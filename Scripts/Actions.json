@@ -1,0 +1,31 @@
+{"dept_actoins": {
+    "In-person course (≥ 2 hours)": 15,
+    "Online course (≥ 1.5 hours)": 9,
+    "Bootcamp": 20,
+    "Technical meetup / Monthly session": 6,
+    "Internal competition (organization)": 12,
+    "Introductory event / Booth": 8,
+    "Partnership / Sponsorship": 15,
+    "Practical project / Product": 20,
+    "Participation in an external competition": 10,
+    "Published educational content": 10,
+    "Qualification / Top ranks in a competition": 12
+  },
+  "member_actions": {
+    "Attending an in-person course": 6,
+    "Attending an online course": 4,
+    "Attending a training camp (per day)": 10,
+    "Attending a technical meetup / session": 3,
+    "Delivering a short session (≤ 20 minutes)": 8,
+    "Delivering a full course": 20,
+    "Organizing / volunteering in an event (shift)": 5,
+    "Participating in a published practical project": 10,
+    "Participating in an external competition": 6,
+    "Qualification / Top ranks in a competition": 12,
+    "Winning / First place externally": 18,
+    "Contributing to an approved design": 6,
+    "Writing an approved article / educational video": 10
+  }
+  
+}
+
