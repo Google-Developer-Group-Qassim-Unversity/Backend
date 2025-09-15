@@ -5,10 +5,20 @@ import type { Request, Response } from "express";
 const app = express();
 const PORT = 9000;
 
-
+app.all("/", handleRoot)
 app.post("/events", handleEvents)
 
+async function handleRoot(req: Request, res: Response) {
+    res.status(200).send("<h1>Ready</h1>").end()
+}
+
 async function handleEvents(req: Request, res: Response) {
+    type Params = {
+        Main_sheet: string;
+        Contrib_sheet: string;
+        attendance_sheet: string;
+    }
+
     
 }
 
