@@ -1,17 +1,19 @@
-from pydantic import BaseModel, Field, HttpUrl, EmailStr
+from pydantic import BaseModel, Field, HttpUrl
 import json
 from typing import List
 from datetime import date
 
 class Contributor(BaseModel):
     name: str
-    email: EmailStr
+    email: str
     phone_number: str = Field(alias="phone number")  
     uni_id: str = Field(alias="uni id")
     action: str
 
     class Config:
         populate_by_name = True
+
+
 class Event(BaseModel):
     action: str
     departments: str
@@ -23,3 +25,12 @@ class Event(BaseModel):
 
     class Config:
         populate_by_name = True
+
+
+
+class Member(BaseModel):
+    id: int
+    name: str
+    email: str
+    phone_number: str = Field(alias="phone number")
+    uni_id: str = Field(alias="uni id")
