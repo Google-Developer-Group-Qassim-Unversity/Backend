@@ -18,7 +18,7 @@ def main():
     csv_file = io.StringIO(csv_data)
 
     data = [row for row in csv.DictReader(csv_file)]
-    pprint(data, indent=4)
+    pprint(len(data), indent=4)
 
 
 if __name__ == "__main__":

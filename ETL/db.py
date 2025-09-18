@@ -58,7 +58,7 @@ class Actions(Base):
 class Events(Base):
     __table__ = Table(
         "events", 
-        Base.metadatam,
+        Base.metadata,
         autoload_with=engine
     )
 
@@ -71,7 +71,7 @@ class Modifications(Base):
 
 class DepartmentsPoints(Base):
     __table__ = Table(
-        "deparments_points",
+        "departments_points",
         Base.metadata,
         autoload_with=engine
     )
@@ -90,7 +90,7 @@ class MembersPoints(Base):
 
 class DeparmentsHistory(Base):
     __table__ = Table(
-        "deparment_history",
+        "departments_history",
         Base.metadata, 
         autoload_with=engine
     )
