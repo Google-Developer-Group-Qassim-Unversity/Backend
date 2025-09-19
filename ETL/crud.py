@@ -80,5 +80,6 @@ def get_actions():
 def add_action(action: Actions):
     with SessionLocal() as session:
         new_action = Actions(
+            english_action_name=action.action_name,
             
         )
