@@ -35,19 +35,6 @@ def update_member(member: Member):
                 "uni_id": db_member.uni_id
             }
             )
-
-
-@router.get("/actions")
-def get_actions():
-    with SessionLocal() as session:
-        stmt = select(Actions)
-        result = session.scalars(stmt).all()
-        actions = []
-        
-        for action in result:
-            actions.append(action)
-
-    return {"actions": actions}
     
 
 @router.post("/members")
@@ -76,3 +63,22 @@ def add_member(member: Member):
     )
 
 
+@router.get("/actions")
+def get_actions():
+    with SessionLocal() as session:
+        stmt = select(Actions)
+        result = session.scalars(stmt).all()
+        actions = []
+        
+        for action in result:
+            actions.append(action)
+
+    return {"actions": actions}
+    
+
+@router.put("/actions")
+def add_action(action: Actions):
+    with SessionLocal() as session:
+        new_action = Actions(
+            
+        )

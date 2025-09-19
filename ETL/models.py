@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, HttpUrl
 import json
-from typing import List
+from typing import List, Literal
 from datetime import date
 
 class Contributor(BaseModel):
@@ -34,3 +34,11 @@ class Member(BaseModel):
     email: str
     phone_number: str = Field(alias="phone number")
     uni_id: str = Field(alias="uni id")
+
+
+class Action(BaseModel):
+    action_name: str
+    action_arabic_name: str
+    action_type: Literal["composite", "department", "member"]
+    action_description: str
+    points: int

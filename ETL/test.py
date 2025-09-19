@@ -12,6 +12,6 @@ member = {
     "uni id": "452106902"
 }
 
-request = requests.post("http://127.0.0.1:8000/members")
+request = requests.post("http://127.0.0.1:8000/members", json=member)
 print(f"response code", request.status_code)
 pprint(request.json())
