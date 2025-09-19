@@ -50,3 +50,13 @@ class Action(BaseModel):
     class Config:
         populate_by_name = True
         from_attributes = True
+
+
+class Categorized_action(BaseModel):
+    composite_actions: List[Action] = Field(alias="composite action")
+    department_actoins: List[Action] = Field(alias="department action")
+    member_actoins: List[Action] = Field(alias="member action")
+
+    class Config:
+        populate_by_name = True
+        from_attributes = True

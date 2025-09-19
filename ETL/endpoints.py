@@ -1,9 +1,24 @@
 from sqlalchemy import select 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
-from models import Member, Action
-
+from models import Member, Action, Categorized_action
+from typing import List
 router = APIRouter()
+
+def to_dict(obj):
+    return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+
+@router.get("/", status_code=200)
+def hanlde_root():
+    return HTMLResponse("<h1>Score Admin API is ready ✅</h1>")
+
+@router.get("/members", status_code=200)
+def handle_members():
+    with SessionLocal() as session:
+        members = session.scalars(select(Members)).all()
+
+        return members[0].email
 
 @router.put("/members", response_model=Member, status_code=201)
 def update_member(member: Member):
@@ -44,18 +59,27 @@ def add_member(member: Member):
     return new_member
 
 
-@router.get("/actions")
+@router.get("/actions", status_code=200, response_model=Categorized_action)
 def get_actions():
     with SessionLocal() as session:
-        stmt = select(Actions)
-        result = session.scalars(stmt).all()
-        actions = []
-
+        statement = select(Actions)
+        result = session.scalars(statement).all()
+        composite_actions = []
+        department_actions = []
+        member_actions = []        
         for action in result:
-            actions.append(action)
-            
-    return {"actions": actions}
-    
+            if action.action_type == "composite":
+                composite_actions.append(action)
+            elif action.action_type == "member":
+                member_actions.append(action)
+            elif action.action_type == "department":
+                department_actions.append(action)
+
+    return Categorized_action(
+        composite_actions = composite_actions,
+        member_actions = member_actions,
+        department_actions = department_actions
+    )
 
 @router.post("/actions", status_code=201, response_model=Action)
 def add_action(action: Action):
