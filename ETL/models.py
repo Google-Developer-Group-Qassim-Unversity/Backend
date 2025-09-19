@@ -29,7 +29,7 @@ class Event(BaseModel):
 
 
 class Member(BaseModel):
-    id: int
+    id: int | None = None
     name: str
     email: str
     phone_number: str = Field(alias="phone number")

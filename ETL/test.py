@@ -5,18 +5,13 @@ from pprint import pprint
 with open("test.json", "r", encoding="utf-8") as f:
     data = json.load(f)
 
-member = {
-    "id": 122, 
-    "name": "Superman", 
-    "email": "superman@cryptonite.com",
-    "phone number": "05555555555", 
-    "uni id": "452106906"
+member = { 
+    "name": "Batman", 
+    "email": "brucewain@gotham.com",
+    "phone number": "0566666666", 
+    "uni id": "452106902"
 }
 
-request = requests.get("http://127.0.0.1:8000/actions")
-# print(f"response code", request.status_code, request.text)
-
-actions = request.json()["actions"]
-
-for action in actions:
-    pprint(action)
+request = requests.post("http://127.0.0.1:8000/members")
+print(f"response code", request.status_code)
+pprint(request.json())
