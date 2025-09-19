@@ -2,7 +2,7 @@ from sqlalchemy import select
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import JSONResponse
 from db import *
-from models import Member
+from models import Member, Action
 
 router = APIRouter()
 
@@ -76,10 +76,33 @@ def get_actions():
     return {"actions": actions}
     
 
-@router.put("/actions")
-def add_action(action: Actions):
+@router.post("/actions")
+def add_action(action: Action):
     with SessionLocal() as session:
         new_action = Actions(
             english_action_name=action.action_name,
-            
+            arabic_action_name=action.action_arabic_name, 
+            action_type=action.action_type,
+            action_description=action.action_description, 
+            points=action.points
         )
+
+        session.add(new_action)
+        session.commit()
+        session.refresh(new_action)
+
+    return JSONResponse(
+        status_code=201, 
+        content={
+        "id": new_action.id,
+        "english_action_name": new_action.english_action_name,
+        "arabic_action_name": new_action.arabic_action_name,
+        "action_type": new_action.action_type,
+        "action_description": new_action.action_description,
+        "points": new_action.points
+        }
+    )
+
+
+@router.put("/events")
+def update_event(event: )

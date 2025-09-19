@@ -31,14 +31,20 @@ class Event(BaseModel):
 class Member(BaseModel):
     id: int | None = None
     name: str
-    email: str
-    phone_number: str = Field(alias="phone number")
+    email: str 
+    phone_number: str | None = Field(default=None, alias="phone number")
     uni_id: str = Field(alias="uni id")
+
+    class Config:
+        populate_by_name = True
 
 
 class Action(BaseModel):
-    action_name: str
-    action_arabic_name: str
-    action_type: Literal["composite", "department", "member"]
-    action_description: str
+    action_name: str = Field(alias="action name")
+    action_arabic_name: str = Field(alias="action arabic name")
+    action_type: Literal["composite", "department", "member"] = Field(alias="action type")
+    action_description: str = Field(alias="action description")
     points: int
+    
+    class Config:
+        populate_by_name = True
