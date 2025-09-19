@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
 from models import Member, Action, Categorized_action
 from typing import List
+from pprint import pprint
 router = APIRouter()
 
 def to_dict(obj):
@@ -64,21 +65,21 @@ def get_actions():
     with SessionLocal() as session:
         statement = select(Actions)
         result = session.scalars(statement).all()
-        composite_actions = []
-        department_actions = []
-        member_actions = []        
+        composite_Actions = []
+        department_Actions = []
+        member_Actions = []
         for action in result:
             if action.action_type == "composite":
-                composite_actions.append(action)
+                composite_Actions.append(action)
             elif action.action_type == "member":
-                member_actions.append(action)
+                member_Actions.append(action)
             elif action.action_type == "department":
-                department_actions.append(action)
+                department_Actions.append(action)
 
     return Categorized_action(
-        composite_actions = composite_actions,
-        member_actions = member_actions,
-        department_actions = department_actions
+    composite_actions = composite_Actions,
+    member_actions = member_Actions,
+    department_actions = department_Actions
     )
 
 @router.post("/actions", status_code=201, response_model=Action)

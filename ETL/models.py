@@ -41,8 +41,10 @@ class Member(BaseModel):
 
 
 class Action(BaseModel):
+    
+    id: int 
     action_name: str = Field(alias="action name")
-    action_arabic_name: str = Field(alias="action arabic name")
+    arabic_action_name: str = Field(alias="action arabic name")
     action_type: Literal["composite", "department", "member"] = Field(alias="action type")
     action_description: str = Field(alias="action description")
     points: int
