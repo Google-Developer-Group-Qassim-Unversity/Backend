@@ -16,12 +16,12 @@ class Contributor(BaseModel):
 
 class Event(BaseModel):
     action: str
-    departments: str
+    department: str
     event_name: str = Field(alias="event name")
     start_date: date = Field(alias="start date")
     end_date: date = Field(alias="end date")
-    attendants: HttpUrl
-    contributors: List[Contributor]
+    attendants: HttpUrl | None = None
+    contributors: List[Contributor] | None = None
 
     class Config:
         populate_by_name = True
@@ -37,6 +37,7 @@ class Member(BaseModel):
 
     class Config:
         populate_by_name = True
+        from_atrributes = True
 
 
 class Action(BaseModel):
@@ -48,3 +49,4 @@ class Action(BaseModel):
     
     class Config:
         populate_by_name = True
+        from_attributes = True

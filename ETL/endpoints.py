@@ -1,12 +1,11 @@
 from sqlalchemy import select 
-from fastapi import APIRouter, HTTPException, Response
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException
 from db import *
 from models import Member, Action
 
 router = APIRouter()
 
-@router.put("/members")
+@router.put("/members", response_model=Member, status_code=201)
 def update_member(member: Member):
 
 
@@ -25,19 +24,10 @@ def update_member(member: Member):
         session.commit()
         session.refresh(db_member)
 
-        return JSONResponse(
-            status_code=204,
-            content={
-                "id": db_member.id,
-                "name": db_member.name,
-                "email": db_member.email, 
-                "phone number": db_member.phone_numer,
-                "uni_id": db_member.uni_id
-            }
-            )
+        return db_member
     
 
-@router.post("/members")
+@router.post("/members", status_code=201, response_model=Member)
 def add_member(member: Member):
     with SessionLocal() as session:
         new_member = Members(
@@ -51,16 +41,7 @@ def add_member(member: Member):
         session.commit()
         session.refresh(new_member)
 
-    return JSONResponse(
-        status_code=201, 
-        content={
-            "id": new_member.id,
-            "name": new_member.name,
-            "email": new_member.email,
-            "phone_number": new_member.phone_number,
-            "uni_id": new_member.uni_id
-        }
-    )
+    return new_member
 
 
 @router.get("/actions")
@@ -69,14 +50,14 @@ def get_actions():
         stmt = select(Actions)
         result = session.scalars(stmt).all()
         actions = []
-        
+
         for action in result:
             actions.append(action)
-
+            
     return {"actions": actions}
     
 
-@router.post("/actions")
+@router.post("/actions", status_code=201, response_model=Action)
 def add_action(action: Action):
     with SessionLocal() as session:
         new_action = Actions(
@@ -91,18 +72,8 @@ def add_action(action: Action):
         session.commit()
         session.refresh(new_action)
 
-    return JSONResponse(
-        status_code=201, 
-        content={
-        "id": new_action.id,
-        "english_action_name": new_action.english_action_name,
-        "arabic_action_name": new_action.arabic_action_name,
-        "action_type": new_action.action_type,
-        "action_description": new_action.action_description,
-        "points": new_action.points
-        }
-    )
+    return new_action
 
 
-@router.put("/events")
-def update_event(event: )
+# @router.put("/events")
+# def update_event(event: )

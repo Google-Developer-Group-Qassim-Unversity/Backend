@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from crud import router
+from endpoints import router
 
 app  = FastAPI()
 
