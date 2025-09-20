@@ -1,10 +1,10 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import Response
 from models import ValidateSheet
 import pandas as pd
 from pydantic import EmailStr, ValidationError, BaseModel
-from datetime import date
 
-#router = APIRouter()
+router = APIRouter()
 
 class EmailCheck(BaseModel):
     email: EmailStr
@@ -18,47 +18,77 @@ def validate_email(email: str) -> bool:
         return False
 
 
-#@router.post("/validate/sheet")
-sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRcmCPGpWxuj9y8LEjeKPhBW77qRvyWs3g5wAH5eA5weEPASXj-FvhLUwa_CNW5ZX9D6c3qyOk5bej0/pub?gid=1781104695&single=true&output=csv"
-
-validate_sheet = ValidateSheet(
-    url=sheet_url, 
-    start_date= date(2025, 9, 20),
-    end_date=date(2025, 9, 21)
-)
-
-print(validate_sheet.end_date - validate_sheet.start_date)
-
-def validate_sheet(validate_sheet: ValidateSheet):
+@router.post("/validate/sheet")
+def validate_sheet(validation_sheet: ValidateSheet):
     EXPECTED_HEADERS = set(["name", "email", "uni id", "phone number", "gender"])
 
     try:
-        df = pd.read_csv("test.csv")
+        df = pd.read_csv(validation_sheet.url)
     except Exception as e:
-        print("error could not open sheet", e)
-        return
+        raise HTTPException(status_code=500, detail="Could not read the sheet")
     
     sheet_headers = set(df.columns.str.lower().str.strip())
 
     # check headers
     if sheet_headers != EXPECTED_HEADERS:
         missing_headers = [h for h in EXPECTED_HEADERS if h not in sheet_headers]
-        extra_headers = [h for h in sheet_headers if h not in EXPECTED_HEADERS]
 
         if missing_headers:
-            print("missing headers", missing_headers)
-            return missing_headers
-
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+                "error": "Missing columns",
+                "details": missing_headers
+            })
+            
         
+        extra_headers = [h.split(".")[0] for h in sheet_headers if h not in EXPECTED_HEADERS]
+        if len(extra_headers) != (validation_sheet.end_date - validation_sheet.start_date).days + 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+                "error": "Wrong number of columns.",
+                "details": extra_headers
+            })
+
+        for header in extra_headers:
+            s_header = header.strip().lower()
+            if s_header[0:14] != "attendance day" or not s_header[14::].strip().isdigit():
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+                    "error": "Wrong column.",
+                    "details": header
+                })
+
+
+        days = [int(day[14::].strip()) for day in extra_headers]
+        
+        sorted_days = sorted(days)
+
+        if sorted_days[0] != 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+                "error": "Attendance must begin with day 1.",
+                "details": f"Current sheet attendance begin with day: {sorted_days[0]}"
+            })
+
+        if len(days) > 1:
+            if not all(b - a for a, b in zip(days, days[1:])):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+                    "error": "Attendace days have to be sequential.",
+                    "details": f"Found {days}"
+                })
+            
+
     # check for missin names
     if df.name.isnull().any():
-        print("missing emails on rows:", [idx+2 for idx in df.index[df["email"].isnull()]])       
-        return 
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "error": "Missing emails.",
+            "details": f"Missing email on rows: {[idx+2 for idx in df.index[df['email'].isnull()]]}"
+        })
+
 
     # check for missing uni ids
     if df["uni id"].isnull().any():
-        print("missing uni id on row: ", [idx+2 for idx in df.index[df["uni id"].isnull()]])
-        return
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "error": "Missing uni ids.",
+            "detils": f"Missing uni ids on rows: {[idx+2 for idx in df.index[df['uni id'].isnull()]]}"
+        })
+
 
     # validate uni ids
     uni_ids = df.loc[:, "uni id"]
@@ -67,12 +97,16 @@ def validate_sheet(validate_sheet: ValidateSheet):
     # check if ids not digits
     for idx, value in uni_ids.items():
         value = str(value)
+
         if not value.isdigit():
             fault_indecies.append(idx + 2)
 
     if fault_indecies:
-        print("wrong ids", fault_indecies)
-        return fault_indecies
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "error": "Invalid uni ids.", 
+            "details": f"uni ids are not numbers on rows: {fault_indecies}"
+        })
+
 
 
     # check if ids not of length 9
@@ -83,14 +117,18 @@ def validate_sheet(validate_sheet: ValidateSheet):
             fault_indecies.append(idx + 2)
         
     if fault_indecies:
-        print("wrong length of id", fault_indecies)
-        return fault_indecies
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "error": "Length of uni ids must be 9.", 
+            "details": f"Rows: {fault_indecies}"
+        })
 
 
     #validate emails
     if df["email"].isnull().any():
-        print("missing emails on rows: ", [idx+2 for idx in df.index[df["email"].isnull()]])
-        return
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "error": "Missing emails.", 
+            "details": f"Missing emails on rows: {[idx+2 for idx in df.index[df['email'].isnull()]]}"
+        })
     
     emails = df.loc[:, "email"]
     fault_emails = []
@@ -101,12 +139,19 @@ def validate_sheet(validate_sheet: ValidateSheet):
     
     if fault_emails:
         print("invalid emails on rows", fault_emails)
-        return fault_emails
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "error": "Invalid emails.",
+            "details": f"Rows: {fault_emails}"
+        })
+    
     
     # validate gender
     if df["gender"].isnull().any():
         print("missing gender on rows", [idx+2 for idx in df.index[df["gender"].isnull()]])
-        return
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "error": "Missing genders",
+            "details": f"Missing genders on rows: {[idx+2 for idx in df.index[df['gender'].isnull()]]}"
+        })
     
     genders = df.loc[:, "gender"]
     fault_genders = []
@@ -117,7 +162,9 @@ def validate_sheet(validate_sheet: ValidateSheet):
     
     if fault_genders:
         print("invlid genders on rows: ", fault_genders)
-        return fault_genders
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "error": "Invalid genders.", 
+            "details": f"Genders must be either Male or Female on rows: {fault_emails} (We are not wok)"
+        })
     
-    print("perfect")
-validate_sheet(validate_sheet=validate_sheet)
+    return Response(status_code=status.HTTP_200_OK)

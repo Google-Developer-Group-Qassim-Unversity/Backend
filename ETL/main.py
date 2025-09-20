@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 from endpoints import router
 from fastapi.middleware.cors import CORSMiddleware
+import sheet_validation as sv
 app  = FastAPI()
 
 app.include_router(router)
-
+app.include_router(sv.router)
 
 app.add_middleware(
     CORSMiddleware,
