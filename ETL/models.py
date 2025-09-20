@@ -62,3 +62,12 @@ class Categorized_action(BaseModel):
     class Config:
         populate_by_name = True
         from_attributes = True
+
+
+class ValidateSheet(BaseModel):
+    url: HttpUrl
+    start_date: date = Field(alias="start date") 
+    end_date: date = Field(alias="end date")
+
+    class Config:
+        populate_by_name = True 
