@@ -51,6 +51,8 @@ class FormData(BaseModel):
     members_link: HttpUrl = Field(alias="members link")
     Organizers: List[OrganizerData] | None
     action_id: int
+    bonus: int
+    discount: int
     class Config:
         populate_by_name = True
 
@@ -102,8 +104,8 @@ class Categorized_action(BaseModel):
 
 class ValidateSheet(BaseModel):
     url: HttpUrl
-    start_date: date = Field(alias="start date") 
-    end_date: date = Field(alias="end date")
+    start_date: datetime = Field(alias="start date") 
+    end_date: datetime = Field(alias="end date")
 
     class Config:
         populate_by_name = True 

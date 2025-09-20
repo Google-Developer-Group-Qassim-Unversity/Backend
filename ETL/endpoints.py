@@ -49,6 +49,25 @@ def handle_events(form_data: FormData):
             session.flush()
             print(f"Log created with id: \x1b[32m{new_log.id}\x1b[0m")
 
+            print(f"Creating modification for log id: \x1b[33m{new_log.id}\x1b[0m")
+            if form_data.bonus > 0:
+                new_bonus = Modifications(
+                    log_id=new_log.id,
+                    type = "bonus",
+                    value= form_data.bonus
+                )
+                session.add(new_bonus)
+                print(f"Modification created with id: \x1b[32m{new_bonus.id}\x1b[0m")
+            if form_data.discount > 0:
+                new_discount = Modifications(
+                    log_id=new_log.id,
+                    type = "discount",
+                    value= form_data.discount
+                )
+                session.add(new_discount)
+                session.flush()
+                print(f"Modification created with id: \x1b[32m{new_discount.id}\x1b[0m")
+
             event_date = form_data.event_info.start_date
 
             print(f"Processing \x1b[33m{len(members_data)}\x1b[0m members from csv")
