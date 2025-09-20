@@ -51,6 +51,8 @@ class FormData(BaseModel):
     members_link: HttpUrl = Field(alias="members link")
     Organizers: List[OrganizerData] | None
     action_id: int
+    bonus: int
+    discount: int
     class Config:
         populate_by_name = True
 
