@@ -30,7 +30,7 @@ class Members(Base):
     email: Mapped[str | None] = mapped_column(String(100), unique=True)
     phone_number: Mapped[str | None] = mapped_column(String(20), unique=True)
     uni_id: Mapped[str] = mapped_column(String(50), unique=True)
-
+    gender: Mapped[str] = mapped_column(Enum("Male", "Female"))
 
     logs: Mapped[list["MembersLogs"]] = relationship(back_populates="member")
 
@@ -89,7 +89,7 @@ class Absence(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     date: Mapped[dt.date] = mapped_column(Date, nullable=False)
-    member_log_id: Mapped[int] = mapped_column(ForeignKey("members_logs.id"), ondelete="CASCADE", onupdate="CASCADE")
+    member_log_id: Mapped[int] = mapped_column(ForeignKey("members_logs.id", ondelete="CASCADE", onupdate="CASCADE"))
 
     member_log: Mapped["MembersLogs"] = relationship(back_populates="absence")
 

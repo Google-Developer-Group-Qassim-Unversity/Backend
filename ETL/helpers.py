@@ -4,18 +4,22 @@ import io
 from models import Member
 from typing import List
 def csv_to_pydantic_member(url) -> List[Member]:
+    print(f"Got link: \x1b[33m{url}\x1b[0m")
     response = urllib.request.urlopen(url)
     csv_data = response.read().decode("utf-8")
     csv_file = io.StringIO(csv_data)
     members_and_date = []
-    for row in csv.DictReader(csv_file):
+    reader = csv.DictReader(csv_file)
+    columns = reader.fieldnames
+    for row in reader:
         members_and_date.append((Member(
             name=row.get("name"),
             email=row.get("email"),
             phone_number = None if row.get("phone number") == "" else row.get("phone number"),
             uni_id=row.get("uni id"),
             gender=row.get("gender")
-        ), (row.get("start date"), row.get("end date"))))
+        ), [row[n] for n in columns[5:]]))  # Collecting all date columns
+    print(f"Extracted \x1b[32m{len(members_and_date)}\x1b[0m members from csv")
     return members_and_date
 
 if __name__ == "__main__":
