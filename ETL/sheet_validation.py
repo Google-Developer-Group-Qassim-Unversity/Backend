@@ -3,6 +3,7 @@ from fastapi.responses import Response
 from models import ValidateSheet
 import pandas as pd
 from pydantic import EmailStr, ValidationError, BaseModel
+from datetime import datetime
 
 router = APIRouter()
 
@@ -17,15 +18,19 @@ def validate_email(email: str) -> bool:
     except ValidationError:
         return False
 
-
-@router.post("/validate/sheet")
+#@router.post("/validate/sheet")
 def validate_sheet(validation_sheet: ValidateSheet):
     EXPECTED_HEADERS = set(["name", "email", "uni id", "phone number", "gender"])
 
     try:
-        df = pd.read_csv(validation_sheet.url)
+        df = pd.read_csv(validation_sheet.url_str)
+        print("done")
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Could not read the sheet")
+        print("not done", e)
+        raise HTTPException(status_code=500, detail={
+            "error": "Could not read the sheet.",
+            "details": None
+        })
     
     sheet_headers = set(df.columns.str.lower().str.strip())
 
@@ -144,7 +149,7 @@ def validate_sheet(validation_sheet: ValidateSheet):
             "details": f"Rows: {fault_emails}"
         })
     
-    
+
     # validate gender
     if df["gender"].isnull().any():
         print("missing gender on rows", [idx+2 for idx in df.index[df["gender"].isnull()]])
@@ -168,3 +173,5 @@ def validate_sheet(validation_sheet: ValidateSheet):
         })
     
     return Response(status_code=status.HTTP_200_OK)
+
+validate_sheet(sheet)

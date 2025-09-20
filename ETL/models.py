@@ -102,8 +102,12 @@ class Categorized_action(BaseModel):
 
 class ValidateSheet(BaseModel):
     url: HttpUrl
-    start_date: date = Field(alias="start date") 
-    end_date: date = Field(alias="end date")
+    start_date: datetime = Field(alias="start date") 
+    end_date: datetime = Field(alias="end date")
 
     class Config:
         populate_by_name = True 
+
+    @property
+    def url_str(self) -> str:
+        return str(self.url)
