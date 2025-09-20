@@ -2,7 +2,7 @@ from sqlalchemy import select
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
-from models import Member, Action, Categorized_action
+from models import Member, Action, Categorized_action, FormData, Department
 from typing import List
 from pprint import pprint
 router = APIRouter()
@@ -14,12 +14,16 @@ def to_dict(obj):
 def hanlde_root():
     return HTMLResponse("<h1>Score Admin API is ready ✅</h1>")
 
-@router.get("/members", status_code=200)
+@router.post("/events", status_code=200)
+def handle_events(form_data: FormData):
+    pprint(form_data)
+
+@router.get("/members", status_code=200, response_model=List[Member])
 def handle_members():
     with SessionLocal() as session:
         members = session.scalars(select(Members)).all()
 
-        return members[0].email
+    return members
 
 @router.put("/members", response_model=Member, status_code=201)
 def update_member(member: Member):
@@ -59,6 +63,15 @@ def add_member(member: Member):
 
     return new_member
 
+@router.get("/departments", status_code=200, response_model=List[Department])
+def handle_department():
+    with SessionLocal() as session:
+        result = session.scalars(select(Departments)).all()
+        departments = []
+        for department in result:
+            departments.append(department)
+
+    return departments
 
 @router.get("/actions", status_code=200, response_model=Categorized_action)
 def get_actions():
