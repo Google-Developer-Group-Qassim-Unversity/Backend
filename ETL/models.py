@@ -1,13 +1,13 @@
 from pydantic import BaseModel, Field, HttpUrl
 import json
 from typing import List, Literal
-from datetime import date
+from datetime import datetime, date
 
 class Contributor(BaseModel):
     name: str
     email: str
     phone_number: str = Field(alias="phone number")  
-    uni_id: str = Field(alias="uni id")
+    uni_id: str # @ibrahim do not add alias.
     action: str
 
     class Config:
@@ -26,6 +26,33 @@ class Event(BaseModel):
     class Config:
         populate_by_name = True
 
+class EventData(BaseModel):
+    event_title: str
+    start_date: datetime
+    end_date: datetime
+
+    class Config:
+        populate_by_name = True
+
+class OrganizerData(BaseModel):
+    name: str
+    uni_id: str
+    email: str | None
+    phone_number: str | None
+    participation_type: str
+
+    class Config:
+        populate_by_name = True
+
+class FormData(BaseModel):
+    action: Literal["composite", "department", "member"]
+    event_info: EventData
+    department_id: str
+    members_link: HttpUrl = Field(alias="members link")
+    Organizers: List[OrganizerData] | None
+    action_id: int
+    class Config:
+        populate_by_name = True
 
 
 class Member(BaseModel):
@@ -33,7 +60,16 @@ class Member(BaseModel):
     name: str
     email: str 
     phone_number: str | None = Field(default=None, alias="phone number")
-    uni_id: str = Field(alias="uni id")
+    uni_id: str # @ibrahim do not add alias.
+    gender: Literal["Male", "Female"]
+
+    class Config:
+        populate_by_name = True
+        from_atrributes = True
+
+class Department(BaseModel):
+    id: int
+    name: str
 
     class Config:
         populate_by_name = True
@@ -56,8 +92,8 @@ class Action(BaseModel):
 
 class Categorized_action(BaseModel):
     composite_actions: List[Action] = Field(alias="composite action")
-    department_actoins: List[Action] = Field(alias="department action")
-    member_actoins: List[Action] = Field(alias="member action")
+    department_actions: List[Action] = Field(alias="department action")
+    member_actions: List[Action] = Field(alias="member action")
 
     class Config:
         populate_by_name = True

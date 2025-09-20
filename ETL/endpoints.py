@@ -2,7 +2,8 @@ from sqlalchemy import select
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
-from models import Member, Action, Categorized_action
+from helpers import csv_to_pydantic_member
+from models import Member, Action, Categorized_action, FormData, Department
 from typing import List
 from pprint import pprint
 router = APIRouter()
@@ -14,12 +15,86 @@ def to_dict(obj):
 def hanlde_root():
     return HTMLResponse("<h1>Score Admin API is ready ✅</h1>")
 
-@router.get("/members", status_code=200)
+@router.post("/events", status_code=200)
+def handle_events(form_data: FormData):
+    pprint(form_data)
+# {
+#   "Organizers": [
+#     {
+#       "name": "Superman",
+#       "email": "superman@cryptonite.com",
+#       "phone_number": "",
+#       "uni_id": "452106906",
+#       "participation_type": "volunteer"
+#     }
+#   ],
+#   "action": "composite",
+#   "action_id": "51",
+#   "department_id": "3",
+#   "members_link": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRcmCPGpWxuj9y8LEjeKPhBW77qRvyWs3g5wAH5eA5weEPASXj-FvhLUwa_CNW5ZX9D6c3qyOk5bej0/pub?gid=1781104695&single=true&output=csv"
+# }
+
+    members_data = csv_to_pydantic_member(form_data.members_link)
+    with SessionLocal() as session: # @ibrahim make this a transaction
+
+        new_event = Events(
+            event_name=form_data.event_info.event_title,
+        )
+
+        session.add(new_event)
+        session.commit()
+        session.refresh(new_event)
+
+        new_log = Logs(
+            action_id=form_data.action_id,
+            event_id=new_event.id,
+            start_date=form_data.event_info.start_date,
+            end_date=form_data.event_info.end_date
+        )
+
+        session.add(new_log)
+        session.commit()
+
+        for member, date_range in csv_to_pydantic_member(form_data.members_link):
+            db_member = session.execute(
+                select(Members).where(Members.uni_id == member.uni_id)
+            ).scalar_one_or_none()
+
+            if not db_member:
+                db_member = Members(
+                    name=member.name,
+                    email=member.email,
+                    phone_number=member.phone_number,
+                    uni_id=member.uni_id
+                )
+                session.add(db_member)
+                session.commit()
+                session.refresh(db_member)
+
+            new_members_logs = MembersLogs(
+                member_id=db_member.id,
+                log_id=new_log.id,
+
+            )
+
+            session.add(new_members_logs)
+            session.commit()
+
+        new_departments_logs = DepartmentsLogs(
+            id=form_data.department_id,
+            department_id=form_data.department_id,
+            log_id=new_log.id
+        )
+
+        session.add(new_departments_logs)
+        session.commit()
+
+@router.get("/members", status_code=200, response_model=List[Member])
 def handle_members():
     with SessionLocal() as session:
         members = session.scalars(select(Members)).all()
 
-        return members[0].email
+    return members
 
 @router.put("/members", response_model=Member, status_code=201)
 def update_member(member: Member):
@@ -59,6 +134,15 @@ def add_member(member: Member):
 
     return new_member
 
+@router.get("/departments", status_code=200, response_model=List[Department])
+def handle_department():
+    with SessionLocal() as session:
+        result = session.scalars(select(Departments)).all()
+        departments = []
+        for department in result:
+            departments.append(department)
+
+    return departments
 
 @router.get("/actions", status_code=200, response_model=Categorized_action)
 def get_actions():
@@ -82,6 +166,15 @@ def get_actions():
     department_actions = department_Actions
     )
 
+@router.get("/actions/contributers", response_model=List[Action], status_code=200)
+def get_action_contributors():
+    with SessionLocal() as session:
+        statement = select(Actions).where(
+            Actions.action_name.in_(["volunteer", "Presented a course"])
+        )
+        result = session.scalars(statement).all()
+    return result
+
 @router.post("/actions", status_code=201, response_model=Action)
 def add_action(action: Action):
     with SessionLocal() as session:
@@ -98,7 +191,3 @@ def add_action(action: Action):
         session.refresh(new_action)
 
     return new_action
-
-
-# @router.put("/events")
-# def update_event(event: )
