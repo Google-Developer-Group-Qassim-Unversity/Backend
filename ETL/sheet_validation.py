@@ -24,9 +24,10 @@ sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRcmCPGpWxuj9y8LEje
 validate_sheet = ValidateSheet(
     url=sheet_url, 
     start_date= date(2025, 9, 20),
-    end_date=date(2025, 9, 20)
+    end_date=date(2025, 9, 21)
 )
 
+print(validate_sheet.end_date - validate_sheet.start_date)
 
 def validate_sheet(validate_sheet: ValidateSheet):
     EXPECTED_HEADERS = set(["name", "email", "uni id", "phone number", "gender"])
@@ -47,9 +48,7 @@ def validate_sheet(validate_sheet: ValidateSheet):
         if missing_headers:
             print("missing headers", missing_headers)
             return missing_headers
-        else:
-            print("extra headers", extra_headers)
-            return extra_headers
+
         
     # check for missin names
     if df.name.isnull().any():

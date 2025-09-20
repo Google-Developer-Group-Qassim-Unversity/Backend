@@ -3,6 +3,7 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column,
 from os import getenv
 from dotenv import load_dotenv
 from datetime import date
+import datetime as dt
 
 load_dotenv()
 engine = create_engine(getenv("DATABASE_URL"))
@@ -78,12 +79,19 @@ class MembersLogs(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     member_id: Mapped[int] = mapped_column(ForeignKey("members.id"))
     log_id: Mapped[int] = mapped_column(ForeignKey("logs.id", ondelete="CASCADE", onupdate="CASCADE"))
-    absence_start_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
-    absence_end_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
 
     member: Mapped["Members"] = relationship(back_populates="logs")
     log: Mapped["Logs"] = relationship(back_populates="members")
+    absence: Mapped[list["Absence"]] = relationship(back_populates="member_log")
 
+class Absence(Base):
+    __tablename__ = "absence"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    member_log_id: Mapped[int] = mapped_column(ForeignKey("members_logs.id"), ondelete="CASCADE", onupdate="CASCADE")
+
+    member_log: Mapped["MembersLogs"] = relationship(back_populates="absence")
 
 class Actions(Base):
     __tablename__ = "actions"
