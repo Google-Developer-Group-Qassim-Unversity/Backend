@@ -173,5 +173,3 @@ def validate_sheet(validation_sheet: ValidateSheet):
         })
     
     return Response(status_code=status.HTTP_200_OK)
-
-validate_sheet(sheet)
