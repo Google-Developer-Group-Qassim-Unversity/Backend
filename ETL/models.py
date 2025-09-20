@@ -61,6 +61,7 @@ class Member(BaseModel):
     email: str 
     phone_number: str | None = Field(default=None, alias="phone number")
     uni_id: str # @ibrahim do not add alias.
+    gender: Literal["Male", "Female"]
 
     class Config:
         populate_by_name = True

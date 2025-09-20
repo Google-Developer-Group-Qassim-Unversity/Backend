@@ -12,13 +12,13 @@ from pprint import pprint
 
 
 def main():
-    sheet_link = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRcmCPGpWxuj9y8LEjeKPhBW77qRvyWs3g5wAH5eA5weEPASXj-FvhLUwa_CNW5ZX9D6c3qyOk5bej0/pub?gid=336347838&single=true&output=csv"
+    sheet_link = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRcmCPGpWxuj9y8LEjeKPhBW77qRvyWs3g5wAH5eA5weEPASXj-FvhLUwa_CNW5ZX9D6c3qyOk5bej0/pub?gid=1781104695&single=true&output=csv"
     response = urllib.request.urlopen(sheet_link)
     csv_data = response.read().decode("utf-8")
     csv_file = io.StringIO(csv_data)
 
-    data = [row for row in csv.DictReader(csv_file)]
-    pprint(len(data), indent=4)
+    for row in csv.DictReader(csv_file):
+        print(f"'{row.get('phone number')}',")
 
 
 if __name__ == "__main__":
