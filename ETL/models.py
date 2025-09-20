@@ -7,7 +7,7 @@ class Contributor(BaseModel):
     name: str
     email: str
     phone_number: str = Field(alias="phone number")  
-    uni_id: str = Field(alias="uni id")
+    uni_id: str # @ibrahim do not add alias.
     action: str
 
     class Config:
@@ -36,9 +36,9 @@ class EventData(BaseModel):
 
 class OrganizerData(BaseModel):
     name: str
-    email: str
-    phone_number: str
     uni_id: str
+    email: str | None
+    phone_number: str | None
     participation_type: str
 
     class Config:
@@ -47,11 +47,10 @@ class OrganizerData(BaseModel):
 class FormData(BaseModel):
     action: Literal["composite", "department", "member"]
     event_info: EventData
-    department: str
+    department_id: str
     members_link: HttpUrl = Field(alias="members link")
-    Organizers: List[OrganizerData]
-    action_id: int = Field(alias="action id")
-
+    Organizers: List[OrganizerData] | None
+    action_id: int
     class Config:
         populate_by_name = True
 
@@ -61,7 +60,7 @@ class Member(BaseModel):
     name: str
     email: str 
     phone_number: str | None = Field(default=None, alias="phone number")
-    uni_id: str = Field(alias="uni id")
+    uni_id: str # @ibrahim do not add alias.
 
     class Config:
         populate_by_name = True

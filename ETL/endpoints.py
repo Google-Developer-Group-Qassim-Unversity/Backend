@@ -95,6 +95,15 @@ def get_actions():
     department_actions = department_Actions
     )
 
+@router.get("/actions/contributers", response_model=List[Action], status_code=200)
+def get_action_contributors():
+    with SessionLocal() as session:
+        statement = select(Actions).where(
+            Actions.action_name.in_(["volunteer", "Presented a course"])
+        )
+        result = session.scalars(statement).all()
+    return result
+
 @router.post("/actions", status_code=201, response_model=Action)
 def add_action(action: Action):
     with SessionLocal() as session:
@@ -111,7 +120,3 @@ def add_action(action: Action):
         session.refresh(new_action)
 
     return new_action
-
-
-# @router.put("/events")
-# def update_event(event: )
