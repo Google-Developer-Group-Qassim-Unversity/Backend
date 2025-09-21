@@ -79,7 +79,7 @@ def validate_sheet(validation_sheet: ValidateSheet):
                 })
             
 
-    # check for missin names
+    # check for missing names
     if df.name.isnull().any():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
             "error": "Missing emails.",
@@ -92,6 +92,15 @@ def validate_sheet(validation_sheet: ValidateSheet):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
             "error": "Missing uni ids.",
             "detils": f"Missing uni ids on rows: {[idx+2 for idx in df.index[df['uni id'].isnull()]]}"
+        })
+
+    # check for duplicate uni ids
+    dups = df[df["uni id"].duplicated(keep=False)].index.tolist()
+    if dups:
+        dups = [i+2 for i in dups]
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "error": "Duplicates in uni id",
+            "details": f"Uni id duplicates on rows {dups}"
         })
 
 
