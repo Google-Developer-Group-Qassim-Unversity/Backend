@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
 from helpers import csv_to_pydantic_member
-from models import Member, Action, Categorized_action, FormData, Department
+from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department
 from typing import List
 import datetime
 from pprint import pprint
@@ -17,14 +17,16 @@ def hanlde_root():
     return HTMLResponse("<h1>Score Admin API is ready ✅</h1>")
 
 @router.post("/events", status_code=200)
-def handle_events(form_data: FormData):
+def handle_events(form_data: CompositeFormData):
 
     # This needs to be refactored into smaller functions.
     # that take the same session. so that multiple queryies
     # can be done in one transaction.
 
+    # return JSONResponse(status_code=200, content={"message": "Event processed successfully"})
+
     members_data = csv_to_pydantic_member(str(form_data.members_link))
-    with SessionLocal() as session: # @ibrahim make this a transaction
+    with SessionLocal() as session:
         try:
 
             print(f"Creating event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
@@ -37,36 +39,61 @@ def handle_events(form_data: FormData):
             print(f"Event created with id: \x1b[32m{new_event.id}\x1b[0m")
 
 
-            print(f"Creating log for event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
-            new_log = Logs(
-                action_id=form_data.action_id,
+            print(f"Creating log for department for event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
+            dept_new_log = Logs(
+                action_id=form_data.department_action_id,
                 event_id=new_event.id,
                 start_date=form_data.event_info.start_date,
                 end_date=form_data.event_info.end_date
             )
 
-            session.add(new_log)
+            session.add(dept_new_log)
             session.flush()
-            print(f"Log created with id: \x1b[32m{new_log.id}\x1b[0m")
+            print(f"Log for department created with id: \x1b[32m{dept_new_log.id}\x1b[0m")
 
-            print(f"Creating modification for log id: \x1b[33m{new_log.id}\x1b[0m")
-            if form_data.bonus > 0:
-                new_bonus = Modifications(
-                    log_id=new_log.id,
-                    type = "bonus",
-                    value= form_data.bonus
-                )
-                session.add(new_bonus)
-                print(f"Modification created with id: \x1b[32m{new_bonus.id}\x1b[0m")
-            if form_data.discount > 0:
-                new_discount = Modifications(
-                    log_id=new_log.id,
-                    type = "discount",
-                    value= form_data.discount
-                )
-                session.add(new_discount)
-                session.flush()
-                print(f"Modification created with id: \x1b[32m{new_discount.id}\x1b[0m")
+            print(f"Linking department id: \x1b[33m{form_data.department_id}\x1b[0m to log id: \x1b[33m{dept_new_log.id}\x1b[0m")
+            new_departments_logs = DepartmentsLogs(
+                id=form_data.department_id,
+                department_id=form_data.department_id,
+                log_id=dept_new_log.id
+            )
+
+            session.add(new_departments_logs)
+            print(f"Department log created with id: \x1b[32m{new_departments_logs.id}\x1b[0m")
+
+
+            # bonus and discount will not be implemented yet.
+
+            # print(f"Creating modification for log id: \x1b[33m{new_log.id}\x1b[0m")
+            # if form_data.bonus > 0:
+            #     new_bonus = Modifications(
+            #         log_id=new_log.id,
+            #         type = "bonus",
+            #         value= form_data.bonus
+            #     )
+            #     session.add(new_bonus)
+            #     print(f"Modification created with id: \x1b[32m{new_bonus.id}\x1b[0m")
+            # if form_data.discount > 0:
+            #     new_discount = Modifications(
+            #         log_id=new_log.id,
+            #         type = "discount",
+            #         value= form_data.discount
+            #     )
+            #     session.add(new_discount)
+            #     session.flush()
+            #     print(f"Modification created with id: \x1b[32m{new_discount.id}\x1b[0m")
+
+            print(f"Creating log for members for event: \x1b[33m{form_data.event_info.event_title}, Action_id: {form_data.member_action_id}\x1b[0m")
+            member_new_log = Logs(
+                action_id=form_data.member_action_id,
+                event_id=new_event.id,
+                start_date=form_data.event_info.start_date,
+                end_date=form_data.event_info.end_date
+            )
+
+            session.add(member_new_log)
+            session.flush()
+            print(f"Log for members created with id: \x1b[32m{member_new_log.id}\x1b[0m")
 
             event_date = form_data.event_info.start_date
 
@@ -82,6 +109,7 @@ def handle_events(form_data: FormData):
 
                 
                 if not db_member:
+                    print(f"Member \x1b[33m{member.uni_id}\x1b[0m not found in db, creating new member")
                     db_member = Members(
                         name=member.name,
                         email=member.email,
@@ -97,7 +125,7 @@ def handle_events(form_data: FormData):
                 print(f"Creating member log for member: \x1b[33m{member.name}\x1b[0m")
                 new_members_logs = MembersLogs(
                     member_id=db_member.id,
-                    log_id=new_log.id,
+                    log_id=member_new_log.id,
                 )
 
                 session.add(new_members_logs)
@@ -111,7 +139,7 @@ def handle_events(form_data: FormData):
                         )
                         session.add(new_absence)
                 
-            # if there is an organizer they need their own log
+            # Flow for organizers
             organizers = len(form_data.Organizers) if form_data.Organizers != None else 0
             if organizers > 0:
                 print(f"Processing \x1b[33m{form_data.Organizers}\x1b[0m organizers")
@@ -132,9 +160,9 @@ def handle_events(form_data: FormData):
                     session.add(db_member)
                     session.flush()
 
-                    print(f"Creating Organizer log for event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
+                    print(f"Creating log for organizer for event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
                     org_new_log = Logs(
-                        action_id=member.participation_type,
+                        action_id=member.participation_action_id,
                         event_id=new_event.id,
                         start_date=form_data.event_info.start_date,
                         end_date=form_data.event_info.end_date
@@ -154,16 +182,6 @@ def handle_events(form_data: FormData):
             else:
                 print("No organizers to process")    
 
-
-            print(f"Linking department id: \x1b[33m{form_data.department_id}\x1b[0m to log id: \x1b[33m{new_log.id}\x1b[0m")
-            new_departments_logs = DepartmentsLogs(
-                id=form_data.department_id,
-                department_id=form_data.department_id,
-                log_id=new_log.id
-            )
-            print(f"Department log created with id: \x1b[32m{new_departments_logs.id}\x1b[0m")
-
-            session.add(new_departments_logs)
             session.commit()
             print(f"Event processing completed successfully ✅")
             return JSONResponse(status_code=200, content={"message": "Event processed successfully"})
@@ -235,21 +253,36 @@ def get_actions():
     with SessionLocal() as session:
         statement = select(Actions)
         result = session.scalars(statement).all()
-        composite_Actions = []
         department_Actions = []
         member_Actions = []
         for action in result:
-            if action.action_type == "composite":
-                composite_Actions.append(action)
-            elif action.action_type == "member":
-                member_Actions.append(action)
+            if action.action_type == "member":
+                member_Actions.append(to_dict(action))
             elif action.action_type == "department":
-                department_Actions.append(action)
+                department_Actions.append(to_dict(action))
+
+        ids_group1 = [51, 52, 53, 54]
+        ids_group2 = [76, 77, 78, 79]
+
+        # Query
+        rows1 = session.execute(select(Actions).where(Actions.id.in_(ids_group1))).scalars().all()
+        id_to_row1 = {row.id: row for row in rows1}
+        ordered_rows1 = [id_to_row1[i] for i in ids_group1]
+
+        rows2 = session.execute(select(Actions).where(Actions.id.in_(ids_group2))).scalars().all()
+        id_to_row2 = {row.id: row for row in rows2}
+        ordered_rows2 = [id_to_row2[i] for i in ids_group2]
+
+        # Serialize and pair
+        paired = [
+            (to_dict(a1), to_dict(a2))
+            for a1, a2 in zip(ordered_rows1, ordered_rows2)
+        ]
 
     return Categorized_action(
-    composite_actions = composite_Actions,
-    member_actions = member_Actions,
-    department_actions = department_Actions
+        composite_actions=paired,
+        department_actions=department_Actions,
+        member_actions=member_Actions
     )
 
 @router.get("/actions/contributers", response_model=List[Action], status_code=200)
