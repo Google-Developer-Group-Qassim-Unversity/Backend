@@ -46,7 +46,7 @@ class OrganizerData(BaseModel):
 
 class FormData(BaseModel):
     action: Literal["composite", "department", "member"]
-    event_info: EventData
+    event_info: EventData 
     department_id: str
     members_link: HttpUrl = Field(alias="members link")
     Organizers: List[OrganizerData] | None
