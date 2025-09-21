@@ -1,5 +1,5 @@
-from sqlalchemy import select 
-from fastapi import APIRouter, HTTPException
+from sqlalchemy import select, exists
+from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
 from helpers import csv_to_pydantic_member
@@ -29,6 +29,14 @@ def handle_events(form_data: CompositeFormData):
     with SessionLocal() as session:
         try:
 
+            is_event_exist = session.scalar(select(exists().where(Events.name == form_data.event_info.event_title)))
+
+            if is_event_exist:
+                raise HTTPException(status_code=400, detail={
+                    "error": "Event already exist with that name",
+                    "detail": form_data.event_info.event_title
+                })
+
             print(f"Creating event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
             new_event = Events(
                 name=form_data.event_info.event_title,
@@ -52,36 +60,41 @@ def handle_events(form_data: CompositeFormData):
             print(f"Log for department created with id: \x1b[32m{dept_new_log.id}\x1b[0m")
 
             print(f"Linking department id: \x1b[33m{form_data.department_id}\x1b[0m to log id: \x1b[33m{dept_new_log.id}\x1b[0m")
-            new_departments_logs = DepartmentsLogs(
-                id=form_data.department_id,
+            new_departments_log = DepartmentsLogs(
                 department_id=form_data.department_id,
-                log_id=dept_new_log.id
+                log_id=dept_new_log.id,
+                attendants_number=len(members_data)
             )
 
-            session.add(new_departments_logs)
-            print(f"Department log created with id: \x1b[32m{new_departments_logs.id}\x1b[0m")
+            session.add(new_departments_log)
+            session.flush()
+            print(f"Department log created with id: \x1b[32m{new_departments_log.id}\x1b[0m")
 
 
-            # bonus and discount will not be implemented yet.
+            print(f"Creating modification for log id: \x1b[33m{dept_new_log.id}\x1b[0m")
+            if form_data.bonus > 0:
+                new_bonus = Modifications(
+                    log_id=dept_new_log.id,
+                    type="bonus", 
+                    value=form_data.bonus
+                )
 
-            # print(f"Creating modification for log id: \x1b[33m{new_log.id}\x1b[0m")
-            # if form_data.bonus > 0:
-            #     new_bonus = Modifications(
-            #         log_id=new_log.id,
-            #         type = "bonus",
-            #         value= form_data.bonus
-            #     )
-            #     session.add(new_bonus)
-            #     print(f"Modification created with id: \x1b[32m{new_bonus.id}\x1b[0m")
-            # if form_data.discount > 0:
-            #     new_discount = Modifications(
-            #         log_id=new_log.id,
-            #         type = "discount",
-            #         value= form_data.discount
-            #     )
-            #     session.add(new_discount)
-            #     session.flush()
-            #     print(f"Modification created with id: \x1b[32m{new_discount.id}\x1b[0m")
+                session.add(new_bonus)
+                session.flush()
+                print(f"Modification with type 'bonus' and value {new_bonus.value} was created for this log id: \x1b[32m{dept_new_log.id}\x1b[0m")
+
+ 
+            if form_data.discount > 0:
+                new_discount = Modifications(
+                    log_id=dept_new_log.id, 
+                    type="discount", 
+                    value=form_data.discount
+                )
+
+                session.add(new_discount)
+                session.flush()
+                print(f"Modification with type 'discount' and value {new_discount.value} was created for this log id: \x1b[32m{dept_new_log.id}\x1b[0m")
+
 
             print(f"Creating log for members for event: \x1b[33m{form_data.event_info.event_title}, Action_id: {form_data.member_action_id}\x1b[0m")
             member_new_log = Logs(
@@ -95,7 +108,7 @@ def handle_events(form_data: CompositeFormData):
             session.flush()
             print(f"Log for members created with id: \x1b[32m{member_new_log.id}\x1b[0m")
 
-            event_date = form_data.event_info.start_date
+            event_start_date = form_data.event_info.start_date
 
             print(f"Processing \x1b[33m{len(members_data)}\x1b[0m members from csv")
             for member, days_present in members_data:
@@ -117,10 +130,11 @@ def handle_events(form_data: CompositeFormData):
                         uni_id=member.uni_id,
                         gender=member.gender
                     )
-                print(f"Adding member: \x1b[33m{member.name}\x1b[0m")
-                session.add(db_member)
-                session.flush()
-                print(f"Member id: \x1b[32m{db_member.id}\x1b[0m")
+
+                    print(f"Adding member: \x1b[33m{member.name}\x1b[0m")
+                    session.add(db_member)
+                    session.flush()
+                    print(f"Member id: \x1b[32m{db_member.id}\x1b[0m")
 
                 print(f"Creating member log for member: \x1b[33m{member.name}\x1b[0m")
                 new_members_logs = MembersLogs(
@@ -135,7 +149,7 @@ def handle_events(form_data: CompositeFormData):
                     if day == "absent":
                         new_absence = Absence(
                             member_log_id=new_members_logs.id,
-                            date=event_date + datetime.timedelta(days=i)
+                            date=event_start_date + datetime.timedelta(days=i)
                         )
                         session.add(new_absence)
                 
@@ -157,8 +171,8 @@ def handle_events(form_data: CompositeFormData):
                             gender=member.gender
                         )
 
-                    session.add(db_member)
-                    session.flush()
+                        session.add(db_member)
+                        session.flush()
 
                     print(f"Creating log for organizer for event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
                     org_new_log = Logs(
@@ -205,38 +219,50 @@ def update_member(member: Member):
 
 
     with SessionLocal() as session:
-        db_member = session.get(Members, member.id)
-        
-        if not db_member:
-            print(f"member id {member.id}")
-            raise HTTPException(status_code=404, detail="Member not found in db.")
-        
-        db_member.name = member.name
-        db_member.email = member.email
-        db_member.phone_number = member.phone_number
-        db_member.uni_id = member.uni_id
+        try:
+            db_member = session.get(Members, member.id)
+            
+            if not db_member:
+                print(f"member id {member.id}")
+                raise HTTPException(status_code=404, detail="Member not found in db.")
+            
+            db_member.name = member.name
+            db_member.email = member.email
+            db_member.phone_number = member.phone_number
+            db_member.uni_id = member.uni_id
+            db_member.gender = member.gender
 
-        session.commit()
-        session.refresh(db_member)
+            session.commit()
+            session.refresh(db_member)
+            return db_member
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"Internal server error."})
 
-        return db_member
+        
     
 
 @router.post("/members", status_code=201, response_model=Member)
 def add_member(member: Member):
     with SessionLocal() as session:
-        new_member = Members(
-            name=member.name, 
-            email=member.email,
-            phone_number=member.phone_number,
-            uni_id=member.uni_id
-        )
+        try:
+            new_member = Members(
+                name=member.name, 
+                email=member.email,
+                phone_number=member.phone_number,
+                uni_id=member.uni_id,
+                gender=member.gender
+            )
 
-        session.add(new_member)
-        session.commit()
-        session.refresh(new_member)
+            session.add(new_member)
+            session.commit()
+            session.refresh(new_member)
 
-    return new_member
+            return new_member
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"Internal server error"})
+
 
 @router.get("/departments", status_code=200, response_model=List[Department])
 def handle_department():
@@ -247,6 +273,7 @@ def handle_department():
             departments.append(department)
 
     return departments
+
 
 @router.get("/actions", status_code=200, response_model=Categorized_action)
 def get_actions():
@@ -297,16 +324,21 @@ def get_action_contributors():
 @router.post("/actions", status_code=201, response_model=Action)
 def add_action(action: Action):
     with SessionLocal() as session:
-        new_action = Actions(
-            english_action_name=action.action_name,
-            arabic_action_name=action.action_arabic_name, 
-            action_type=action.action_type,
-            action_description=action.action_description, 
-            points=action.points
-        )
+        try:
+            new_action = Actions(
+                english_action_name=action.action_name,
+                arabic_action_name=action.arabic_action_name, 
+                action_type=action.action_type,
+                action_description=action.action_description, 
+                points=action.points
+            )
 
-        session.add(new_action)
-        session.commit()
-        session.refresh(new_action)
+            session.add(new_action)
+            session.commit()
+            session.refresh(new_action)
 
-    return new_action
+            return new_action
+        
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"Internal server error"})

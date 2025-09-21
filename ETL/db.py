@@ -29,8 +29,8 @@ class Members(Base):
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     email: Mapped[str | None] = mapped_column(String(100), unique=True)
     phone_number: Mapped[str | None] = mapped_column(String(20), unique=True)
-    uni_id: Mapped[str] = mapped_column(String(50), unique=True)
-    gender: Mapped[str] = mapped_column(Enum("Male", "Female"))
+    uni_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    gender: Mapped[str] = mapped_column(Enum("Male", "Female"), nullable=False)
 
     logs: Mapped[list["MembersLogs"]] = relationship(back_populates="member")
 
@@ -65,8 +65,7 @@ class DepartmentsLogs(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id", ondelete="CASCADE", onupdate="CASCADE"))
-    mf: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    attendants_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    attendants_number: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     log_id: Mapped[int] = mapped_column(ForeignKey("logs.id", ondelete="CASCADE", onupdate="CASCADE"))
 
     department: Mapped["Departments"] = relationship(back_populates="logs")
