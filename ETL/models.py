@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, HttpUrl
 import json
-from typing import List, Literal
+from typing import List, Literal, Tuple
 from datetime import datetime, date
 
 class Contributor(BaseModel):
@@ -39,18 +39,20 @@ class OrganizerData(BaseModel):
     uni_id: str
     email: str | None
     phone_number: str | None
-    participation_type: str
+    participation_action_id: str
+    gender: Literal["Male", "Female"]
 
     class Config:
         populate_by_name = True
 
-class FormData(BaseModel):
-    action: Literal["composite", "department", "member"]
-    event_info: EventData 
+class CompositeFormData(BaseModel):
+    action: Literal["composite"]
+    event_info: EventData
     department_id: str
     members_link: HttpUrl = Field(alias="members link")
     Organizers: List[OrganizerData] | None
-    action_id: int
+    department_action_id: int
+    member_action_id: int
     bonus: int
     discount: int
     class Config:
@@ -93,7 +95,7 @@ class Action(BaseModel):
 
 
 class Categorized_action(BaseModel):
-    composite_actions: List[Action] = Field(alias="composite action")
+    composite_actions: List[List[Action]] = Field(alias="composite action", description="List of pairs of actions, each inner list should have length 2")
     department_actions: List[Action] = Field(alias="department action")
     member_actions: List[Action] = Field(alias="member action")
 

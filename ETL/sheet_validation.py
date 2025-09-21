@@ -18,7 +18,7 @@ def validate_email(email: str) -> bool:
     except ValidationError:
         return False
 
-#@router.post("/validate/sheet")
+@router.post("/validate/sheet")
 def validate_sheet(validation_sheet: ValidateSheet):
     EXPECTED_HEADERS = set(["name", "email", "uni id", "phone number", "gender"])
 
