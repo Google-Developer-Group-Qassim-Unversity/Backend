@@ -80,10 +80,10 @@ def validate_sheet(validation_sheet: ValidateSheet):
             
 
     # check for missing names
-    if df.name.isnull().any():
+    if df["name"].isnull().any():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
-            "error": "Missing emails.",
-            "details": f"Missing email on rows: {[idx+2 for idx in df.index[df['email'].isnull()]]}"
+            "error": "Missing names.",
+            "details": f"Missing names on rows: {[idx+2 for idx in df.index[df['name'].isnull()]]}"
         })
 
 
