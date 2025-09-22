@@ -563,6 +563,7 @@ def get_action_contributors():
 
 @router.post("/actions", status_code=status.HTTP_201_CREATED, response_model=Action)
 def add_action(action: Action):
+
     with SessionLocal() as session:
         try:
             new_action = Actions(
@@ -582,3 +583,18 @@ def add_action(action: Action):
         except Exception as e:
             session.rollback()
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"Internal server error"})
+        
+
+@router.get("/events", status_code=status.HTTP_200_OK, response_model=List[str])
+def handler_get_events():
+    with SessionLocal() as session:
+        try:
+            db_events = session.scalars(select(Events.name)).all()
+            
+            events = []
+            for event in db_events:
+                events.append(event)
+
+            return events
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
