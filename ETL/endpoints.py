@@ -19,9 +19,6 @@ def hanlde_root():
     return HTMLResponse("<h1>Score Admin API is ready ✅</h1>")
 
 
-@router.post("/")
-
-
 @router.post("/events", status_code=200)
 def handle_events(form_data: CompositeFormData):
 
@@ -449,16 +446,13 @@ def handle_members(form_data: MemberFormData):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
 
-
-
-            
-
 @router.get("/members", status_code=status.HTTP_200_OK, response_model=List[Member])
 def handle_get_members():
     with SessionLocal() as session:
         members = session.scalars(select(Members)).all()
 
     return members
+
 
 @router.put("/members", response_model=Member, status_code=status.HTTP_201_CREATED)
 def handle_update_member(member: Member):
@@ -485,8 +479,6 @@ def handle_update_member(member: Member):
             session.rollback()
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"Internal server error."})
 
-        
-    
 
 @router.post("/members", status_code=status.HTTP_201_CREATED, response_model=Member)
 def handle_create_member(member: Member):
@@ -558,6 +550,7 @@ def get_actions():
         member_actions=member_Actions
     )
 
+
 @router.get("/actions/contributers", response_model=List[Action], status_code=status.HTTP_200_OK)
 def get_action_contributors():
     with SessionLocal() as session:
@@ -566,6 +559,7 @@ def get_action_contributors():
         )
         result = session.scalars(statement).all()
     return result
+
 
 @router.post("/actions", status_code=status.HTTP_201_CREATED, response_model=Action)
 def add_action(action: Action):
