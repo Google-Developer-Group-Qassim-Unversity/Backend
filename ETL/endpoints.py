@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
 from helpers import csv_to_pydantic_member
-from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department, DepartmentFormData, OrganizerData, MemberFormData
+from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData
 from typing import List
 import datetime
 from pprint import pprint
@@ -13,6 +13,7 @@ router = APIRouter()
 
 def to_dict(obj):
     return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+
 
 @router.get("/", status_code=200)
 def hanlde_root():
@@ -598,3 +599,85 @@ def handler_get_events():
             return events
         except Exception:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+
+@router.post("/events/custom/members", status_code=status.HTTP_201_CREATED)
+def handler_custom_members(form_data: CustomMembersFormData,):
+    with SessionLocal() as session:
+        try:
+            # check if event exist in DB
+            is_event_exist = session.scalar(select(exists().where(Events.name == form_data.event_info.event_title)))
+
+            if is_event_exist: 
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+                    "error": "Event already exist with that name",
+                    "detail": form_data.event_info.event_title
+                })
+            
+            new_event = Events(
+                name=form_data
+            )
+
+            session.add(new_event)
+            session.flush()
+            print(f"Event Created. \x1b[32m{new_event.name}\x1b[0m")
+
+            # add a log to the event 
+            new_log = Logs(
+                action_id=form_data.action_id, 
+                event_id=new_event.id, 
+                start_date=form_data.event_info.start_date, 
+                end_date=form_data.event_info.end_date
+            )
+
+            session.add(new_event)
+            session.flush()
+            print(f"Log Created. \x1b[32m{new_log.id}\x1b[0m")
+
+            new_modification = Modifications(
+                log_id=new_log.id, 
+                type="bonus", 
+                value=form_data.bonus
+            )
+
+            session.add(new_modification)
+            session.flush()
+            print(f"Bonus Row Created With Value. \x1b[32m{new_modification.value}\x1b[0m")
+
+
+            members = form_data.members
+            for member in members:
+                member: Member
+
+                db_member = session.execute(select(Member).where(Member.uni_id == member.uni_id))
+
+                if not db_member:
+                    db_member = Member(
+                        name=member.name, 
+                        email=member.email, 
+                        phone_number=member.phone_number, 
+                        uni_id=member.uni_id, 
+                        gender=member.gender
+                    )
+
+                    session.add(db_member)
+                    session.flush()
+                    print(f"Member Created. \x1b[32m{db_member.id}\x1b[0m")
+
+                # linking member to the created log
+                new_member_log = MembersLogs(
+                    member_id=db_member.id, 
+                    log_id=new_log.id
+                )
+
+                session.add(new_member_log)
+                print(f"Member Log Created. \x1b[32m{new_member_log.id}\x1b[0m")
+
+            session.commit()
+            print(f"Event processing completed successfully ✅")
+            return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Event processed successfully"})
+        except Exception as e:
+            session.rollback()
+            print("Error processing event ❌")
+            print(e)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error") 
