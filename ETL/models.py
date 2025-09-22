@@ -41,16 +41,26 @@ class OrganizerData(BaseModel):
     phone_number: str | None
     participation_action_id: str
     gender: Literal["Male", "Female"]
+    attendance: List[Literal["present", "absent"]]
 
     class Config:
         populate_by_name = True
 
+class DepartmentFormData(BaseModel):
+    action: Literal["department"]
+    event_info: EventData
+    department_id: int
+    organizers: List[OrganizerData] | None 
+    action_id: int
+    bonus: int 
+    discount: int
+
 class CompositeFormData(BaseModel):
     action: Literal["composite"]
     event_info: EventData
-    department_id: str
+    department_id: int
     members_link: HttpUrl = Field(alias="members link")
-    Organizers: List[OrganizerData] | None
+    organizers: List[OrganizerData] | None
     department_action_id: int
     member_action_id: int
     bonus: int

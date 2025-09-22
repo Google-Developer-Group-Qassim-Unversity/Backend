@@ -3,10 +3,12 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
 from helpers import csv_to_pydantic_member
-from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department
+from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department, DepartmentFormData, OrganizerData
 from typing import List
 import datetime
 from pprint import pprint
+
+
 router = APIRouter()
 
 def to_dict(obj):
@@ -15,6 +17,10 @@ def to_dict(obj):
 @router.get("/", status_code=200)
 def hanlde_root():
     return HTMLResponse("<h1>Score Admin API is ready ✅</h1>")
+
+
+@router.post("/")
+
 
 @router.post("/events", status_code=200)
 def handle_events(form_data: CompositeFormData):
@@ -154,10 +160,12 @@ def handle_events(form_data: CompositeFormData):
                         session.add(new_absence)
                 
             # Flow for organizers
-            organizers = len(form_data.Organizers) if form_data.Organizers != None else 0
+            organizers = len(form_data.organizers) if form_data.organizers != None else 0
             if organizers > 0:
-                print(f"Processing \x1b[33m{form_data.Organizers}\x1b[0m organizers")
-                for member in form_data.Organizers:
+                print(f"Processing \x1b[33m{form_data.organizers}\x1b[0m organizers")
+                for member in form_data.organizers:
+                    member: OrganizerData
+
                     db_member = session.execute(
                         select(Members).where(Members.uni_id == member.uni_id)
                     ).scalar_one_or_none()
@@ -192,22 +200,149 @@ def handle_events(form_data: CompositeFormData):
                     )
 
                     session.add(new_members_logs)
-                print(f"processed organizer: \x1b[32m{len(form_data.Organizers) if form_data.Organizers != None else 0}\x1b[0m")
+
+                    for i, day in enumerate(member.attendance):
+                        if day == "absent":
+                            new_absence = Absence(
+                                member_log_id = db_member.id, 
+                                date = event_start_date + datetime.timedelta(days=i)
+                            )
+
+                            session.add(new_absence)
+                            session.flush()
+
+                print(f"processed organizer: \x1b[32m{len(form_data.organizers) if form_data.organizers != None else 0}\x1b[0m")
             else:
                 print("No organizers to process")    
 
             session.commit()
             print(f"Event processing completed successfully ✅")
-            return JSONResponse(status_code=200, content={"message": "Event processed successfully"})
+            return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
             print("Error processing event ❌")
             print(e)
-            raise HTTPException(status_code=500, detail="Internal Server Error") 
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error") 
 
 
+@router.post("/events/departments", status_code=status.HTTP_200_OK)
+def handle_departments(form_data: DepartmentFormData):
+    with SessionLocal() as session:
+        try:
+            # check if event already exist in DB
+            is_event_exist = session.scalar(select(exists().where(Events.name == form_data.event_info.event_title)))
+            if is_event_exist:                
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+                    "error": "Event already exist with that name",
+                    "detail": form_data.event_info.event_title
+                })
+            
+            # insert event into DB
+            print(f"Creating event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
+            new_event = Events(
+                name=form_data.event_info.event_title
+            )
 
-@router.get("/members", status_code=200, response_model=List[Member])
+            print(f"Event created with id: \x1b[32m{new_event.id}\x1b[0m")
+            session.add(new_event)
+            session.flush()
+
+            # create and insert a log into DB
+            print(f"Creating log for department for event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
+            new_log = Logs(
+                action_id=form_data.action_id,
+                start_date=form_data.event_info.start_date,
+                end_date=form_data.event_info.end_date,
+                event_id=new_event.id
+            )
+
+            print(f"Log for department created with id: \x1b[32m{new_log.id}\x1b[0m")
+            session.add(new_log)
+            session.flush()
+
+
+            # link the log to dept log 
+            new_dept_log = DepartmentsLogs(
+                department_id=form_data.department_id,
+                log_id=new_log.id
+            )
+
+
+            session.add(new_dept_log)
+            session.flush()
+            print(f"Department log created with id: \x1b[32m{new_dept_log.id}\x1b[0m")
+
+
+            # origanizers flow
+            organizers = len(form_data.organizers) if form_data.organizers != None else 0
+            if organizers > 0:
+                print(f"Processing \x1b[33m{form_data.organizers}\x1b[0m organizers")
+                for member in form_data.organizers:
+                    member: OrganizerData
+                    db_member = session.execute(
+                        select(Members).where(Members.uni_id == member.uni_id)
+                    ).scalar_one_or_none()
+
+                    if not db_member:
+                        db_member = Members(
+                            name=member.name,
+                            email=member.email,
+                            phone_number=member.phone_number,
+                            uni_id=member.uni_id,
+                            gender=member.gender
+                        )
+
+                        session.add(db_member)
+                        session.flush()
+
+                    print(f"Creating log for organizer for event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
+                    org_new_log = Logs(
+                        action_id=member.participation_action_id,
+                        event_id=new_event.id,
+                        start_date=form_data.event_info.start_date,
+                        end_date=form_data.event_info.end_date
+                    )
+
+                    session.add(org_new_log)
+                    session.flush()
+                    print(f"Organizer log created with id: \x1b[32m{org_new_log.id}\x1b[0m")
+
+                    new_members_log = MembersLogs(
+                        member_id=db_member.id,
+                        log_id=org_new_log.id 
+                    )
+
+                    session.add(new_members_log)
+                    session.flush()
+
+
+                    # processing attendance for organizers
+                    for i, day in enumerate(member.attendance):
+                        if day == "absent":
+                            new_absence=Absence(
+                                member_log_id=new_members_log.id,
+                                date=form_data.event_info.start_date + datetime.timedelta(days=i)
+                            )
+
+                            session.add(new_absence)
+
+                print(f"processed organizer: \x1b[32m{len(form_data.organizers) if form_data.organizers != None else 0}\x1b[0m")
+            else:
+                print(f"processed organizer: \x1b[32m{len(form_data.organizers) if form_data.organizers != None else 0}\x1b[0m")
+
+            session.commit()
+            print(f"Event processing completed successfully ✅")
+            return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Event processed successfully"})
+        except Exception as e:
+            session.rollback()
+            print("Error processing event ❌")
+            print(e)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
+
+                    
+
+
+@router.get("/members", status_code=status.HTTP_200_OK, response_model=List[Member])
 def handle_members():
     with SessionLocal() as session:
         members = session.scalars(select(Members)).all()
@@ -215,7 +350,7 @@ def handle_members():
     return members
 
 @router.put("/members", response_model=Member, status_code=201)
-def update_member(member: Member):
+def handle_update_member(member: Member):
 
 
     with SessionLocal() as session:
@@ -242,8 +377,8 @@ def update_member(member: Member):
         
     
 
-@router.post("/members", status_code=201, response_model=Member)
-def add_member(member: Member):
+@router.post("/members", status_code=status.HTTP_201_CREATED, response_model=Member)
+def handle_create_member(member: Member):
     with SessionLocal() as session:
         try:
             new_member = Members(
@@ -264,7 +399,7 @@ def add_member(member: Member):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"Internal server error"})
 
 
-@router.get("/departments", status_code=200, response_model=List[Department])
+@router.get("/departments", status_code=status.HTTP_200_OK, response_model=List[Department])
 def handle_department():
     with SessionLocal() as session:
         result = session.scalars(select(Departments)).all()
@@ -275,7 +410,7 @@ def handle_department():
     return departments
 
 
-@router.get("/actions", status_code=200, response_model=Categorized_action)
+@router.get("/actions", status_code=status.HTTP_200_OK, response_model=Categorized_action)
 def get_actions():
     with SessionLocal() as session:
         statement = select(Actions)
