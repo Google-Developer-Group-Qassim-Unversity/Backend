@@ -137,3 +137,10 @@ class ValidateSheet(BaseModel):
     def url_str(self) -> str:
         return str(self.url)
     
+
+
+class CustomMembersFormData(BaseModel):
+    event_info: EventData
+    members: List[Member]
+    bonus: int
+    action_id: int
