@@ -4,9 +4,10 @@ from os import getenv
 from dotenv import load_dotenv
 from datetime import date
 import datetime as dt
+from helpers import get_database_url
 
 load_dotenv()
-engine = create_engine(getenv("DATABASE_URL"))
+engine = create_engine(get_database_url())
 
 
 class Base(DeclarativeBase):

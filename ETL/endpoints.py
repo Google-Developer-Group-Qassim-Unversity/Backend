@@ -240,9 +240,9 @@ def handle_departments(form_data: DepartmentFormData):
                 name=form_data.event_info.event_title
             )
 
-            print(f"Event created with id: \x1b[32m{new_event.id}\x1b[0m")
             session.add(new_event)
             session.flush()
+            print(f"Event created with id: \x1b[32m{new_event.id}\x1b[0m")
 
             # create and insert a log into DB
             print(f"Creating log for department for event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
@@ -253,9 +253,9 @@ def handle_departments(form_data: DepartmentFormData):
                 event_id=new_event.id
             )
 
-            print(f"Log for department created with id: \x1b[32m{new_log.id}\x1b[0m")
             session.add(new_log)
             session.flush()
+            print(f"Log for department created with id: \x1b[32m{new_log.id}\x1b[0m")
 
             # check then adding dicounts and bonuses
             if form_data.discount > 0:
@@ -356,7 +356,7 @@ def handle_departments(form_data: DepartmentFormData):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
 
-@router.post("events/members", status_code=status.HTTP_200_OK)
+@router.post("/events/members", status_code=status.HTTP_200_OK)
 def handle_members(form_data: MemberFormData):
     with SessionLocal() as session:
         try:
@@ -443,6 +443,12 @@ def handle_members(form_data: MemberFormData):
             session.rollback()
             print("Error processing event ❌")
             print(e)
+            # {'error': 'Event already exist with that name', 'detail': 'asdf'}
+            try:
+                if e['error'] == "Event already exist with that name":
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e)
+            except Exception as ex:
+                pass
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
 
