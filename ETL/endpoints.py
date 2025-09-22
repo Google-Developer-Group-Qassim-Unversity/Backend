@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
 from helpers import csv_to_pydantic_member
-from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department, DepartmentFormData, OrganizerData
+from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department, DepartmentFormData, OrganizerData, MemberFormData
 from typing import List
 import datetime
 from pprint import pprint
@@ -260,6 +260,23 @@ def handle_departments(form_data: DepartmentFormData):
             session.add(new_log)
             session.flush()
 
+            # check then adding dicounts and bonuses
+            if form_data.discount > 0:
+                new_modification = Modifications(
+                    log_id=new_log.id,
+                    type="discount",
+                    value=form_data.discount
+                )                 
+                session.add(new_modification)
+
+
+            if form_data.bonus > 0:
+                new_modification = Modifications(
+                    log_id=new_log.id, 
+                    type="bonus", 
+                    value=form_data.bonus
+                )
+
 
             # link the log to dept log 
             new_dept_log = DepartmentsLogs(
@@ -277,7 +294,8 @@ def handle_departments(form_data: DepartmentFormData):
             organizers = len(form_data.organizers) if form_data.organizers != None else 0
             if organizers > 0:
                 print(f"Processing \x1b[33m{form_data.organizers}\x1b[0m organizers")
-                for member in form_data.organizers:
+                members = form_data.organizers
+                for member in members:
                     member: OrganizerData
                     db_member = session.execute(
                         select(Members).where(Members.uni_id == member.uni_id)
@@ -317,7 +335,8 @@ def handle_departments(form_data: DepartmentFormData):
 
 
                     # processing attendance for organizers
-                    for i, day in enumerate(member.attendance):
+                    attendance = member.attendance
+                    for i, day in enumerate(attendance):
                         if day == "absent":
                             new_absence=Absence(
                                 member_log_id=new_members_log.id,
@@ -339,17 +358,109 @@ def handle_departments(form_data: DepartmentFormData):
             print(e)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
-                    
 
+@router.post("events/members", status_code=status.HTTP_200_OK)
+def handle_members(form_data: MemberFormData):
+    with SessionLocal() as session:
+        try:
+            # checking if event exist then adding it if not
+            is_event_exist = session.scalar(select(exists().where(Events.name == form_data.event_info.event_title)))
+            if is_event_exist:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+                    "error": "Event already exist with that name",
+                    "detail": form_data.event_info.event_title
+                })
+            
+            new_event = Events(
+                name=form_data.event_info.event_title
+            )
+
+            session.add(new_event)
+            session.flush()
+            print(f"Event Created. \x1b[32m{form_data.event_info.event_title}\x1b[0m")
+
+            # creating a log for the event
+            new_log = Logs(
+                    action_id=form_data.action_id,
+                    start_date=form_data.event_info.start_date, 
+                    end_date=form_data.event_info.end_date, 
+                    event_id=new_event.id
+                )
+
+            session.add(new_log)
+            session.flush()
+            print(f"Log Created. \x1b[32m{new_log.id}\x1b[0m")
+
+
+            if form_data.bonus > 0:
+                new_modification = Modifications(
+                    log_id=new_log.id, 
+                    type="bonus", 
+                    valu=form_data.bonus
+                )
+
+                session.add(new_modification)
+            
+            if form_data.discount > 0:
+                new_modification = Modifications(
+                    log_id=new_log.id, 
+                    type="discount", 
+                    value=form_data.discount
+                )
+
+                session.add(new_modification)
+
+            # adding members and all that kind of crap 
+            members = form_data.members
+            for member in members:
+                member: Member
+
+                new_member = session.execute(select(Member).where(Member.uni_id == member.uni_id)).scalar_one_or_none()
+
+                if not new_member:
+                    new_member = Members(
+                        name=member.name, 
+                        email=member.email, 
+                        phone_number=member.phone_number, 
+                        uni_id=member.uni_id, 
+                        gender=member.gender
+                    )
+
+                    session.add(new_member)
+                    session.flush()
+                    print(f"Member was added succussfuly \x1b[32m{new_member.name}\x1b[0m")
+
+                # link linking members to perviously created log
+                new_member_log = MembersLogs(
+                    member_id=new_member.id,
+                    log_id=new_log.id
+                )
+
+                session.add(new_member_log)
+                print(f"Member Log Created. \x1b[32m{new_member_log.id}\x1b[0m")
+
+            session.commit()
+            print(f"Event processing completed successfully ✅")
+            return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Event processed successfully"})
+        except Exception as e:
+            session.rollback()
+            print("Error processing event ❌")
+            print(e)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
+
+
+
+
+            
 
 @router.get("/members", status_code=status.HTTP_200_OK, response_model=List[Member])
-def handle_members():
+def handle_get_members():
     with SessionLocal() as session:
         members = session.scalars(select(Members)).all()
 
     return members
 
-@router.put("/members", response_model=Member, status_code=201)
+@router.put("/members", response_model=Member, status_code=status.HTTP_201_CREATED)
 def handle_update_member(member: Member):
 
 
@@ -447,7 +558,7 @@ def get_actions():
         member_actions=member_Actions
     )
 
-@router.get("/actions/contributers", response_model=List[Action], status_code=200)
+@router.get("/actions/contributers", response_model=List[Action], status_code=status.HTTP_200_OK)
 def get_action_contributors():
     with SessionLocal() as session:
         statement = select(Actions).where(
@@ -456,7 +567,7 @@ def get_action_contributors():
         result = session.scalars(statement).all()
     return result
 
-@router.post("/actions", status_code=201, response_model=Action)
+@router.post("/actions", status_code=status.HTTP_201_CREATED, response_model=Action)
 def add_action(action: Action):
     with SessionLocal() as session:
         try:

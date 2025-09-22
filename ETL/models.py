@@ -46,6 +46,7 @@ class OrganizerData(BaseModel):
     class Config:
         populate_by_name = True
 
+
 class DepartmentFormData(BaseModel):
     action: Literal["department"]
     event_info: EventData
@@ -80,6 +81,16 @@ class Member(BaseModel):
     class Config:
         populate_by_name = True
         from_atrributes = True
+
+
+
+class MemberFormData(BaseModel):
+    event_info: EventData
+    members: List[Member]
+    bonus: int
+    discount: int 
+    action_id: int
+
 
 class Department(BaseModel):
     id: int
