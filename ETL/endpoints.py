@@ -1,9 +1,9 @@
 from sqlalchemy import select, exists
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
-from helpers import csv_to_pydantic_member
-from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData, CustomDepartmentsFormData
+from helpers import get_pydantic_members
+from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData, CustomDepartmentsFormData, parse_composite_form
 from typing import List
 import datetime
 from pprint import pprint
@@ -20,16 +20,22 @@ def hanlde_root():
     return HTMLResponse("<h1>Score Admin API is ready ✅</h1>")
 
 
-@router.post("/events", status_code=200)
-def handle_events(form_data: CompositeFormData):
+@router.post("/events/composite", status_code=status.HTTP_201_CREATED)
+def handle_events(parsed: tuple = Depends(parse_composite_form)):
 
+
+    form_data, file = parsed
+    form_data: CompositeFormData
     # This needs to be refactored into smaller functions.
     # that take the same session. so that multiple queryies
     # can be done in one transaction.
 
     # return JSONResponse(status_code=200, content={"message": "Event processed successfully"})
 
-    members_data = csv_to_pydantic_member(str(form_data.members_link))
+    if file is not None:
+        members_data = get_pydantic_members(file)
+    else:
+        members_data = get_pydantic_members(str(form_data.members_link))
     with SessionLocal() as session:
         try:
 
@@ -118,6 +124,7 @@ def handle_events(form_data: CompositeFormData):
             for member, days_present in members_data:
                 member: Member
                 days_present: list
+                print(f"member name \x1b[35m'{member.name}'\x1b[0m has days present {days_present}")
 
                 print(f"searching for member: \x1b[33m{member.name}\x1b[0m")
                 db_member = session.execute(
@@ -150,7 +157,7 @@ def handle_events(form_data: CompositeFormData):
                 session.flush()
 
                 for i, day in enumerate(days_present): # [present, absent, absent]
-                    if day == "absent":
+                    if day == "Absent":
                         new_absence = Absence(
                             member_log_id=new_members_logs.id,
                             date=event_start_date + datetime.timedelta(days=i)
@@ -215,7 +222,7 @@ def handle_events(form_data: CompositeFormData):
 
             session.commit()
             print(f"Event processing completed successfully ✅")
-            return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Event processed successfully"})
+            return JSONResponse(status_code=status.HTTP_201_CREATED, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
             print("Error processing event ❌")
@@ -223,7 +230,7 @@ def handle_events(form_data: CompositeFormData):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error") 
 
 
-@router.post("/events/departments", status_code=status.HTTP_200_OK)
+@router.post("/events/departments", status_code=status.HTTP_201_CREATED)
 def handle_departments(form_data: DepartmentFormData):
     with SessionLocal() as session:
         try:
@@ -349,7 +356,7 @@ def handle_departments(form_data: DepartmentFormData):
 
             session.commit()
             print(f"Event processing completed successfully ✅")
-            return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Event processed successfully"})
+            return JSONResponse(status_code=status.HTTP_201_CREATED, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
             print("Error processing event ❌")
@@ -357,7 +364,7 @@ def handle_departments(form_data: DepartmentFormData):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
 
-@router.post("/events/members", status_code=status.HTTP_200_OK)
+@router.post("/events/members", status_code=status.HTTP_201_CREATED)
 def handle_members(form_data: MemberFormData):
     with SessionLocal() as session:
         try:
@@ -439,7 +446,7 @@ def handle_members(form_data: MemberFormData):
 
             session.commit()
             print(f"Event processing completed successfully ✅")
-            return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Event processed successfully"})
+            return JSONResponse(status_code=status.HTTP_201_CREATED, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
             print("Error processing event ❌")
@@ -597,7 +604,7 @@ def add_action(action: Action):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"Internal server error"})
         
 
-@router.get("/events", status_code=status.HTTP_200_OK, response_model=List[str])
+@router.get("/events", status_code=status.HTTP_201_CREATED, response_model=List[str])
 def handler_get_events():
     with SessionLocal() as session:
         try:
@@ -696,7 +703,7 @@ def handler_custom_members(form_data: CustomMembersFormData,):
 
             session.commit()
             print(f"Event processing completed successfully ✅")
-            return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Event processed successfully"})
+            return JSONResponse(status_code=status.HTTP_201_CREATED, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
             print("Error processing event ❌")
@@ -764,7 +771,7 @@ def handle_custom_departments(form_data: CustomDepartmentsFormData):
 
             session.commit()
             print(f"Event processing completed successfully ✅")
-            return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Event processed successfully"})
+            return JSONResponse(status_code=status.HTTP_201_CREATED, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
             print("Error processing event ❌")

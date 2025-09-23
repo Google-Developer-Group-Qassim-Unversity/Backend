@@ -4,24 +4,47 @@ import io
 from models import Member
 from typing import List
 from dotenv import load_dotenv
+from typing import Union, Tuple
+from pathlib import Path
+import pandas as pd
+from fastapi import UploadFile
+
 import os
-def csv_to_pydantic_member(url) -> List[Member]:
-    print(f"Got link: \x1b[33m{url}\x1b[0m")
-    response = urllib.request.urlopen(url)
-    csv_data = response.read().decode("utf-8")
-    csv_file = io.StringIO(csv_data)
+
+def get_pydantic_members(source: Union[UploadFile, str]) -> List[tuple]:
+    if isinstance(source, str):
+        # Handle URL
+        print(f"Got link: \x1b[33m{source}\x1b[0m")
+        df = pd.read_csv(source)
+    else:
+        # Handle UploadFile
+        print(f"Got file: \x1b[33m{source.filename}\x1b[0m")
+        df = pd.read_excel(source.file)
+    
     members_and_date = []
-    reader = csv.DictReader(csv_file)
-    columns = reader.fieldnames
-    for row in reader:
-        members_and_date.append((Member(
+    
+    # Get column names
+    columns = df.columns.tolist()
+    print(f"Columns found: \x1b[36m{columns}\x1b[0m")
+    print(f"Date columns found: \x1b[36m{columns[5:]}\x1b[0m")
+    
+    # Iterate through DataFrame rows
+    for _, row in df.iterrows():
+        member = Member(
             name=row.get("name"),
-            email=row.get("email"),
-            phone_number = None if row.get("phone number") == "" else row.get("phone number"),
-            uni_id=row.get("uni id"),
+            email=str(row.get("email")),
+            phone_number=None if pd.isna(row.get("phone number")) or row.get("phone number") == "" else str(row.get("phone number")),
+            uni_id=str(row.get("uni id")),
             gender=row.get("gender")
-        ), [row[n] for n in columns[5:]]))  # Collecting all date columns
-    print(f"Extracted \x1b[32m{len(members_and_date)}\x1b[0m members from csv")
+        )
+        
+        # Collecting all date columns (assuming first 5 columns are member data)
+        date_columns = [row[col] for col in columns[5:]]
+        
+        members_and_date.append((member, date_columns))
+    
+    source_type = "URL" if isinstance(source, str) else "file"
+    print(f"Extracted \x1b[32m{len(members_and_date)}\x1b[0m members from {source_type}")
     return members_and_date
 
 def get_database_url():
@@ -39,7 +62,6 @@ def get_database_url():
 
 
 if __name__ == "__main__":
-    url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRcmCPGpWxuj9y8LEjeKPhBW77qRvyWs3g5wAH5eA5weEPASXj-FvhLUwa_CNW5ZX9D6c3qyOk5bej0/pub?gid=1781104695&single=true&output=csv"
-    members = csv_to_pydantic_member(url)
-    for member in members:
-        print(member)
+    url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTI-xnfTaaEhNO4G4Vx1dJejKq2kDtHSi5yWtcrFGNfKJJxqRvIpBXk2_M9dxDc49NrDY-dD5SiJ6pR/pub?gid=1781104695&single=true&output=csv"
+    members = get_pydantic_members(url)
+    print(f"done ✅ got {len(members)} members")

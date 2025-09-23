@@ -1,10 +1,9 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, UploadFile, status, Depends
 from fastapi.responses import Response
-from models import ValidateSheet
+from models import ValidateSheet, parse_validate_sheet
 import pandas as pd
 from pydantic import EmailStr, ValidationError, BaseModel
 from datetime import datetime
-
 router = APIRouter()
 
 class EmailCheck(BaseModel):
@@ -19,11 +18,18 @@ def validate_email(email: str) -> bool:
         return False
 
 @router.post("/validate/sheet")
-def validate_sheet(validation_sheet: ValidateSheet):
+def validate_sheet(parsed: tuple = Depends(parse_validate_sheet)):
     EXPECTED_HEADERS = set(["name", "email", "uni id", "phone number", "gender"])
 
+    validation_sheet, file = parsed
+    validation_sheet: ValidateSheet
+    file: UploadFile | None
+    
     try:
-        df = pd.read_csv(validation_sheet.url_str)
+        if file is not None:
+            df = pd.read_excel(file.file)
+        else:
+            df = pd.read_csv(validation_sheet.url_str)
         print("done")
     except Exception as e:
         print("not done", e)
