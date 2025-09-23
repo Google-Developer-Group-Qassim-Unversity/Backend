@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
 from helpers import csv_to_pydantic_member
-from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData
+from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData, CustomDepartmentsFormData
 from typing import List
 import datetime
 from pprint import pprint
@@ -413,7 +413,7 @@ def handle_members(form_data: MemberFormData):
             for member in members:
                 member: Member
 
-                new_member = session.execute(select(Member).where(Member.uni_id == member.uni_id)).scalar_one_or_none()
+                new_member = session.execute(select(Members).where(Member.uni_id == member.uni_id)).scalar_one_or_none()
 
                 if not new_member:
                     new_member = Members(
@@ -527,11 +527,15 @@ def get_actions():
         result = session.scalars(statement).all()
         department_Actions = []
         member_Actions = []
+        custom_action = []
         for action in result:
             if action.action_type == "member":
                 member_Actions.append(to_dict(action))
             elif action.action_type == "department":
                 department_Actions.append(to_dict(action))
+            elif action.action_name == "Bonus":
+                custom_action.append(to_dict(action))
+
 
         ids_group1 = [51, 52, 53, 54]
         ids_group2 = [76, 77, 78, 79]
@@ -554,7 +558,8 @@ def get_actions():
     return Categorized_action(
         composite_actions=paired,
         department_actions=department_Actions,
-        member_actions=member_Actions
+        member_actions=member_Actions,
+        custom_actions=custom_action,
     )
 
 
@@ -613,15 +618,17 @@ def handler_custom_members(form_data: CustomMembersFormData,):
         try:
             # check if event exist in DB
             is_event_exist = session.scalar(select(exists().where(Events.name == form_data.event_info.event_title)))
+            
 
-            if is_event_exist: 
+            if is_event_exist:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
                     "error": "Event already exist with that name",
                     "detail": form_data.event_info.event_title
                 })
             
+            print(f"Creating event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
             new_event = Events(
-                name=form_data
+                name=form_data.event_info.event_title
             )
 
             session.add(new_event)
@@ -629,6 +636,7 @@ def handler_custom_members(form_data: CustomMembersFormData,):
             print(f"Event Created. \x1b[32m{new_event.name}\x1b[0m")
 
             # add a log to the event 
+            print(f"Creating log for members for event: \x1b[33m{form_data.event_info.event_title}, Action_id: {form_data.action_id}\x1b[0m")
             new_log = Logs(
                 action_id=form_data.action_id, 
                 event_id=new_event.id, 
@@ -636,10 +644,11 @@ def handler_custom_members(form_data: CustomMembersFormData,):
                 end_date=form_data.event_info.end_date
             )
 
-            session.add(new_event)
+            session.add(new_log)
             session.flush()
             print(f"Log Created. \x1b[32m{new_log.id}\x1b[0m")
 
+            print(f"Creating modification for log id: \x1b[33m{new_log.id}\x1b[0m")
             new_modification = Modifications(
                 log_id=new_log.id, 
                 type="bonus", 
@@ -654,10 +663,12 @@ def handler_custom_members(form_data: CustomMembersFormData,):
             members = form_data.members
             for member in members:
                 member: Member
-
-                db_member = session.execute(select(Member).where(Member.uni_id == member.uni_id))
+                print(f"Searching for member: \x1b[33m{member.name}\x1b[0m")
+                db_member = session.execute(select(Members).where(Members.uni_id == member.uni_id)).scalar_one_or_none()
+                
 
                 if not db_member:
+                    print(f"Member \x1b[33m{member.uni_id}\x1b[0m not found in db, creating new member")
                     db_member = Member(
                         name=member.name, 
                         email=member.email, 
@@ -669,7 +680,10 @@ def handler_custom_members(form_data: CustomMembersFormData,):
                     session.add(db_member)
                     session.flush()
                     print(f"Member Created. \x1b[32m{db_member.id}\x1b[0m")
+                else:
+                    print(f"Member Found. \x1b[32m{db_member.id}\x1b[0m")
 
+                print(f"Linking member id: \x1b[33m{db_member.id}\x1b[0m to log id: \x1b[33m{new_log.id}\x1b[0m")
                 # linking member to the created log
                 new_member_log = MembersLogs(
                     member_id=db_member.id, 
@@ -677,7 +691,76 @@ def handler_custom_members(form_data: CustomMembersFormData,):
                 )
 
                 session.add(new_member_log)
+                session.flush()
                 print(f"Member Log Created. \x1b[32m{new_member_log.id}\x1b[0m")
+
+            session.commit()
+            print(f"Event processing completed successfully ✅")
+            return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Event processed successfully"})
+        except Exception as e:
+            session.rollback()
+            print("Error processing event ❌")
+            print(e)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error") 
+
+
+@router.post("/events/custom/departments", status_code=status.HTTP_201_CREATED)
+def handle_custom_departments(form_data: CustomDepartmentsFormData):
+    with SessionLocal() as session:
+        try:
+            # check if event exist in DB
+            is_event_exist = session.scalar(select(exists().where(Events.name == form_data.event_info.event_title)))
+            
+            if is_event_exist:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+                    "error": "Event already exist with that name",
+                    "detail": form_data.event_info.event_title
+                })
+            
+            print(f"Creating event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
+            new_event = Events(
+                name=form_data.event_info.event_title
+            )
+
+            session.add(new_event)
+            session.flush()
+            print(f"Event Created. \x1b[32m{new_event.name}\x1b[0m")
+
+            # add a log to the event 
+            print(f"Creating log for members for event: \x1b[33m{form_data.event_info.event_title}, Action_id: {form_data.action_id}\x1b[0m")
+            new_log = Logs(
+                action_id=form_data.action_id, 
+                event_id=new_event.id, 
+                start_date=form_data.event_info.start_date, 
+                end_date=form_data.event_info.end_date
+            )
+
+            session.add(new_log)
+            session.flush()
+            print(f"Log Created. \x1b[32m{new_log.id}\x1b[0m")
+
+            print(f"Creating modification for log id: \x1b[33m{new_log.id}\x1b[0m")
+            new_modification = Modifications(
+                log_id=new_log.id, 
+                type="bonus", 
+                value=form_data.bonus
+            )
+
+            session.add(new_modification)
+            session.flush()
+            print(f"Bonus Row Created With Value. \x1b[32m{new_modification.value}\x1b[0m")
+
+            print(f"Linking department id: \x1b[33m{form_data.department_id}\x1b[0m to log id: \x1b[33m{new_log.id}\x1b[0m")
+            # link the log to dept log 
+            new_dept_log = DepartmentsLogs(
+                department_id=form_data.department_id,
+                log_id=new_log.id
+            )
+
+
+            session.add(new_dept_log)
+            session.flush()
+            print(f"Department log created with id: \x1b[32m{new_dept_log.id}\x1b[0m")
 
             session.commit()
             print(f"Event processing completed successfully ✅")

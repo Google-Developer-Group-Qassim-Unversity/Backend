@@ -55,6 +55,7 @@ class DepartmentFormData(BaseModel):
     action_id: int
     bonus: int 
     discount: int
+    
 
 class CompositeFormData(BaseModel):
     action: Literal["composite"]
@@ -119,6 +120,7 @@ class Categorized_action(BaseModel):
     composite_actions: List[List[Action]] = Field(alias="composite action", description="List of pairs of actions, each inner list should have length 2")
     department_actions: List[Action] = Field(alias="department action")
     member_actions: List[Action] = Field(alias="member action")
+    custom_actions: List[Action] = Field(alias="custom action")
 
     class Config:
         populate_by_name = True
@@ -142,5 +144,11 @@ class ValidateSheet(BaseModel):
 class CustomMembersFormData(BaseModel):
     event_info: EventData
     members: List[Member]
+    bonus: int
+    action_id: int
+
+class CustomDepartmentsFormData(BaseModel):
+    event_info: EventData
+    department_id: int
     bonus: int
     action_id: int
