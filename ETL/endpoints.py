@@ -240,7 +240,7 @@ def handle_departments(form_data: DepartmentFormData):
         try:
             # check if event already exist in DB
             is_event_exist = session.scalar(select(exists().where(Events.name == form_data.event_info.event_title)))
-            if is_event_exist:                
+            if is_event_exist:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
                     "error": "Event already exist with that name",
                     "detail": form_data.event_info.event_title
@@ -721,8 +721,8 @@ def handle_custom_departments(form_data: CustomDepartmentsFormData):
                 new_event = session.scalar(select(Events).where(Events.name == str(form_data.event_info)))
                 session.add(new_event)
                 session.flush()
-                start_date, end_date = session.scalar(select(Logs).where(Logs.event_id == new_event.id)).start_date, session.scalar(select(Logs).where(Logs.event_id == new_event.id)).end_date
-                print(f"Using existing event: \x1b[32m{new_event.name}\x1b[0m with start date: \x1b[32m{start_date}\x1b[0m and end date: \x1b[32m{end_date}\x1b[0m")
+                form_data.event_info.start_date, form_data.event_info.end_date = session.scalar(select(Logs).where(Logs.event_id == new_event.id)).start_date, session.scalar(select(Logs).where(Logs.event_id == new_event.id)).end_date
+                print(f"Using existing event: \x1b[32m{new_event.name}\x1b[0m with start date: \x1b[32m{form_data.event_info.start_date}\x1b[0m and end date: \x1b[32m{form_data.event_info.end_date}\x1b[0m")
             else:
                 is_event_exist = session.scalar(select(exists().where(Events.name == form_data.event_info.event_title)))
                 
@@ -744,8 +744,8 @@ def handle_custom_departments(form_data: CustomDepartmentsFormData):
             new_log = Logs(
                 action_id=form_data.action_id, 
                 event_id=new_event.id, 
-                start_date=start_date, 
-                end_date=end_date
+                start_date=form_data.event_info.start_date, 
+                end_date=form_data.event_info.end_date
             )
 
             session.add(new_log)
