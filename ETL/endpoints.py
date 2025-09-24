@@ -3,7 +3,11 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
 from helpers import get_pydantic_members
-from models import CompositeFormData, Member, Action, Categorized_action, CompositeFormData, Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData, CustomDepartmentsFormData, parse_composite_form
+from models import (
+    CompositeFormData, Member, Action, Categorized_action, CompositeFormData,
+    Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData,
+    CustomDepartmentsFormData, parse_composite_form, Events_table, EventData, Whatever
+)
 from typing import List
 import datetime
 from pprint import pprint
@@ -420,7 +424,7 @@ def handle_members(form_data: MemberFormData):
             for member in members:
                 member: Member
 
-                new_member = session.execute(select(Members).where(Member.uni_id == member.uni_id)).scalar_one_or_none()
+                new_member = session.execute(select(Members).where(Members.uni_id == member.uni_id)).scalar_one_or_none()
 
                 if not new_member:
                     new_member = Members(
@@ -604,18 +608,14 @@ def add_action(action: Action):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"Internal server error"})
         
 
-@router.get("/events", status_code=status.HTTP_201_CREATED, response_model=List[str])
+@router.get("/events", status_code=status.HTTP_201_CREATED, response_model=List[Events_table])
 def handler_get_events():
     with SessionLocal() as session:
         try:
-            db_events = session.scalars(select(Events.name)).all()
-            
-            events = []
-            for event in db_events:
-                events.append(event)
-
-            return events
-        except Exception:
+            db_events = session.scalars(select(Events)).all()
+            return db_events
+        except Exception as e:
+            print(e)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
 
@@ -716,30 +716,36 @@ def handle_custom_departments(form_data: CustomDepartmentsFormData):
     with SessionLocal() as session:
         try:
             # check if event exist in DB
-            is_event_exist = session.scalar(select(exists().where(Events.name == form_data.event_info.event_title)))
-            
-            if is_event_exist:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
-                    "error": "Event already exist with that name",
-                    "detail": form_data.event_info.event_title
-                })
-            
-            print(f"Creating event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
-            new_event = Events(
-                name=form_data.event_info.event_title
-            )
+            if isinstance(form_data.event_info, str):
+                print(f"Event info is a string: \x1b[33m{form_data.event_info}\x1b[0m")
+                new_event = session.scalar(select(Events).where(Events.name == str(form_data.event_info)))
+                session.add(new_event)
+                session.flush()
+                start_date, end_date = session.scalar(select(Logs).where(Logs.event_id == new_event.id)).start_date, session.scalar(select(Logs).where(Logs.event_id == new_event.id)).end_date
+                print(f"Using existing event: \x1b[32m{new_event.name}\x1b[0m with start date: \x1b[32m{start_date}\x1b[0m and end date: \x1b[32m{end_date}\x1b[0m")
+            else:
+                is_event_exist = session.scalar(select(exists().where(Events.name == form_data.event_info.event_title)))
+                
+                if is_event_exist:
+                    print(f"Event already exist with that name \x1b[33m{form_data.event_info.event_title}\x1b[0m")
+                    new_event = is_event_exist
+                else:
+                    print(f"Creating event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
+                    new_event = Events(
+                        name=form_data.event_info.event_title
+                    )
 
-            session.add(new_event)
-            session.flush()
+                session.add(new_event)
+                session.flush()
             print(f"Event Created. \x1b[32m{new_event.name}\x1b[0m")
 
             # add a log to the event 
-            print(f"Creating log for members for event: \x1b[33m{form_data.event_info.event_title}, Action_id: {form_data.action_id}\x1b[0m")
+            print(f"Creating log for members for event: \x1b[33m{new_event.name}, Action_id: {form_data.action_id}\x1b[0m")
             new_log = Logs(
                 action_id=form_data.action_id, 
                 event_id=new_event.id, 
-                start_date=form_data.event_info.start_date, 
-                end_date=form_data.event_info.end_date
+                start_date=start_date, 
+                end_date=end_date
             )
 
             session.add(new_log)

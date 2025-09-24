@@ -13,6 +13,13 @@ class Contributor(BaseModel):
     class Config:
         populate_by_name = True
 
+class Events_table(BaseModel):
+    id: int
+    name: str
+    class Config:
+        populate_by_name = True
+        from_attributes = True
+
 
 class Event(BaseModel):
     action: str
@@ -168,10 +175,13 @@ class CustomMembersFormData(BaseModel):
     action_id: int
 
 class CustomDepartmentsFormData(BaseModel):
-    event_info: EventData
+    event_info: EventData | str
     department_id: int
     bonus: int
     action_id: int
+
+class Whatever(BaseModel):
+    whatever1: str
 
 
 def parse_composite_form(
