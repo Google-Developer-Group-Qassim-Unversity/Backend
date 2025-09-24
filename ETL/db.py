@@ -7,7 +7,7 @@ import datetime as dt
 from helpers import get_database_url
 
 load_dotenv()
-engine = create_engine(get_database_url())
+engine = create_engine(getenv(get_database_url()))
 
 
 class Base(DeclarativeBase):

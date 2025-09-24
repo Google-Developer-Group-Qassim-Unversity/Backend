@@ -56,7 +56,7 @@ def get_database_url():
     load_dotenv()
     dev_url = os.getenv("DEV_DATABASE_URL")
     if dev_url is not None:
-        return dev_url
+        return "DEV_DATABASE_URL"
     # If DEV_DATABASE_URL doesn't exist, return the string "DATABASE_URL"
     return "DATABASE_URL"
 
