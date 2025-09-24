@@ -721,6 +721,8 @@ def handle_custom_departments(form_data: CustomDepartmentsFormData):
                 new_event = session.scalar(select(Events).where(Events.name == str(form_data.event_info)))
                 session.add(new_event)
                 session.flush()
+                form_data.event_info = EventData(event_title=new_event.name, start_date=datetime.datetime.now(), end_date=datetime.datetime.now())
+                print(f"created fake data for event info: \x1b[32m{form_data.event_info}\x1b[0m")
                 form_data.event_info.start_date, form_data.event_info.end_date = session.scalar(select(Logs).where(Logs.event_id == new_event.id)).start_date, session.scalar(select(Logs).where(Logs.event_id == new_event.id)).end_date
                 print(f"Using existing event: \x1b[32m{new_event.name}\x1b[0m with start date: \x1b[32m{form_data.event_info.start_date}\x1b[0m and end date: \x1b[32m{form_data.event_info.end_date}\x1b[0m")
             else:
