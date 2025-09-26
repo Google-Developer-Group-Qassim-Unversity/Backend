@@ -670,13 +670,13 @@ def handler_custom_members(form_data: CustomMembersFormData,):
             members = form_data.members
             for member in members:
                 member: Member
-                print(f"Searching for member: \x1b[33m{member.name}\x1b[0m")
+                print(f"Searching for member: \x1b[33m{member.uni_id}\x1b[0m")
                 db_member = session.execute(select(Members).where(Members.uni_id == member.uni_id)).scalar_one_or_none()
                 
 
                 if not db_member:
                     print(f"Member \x1b[33m{member.uni_id}\x1b[0m not found in db, creating new member")
-                    db_member = Member(
+                    db_member = Members(
                         name=member.name, 
                         email=member.email, 
                         phone_number=member.phone_number, 
