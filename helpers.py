@@ -1,7 +1,7 @@
 import urllib.request
 import csv
 import io
-from models import Member
+from DB.models import Member
 from typing import List
 from dotenv import load_dotenv
 from typing import Union, Tuple

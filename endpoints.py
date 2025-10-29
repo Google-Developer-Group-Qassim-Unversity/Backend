@@ -1,13 +1,9 @@
 from sqlalchemy import select, exists
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import JSONResponse, HTMLResponse
-from db import *
+from DB.schema import *
 from helpers import get_pydantic_members
-from models import (
-    CompositeFormData, Member, Action, Categorized_action, CompositeFormData,
-    Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData,
-    CustomDepartmentsFormData, parse_composite_form, Events_table, EventData, Whatever
-)
+from DB.models import *
 from typing import List
 import datetime
 from pprint import pprint
@@ -26,8 +22,6 @@ def hanlde_root():
 
 @router.post("/events/composite", status_code=status.HTTP_201_CREATED)
 def handle_events(parsed: tuple = Depends(parse_composite_form)):
-
-
     form_data, file = parsed
     form_data: CompositeFormData
     # This needs to be refactored into smaller functions.

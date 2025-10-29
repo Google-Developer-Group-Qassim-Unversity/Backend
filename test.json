@@ -1,0 +1,53 @@
+{
+  "standard": {
+    "action": "composite",
+    "event_info":{
+      "event_title": "Test-standard-1",
+      "start_date": "2025-09-21",
+      "end_date": "2025-09-24"
+    },
+    "department_id": 1,
+    "department_action_id": 53,
+    "member_action_id": 78,
+    "bonus": 0,
+    "discount": 0,
+    "attendants": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQvha2YIA3oczIREsNYWQjFQDldyJj7sVWslBjhBFfeo1zCmkW8TNHVAjGuVs4LPBkYWleHoWVW4ftz/pub?gid=1781104695&single=true&output=csv",
+    "contributors": null
+  },
+  "contributors": {
+    "action": "composite",
+    "event_info":{
+      "event_title": "Test-contributors-1",
+      "start_date": "2025-09-21",
+      "end_date": "2025-09-21"
+    },
+    "department_id": 2,
+    "department_action_id": 51,
+    "member_action_id": 76,
+    "bonus": 0,
+    "discount": 0,
+    "attendants": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQvha2YIA3oczIREsNYWQjFQDldyJj7sVWslBjhBFfeo1zCmkW8TNHVAjGuVs4LPBkYWleHoWVW4ftz/pub?gid=1781104695&single=true&output=csv",
+
+
+    "organizing": [
+      {
+        "name": "Ibrahim", 
+        "email": "ibrahim@example.com",
+        "phone number": "0508082135", 
+        "uni_id": "452443344", 
+        "gender": "Male",
+        "participation_action_id": 80,
+        "attendance": ["present"]
+      },
+      {
+          "name": "Omar", 
+          "email": "omar@example.com",
+          "phone number": "0508083333",
+          "uni_id": "442109890",
+          "gender": "Male",
+          "participation_action_id": 64,
+          "attendance": ["present"]
+      }
+    ]
+  }
+}
