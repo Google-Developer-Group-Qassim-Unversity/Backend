@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from endpoints import router
+from api.upload import router as upload_router
 from fastapi.middleware.cors import CORSMiddleware
 import api.sheet_validation as sv
 app  = FastAPI()
@@ -14,3 +15,4 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(sv.router)
+app.include_router(upload_router)
