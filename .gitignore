@@ -1,3 +1,6 @@
 __pycache__
 .venv
-uploads
+*.xls
+*.xlsx
+*.csv
+.env
