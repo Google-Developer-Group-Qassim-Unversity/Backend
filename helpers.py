@@ -1,7 +1,7 @@
 import urllib.request
 import csv
 import io
-from DB.models import Member
+from app.DB.models import Member_model
 from typing import List
 from dotenv import load_dotenv
 from typing import Union, Tuple
@@ -30,7 +30,7 @@ def get_pydantic_members(source: Union[UploadFile, str]) -> List[tuple]:
     
     # Iterate through DataFrame rows
     for _, row in df.iterrows():
-        member = Member(
+        member = Member_model(
             name=row.get("name"),
             email=str(row.get("email")),
             phone_number=None if pd.isna(row.get("phone number")) or row.get("phone number") == "" else str(row.get("phone number")),
@@ -58,7 +58,11 @@ def get_database_url():
     if dev_url is not None:
         return "DEV_DATABASE_URL"
     # If DEV_DATABASE_URL doesn't exist, return the string "DATABASE_URL"
-    return "DATABASE_URL"
+    url = os.getenv("DATABASE_URL")
+    if url is None or url == "":
+        raise ValueError("DATABASE_URL is not set in the environment variables.")
+    else:
+        return "DATABASE_URL" 
 
 
 if __name__ == "__main__":

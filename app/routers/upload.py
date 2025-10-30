@@ -37,12 +37,12 @@ async def _uploaded_file(file: UploadFile) -> tuple[str, str]:
 	
 	return file_name, file_location
 
-@router.post("/upload", status_code=201, tags=["upload"])
+@router.post("/", status_code=201)
 async def upload_file(file: UploadFile = File(...)):
 	file_name, _ = await _uploaded_file(file)
 	return {"file": file_name}
 
-@router.post("/upload/members", status_code=201, tags=["upload"])
+@router.post("/members", status_code=201)
 async def upload_members(parsed: tuple = Depends(parse_upload_members_form)):
 	start_date, end_date, file = parsed
 	

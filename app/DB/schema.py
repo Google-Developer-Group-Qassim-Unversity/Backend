@@ -13,7 +13,7 @@ engine = create_engine(getenv(get_database_url()))
 class Base(DeclarativeBase):
     pass
 
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+SessionLocal = sessionmaker(bind=engine, autocommit=False)
 
 from sqlalchemy import String, Integer, Date, ForeignKey, Enum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship

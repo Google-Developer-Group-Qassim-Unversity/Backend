@@ -1,9 +1,9 @@
 from sqlalchemy import select, exists
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import JSONResponse, HTMLResponse
-from DB.schema import *
+from app.DB.schema import *
 from helpers import get_pydantic_members
-from DB.models import *
+from app.DB.models import *
 from typing import List
 import datetime
 from pprint import pprint
@@ -120,7 +120,7 @@ def handle_events(parsed: tuple = Depends(parse_composite_form)):
 
             print(f"Processing \x1b[33m{len(members_data)}\x1b[0m members from csv")
             for member, days_present in members_data:
-                member: Member
+                member: Member_model
                 days_present: list
                 print(f"member name \x1b[35m'{member.name}'\x1b[0m has days present {days_present}")
 
@@ -416,7 +416,7 @@ def handle_members(form_data: MemberFormData):
             # adding members and all that kind of crap 
             members = form_data.members
             for member in members:
-                member: Member
+                member: Member_model
 
                 new_member = session.execute(select(Members).where(Members.uni_id == member.uni_id)).scalar_one_or_none()
 
@@ -458,7 +458,7 @@ def handle_members(form_data: MemberFormData):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
 
-@router.get("/members", status_code=status.HTTP_200_OK, response_model=List[Member])
+@router.get("/members", status_code=status.HTTP_200_OK, response_model=List[Member_model])
 def handle_get_members():
     with SessionLocal() as session:
         members = session.scalars(select(Members)).all()
@@ -466,8 +466,8 @@ def handle_get_members():
     return members
 
 
-@router.put("/members", response_model=Member, status_code=status.HTTP_201_CREATED)
-def handle_update_member(member: Member):
+@router.put("/members", response_model=Member_model, status_code=status.HTTP_201_CREATED)
+def handle_update_member(member: Member_model):
 
 
     with SessionLocal() as session:
@@ -492,8 +492,8 @@ def handle_update_member(member: Member):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"Internal server error."})
 
 
-@router.post("/members", status_code=status.HTTP_201_CREATED, response_model=Member)
-def handle_create_member(member: Member):
+@router.post("/members", status_code=status.HTTP_201_CREATED, response_model=Member_model)
+def handle_create_member(member: Member_model):
     with SessionLocal() as session:
         try:
             new_member = Members(
@@ -663,7 +663,7 @@ def handler_custom_members(form_data: CustomMembersFormData,):
 
             members = form_data.members
             for member in members:
-                member: Member
+                member: Member_model
                 print(f"Searching for member: \x1b[33m{member.uni_id}\x1b[0m")
                 db_member = session.execute(select(Members).where(Members.uni_id == member.uni_id)).scalar_one_or_none()
                 

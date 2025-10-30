@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, EmailStr, field_validator
 import json
 from typing import List, Literal, Tuple, Optional
 from datetime import datetime, date
@@ -78,23 +78,40 @@ class CompositeFormData(BaseModel):
         populate_by_name = True
 
 
-class Member(BaseModel):
+class Member_model(BaseModel):
     id: int | None = None
     name: str
-    email: str 
+    email: EmailStr
     phone_number: str | None = Field(default=None, alias="phone number")
-    uni_id: str
+    uni_id: int
     gender: Literal["Male", "Female"]
+
+    @field_validator("uni_id")
+    def validate_uni_id(cls, value):
+        if len(str(value)) != 9:
+            raise ValueError("uni_id must be a 9-digit integer")
+        return value
+
+    # This validator is needed but We have some fucked up data in the database
+    # so i'll will comment it out for now.
+
+    # @field_validator("phone_number")
+    # def validate_phone_number(cls, value):
+    #     if not value:
+    #         return value
+    #     if len(str(value)) != 10:
+    #         raise ValueError("phone_number must contain 10 digits")
+    #     return value
 
     class Config:
         populate_by_name = True
-        from_atrributes = True
+        from_attributes = True
 
 
 
 class MemberFormData(BaseModel):
     event_info: EventData
-    members: List[Member]
+    members: List[Member_model]
     bonus: int
     discount: int 
     action_id: int
@@ -170,7 +187,7 @@ def parse_validate_sheet(
 
 class CustomMembersFormData(BaseModel):
     event_info: EventData
-    members: List[Member]
+    members: List[Member_model]
     bonus: int
     action_id: int
 

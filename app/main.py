@@ -1,6 +1,5 @@
 from fastapi import FastAPI
-from endpoints import router
-from api.upload import router as upload_router
+from app.routers import upload, members
 from fastapi.middleware.cors import CORSMiddleware
 app  = FastAPI()
 
@@ -12,5 +11,5 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all HTTP headers
 )
 
-app.include_router(router)
-app.include_router(upload_router)
+app.include_router(members.router, prefix="/members", tags=["members"])
+app.include_router(upload.router, prefix="/upload", tags=["upload"])

@@ -1,1 +1,1 @@
-uv run uvicorn api.main:app --reload --port 7001
+uv run uvicorn app.main:app --reload --port 7001
