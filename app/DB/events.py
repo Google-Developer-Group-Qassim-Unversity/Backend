@@ -14,18 +14,22 @@ def get_event_by_id(session: Session, event_id: int):
     return event
 
 def create_event(session: Session, event_data: Events_model):
-    
-    new_event = Events(
-        name=event_data.name,
-        location_type=event_data.location_type,
-        location=event_data.location,
-        start_datetime=event_data.start_datetime,
-        end_datetime=event_data.end_datetime,
-        description=event_data.description
-    )
-    session.add(new_event)
-    session.flush()
-    return new_event
+    try:
+        new_event = Events(
+            name=event_data.name,
+            location_type=event_data.location_type,
+            location=event_data.location,
+            start_datetime=event_data.start_datetime,
+            end_datetime=event_data.end_datetime,
+            description=event_data.description
+        )
+        session.add(new_event)
+        session.flush()
+        return new_event
+    except IntegrityError as e:
+        session.rollback()
+        print(f"IntegrityError in create_event: {str(e)[:50]}...")
+        return None
 
 def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event = session.scalar(select(Events).where(Events.id == event_id))

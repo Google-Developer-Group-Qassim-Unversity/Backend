@@ -8,7 +8,7 @@ class Events_model(BaseModel):
     id: int | None = None
     name: str
     description: str | None = None
-    location_type: Literal['online', 'on-site']
+    location_type: Literal['online', 'on-fsite']
     location: str
     start_datetime: datetime
     end_datetime: datetime
