@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field, HttpUrl, EmailStr, field_validator
 import json
 from typing import List, Literal, Tuple, Optional
 from datetime import datetime, date
-from fastapi import Form, UploadFile, File, HTTPException
+from fastapi import HTTPException, status
 
 class Events_model(BaseModel):
     id: int | None = None
@@ -45,3 +45,9 @@ class Member_model(BaseModel):
     class Config:
         populate_by_name = True
         from_attributes = True        
+
+class ConflictResponse(BaseModel):
+    detail: str
+
+class NotFoundResponse(BaseModel):
+    detail: str
