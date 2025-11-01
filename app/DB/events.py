@@ -26,3 +26,16 @@ def create_event(session: Session, event_data: Events_model):
     session.add(new_event)
     session.flush()
     return new_event
+
+def update_event(session: Session, event_id: int, event_data: Events_model):
+    existing_event = session.scalar(select(Events).where(Events.id == event_id))
+    if not existing_event:
+        return None
+    existing_event.name = event_data.name
+    existing_event.location_type = event_data.location_type
+    existing_event.location = event_data.location
+    existing_event.start_datetime = event_data.start_datetime
+    existing_event.end_datetime = event_data.end_datetime
+    existing_event.description = event_data.description
+
+    return existing_event

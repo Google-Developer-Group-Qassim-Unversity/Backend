@@ -31,3 +31,12 @@ def create_event(event: Events_model):
         print(f"IntegrityError: {str(e)[:50]}...")
         session.rollback()
         raise HTTPException(status_code=409, detail=f"An event with the name '{event.name}' already exists")
+    
+@router.put("/{event_id}", status_code=200, response_model=Events_model)
+def update_event(event_id: int, event: Events_model):
+    with SessionLocal() as session:
+        updated_event = events_queries.update_event(session, event_id, event)
+        if updated_event is None:
+            raise HTTPException(status_code=404, detail="Event not found")
+        session.commit()
+        return updated_event
