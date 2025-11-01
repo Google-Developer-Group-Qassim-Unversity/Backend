@@ -1,15 +1,23 @@
 from fastapi import FastAPI
-from app.routers import upload, members
+from app.routers import upload, members, events
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from os import getenv
+from dotenv import load_dotenv
+from helpers import get_database_url
+
+
 app  = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=["*"], 
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all HTTP headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(members.router, prefix="/members", tags=["members"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
+app.include_router(events.router, prefix="/events", tags=["events"])

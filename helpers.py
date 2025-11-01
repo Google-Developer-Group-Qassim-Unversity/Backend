@@ -1,7 +1,7 @@
 import urllib.request
 import csv
 import io
-from app.DB.models import Member_model
+from app.routers.models import Member_model
 from typing import List
 from dotenv import load_dotenv
 from typing import Union, Tuple

@@ -1,126 +1,242 @@
-from sqlalchemy import create_engine, Integer, Date, ForeignKey 
-from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column, relationship
-from os import getenv
-from dotenv import load_dotenv
-from datetime import date
-import datetime as dt
-from helpers import get_database_url
+from typing import Optional
+import datetime
 
-load_dotenv()
-engine = create_engine(getenv(get_database_url()))
-
-
-class Base(DeclarativeBase):
-    pass
-
-SessionLocal = sessionmaker(bind=engine, autocommit=False)
-
-from sqlalchemy import String, Integer, Date, ForeignKey, Enum
+from sqlalchemy import Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, String, Table, Text, text
+from sqlalchemy.dialects.mysql import DATETIME, ENUM, INTEGER, TEXT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-
 class Base(DeclarativeBase):
     pass
 
 
-class Members(Base):
-    __tablename__ = "members"
+class PrismaMigrations(Base):
+    __tablename__ = '_prisma_migrations'
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(50), nullable=False)
-    email: Mapped[str | None] = mapped_column(String(100), unique=True)
-    phone_number: Mapped[str | None] = mapped_column(String(20), unique=True)
-    uni_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    gender: Mapped[str] = mapped_column(Enum("Male", "Female"), nullable=False)
+    id: Mapped[str] = mapped_column(VARCHAR(36), primary_key=True)
+    checksum: Mapped[str] = mapped_column(VARCHAR(64), nullable=False)
+    migration_name: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
+    started_at: Mapped[datetime.datetime] = mapped_column(DATETIME(fsp=3), nullable=False, server_default=text('CURRENT_TIMESTAMP(3)'))
+    applied_steps_count: Mapped[int] = mapped_column(INTEGER, nullable=False, server_default=text("'0'"))
+    finished_at: Mapped[Optional[datetime.datetime]] = mapped_column(DATETIME(fsp=3))
+    logs: Mapped[Optional[str]] = mapped_column(TEXT)
+    rolled_back_at: Mapped[Optional[datetime.datetime]] = mapped_column(DATETIME(fsp=3))
 
-    logs: Mapped[list["MembersLogs"]] = relationship(back_populates="member")
-
-
-class Departments(Base):
-    __tablename__ = "departments"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(50), nullable=False)
-
-    logs: Mapped[list["DepartmentsLogs"]] = relationship(back_populates="department")
-
-
-class Logs(Base):
-    __tablename__ = "logs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    action_id: Mapped[int] = mapped_column(ForeignKey("actions.id", ondelete="CASCADE", onupdate="CASCADE"))
-    start_date: Mapped[date] = mapped_column(Date, nullable=False)
-    end_date: Mapped[date] = mapped_column(Date, nullable=False)
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
-
-    action: Mapped["Actions"] = relationship(back_populates="logs")
-    event: Mapped["Events"] = relationship(back_populates="logs")
-    members: Mapped[list["MembersLogs"]] = relationship(back_populates="log")
-    departments: Mapped[list["DepartmentsLogs"]] = relationship(back_populates="log")
-    modifications: Mapped[list["Modifications"]] = relationship(back_populates="log")
-
-
-class DepartmentsLogs(Base):
-    __tablename__ = "departments_logs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id", ondelete="CASCADE", onupdate="CASCADE"))
-    attendants_number: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
-    log_id: Mapped[int] = mapped_column(ForeignKey("logs.id", ondelete="CASCADE", onupdate="CASCADE"))
-
-    department: Mapped["Departments"] = relationship(back_populates="logs")
-    log: Mapped["Logs"] = relationship(back_populates="departments")
-
-
-class MembersLogs(Base):
-    __tablename__ = "members_logs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"))
-    log_id: Mapped[int] = mapped_column(ForeignKey("logs.id", ondelete="CASCADE", onupdate="CASCADE"))
-
-    member: Mapped["Members"] = relationship(back_populates="logs")
-    log: Mapped["Logs"] = relationship(back_populates="members")
-    absence: Mapped[list["Absence"]] = relationship(back_populates="member_log")
-
-class Absence(Base):
-    __tablename__ = "absence"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    date: Mapped[dt.date] = mapped_column(Date, nullable=False)
-    member_log_id: Mapped[int] = mapped_column(ForeignKey("members_logs.id", ondelete="CASCADE", onupdate="CASCADE"))
-
-    member_log: Mapped["MembersLogs"] = relationship(back_populates="absence")
 
 class Actions(Base):
-    __tablename__ = "actions"
+    __tablename__ = 'actions'
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    action_name: Mapped[str] = mapped_column(String(60), nullable=False)
-    points: Mapped[int] = mapped_column(Integer, nullable=False)
-    action_type: Mapped[str] = mapped_column(Enum("composite", "department", "member"))
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    action_name: Mapped[str] = mapped_column(VARCHAR(60), nullable=False)
+    points: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    action_type: Mapped[str] = mapped_column(ENUM('composite', 'department', 'member'), nullable=False)
     action_description: Mapped[str] = mapped_column(String(100), nullable=False)
     arabic_action_name: Mapped[str] = mapped_column(String(100), nullable=False)
 
-    logs: Mapped[list["Logs"]] = relationship(back_populates="action")
+    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='action')
+
+
+class Departments(Base):
+    __tablename__ = 'departments'
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    type: Mapped[str] = mapped_column(Enum('administrative', 'practical'), nullable=False)
+
+    departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='department')
+
+
+t_departments_points = Table(
+    'departments_points', Base.metadata,
+    Column('department_id', INTEGER, server_default=text("'0'")),
+    Column('department_name', String(50)),
+    Column('department_log_id', INTEGER, server_default=text("'0'")),
+    Column('log_id', INTEGER, server_default=text("'0'")),
+    Column('start_date', Date),
+    Column('end_date', Date),
+    Column('event_name', String(150)),
+    Column('action_points', INTEGER),
+    Column('action_name', String(60))
+)
 
 
 class Events(Base):
-    __tablename__ = "events"
+    __tablename__ = 'events'
+    __table_args__ = (
+        Index('event_name', 'name'),
+        Index('events_unique', 'name', unique=True)
+    )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(150))
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    name: Mapped[str] = mapped_column(VARCHAR(150), nullable=False)
+    location_type: Mapped[str] = mapped_column(Enum('online', 'on-site'), nullable=False)
+    location: Mapped[str] = mapped_column(String(100), nullable=False)
+    start_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
+    end_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
+    description: Mapped[Optional[str]] = mapped_column(Text)
 
-    logs: Mapped[list["Logs"]] = relationship(back_populates="event")
+    forms: Mapped[list['Forms']] = relationship('Forms', back_populates='event')
+    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event')
+
+
+class Members(Base):
+    __tablename__ = 'members'
+    __table_args__ = (
+        Index('uni_id', 'uni_id', unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    uni_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    gender: Mapped[str] = mapped_column(Enum('Male', 'Female'), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(100))
+    phone_number: Mapped[Optional[str]] = mapped_column(String(20))
+
+    members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='member')
+    responses: Mapped[list['Responses']] = relationship('Responses', back_populates='member')
+
+
+t_members_points = Table(
+    'members_points', Base.metadata,
+    Column('member_id', INTEGER, server_default=text("'0'")),
+    Column('member_name', String(50)),
+    Column('member_log_id', INTEGER, server_default=text("'0'")),
+    Column('member_gender', Enum('Male', 'Female')),
+    Column('log_id', INTEGER, server_default=text("'0'")),
+    Column('event_name', String(150)),
+    Column('start_date', Date),
+    Column('end_date', Date),
+    Column('action_points', INTEGER),
+    Column('action_name', String(60))
+)
+
+
+class Forms(Base):
+    __tablename__ = 'forms'
+    __table_args__ = (
+        ForeignKeyConstraint(['event_id'], ['events.id'], name='forms_ibfk_1'),
+        Index('event_id', 'event_id')
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+
+    event: Mapped[Optional['Events']] = relationship('Events', back_populates='forms')
+    questions: Mapped[list['Questions']] = relationship('Questions', back_populates='forms')
+
+
+class Logs(Base):
+    __tablename__ = 'logs'
+    __table_args__ = (
+        ForeignKeyConstraint(['action_id'], ['actions.id'], ondelete='CASCADE', onupdate='CASCADE', name='logs_ibfk_1'),
+        ForeignKeyConstraint(['event_id'], ['events.id'], ondelete='CASCADE', name='fk_events'),
+        Index('action_id', 'action_id'),
+        Index('fk_events', 'event_id')
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    action_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    start_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+
+    action: Mapped['Actions'] = relationship('Actions', back_populates='logs')
+    event: Mapped[Optional['Events']] = relationship('Events', back_populates='logs')
+    departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='log')
+    members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='log')
+    modifications: Mapped[list['Modifications']] = relationship('Modifications', back_populates='log')
+
+
+class DepartmentsLogs(Base):
+    __tablename__ = 'departments_logs'
+    __table_args__ = (
+        ForeignKeyConstraint(['department_id'], ['departments.id'], ondelete='CASCADE', onupdate='CASCADE', name='departments_logs_departments_FK'),
+        ForeignKeyConstraint(['log_id'], ['logs.id'], ondelete='CASCADE', onupdate='CASCADE', name='departments_logs_logs_FK'),
+        Index('departments_logs_departments_FK', 'department_id'),
+        Index('departments_logs_unique', 'log_id', 'department_id', unique=True)
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    department_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    attendants_number: Mapped[Optional[int]] = mapped_column(INTEGER, server_default=text("'0'"))
+
+    department: Mapped['Departments'] = relationship('Departments', back_populates='departments_logs')
+    log: Mapped['Logs'] = relationship('Logs', back_populates='departments_logs')
+
+
+class MembersLogs(Base):
+    __tablename__ = 'members_logs'
+    __table_args__ = (
+        ForeignKeyConstraint(['log_id'], ['logs.id'], ondelete='CASCADE', onupdate='CASCADE', name='members_logs_logs_FK'),
+        ForeignKeyConstraint(['member_id'], ['members.id'], name='fk_members_id'),
+        Index('fk_members_id', 'member_id'),
+        Index('members_logs_unique', 'log_id', 'member_id', unique=True)
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+
+    log: Mapped['Logs'] = relationship('Logs', back_populates='members_logs')
+    member: Mapped['Members'] = relationship('Members', back_populates='members_logs')
+    absence: Mapped[list['Absence']] = relationship('Absence', back_populates='member_log')
 
 
 class Modifications(Base):
-    __tablename__ = "modifications"
+    __tablename__ = 'modifications'
+    __table_args__ = (
+        ForeignKeyConstraint(['log_id'], ['logs.id'], ondelete='CASCADE', onupdate='CASCADE', name='modifications_ibfk_1'),
+        Index('log_id', 'log_id')
+    )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    log_id: Mapped[int] = mapped_column(ForeignKey("logs.id", ondelete="CASCADE", onupdate="CASCADE"))
-    type: Mapped[str] = mapped_column(Enum("bonus", "discount"), nullable=False)
-    value: Mapped[int] = mapped_column(Integer, nullable=False)
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    type: Mapped[str] = mapped_column(Enum('bonus', 'discount'), nullable=False)
+    value: Mapped[int] = mapped_column(INTEGER, nullable=False)
 
-    log: Mapped["Logs"] = relationship(back_populates="modifications")
+    log: Mapped['Logs'] = relationship('Logs', back_populates='modifications')
+
+
+class Questions(Base):
+    __tablename__ = 'questions'
+    __table_args__ = (
+        ForeignKeyConstraint(['forms_id'], ['forms.id'], name='questions_ibfk_1'),
+        Index('forms_id', 'forms_id')
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    value: Mapped[str] = mapped_column(String(200), nullable=False)
+    forms_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+
+    forms: Mapped[Optional['Forms']] = relationship('Forms', back_populates='questions')
+    responses: Mapped[list['Responses']] = relationship('Responses', back_populates='question')
+
+
+class Absence(Base):
+    __tablename__ = 'absence'
+    __table_args__ = (
+        ForeignKeyConstraint(['member_log_id'], ['members_logs.id'], ondelete='CASCADE', onupdate='CASCADE', name='absence_members_logs_FK'),
+        Index('absence_members_logs_FK', 'member_log_id')
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    member_log_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+
+    member_log: Mapped[Optional['MembersLogs']] = relationship('MembersLogs', back_populates='absence')
+
+
+class Responses(Base):
+    __tablename__ = 'responses'
+    __table_args__ = (
+        ForeignKeyConstraint(['member_id'], ['members.id'], name='responses_ibfk_1'),
+        ForeignKeyConstraint(['question_id'], ['questions.id'], name='responses_ibfk_2'),
+        Index('question_id', 'question_id')
+    )
+
+    member_id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    question_id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+
+    member: Mapped['Members'] = relationship('Members', back_populates='responses')
+    question: Mapped['Questions'] = relationship('Questions', back_populates='responses')

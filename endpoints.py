@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import JSONResponse, HTMLResponse
 from app.DB.schema import *
 from helpers import get_pydantic_members
-from app.DB.models import *
+from app.routers.models import *
 from typing import List
 import datetime
 from pprint import pprint
