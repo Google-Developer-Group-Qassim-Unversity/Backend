@@ -21,7 +21,7 @@ class Member_model(BaseModel):
     id: int | None = None
     name: str
     email: EmailStr
-    phone_number: str | None = Field(default=None, alias="phone number")
+    phone_number: str | None
     uni_id: int
     gender: Literal["Male", "Female"]
 
@@ -43,8 +43,16 @@ class Member_model(BaseModel):
     #     return value
 
     class Config:
-        populate_by_name = True
         from_attributes = True        
+
+class Department_model(BaseModel):
+    id: int | None = None
+    name: str
+    type: Literal['administrative', 'practical']
+
+    class Config:
+        from_attributes = True
+
 
 class ConflictResponse(BaseModel):
     detail: str

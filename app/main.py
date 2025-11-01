@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.routers import upload, members, events
+from app.routers import upload, members, events, departments
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -21,3 +21,4 @@ app.add_middleware(
 app.include_router(members.router, prefix="/members", tags=["members"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(events.router, prefix="/events", tags=["events"])
+app.include_router(departments.router, prefix="/departments", tags=["departments"])
