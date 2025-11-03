@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from .schema import Events
 from ..routers.models import Events_model
+
 def get_events(session: Session):
     statement = select(Events)
     events = session.scalars(statement).all()

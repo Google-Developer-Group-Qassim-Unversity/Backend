@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, HttpUrl, EmailStr, field_validator
+from pydantic import BaseModel, Field, HttpUrl, EmailStr, field_validator, conlist
 import json
 from typing import List, Literal, Tuple, Optional
 from datetime import datetime, date
@@ -49,6 +49,27 @@ class Department_model(BaseModel):
     id: int | None = None
     name: str
     type: Literal['administrative', 'practical']
+
+    class Config:
+        from_attributes = True
+
+class Action_model(BaseModel):
+    id: int 
+    action_name: str
+    arabic_action_name: str 
+    action_type: Literal["composite", "department", "member"] 
+    action_description: str 
+    points: int
+    
+    class Config:
+        from_attributes = True
+
+
+class Categorized_action(BaseModel):
+    composite_actions: List[conlist(Action_model, min_length=2, max_length=2)]
+    department_actions: List[Action_model]
+    member_actions: List[Action_model] 
+    custom_actions: List[Action_model]
 
     class Config:
         from_attributes = True

@@ -568,7 +568,7 @@ def get_actions():
     )
 
 
-@router.get("/actions/contributers", response_model=List[Action], status_code=status.HTTP_200_OK)
+@router.get("/actions/contributers", response_model=List[Action_model], status_code=status.HTTP_200_OK)
 def get_action_contributors():
     with SessionLocal() as session:
         statement = select(Actions).where(
@@ -578,8 +578,8 @@ def get_action_contributors():
     return result
 
 
-@router.post("/actions", status_code=status.HTTP_201_CREATED, response_model=Action)
-def add_action(action: Action):
+@router.post("/actions", status_code=status.HTTP_201_CREATED, response_model=Action_model)
+def add_action(action: Action_model):
 
     with SessionLocal() as session:
         try:

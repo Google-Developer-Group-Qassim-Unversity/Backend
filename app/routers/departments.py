@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException, status
 from app.DB import departments as departments_queries
 from ..DB.main import SessionLocal
 from app.routers.models import Department_model, NotFoundResponse
-from sqlalchemy.exc import IntegrityError
 router = APIRouter()
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Department_model])

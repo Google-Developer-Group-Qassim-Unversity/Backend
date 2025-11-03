@@ -1,8 +1,6 @@
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from .schema import Departments
-from ..routers.models import Department_model
 
 def get_departments(session: Session):
 	statement = select(Departments)
