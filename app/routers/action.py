@@ -13,6 +13,8 @@ def get_action_by_id(actions, action_id: int):
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=Categorized_action)
 def get_all_actions():
+
+    # These are to link department and member actions into composite actions
     department_ids = [51, 52, 53, 54]
     member_ids = [76, 77, 78, 79]
     bonus_id = 81

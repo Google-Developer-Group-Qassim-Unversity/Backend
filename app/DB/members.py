@@ -37,10 +37,16 @@ def update_member(session: Session, member_id: int, member: Member_model):
     print(f"Updating member: {existing_member.name}")
     if not existing_member:
         return None
+    try:
+        existing_member.uni_id = member.uni_id
+        session.flush()
+    except IntegrityError as e:
+        session.rollback()
+        print(f"IntegrityError in update_member: {str(e)[:50]}...")
+        return -1
     existing_member.name = member.name
     existing_member.email = member.email
     existing_member.phone_number = member.phone_number
-    existing_member.uni_id = member.uni_id
     existing_member.gender = member.gender
     session.flush()
     print(f"Updated member: {existing_member.name}")

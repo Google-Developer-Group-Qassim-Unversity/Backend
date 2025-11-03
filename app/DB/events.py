@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from .schema import Events
+from .schema import Events, Logs
 from ..routers.models import Events_model
 
 def get_events(session: Session):
@@ -36,7 +36,13 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event = session.scalar(select(Events).where(Events.id == event_id))
     if not existing_event:
         return None
-    existing_event.name = event_data.name
+    try:
+        existing_event.name = event_data.name
+        session.flush()
+    except IntegrityError as e:
+        session.rollback()
+        print(f"IntegrityError in update_event: {str(e)[:50]}...")
+        return -1
     existing_event.location_type = event_data.location_type
     existing_event.location = event_data.location
     existing_event.start_datetime = event_data.start_datetime
@@ -44,3 +50,5 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event.description = event_data.description
 
     return existing_event
+
+def create_log(session: Session, event_id: int, )

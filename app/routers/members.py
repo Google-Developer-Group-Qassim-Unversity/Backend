@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException, status
 from app.DB import members as member_queries
 from ..DB.main import SessionLocal
 from app.routers.models import Member_model, NotFoundResponse
-from sqlalchemy.exc import IntegrityError
 router = APIRouter()
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Member_model])
@@ -31,12 +30,14 @@ def create_members(members: list[Member_model]):
         session.commit()
     return created_members
 
-@router.put("/{member_id}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}})
+@router.put("/{member_id}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}, 409: {"model": NotFoundResponse, "description": "Member already exists"}})
 def update_member(member_id: int, member: Member_model):
     with SessionLocal() as session:
         updated_member = member_queries.update_member(session, member_id, member)
         if updated_member is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} not found")
+        if updated_member == -1:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"member with the uni_id '{member.uni_id}' already exists")
         session.commit()
     return updated_member
 
