@@ -2,7 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from os import getenv
 from dotenv import load_dotenv
-from helpers import get_database_url
+from app.helpers import get_database_url
 
 
 

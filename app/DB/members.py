@@ -19,7 +19,14 @@ def create_member(session: Session, member: Member_model):
     except IntegrityError as e:
         session.rollback()
         print(f"IntegrityError in create_member: {str(e)[:50]}...")
-        return None 
+        return None
+
+def create_member_if_not_exists(session: Session, member: Member_model) -> Members:
+    existing_member = session.scalar(select(Members).where(Members.uni_id == member.uni_id))
+    if existing_member:
+        session.flush()
+        return existing_member
+    return create_member(session, member)
 
 def get_members(session: Session):
     statement = select(Members)

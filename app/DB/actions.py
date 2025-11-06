@@ -9,3 +9,8 @@ def get_actions(session: Session):
     return actions
 
 
+def get_action_by_id(session: Session, action_id: int):
+    statement = select(Actions).where(Actions.id == action_id)
+    action = session.scalars(statement).first()
+    session.flush()
+    return action

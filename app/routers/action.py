@@ -32,7 +32,6 @@ def get_all_actions():
 
     # 1. Add composite actions
     for deptId, memberId in zip(department_ids, member_ids):
-        print(deptId, memberId)
         categorized_action["composite_actions"].append((get_action_by_id(actions, deptId), get_action_by_id(actions, memberId)))
 
     # 2. filter out department and member actions

@@ -50,5 +50,3 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event.description = event_data.description
 
     return existing_event
-
-def create_log(session: Session, event_id: int, )

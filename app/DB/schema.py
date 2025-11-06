@@ -1,7 +1,7 @@
 from typing import Optional
 import datetime
 
-from sqlalchemy import Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, String, Table, Text, text
+from sqlalchemy import Date, DateTime, Enum, ForeignKeyConstraint, Index, String, Text, text
 from sqlalchemy.dialects.mysql import DATETIME, ENUM, INTEGER, TEXT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -45,20 +45,6 @@ class Departments(Base):
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='department')
 
 
-t_departments_points = Table(
-    'departments_points', Base.metadata,
-    Column('department_id', INTEGER, server_default=text("'0'")),
-    Column('department_name', String(50)),
-    Column('department_log_id', INTEGER, server_default=text("'0'")),
-    Column('log_id', INTEGER, server_default=text("'0'")),
-    Column('start_date', Date),
-    Column('end_date', Date),
-    Column('event_name', String(150)),
-    Column('action_points', INTEGER),
-    Column('action_name', String(60))
-)
-
-
 class Events(Base):
     __tablename__ = 'events'
     __table_args__ = (
@@ -95,21 +81,6 @@ class Members(Base):
     responses: Mapped[list['Responses']] = relationship('Responses', back_populates='member')
 
 
-t_members_points = Table(
-    'members_points', Base.metadata,
-    Column('member_id', INTEGER, server_default=text("'0'")),
-    Column('member_name', String(50)),
-    Column('member_log_id', INTEGER, server_default=text("'0'")),
-    Column('member_gender', Enum('Male', 'Female')),
-    Column('log_id', INTEGER, server_default=text("'0'")),
-    Column('event_name', String(150)),
-    Column('start_date', Date),
-    Column('end_date', Date),
-    Column('action_points', INTEGER),
-    Column('action_name', String(60))
-)
-
-
 class Forms(Base):
     __tablename__ = 'forms'
     __table_args__ = (
@@ -135,8 +106,6 @@ class Logs(Base):
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     action_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    start_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
-    end_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
 
     action: Mapped['Actions'] = relationship('Actions', back_populates='logs')

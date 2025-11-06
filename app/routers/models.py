@@ -1,10 +1,13 @@
-from pydantic import BaseModel, Field, HttpUrl, EmailStr, field_validator, conlist
-import json
-from typing import List, Literal, Tuple, Optional
-from datetime import datetime, date
-from fastapi import HTTPException, status
+from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist
+from typing import List, Literal
+from datetime import datetime
 
-class Events_model(BaseModel):
+class BaseClassModel(BaseModel):
+
+    class Config:
+        from_attributes = True
+
+class Events_model(BaseClassModel):
     id: int | None = None
     name: str
     description: str | None = None
@@ -13,11 +16,8 @@ class Events_model(BaseModel):
     start_datetime: datetime
     end_datetime: datetime
 
-    class Config:
-        from_attributes = True
 
-
-class Member_model(BaseModel):
+class Member_model(BaseClassModel):
     id: int | None = None
     name: str
     email: EmailStr
@@ -42,41 +42,53 @@ class Member_model(BaseModel):
     #         raise ValueError("phone_number must contain 10 digits")
     #     return value
 
-    class Config:
-        from_attributes = True        
 
-class Department_model(BaseModel):
+class Department_model(BaseClassModel):
     id: int | None = None
     name: str
     type: Literal['administrative', 'practical']
 
-    class Config:
-        from_attributes = True
 
-class Action_model(BaseModel):
+class Action_model(BaseClassModel):
     id: int 
     action_name: str
     arabic_action_name: str 
     action_type: Literal["composite", "department", "member"] 
     action_description: str 
     points: int
+
     
-    class Config:
-        from_attributes = True
 
 
-class Categorized_action(BaseModel):
+class Categorized_action(BaseClassModel):
     composite_actions: List[conlist(Action_model, min_length=2, max_length=2)]
     department_actions: List[Action_model]
     member_actions: List[Action_model] 
     custom_actions: List[Action_model]
 
-    class Config:
-        from_attributes = True
 
 
-class ConflictResponse(BaseModel):
+class ConflictResponse(BaseClassModel):
     detail: str
 
-class NotFoundResponse(BaseModel):
+class NotFoundResponse(BaseClassModel):
     detail: str
+
+
+class Complex_EventData(BaseClassModel):
+    event_info: Events_model
+    discount: int
+    bonus: int
+
+class CompositeEventData(Complex_EventData):
+    department_id: int
+    members_attendance: HttpUrl | str
+    department_action_id: int
+    member_action_id: int
+
+class CompositeEventReport(BaseClassModel):
+    event: Events_model
+    days: int
+    members_count: int
+    members_points: int
+    department_points: int

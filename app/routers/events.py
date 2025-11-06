@@ -10,7 +10,7 @@ def get_all_events():
         events = events_queries.get_events(session)
     return events
 
-@router.get("/{event_id}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
+@router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
 def get_event_by_id(event_id: int):
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)

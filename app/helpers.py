@@ -1,33 +1,28 @@
-import urllib.request
-import csv
-import io
 from app.routers.models import Member_model
-from typing import List
+from typing import List, Union
 from dotenv import load_dotenv
-from typing import Union, Tuple
-from pathlib import Path
 import pandas as pd
-from fastapi import UploadFile
-
+from pydantic import HttpUrl
 import os
 
-def get_pydantic_members(source: Union[UploadFile, str]) -> List[tuple]:
-    if isinstance(source, str):
+def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
+    if isinstance(source, HttpUrl):
         # Handle URL
-        print(f"Got link: \x1b[33m{source}\x1b[0m")
+        print(f"[2] Got link: \x1b[33m{source}\x1b[0m")
         df = pd.read_csv(source)
     else:
         # Handle UploadFile
-        print(f"Got file: \x1b[33m{source.filename}\x1b[0m")
-        df = pd.read_excel(source.file)
+        print(f"[2] Got file: \x1b[33m{source}\x1b[0m")
+        df = pd.read_excel(f"uploads/{source}")
     
     members_and_date = []
     
     # Get column names
+    df.columns = df.columns.str.strip()
     columns = df.columns.tolist()
-    print(f"Columns found: \x1b[36m{columns}\x1b[0m")
-    print(f"Date columns found: \x1b[36m{columns[5:]}\x1b[0m")
-    
+    print(f"[2] Columns found: \x1b[36m{columns}\x1b[0m")
+    print(f"[2] Date columns found: \x1b[36m{columns[5:]}\x1b[0m")
+
     # Iterate through DataFrame rows
     for _, row in df.iterrows():
         member = Member_model(
@@ -44,7 +39,7 @@ def get_pydantic_members(source: Union[UploadFile, str]) -> List[tuple]:
         members_and_date.append((member, date_columns))
     
     source_type = "URL" if isinstance(source, str) else "file"
-    print(f"Extracted \x1b[32m{len(members_and_date)}\x1b[0m members from {source_type}")
+    print(f"[2] Extracted \x1b[32m{len(members_and_date)}\x1b[0m members from {source_type}")
     return members_and_date
 
 def get_database_url():

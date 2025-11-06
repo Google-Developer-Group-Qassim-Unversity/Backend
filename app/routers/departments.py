@@ -17,3 +17,4 @@ def get_department_by_id(department_id: int):
 		if not department:
 			raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {department_id} not found")
 	return department
+
