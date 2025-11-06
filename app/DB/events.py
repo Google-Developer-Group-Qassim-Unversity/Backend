@@ -29,7 +29,7 @@ def create_event(session: Session, event_data: Events_model):
         return new_event
     except IntegrityError as e:
         session.rollback()
-        print(f"IntegrityError in create_event: {str(e)[:50]}...")
+        print(f"IntegrityError in create_event: {e}...")
         return None
 
 def update_event(session: Session, event_id: int, event_data: Events_model):

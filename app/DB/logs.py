@@ -7,7 +7,7 @@ def create_department_log(session: Session, department_id: int, log_id: int, att
 	new_department_log = DepartmentsLogs(
 		department_id=department_id,
 		log_id=log_id,
-		attendance_number=attendance_number
+		attendants_number=attendance_number
 	)
 	session.add(new_department_log)
 	session.flush()

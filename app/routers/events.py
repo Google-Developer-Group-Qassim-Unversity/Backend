@@ -39,3 +39,12 @@ def update_event(event_id: int, event: Events_model):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{event.name}' already exists")
         session.commit()
     return updated_event
+
+@router.delete("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
+def delete_event(event_id: int):
+    with SessionLocal() as session:
+        deleted_event = events_queries.delete_event(session, event_id)
+        if not deleted_event:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+        session.commit()
+    return deleted_event
