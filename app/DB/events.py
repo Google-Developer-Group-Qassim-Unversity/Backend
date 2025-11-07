@@ -50,3 +50,11 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event.description = event_data.description
 
     return existing_event
+
+def delete_event(session: Session, event_id: int):
+    event_to_delete = session.scalar(select(Events).where(Events.id == event_id))
+    if not event_to_delete:
+        return None
+    session.delete(event_to_delete)
+    session.flush()
+    return event_to_delete

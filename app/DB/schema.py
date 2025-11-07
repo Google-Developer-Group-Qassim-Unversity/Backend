@@ -61,7 +61,7 @@ class Events(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
 
     forms: Mapped[list['Forms']] = relationship('Forms', back_populates='event')
-    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event')
+    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event', passive_deletes=True)
 
 
 class Members(Base):
@@ -106,10 +106,10 @@ class Logs(Base):
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     action_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+    event_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
 
     action: Mapped['Actions'] = relationship('Actions', back_populates='logs')
-    event: Mapped[Optional['Events']] = relationship('Events', back_populates='logs')
+    event: Mapped['Events'] = relationship('Events', back_populates='logs')
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='log')
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='log')
     modifications: Mapped[list['Modifications']] = relationship('Modifications', back_populates='log')

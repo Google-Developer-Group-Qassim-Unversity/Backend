@@ -77,18 +77,42 @@ class NotFoundResponse(BaseClassModel):
 
 class Complex_EventData(BaseClassModel):
     event_info: Events_model
-    discount: int
-    bonus: int
+    department_discount: int
+    department_bonus: int
+    member_discount: int
+    member_bonus: int
 
 class CompositeEventData(Complex_EventData):
     department_id: int
-    members_attendance: HttpUrl | str
+    members_attendance: str
     department_action_id: int
     member_action_id: int
 
-class CompositeEventReport(BaseClassModel):
+    @field_validator('members_attendance')
+    def file_or_url(cls, v: str):
+        if v.startswith('https://'):
+            if "docs.google.com/spreadsheets" not in v and not v.endswith("output=csv"):
+                raise ValueError("The Url must be a Google Sheets link with 'output=csv' parameter")
+            else:
+                return HttpUrl(v)
+        elif (v.endswith('.xlsx') or v.endswith('.csv')):
+            return v
+        else:
+            raise ValueError("members_attendance must be a valid file path ending with .xlsx or .csv, or a Google Sheets URL")
+
+
+class BaseEventReport(BaseClassModel):
     event: Events_model
     days: int
+    department: str
+    department_points: int
+
+class CompositeEventReport(BaseEventReport):
     members_count: int
     members_points: int
-    department_points: int
+
+class DepartmentEventData(BaseClassModel):
+    event_info: Events_model
+    department_id: int
+    action_id: int
+    bonus: int 

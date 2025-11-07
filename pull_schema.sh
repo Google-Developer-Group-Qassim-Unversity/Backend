@@ -20,7 +20,7 @@ fi
 # Generate the schema using sqlacodegen
 sqlacodegen --generator declarative --outfile "$OUTFILE" "$DATABASE_URL"
 if [ $? -eq 0 ]; then
-  echo "Schema generated successfully and saved to $OUTFILE"
+  echo -e "\033[32m✅ Schema generated successfully and saved to $OUTFILE\033[0m"
 else
-  echo "Failed to generate schema"
+  echo -e "\033[31m❌ Failed to generate schema\033[0m"
 fi

@@ -7,11 +7,9 @@ import os
 
 def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
     if isinstance(source, HttpUrl):
-        # Handle URL
         print(f"[2] Got link: \x1b[33m{source}\x1b[0m")
-        df = pd.read_csv(source)
+        df = pd.read_csv(source.__str__())
     else:
-        # Handle UploadFile
         print(f"[2] Got file: \x1b[33m{source}\x1b[0m")
         df = pd.read_excel(f"uploads/{source}")
     
