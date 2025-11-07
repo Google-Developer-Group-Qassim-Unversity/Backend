@@ -31,8 +31,8 @@ def summarized_traceback(log_file: str):
 @router.post("/composite", status_code=status.HTTP_201_CREATED, response_model=CompositeEventReport, responses={409: {"model": ConflictResponse, "description": "Conflict: Event already exists"}})
 def create_composite_event(body: CompositeEventData):
     log_file = f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}]-{body.event_info.name.replace(' ', '_')}.log"
-    try:
-        with SessionLocal() as session:
+    with SessionLocal() as session:
+        try:
             write_log(log_file, f"\033[34m{'-'*20}\033[0m[Processing Composite Event {body.event_info.name}]\033[34m{'-'*20}\033[0m")
             # 1. create event
             new_event = events.create_event(session, body.event_info)
@@ -114,24 +114,24 @@ def create_composite_event(body: CompositeEventData):
             write_log(log_file, f"\033[32m{'-'*51}\033[0m")
             return report
         
-    except HTTPException as http_exc:
-        write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{http_exc}\n\033[31m{'-'*67}\033[0m")
-        raise http_exc
-    except Exception as e:
-        session.rollback()
-        write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{e}\n\033[31m{'-'*67}\033[0m")
-        write_log(log_file, f"{'-'*20}[Traceback]{'-'*20}")
-        summarized_traceback(log_file)
-        write_log(log_file, f"{'-'*51}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
+        except HTTPException as http_exc:
+            write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{http_exc}\n\033[31m{'-'*67}\033[0m")
+            raise http_exc
+        except Exception as e:
+            session.rollback()
+            write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{e}\n\033[31m{'-'*67}\033[0m")
+            write_log(log_file, f"{'-'*20}[Traceback]{'-'*20}")
+            summarized_traceback(log_file)
+            write_log(log_file, f"{'-'*51}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
     
 
 
 @router.post("/department", status_code=status.HTTP_201_CREATED, response_model=CompositeEventReport, responses={409: {"model": ConflictResponse, "description": "Conflict: Event already exists"}})
 def create_department_event(body: DepartmentEventData ):
-    try:
-        log_file = f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}]-{body.event_info.name.replace(' ', '_')}.log"
-        with SessionLocal() as session:
+    with SessionLocal() as session:
+        try:
+            log_file = f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}]-{body.event_info.name.replace(' ', '_')}.log"
             write_log(log_file, f"\033[34m{'-'*20}\033[0m[Processing Composite Event {body.event_info.name}]\033[34m{'-'*20}\033[0m")
             # 1. create event
             new_event = events.create_event(session, body.event_info)
@@ -156,7 +156,7 @@ def create_department_event(body: DepartmentEventData ):
             department_points = (actions.get_action_by_id(session, body.department_action_id).points + body.department_bonus) * days
 
             session.commit()
-            
+
             result = BaseEventReport(
                 event=new_event,
                 days=days,
@@ -173,14 +173,14 @@ def create_department_event(body: DepartmentEventData ):
             write_log(log_file, f"\033[32m{'-'*51}\033[0m")
 
             return result
-
-    except HTTPException as http_exc:
-        write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{http_exc}\n\033[31m{'-'*67}\033[0m")
-        raise http_exc
-    except Exception as e:
-        session.rollback()
-        write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{e}\n\033[31m{'-'*67}\033[0m")
-        write_log(log_file, f"{'-'*20}[Traceback]{'-'*20}")
-        summarized_traceback(log_file)
-        write_log(log_file, f"{'-'*51}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
+        
+        except HTTPException as http_exc:
+            write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{http_exc}\n\033[31m{'-'*67}\033[0m")
+            raise http_exc
+        except Exception as e:
+            session.rollback()
+            write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{e}\n\033[31m{'-'*67}\033[0m")
+            write_log(log_file, f"{'-'*20}[Traceback]{'-'*20}")
+            summarized_traceback(log_file)
+            write_log(log_file, f"{'-'*51}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
