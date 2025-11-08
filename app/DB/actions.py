@@ -14,3 +14,13 @@ def get_action_by_id(session: Session, action_id: int):
     action = session.scalars(statement).first()
     session.flush()
     return action
+
+def create_action(session: Session, name: str, points: int, type: str):
+    new_action = Actions(
+        name=name,
+        points=points,
+        action_type=type
+    )
+    session.add(new_action)
+    session.flush()
+    return new_action

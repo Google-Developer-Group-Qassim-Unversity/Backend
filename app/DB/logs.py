@@ -22,7 +22,7 @@ def create_member_log(session: Session, member_id: int, log_id: int):
 	session.flush()
 	return new_member_log
 
-def create_log(session: Session, event_id: int, action_id: int):
+def create_log(session: Session, event_id: int | None, action_id: int):
 	new_log = Logs(
 		event_id=event_id,
 		action_id=action_id

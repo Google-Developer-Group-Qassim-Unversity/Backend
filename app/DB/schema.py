@@ -1,8 +1,8 @@
 from typing import Optional
 import datetime
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKeyConstraint, Index, String, Text, text
-from sqlalchemy.dialects.mysql import DATETIME, ENUM, INTEGER, TEXT, VARCHAR
+from sqlalchemy import Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, String, Table, Text, text
+from sqlalchemy.dialects.mysql import DATETIME, INTEGER, TEXT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
@@ -28,9 +28,9 @@ class Actions(Base):
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     action_name: Mapped[str] = mapped_column(VARCHAR(60), nullable=False)
     points: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    action_type: Mapped[str] = mapped_column(ENUM('composite', 'department', 'member'), nullable=False)
-    action_description: Mapped[str] = mapped_column(String(100), nullable=False)
-    arabic_action_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    action_type: Mapped[str] = mapped_column(Enum('composite', 'department', 'member', 'bonus'), nullable=False)
+    action_description: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
+    arabic_action_name: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
 
     logs: Mapped[list['Logs']] = relationship('Logs', back_populates='action')
 
@@ -43,6 +43,20 @@ class Departments(Base):
     type: Mapped[str] = mapped_column(Enum('administrative', 'practical'), nullable=False)
 
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='department')
+
+
+t_departments_points = Table(
+    'departments_points', Base.metadata,
+    Column('department_id', INTEGER, server_default=text("'0'")),
+    Column('department_name', String(50)),
+    Column('department_log_id', INTEGER, server_default=text("'0'")),
+    Column('log_id', INTEGER, server_default=text("'0'")),
+    Column('start_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('end_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('event_name', String(150)),
+    Column('action_points', INTEGER),
+    Column('action_name', String(60))
+)
 
 
 class Events(Base):
@@ -79,6 +93,21 @@ class Members(Base):
 
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='member')
     responses: Mapped[list['Responses']] = relationship('Responses', back_populates='member')
+
+
+t_members_points = Table(
+    'members_points', Base.metadata,
+    Column('member_id', INTEGER, server_default=text("'0'")),
+    Column('member_name', String(50)),
+    Column('member_log_id', INTEGER, server_default=text("'0'")),
+    Column('member_gender', Enum('Male', 'Female')),
+    Column('log_id', INTEGER, server_default=text("'0'")),
+    Column('event_name', String(150)),
+    Column('start_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('end_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('action_points', INTEGER),
+    Column('action_name', String(60))
+)
 
 
 class Forms(Base):
