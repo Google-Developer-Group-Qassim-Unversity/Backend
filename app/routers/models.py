@@ -140,11 +140,21 @@ class CustomeBulkMemberReport(BaseClassModel):
     action_name: str
 
 
-class customMemberPoints(Member_model):
+class CustomMemberData(Member_model):
     action_name: str
     points: int
 
 class CustomeMemberReport(BaseClassModel):
     member_name: str
+    action_name: str
+    points: int
+
+class CustomeDepartmentData(BaseClassModel):
+    department_id: int
+    action_name: str
+    points: int
+
+class CustomeDepartmentReport(BaseClassModel):
+    department_name: str
     action_name: str
     points: int
