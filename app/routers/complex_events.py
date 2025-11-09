@@ -60,11 +60,11 @@ def create_composite_event(body: CompositeEventData):
             department_log = logs.create_department_log(session, body.department_id, log_department.id)
             write_log(log_file, f"[4] Created department log: \x1b[33m{department_log.id}\x1b[0m")
 
-            if body.bonus > 0:
-                bonus = logs.create_modification(session, log_department.id, 'bonus', body.bonus)
+            if body.department_bonus > 0:
+                bonus = logs.create_modification(session, log_department.id, 'bonus', body.department_bonus)
                 write_log(log_file, f"[4.1] Created bonus for department log: \x1b[33m{bonus.id}\x1b[0m")
-            if body.discount > 0:
-                discount = logs.create_modification(session, log_department.id, 'discount', body.discount)
+            if body.department_discount > 0:
+                discount = logs.create_modification(session, log_department.id, 'discount', body.department_discount)
                 write_log(log_file, f"[4.2] Created discount for department log: \x1b[33m{discount.id}\x1b[0m")
 
             # 4. queries for the report (not part of the event creation)
@@ -75,7 +75,6 @@ def create_composite_event(body: CompositeEventData):
 
 
             # 5 commit and report
-            session.commit()
 
             report = CompositeEventReport(
                 event=new_event,
@@ -92,6 +91,8 @@ def create_composite_event(body: CompositeEventData):
             del report_dict['event']
             [write_log(log_file, f"{key}: \033[32m{value}\033[0m") for key, value in (report_dict.items())]
             write_log(log_file, f"\033[32m{'-'*51}\033[0m")
+
+            session.commit()
             return report
         
         except HTTPException as http_exc:
@@ -135,7 +136,6 @@ def create_department_event(body: DepartmentEventData ):
             department = departments.get_department_by_id(session, body.department_id).name
             department_points = (actions.get_action_by_id(session, body.department_action_id).points + body.department_bonus) * days
 
-            session.commit()
 
             result = BaseEventReport(
                 event=new_event,
@@ -152,6 +152,7 @@ def create_department_event(body: DepartmentEventData ):
             [write_log(log_file, f"{key}: \033[32m{value}\033[0m") for key, value in (result_dict.items())]
             write_log(log_file, f"\033[32m{'-'*51}\033[0m")
 
+            session.commit()
             return result
         
         except HTTPException as http_exc:

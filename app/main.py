@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.routers import upload, members, events, departments, action, complex_events, custom
+from app.routers import upload, members, events, departments, action, complex_events, custom, edit
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -20,3 +20,4 @@ app.include_router(complex_events.router, prefix="/events", tags=["complex_event
 app.include_router(departments.router, prefix="/departments", tags=["departments"])
 app.include_router(action.router, prefix="/actions", tags=["actions"])
 app.include_router(custom.router, prefix="/custom", tags=["custom"])
+app.include_router(edit.router, prefix="/edit", tags=["edit"])

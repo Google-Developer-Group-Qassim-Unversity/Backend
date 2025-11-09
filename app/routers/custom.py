@@ -49,6 +49,7 @@ def custom_bulk_members(data: CustomeBulkMemberData):
             write_log(log_file, f"\033[32m{'-'*20}\033[0m[Successfully processed bulk members ✅]\033[32m{'-'*20}\033[0m")
             [write_log(log_file, f"{key}: \033[32m{value}\033[0m") for key, value in (report.model_dump().items())]
             write_log(log_file, f"\033[32m{'-'*51}\033[0m")
+
             session.commit()
             return report
 
@@ -98,7 +99,6 @@ def custom_member(body: List[CustomMemberData]):
                     )
                 )
 
-            session.commit()
 
             write_log(log_file, f"\033[32m{'-'*20}\033[0m[Successfully processed bulk members ✅]\033[32m{'-'*20}\033[0m")
             for index, report in enumerate(reports):
@@ -107,6 +107,7 @@ def custom_member(body: List[CustomMemberData]):
             
             write_log(log_file, f"\033[32m{'-'*51}\033[0m")
 
+            session.commit()
             return reports
         
         except Exception as e:
@@ -136,7 +137,6 @@ def custom_departments(body: CustomeDepartmentData):
             # extra queries for report (not part of event)
             department = departments.get_department_by_id(session, body.department_id)
 
-            session.commit()
 
             report = CustomeDepartmentReport(
                 department_name=department.name,
@@ -147,6 +147,8 @@ def custom_departments(body: CustomeDepartmentData):
             write_log(log_file, f"\033[32m{'-'*20}\033[0m[Successfully processed bulk members ✅]\033[32m{'-'*20}\033[0m")
             [write_log(log_file, f"{key}: \033[32m{value}\033[0m") for key, value in (report.model_dump().items())]
             write_log(log_file, f"\033[32m{'-'*51}\033[0m")
+            
+            session.commit()
             return report
 
         except Exception as e:

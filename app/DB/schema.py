@@ -1,7 +1,7 @@
 from typing import Optional
 import datetime
 
-from sqlalchemy import Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, String, Table, Text, text
+from sqlalchemy import Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, JSON, String, Table, Text, text
 from sqlalchemy.dialects.mysql import DATETIME, INTEGER, TEXT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -78,6 +78,31 @@ class Events(Base):
     logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event', passive_deletes=True)
 
 
+t_expanded_logs = Table(
+    'expanded logs', Base.metadata,
+    Column('log_id', INTEGER, server_default=text("'0'")),
+    Column('event_id', INTEGER),
+    Column('action_id', INTEGER),
+    Column('event_name', String(150)),
+    Column('event_description', Text),
+    Column('event_start', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('event_end', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('action_name', String(60)),
+    Column('action_points', INTEGER),
+    Column('action_type', Enum('composite', 'department', 'member', 'bonus'))
+)
+
+
+t_expanded_members_logs = Table(
+    'expanded_members_logs', Base.metadata,
+    Column('log_id', INTEGER, server_default=text("'0'")),
+    Column('event_name', String(150)),
+    Column('action_name', String(60)),
+    Column('action_type', Enum('composite', 'department', 'member', 'bonus')),
+    Column('members', JSON)
+)
+
+
 class Members(Base):
     __tablename__ = 'members'
     __table_args__ = (
@@ -135,10 +160,10 @@ class Logs(Base):
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     action_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    event_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
 
     action: Mapped['Actions'] = relationship('Actions', back_populates='logs')
-    event: Mapped['Events'] = relationship('Events', back_populates='logs')
+    event: Mapped[Optional['Events']] = relationship('Events', back_populates='logs')
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='log')
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='log')
     modifications: Mapped[list['Modifications']] = relationship('Modifications', back_populates='log')
@@ -219,9 +244,9 @@ class Absence(Base):
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
-    member_log_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+    member_log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
 
-    member_log: Mapped[Optional['MembersLogs']] = relationship('MembersLogs', back_populates='absence')
+    member_log: Mapped['MembersLogs'] = relationship('MembersLogs', back_populates='absence')
 
 
 class Responses(Base):
