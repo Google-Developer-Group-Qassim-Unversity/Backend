@@ -15,6 +15,7 @@ class Events_model(BaseClassModel):
     location: str
     start_datetime: datetime
     end_datetime: datetime
+    status: Literal['annonced', 'open', 'closed']
 
 
 class Member_model(BaseClassModel):
@@ -42,7 +43,15 @@ class Member_model(BaseClassModel):
     #         raise ValueError("phone_number must contain 10 digits")
     #     return value
 
-
+class MemberHistory_model(BaseClassModel):
+    name: str
+    description: str | None = None
+    location: str
+    location_type: Literal["online", "on-site"]
+    start_datetime: datetime
+    end_datetime: datetime
+    action_name: str
+   
 class Department_model(BaseClassModel):
     id: int | None = None
     name: str

@@ -1,8 +1,8 @@
 from typing import Optional
 import datetime
 
-from sqlalchemy import Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, JSON, String, Table, Text, text
-from sqlalchemy.dialects.mysql import DATETIME, INTEGER, TEXT, VARCHAR
+from sqlalchemy import BigInteger, Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, JSON, String, Table, Text, text
+from sqlalchemy.dialects.mysql import DATETIME, ENUM, INTEGER, TEXT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
@@ -37,6 +37,10 @@ class Actions(Base):
 
 class Departments(Base):
     __tablename__ = 'departments'
+    __table_args__ = (
+        Index('departments_name_IDX', 'name'),
+        Index('departments_type_IDX', 'type')
+    )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -55,7 +59,9 @@ t_departments_points = Table(
     Column('end_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
     Column('event_name', String(150)),
     Column('action_points', INTEGER),
-    Column('action_name', String(60))
+    Column('action_name', String(60)),
+    Column('mod_value', INTEGER),
+    Column('mod_type', Enum('bonus', 'discount'))
 )
 
 
@@ -63,19 +69,21 @@ class Events(Base):
     __tablename__ = 'events'
     __table_args__ = (
         Index('event_name', 'name'),
+        Index('events_id_IDX', 'id', 'name'),
         Index('events_unique', 'name', unique=True)
     )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     name: Mapped[str] = mapped_column(VARCHAR(150), nullable=False)
-    location_type: Mapped[str] = mapped_column(Enum('online', 'on-site'), nullable=False)
+    location_type: Mapped[str] = mapped_column(ENUM('online', 'on-site', 'none'), nullable=False)
     location: Mapped[str] = mapped_column(String(100), nullable=False)
     start_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
     end_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
+    status: Mapped[str] = mapped_column(ENUM('announced', 'open', 'closed'), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
 
     forms: Mapped[list['Forms']] = relationship('Forms', back_populates='event')
-    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event', passive_deletes=True)
+    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event')
 
 
 t_expanded_logs = Table(
@@ -111,13 +119,13 @@ class Members(Base):
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
-    uni_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    email: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
+    uni_id: Mapped[str] = mapped_column(String(9), nullable=False)
     gender: Mapped[str] = mapped_column(Enum('Male', 'Female'), nullable=False)
-    email: Mapped[Optional[str]] = mapped_column(String(100))
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
 
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='member')
-    responses: Mapped[list['Responses']] = relationship('Responses', back_populates='member')
+    submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='member')
 
 
 t_members_points = Table(
@@ -131,22 +139,26 @@ t_members_points = Table(
     Column('start_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
     Column('end_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
     Column('action_points', INTEGER),
-    Column('action_name', String(60))
+    Column('action_name', String(60)),
+    Column('mod_value', INTEGER),
+    Column('mod_type', Enum('bonus', 'discount')),
+    Column('total_absences', BigInteger, server_default=text("'0'"))
 )
 
 
 class Forms(Base):
     __tablename__ = 'forms'
     __table_args__ = (
-        ForeignKeyConstraint(['event_id'], ['events.id'], name='forms_ibfk_1'),
-        Index('event_id', 'event_id')
+        ForeignKeyConstraint(['event_id'], ['events.id'], ondelete='CASCADE', onupdate='CASCADE', name='forms_ibfk_1'),
+        Index('forms_unique_event_id', 'event_id', unique=True)
     )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
 
     event: Mapped[Optional['Events']] = relationship('Events', back_populates='forms')
-    questions: Mapped[list['Questions']] = relationship('Questions', back_populates='forms')
+    questions: Mapped[list['Questions']] = relationship('Questions', back_populates='form')
+    submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='form')
 
 
 class Logs(Base):
@@ -155,6 +167,7 @@ class Logs(Base):
         ForeignKeyConstraint(['action_id'], ['actions.id'], ondelete='CASCADE', onupdate='CASCADE', name='logs_ibfk_1'),
         ForeignKeyConstraint(['event_id'], ['events.id'], ondelete='CASCADE', name='fk_events'),
         Index('action_id', 'action_id'),
+        Index('action_id_event_id_idx', 'action_id', 'event_id'),
         Index('fk_events', 'event_id')
     )
 
@@ -223,16 +236,34 @@ class Modifications(Base):
 class Questions(Base):
     __tablename__ = 'questions'
     __table_args__ = (
-        ForeignKeyConstraint(['forms_id'], ['forms.id'], name='questions_ibfk_1'),
-        Index('forms_id', 'forms_id')
+        ForeignKeyConstraint(['form_id'], ['forms.id'], ondelete='CASCADE', onupdate='CASCADE', name='questions_ibfk_1'),
+        Index('questions_ibfk_1', 'form_id')
     )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     value: Mapped[str] = mapped_column(String(200), nullable=False)
-    forms_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+    form_id: Mapped[Optional[int]] = mapped_column(INTEGER)
 
-    forms: Mapped[Optional['Forms']] = relationship('Forms', back_populates='questions')
+    form: Mapped[Optional['Forms']] = relationship('Forms', back_populates='questions')
     responses: Mapped[list['Responses']] = relationship('Responses', back_populates='question')
+
+
+class Submissions(Base):
+    __tablename__ = 'submissions'
+    __table_args__ = (
+        ForeignKeyConstraint(['form_id'], ['forms.id'], ondelete='CASCADE', onupdate='CASCADE', name='submissions_ibfk_1'),
+        ForeignKeyConstraint(['member_id'], ['members.id'], ondelete='CASCADE', onupdate='CASCADE', name='submissions_ibfk_2'),
+        Index('from_id_member_id_idx', 'form_id', 'member_id'),
+        Index('submissions_unique', 'member_id', 'form_id', unique=True)
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    form_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+
+    form: Mapped['Forms'] = relationship('Forms', back_populates='submissions')
+    member: Mapped['Members'] = relationship('Members', back_populates='submissions')
+    responses: Mapped[list['Responses']] = relationship('Responses', back_populates='submission')
 
 
 class Absence(Base):
@@ -252,14 +283,14 @@ class Absence(Base):
 class Responses(Base):
     __tablename__ = 'responses'
     __table_args__ = (
-        ForeignKeyConstraint(['member_id'], ['members.id'], name='responses_ibfk_1'),
-        ForeignKeyConstraint(['question_id'], ['questions.id'], name='responses_ibfk_2'),
-        Index('question_id', 'question_id')
+        ForeignKeyConstraint(['question_id'], ['questions.id'], ondelete='CASCADE', onupdate='CASCADE', name='responses_ibfk_2'),
+        ForeignKeyConstraint(['submission_id'], ['submissions.id'], ondelete='CASCADE', onupdate='CASCADE', name='responses_ibfk_1'),
+        Index('responses_ibfk_2', 'question_id')
     )
 
-    member_id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    submission_id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     question_id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    value: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[Optional[str]] = mapped_column(Text)
 
-    member: Mapped['Members'] = relationship('Members', back_populates='responses')
     question: Mapped['Questions'] = relationship('Questions', back_populates='responses')
+    submission: Mapped['Submissions'] = relationship('Submissions', back_populates='responses')

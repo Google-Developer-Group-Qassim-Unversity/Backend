@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from app.DB import members as member_queries
 from ..DB.main import SessionLocal
-from app.routers.models import Member_model, NotFoundResponse
+from app.routers.models import Member_model, NotFoundResponse, MemberHistory_model
+from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer, HTTPAuthorizationCredentials
 router = APIRouter()
+
 clerk_config = ClerkConfig(jwks_url="https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json") 
 clerk_auth_guard = ClerkHTTPBearer(config=clerk_config)
 
@@ -13,7 +15,7 @@ def get_all_members():
         members = member_queries.get_members(session)
     return members
 
-@router.get("/{member_id}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}})
+@router.get("/{member_id: int}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}})
 def get_member_by_id(member_id: int):
     with SessionLocal() as session:
         member = member_queries.get_member_by_id(session, member_id)
@@ -33,7 +35,8 @@ def create_members(members: list[Member_model]):
         session.commit()
     return created_members
 
-@router.put("/{member_id}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}, 409: {"model": NotFoundResponse, "description": "Member already exists"}})
+
+@router.put("/{member_id: int}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}, 409: {"model": NotFoundResponse, "description": "Member already exists"}})
 def update_member(member_id: int, member: Member_model):
     with SessionLocal() as session:
         updated_member = member_queries.update_member(session, member_id, member)
@@ -44,3 +47,10 @@ def update_member(member_id: int, member: Member_model):
         session.commit()
     return updated_member
 
+@router.get("/history", status_code=status.HTTP_200_OK)
+def get_member_history(credentials: HTTPAuthorizationCredentials = Depends(clerk_auth_guard)):
+    with SessionLocal() as session:
+        member_uni_id = credentials.model_dump()['decoded']['metadata']['uiId']
+        member_history = member_queries.get_member_history(session, member_uni_id)
+        print(member_history)
+    return member_history

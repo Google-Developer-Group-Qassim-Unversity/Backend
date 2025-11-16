@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from .schema import Members
+from .schema import Actions, Members, MembersLogs, Logs, Events
 from ..routers.models import Member_model
 
 def create_member(session: Session, member: Member_model):
@@ -65,3 +65,25 @@ def update_member(session: Session, member_id: int, member: Member_model):
     session.flush()
     print(f"Updated member: {existing_member.name}")
     return existing_member
+
+def get_member_history(session: Session, uni_id: str):
+    query = (
+    session.query(
+        Events.name,
+        Events.description,
+        Events.location,
+        Events.location_type,
+        Events.start_datetime,
+        Events.end_datetime,
+        Actions.action_name,
+        Actions.points,
+    )
+    .select_from(Members)
+    .join(MembersLogs, Members.id == MembersLogs.member_id)
+    .join(Logs, MembersLogs.log_id == Logs.id)
+    .outerjoin(Events, Logs.event_id == Events.id)
+    .join(Actions, Logs.action_id == Actions.id)
+    .filter(Members.uni_id == uni_id)
+    )
+
+    return [row._asdict() for row in query.all()]
