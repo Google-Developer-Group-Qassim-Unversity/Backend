@@ -158,3 +158,7 @@ class CustomeDepartmentReport(BaseClassModel):
     department_name: str
     action_name: str
     points: int
+
+class CardData(BaseClassModel):
+    name: str
+    url: str
