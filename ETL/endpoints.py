@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
 from helpers import get_pydantic_members
+from fastapi_cache.decorator import cache
 from models import (
     CompositeFormData, Member, Action, Categorized_action, CompositeFormData,
     Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData,
@@ -14,6 +15,21 @@ from pprint import pprint
 
 
 router = APIRouter()
+
+
+
+# for caching test.
+async def get_slow_data():
+     with SessionLocal() as session:
+        members = session.scalars(select(Members)).all()
+
+     return members
+
+
+@router.get("/members/cached")
+@cache(expire=60)
+async def get_cached_members():
+    return await get_slow_data()
 
 def to_dict(obj):
     return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
@@ -785,3 +801,6 @@ def handle_custom_departments(form_data: CustomDepartmentsFormData):
             print("Error processing event ❌")
             print(e)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error") 
+
+
+
