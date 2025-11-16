@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from app.DB.schema import Events, Actions, DepartmentsLogs, Logs, Members, MembersLogs, Modifications, Absence
+from app.DB.schema import Events, Actions, DepartmentsLogs, Logs, Members, MembersLogs, Modifications, Absence, Departments
 from typing import Literal
 from sqlalchemy import select, func, case
 from sqlalchemy.orm import aliased, Session
@@ -115,3 +115,17 @@ def get_expanded_members_logs(session: Session):
         {**row._asdict(), 'members': loads(row.members), 'bonus': row.bonus/len(loads(row.members)) if row.bonus else 0, 'discount': row.discount/len(loads(row.members)) if row.discount else 0}
         for row in stmt.all()
     ]
+
+def get_expanded_department_logs(session: Session):
+	query = (
+    session.query(
+        Logs.id,
+        Departments.name
+    )
+    .join(Actions, Actions.id == Logs.action_id)
+    .join(DepartmentsLogs, DepartmentsLogs.log_id == Logs.id)
+    .join(Departments, Departments.id == DepartmentsLogs.department_id)
+    .filter(Actions.action_type == 'composite')
+	)
+	
+	return query.all()

@@ -3,6 +3,9 @@ from app.DB import members as member_queries
 from ..DB.main import SessionLocal
 from app.routers.models import Member_model, NotFoundResponse
 router = APIRouter()
+clerk_config = ClerkConfig(jwks_url="https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json") 
+clerk_auth_guard = ClerkHTTPBearer(config=clerk_config)
+
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Member_model])
 def get_all_members():
