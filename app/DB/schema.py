@@ -81,6 +81,7 @@ class Events(Base):
     end_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
     status: Mapped[str] = mapped_column(ENUM('announced', 'open', 'closed'), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
+    image_url: Mapped[Optional[str]] = mapped_column(String(100))
 
     forms: Mapped[list['Forms']] = relationship('Forms', back_populates='event')
     logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event')

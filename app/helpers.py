@@ -40,6 +40,11 @@ def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
     print(f"[2] Extracted \x1b[32m{len(members_and_date)}\x1b[0m members from {source_type}")
     return members_and_date
 
+def get_uni_id_from_credentials(credentials) -> str:
+    decoded = credentials.model_dump()['decoded']
+    uni_id = decoded['metadata']['uni_id']
+    return uni_id
+
 def get_database_url():
     ''''
     This function is so that you use the fake DB while running localhost

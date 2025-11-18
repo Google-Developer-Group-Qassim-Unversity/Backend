@@ -87,3 +87,5 @@ def get_member_history(session: Session, uni_id: str):
     )
 
     return [row._asdict() for row in query.all()]
+
+

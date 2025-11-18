@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from app.routers import upload, members, events, departments, action, complex_events, custom, edit, auth
 from fastapi.middleware.cors import CORSMiddleware
-
+from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
 
 app  = FastAPI()
 
@@ -12,6 +12,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+clerk_config = ClerkConfig(jwks_url="https://quality-ram-47.clerk.accounts.dev/.well-known/jwks.json") 
+clerk_auth_guard = ClerkHTTPBearer(config=clerk_config)
 
 app.include_router(members.router, prefix="/members", tags=["members"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])

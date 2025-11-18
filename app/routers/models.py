@@ -16,6 +16,7 @@ class Events_model(BaseClassModel):
     start_datetime: datetime
     end_datetime: datetime
     status: Literal['annonced', 'open', 'closed']
+    image_url: str | None = None
 
 
 class Member_model(BaseClassModel):
