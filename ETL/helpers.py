@@ -1,4 +1,3 @@
-import pendulum
 from models import Member
 from typing import List
 from dotenv import load_dotenv
@@ -20,6 +19,8 @@ def get_pydantic_members(source: Union[UploadFile, str]) -> List[tuple]:
     members_and_date = []
     
     # Get column names
+    df.columns = df.columns.str.strip()
+    df.columns = df.columns.str.lower()
     columns = df.columns.tolist()
     print(f"Columns found: \x1b[36m{columns}\x1b[0m")
     print(f"Date columns found: \x1b[36m{columns[5:]}\x1b[0m")
@@ -57,8 +58,6 @@ def get_database_url():
     return "DATABASE_URL"
 
 
-def print_cache_miss():
-    print(f"\n[{pendulum.now().format('DD-MM-YYYY HH:mm')}] Cache: \033[31mMISS\033[0m")
 
 if __name__ == "__main__":
     url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTI-xnfTaaEhNO4G4Vx1dJejKq2kDtHSi5yWtcrFGNfKJJxqRvIpBXk2_M9dxDc49NrDY-dD5SiJ6pR/pub?gid=1781104695&single=true&output=csv"

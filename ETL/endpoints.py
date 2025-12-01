@@ -2,8 +2,7 @@ from sqlalchemy import select, exists
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
-from helpers import get_pydantic_members, print_cache_miss
-from fastapi_cache.decorator import cache
+from helpers import get_pydantic_members
 from models import (
     CompositeFormData, Member, Action, Categorized_action, CompositeFormData,
     Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData,
@@ -11,7 +10,10 @@ from models import (
 )
 from typing import List
 import datetime
+
 from fastapi_cache.decorator import cache
+from log import log_error, log_traceback, print_cache_miss
+
 router = APIRouter()
 
 CACHE_TIME = 300 # Cache for 5 minutes
@@ -23,11 +25,9 @@ def to_dict(obj):
 def hanlde_root():
     return HTMLResponse("<h1>Score Admin API is ready ✅</h1>")
 
-
-@router.post("/events/composite", status_code=status.HTTP_201_CREATED)
+COMPOSITE_ROUTE = "/events/composite"
+@router.post(COMPOSITE_ROUTE, status_code=status.HTTP_201_CREATED)
 def handle_events(parsed: tuple = Depends(parse_composite_form)):
-
-
     form_data, file = parsed
     form_data: CompositeFormData
     # This needs to be refactored into smaller functions.
@@ -232,12 +232,12 @@ def handle_events(parsed: tuple = Depends(parse_composite_form)):
             return JSONResponse(status_code=status.HTTP_201_CREATED, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
-            print("Error processing event ❌")
-            print(e)
+            log_error(e, COMPOSITE_ROUTE)
+            log_traceback(COMPOSITE_ROUTE)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error") 
 
-
-@router.post("/events/departments", status_code=status.HTTP_201_CREATED)
+DEPARTMENT_ROUTE = "/events/departments"
+@router.post(DEPARTMENT_ROUTE, status_code=status.HTTP_201_CREATED)
 def handle_departments(form_data: DepartmentFormData):
     with SessionLocal() as session:
         try:
@@ -369,12 +369,12 @@ def handle_departments(form_data: DepartmentFormData):
             return JSONResponse(status_code=status.HTTP_201_CREATED, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
-            print("Error processing event ❌")
-            print(e)
+            log_error(e, DEPARTMENT_ROUTE)
+            log_traceback(DEPARTMENT_ROUTE)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
-
-@router.post("/events/members", status_code=status.HTTP_201_CREATED)
+MEMBER_ROUTE = "/events/members"
+@router.post(MEMBER_ROUTE, status_code=status.HTTP_201_CREATED)
 def handle_members(form_data: MemberFormData):
     with SessionLocal() as session:
         try:
@@ -462,8 +462,8 @@ def handle_members(form_data: MemberFormData):
             return JSONResponse(status_code=status.HTTP_201_CREATED, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
-            print("Error processing event ❌")
-            print(e)
+            log_error(e, MEMBER_ROUTE)
+            log_traceback(MEMBER_ROUTE)
             # {'error': 'Event already exist with that name', 'detail': 'asdf'}
             try:
                 if e['error'] == "Event already exist with that name":
@@ -474,7 +474,9 @@ def handle_members(form_data: MemberFormData):
 
 
 @router.get("/members", status_code=status.HTTP_200_OK, response_model=List[Member])
+@cache(expire=CACHE_TIME)
 def handle_get_members():
+    print_cache_miss("/members")
     with SessionLocal() as session:
         members = session.scalars(select(Members)).all()
 
@@ -508,7 +510,6 @@ def handle_update_member(member: Member):
 
 
 @router.post("/members", status_code=status.HTTP_201_CREATED, response_model=Member)
-@cache(expire=CACHE_TIME)
 def handle_create_member(member: Member):
     with SessionLocal() as session:
         try:
@@ -533,6 +534,7 @@ def handle_create_member(member: Member):
 @router.get("/departments", status_code=status.HTTP_200_OK, response_model=List[Department])
 @cache(expire=CACHE_TIME)
 def handle_department():
+    print_cache_miss("/departments")
     with SessionLocal() as session:
         result = session.scalars(select(Departments)).all()
         departments = []
@@ -545,7 +547,7 @@ def handle_department():
 @router.get("/actions", status_code=status.HTTP_200_OK, response_model=Categorized_action)
 @cache(expire=CACHE_TIME) 
 def get_actions():
-    print_cache_miss()
+    print_cache_miss("/actions")
     with SessionLocal() as session:
         statement = select(Actions)
         result = session.scalars(statement).all()
@@ -590,6 +592,7 @@ def get_actions():
 @router.get("/actions/contributers", response_model=List[Action], status_code=status.HTTP_200_OK)
 @cache(expire=CACHE_TIME)
 def get_action_contributors():
+    print_cache_miss("/actions/contributers")
     with SessionLocal() as session:
         statement = select(Actions).where(
             Actions.action_name.in_(["volunteer", "Presented a course"])
@@ -623,7 +626,9 @@ def add_action(action: Action):
         
 
 @router.get("/events", status_code=status.HTTP_200_OK, response_model=List[Events_table])
+@cache(expire=60) # cache for only 1 minute since events change more frequently
 def handler_get_events():
+    print_cache_miss("/events")
     with SessionLocal() as session:
         try:
             db_events = session.scalars(select(Events)).all()
@@ -632,8 +637,8 @@ def handler_get_events():
             print(e)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-
-@router.post("/events/custom/members", status_code=status.HTTP_201_CREATED)
+CUSTOME_MEMBER_ROUTE = "/events/custom/members"
+@router.post(CUSTOME_MEMBER_ROUTE, status_code=status.HTTP_201_CREATED)
 def handler_custom_members(form_data: CustomMembersFormData,):
     with SessionLocal() as session:
         try:
@@ -723,12 +728,12 @@ def handler_custom_members(form_data: CustomMembersFormData,):
             return JSONResponse(status_code=status.HTTP_201_CREATED, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
-            print("Error processing event ❌")
-            print(e)
+            log_error(e, CUSTOME_MEMBER_ROUTE)
+            log_traceback(CUSTOME_MEMBER_ROUTE)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error") 
 
-
-@router.post("/events/custom/departments", status_code=status.HTTP_201_CREATED)
+CUSTOME_DEPARTMENT_ROUTE = "/events/custom/departments"
+@router.post(CUSTOME_DEPARTMENT_ROUTE, status_code=status.HTTP_201_CREATED)
 def handle_custom_departments(form_data: CustomDepartmentsFormData):
     with SessionLocal() as session:
         try:
@@ -799,8 +804,8 @@ def handle_custom_departments(form_data: CustomDepartmentsFormData):
             return JSONResponse(status_code=status.HTTP_201_CREATED, content={"message": "Event processed successfully"})
         except Exception as e:
             session.rollback()
-            print("Error processing event ❌")
-            print(e)
+            log_error(e, CUSTOME_DEPARTMENT_ROUTE)
+            log_traceback(CUSTOME_DEPARTMENT_ROUTE)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error") 
 
 

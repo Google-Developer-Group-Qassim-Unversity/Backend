@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from endpoints import router
 from fastapi.middleware.cors import CORSMiddleware
 import sheet_validation as sv
+from log import POSTRequestLoggerMiddleware
 
 # Caching setup taken from the official 'fastapi-cache' example at "https://github.com/long2ice/fastapi-cache/blob/main/examples/in_memory/main.py"
 from contextlib import asynccontextmanager
@@ -23,6 +24,8 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all HTTP methods
     allow_headers=["*"],  # Allow all HTTP headers
 )
+
+app.add_middleware(POSTRequestLoggerMiddleware)
 
 app.include_router(router)
 app.include_router(sv.router)
