@@ -54,6 +54,9 @@ def handle_events(parsed: tuple = Depends(parse_composite_form)):
             print(f"Creating event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
             new_event = Events(
                 name=form_data.event_info.event_title,
+                location_type='none',
+                location='unkown',
+                status='closed',
             )
 
             session.add(new_event)
@@ -249,7 +252,10 @@ def handle_departments(form_data: DepartmentFormData):
             # insert event into DB
             print(f"Creating event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
             new_event = Events(
-                name=form_data.event_info.event_title
+                name=form_data.event_info.event_title,
+                location_type='none',
+                location='unkown',
+                status='closed',
             )
 
             session.add(new_event)
@@ -381,7 +387,10 @@ def handle_members(form_data: MemberFormData):
                 })
             
             new_event = Events(
-                name=form_data.event_info.event_title
+                name=form_data.event_info.event_title,
+                location_type='none',
+                location='unkown',
+                status='closed',
             )
 
             session.add(new_event)
@@ -640,7 +649,10 @@ def handler_custom_members(form_data: CustomMembersFormData,):
             
             print(f"Creating event: \x1b[33m{form_data.event_info.event_title}\x1b[0m")
             new_event = Events(
-                name=form_data.event_info.event_title
+                name=form_data.event_info.event_title,
+                location_type='none',
+                location='unkown',
+                status='closed',
             )
 
             session.add(new_event)
