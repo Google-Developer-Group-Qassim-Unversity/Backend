@@ -1,10 +1,14 @@
+from typing import Optional
 from sqlalchemy import create_engine, Integer, Date, ForeignKey 
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Mapped, mapped_column, relationship
 from os import getenv
 from dotenv import load_dotenv
-from datetime import date
+from datetime import date, datetime
 import datetime as dt
 from helpers import get_database_url
+from sqlalchemy import Date, DateTime, Enum, Index, String, text
+from sqlalchemy.dialects.mysql import  ENUM, INTEGER, TEXT, VARCHAR
+
 
 load_dotenv()
 engine = create_engine(getenv(get_database_url()))
@@ -107,13 +111,24 @@ class Actions(Base):
 
 
 class Events(Base):
-    __tablename__ = "events"
+    __tablename__ = 'events'
+    __table_args__ = (
+        Index('event_name', 'name'),
+        Index('events_id_IDX', 'id', 'name'),
+        Index('events_unique', 'name', unique=True)
+    )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(150))
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    name: Mapped[str] = mapped_column(VARCHAR(150), nullable=False)
+    location_type: Mapped[str] = mapped_column(ENUM('online', 'on-site', 'none'), nullable=False)
+    location: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
+    start_datetime: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
+    end_datetime: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
+    status: Mapped[str] = mapped_column(ENUM('announced', 'open', 'closed'), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(TEXT)
+    image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
 
-    logs: Mapped[list["Logs"]] = relationship(back_populates="event")
-
+    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event')
 
 class Modifications(Base):
     __tablename__ = "modifications"

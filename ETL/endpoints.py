@@ -2,35 +2,19 @@ from sqlalchemy import select, exists
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import JSONResponse, HTMLResponse
 from db import *
-from helpers import get_pydantic_members
+from helpers import get_pydantic_members, print_cache_miss
 from fastapi_cache.decorator import cache
 from models import (
     CompositeFormData, Member, Action, Categorized_action, CompositeFormData,
     Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData,
-    CustomDepartmentsFormData, parse_composite_form, Events_table, EventData, Whatever
+    CustomDepartmentsFormData, parse_composite_form, Events_table, EventData
 )
 from typing import List
 import datetime
-from pprint import pprint
-
-
+from fastapi_cache.decorator import cache
 router = APIRouter()
 
-
-
-# for caching test.
-async def get_slow_data():
-     with SessionLocal() as session:
-        members = session.scalars(select(Members)).all()
-
-     return members
-
-
-@router.get("/members/cached")
-@cache(expire=60)
-async def get_cached_members():
-    return await get_slow_data()
-
+CACHE_TIME = 300 # Cache for 5 minutes
 def to_dict(obj):
     return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
 
@@ -515,6 +499,7 @@ def handle_update_member(member: Member):
 
 
 @router.post("/members", status_code=status.HTTP_201_CREATED, response_model=Member)
+@cache(expire=CACHE_TIME)
 def handle_create_member(member: Member):
     with SessionLocal() as session:
         try:
@@ -537,6 +522,7 @@ def handle_create_member(member: Member):
 
 
 @router.get("/departments", status_code=status.HTTP_200_OK, response_model=List[Department])
+@cache(expire=CACHE_TIME)
 def handle_department():
     with SessionLocal() as session:
         result = session.scalars(select(Departments)).all()
@@ -548,7 +534,9 @@ def handle_department():
 
 
 @router.get("/actions", status_code=status.HTTP_200_OK, response_model=Categorized_action)
+@cache(expire=CACHE_TIME) 
 def get_actions():
+    print_cache_miss()
     with SessionLocal() as session:
         statement = select(Actions)
         result = session.scalars(statement).all()
@@ -591,6 +579,7 @@ def get_actions():
 
 
 @router.get("/actions/contributers", response_model=List[Action], status_code=status.HTTP_200_OK)
+@cache(expire=CACHE_TIME)
 def get_action_contributors():
     with SessionLocal() as session:
         statement = select(Actions).where(
@@ -624,7 +613,7 @@ def add_action(action: Action):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"Internal server error"})
         
 
-@router.get("/events", status_code=status.HTTP_201_CREATED, response_model=List[Events_table])
+@router.get("/events", status_code=status.HTTP_200_OK, response_model=List[Events_table])
 def handler_get_events():
     with SessionLocal() as session:
         try:

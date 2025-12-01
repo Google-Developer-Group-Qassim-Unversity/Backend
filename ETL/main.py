@@ -1,10 +1,20 @@
 from fastapi import FastAPI
 from endpoints import router
 from fastapi.middleware.cors import CORSMiddleware
+import sheet_validation as sv
+
+# Caching setup taken from the official 'fastapi-cache' example at "https://github.com/long2ice/fastapi-cache/blob/main/examples/in_memory/main.py"
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.inmemory import InMemoryBackend
-import sheet_validation as sv
-app  = FastAPI()
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    FastAPICache.init(InMemoryBackend())
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,8 +27,3 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(sv.router)
 
-
-@app.on_event("startup")
-async def startup_event():
-    print("--- Initializing cache... ---")
-    FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")

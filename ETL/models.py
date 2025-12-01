@@ -180,9 +180,6 @@ class CustomDepartmentsFormData(BaseModel):
     bonus: int
     action_id: int
 
-class Whatever(BaseModel):
-    whatever1: str
-
 
 def parse_composite_form(
     action: str = Form(...),

@@ -1,16 +1,12 @@
-import urllib.request
-import csv
-import io
+import pendulum
 from models import Member
 from typing import List
 from dotenv import load_dotenv
-from typing import Union, Tuple
-from pathlib import Path
+from typing import Union
 import pandas as pd
 from fastapi import UploadFile
-
 import os
-# this is a fake commit to make it re-run github actions so that the the nwe DB_URL gets used 
+
 def get_pydantic_members(source: Union[UploadFile, str]) -> List[tuple]:
     if isinstance(source, str):
         # Handle URL
@@ -60,6 +56,9 @@ def get_database_url():
     # If DEV_DATABASE_URL doesn't exist, return the string "DATABASE_URL"
     return "DATABASE_URL"
 
+
+def print_cache_miss():
+    print(f"\n[{pendulum.now().format('DD-MM-YYYY HH:mm')}] Cache: \033[31mMISS\033[0m")
 
 if __name__ == "__main__":
     url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTI-xnfTaaEhNO4G4Vx1dJejKq2kDtHSi5yWtcrFGNfKJJxqRvIpBXk2_M9dxDc49NrDY-dD5SiJ6pR/pub?gid=1781104695&single=true&output=csv"
