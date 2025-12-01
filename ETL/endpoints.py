@@ -16,7 +16,7 @@ from log import log_error, log_traceback, print_cache_miss
 
 router = APIRouter()
 
-CACHE_TIME = 300 # Cache for 5 minutes
+CACHE_TIME = 3600 # Cache for 1 hour
 def to_dict(obj):
     return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
 
