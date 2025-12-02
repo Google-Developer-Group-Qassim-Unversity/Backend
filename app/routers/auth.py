@@ -8,6 +8,7 @@ router = APIRouter()
 
 
 # Main auth guard used across the app
+
 clerk_config = ClerkConfig(jwks_url="https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json") 
 clerk_auth_guard = ClerkHTTPBearer(config=clerk_config)
 
