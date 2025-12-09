@@ -1,23 +1,31 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Request
 from app.DB import events, members, logs, actions, departments
 from ..DB.main import SessionLocal
 from app.routers.models import ConflictResponse, NotFoundResponse, CompositeEventData, BaseEventReport, CompositeEventReport, DepartmentEventData
 from app.helpers import get_pydantic_members
 from datetime import timedelta, datetime
-from app.routers.logging import write_log, log_summarized_traceback
+from app.routers.logging import write_log, write_log_traceback, write_log_json, write_log_title, write_log_exception, create_log_file
 router = APIRouter()
 
 
 @router.post("/composite", status_code=status.HTTP_201_CREATED, response_model=CompositeEventReport, responses={409: {"model": ConflictResponse, "description": "Conflict: Event already exists"}})
-def create_composite_event(body: CompositeEventData):
+async def create_composite_event(body: CompositeEventData, request: Request):
     with SessionLocal() as session:
+        log_file = create_log_file("/composite")
         try:
-            log_file = f"event_complex_composite [{datetime.now().strftime('%Y-%m-%d %H:%M')}]-{body.event_info.name.replace(' ', '_')}.log"
-            write_log(log_file, f"\033[34m{'-'*20}\033[0m[Processing Composite Event {body.event_info.name}]\033[34m{'-'*20}\033[0m")
+            json = await request.json()
+            write_log_title(log_file, f"Processing Composite Event {body.event_info.name}")
+
             # 1. create event
             new_event = events.create_event(session, body.event_info)
-            if not new_event:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{body.event_info.name}' already exists")
+
+            if isinstance(new_event, Exception):
+                exception = new_event
+                if exception.orig.args[0] == 1062: # MySQL code for duplicate entry
+                    write_log(log_file, str(exception))
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{body.event_info.name}' already exists")
+                else:
+                    raise exception
 
             write_log(log_file, f"[1] Created event: \x1b[33m{new_event.id}\x1b[0m")
 
@@ -96,15 +104,18 @@ def create_composite_event(body: CompositeEventData):
             return report
         
         except HTTPException as http_exc:
-            write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{http_exc}\n\033[31m{'-'*67}\033[0m")
+            session.rollback()
+            write_log_exception(log_file, http_exc)
+            write_log_traceback(log_file)
             raise http_exc
         except Exception as e:
             session.rollback()
-            write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{e}\n\033[31m{'-'*67}\033[0m")
-            write_log(log_file, f"{'-'*20}[Traceback]{'-'*20}")
-            log_summarized_traceback(log_file)
-            write_log(log_file, f"{'-'*51}")
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
+        finally:
+            write_log_json(log_file, json)
     
 
 
@@ -162,6 +173,6 @@ def create_department_event(body: DepartmentEventData ):
             session.rollback()
             write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{e}\n\033[31m{'-'*67}\033[0m")
             write_log(log_file, f"{'-'*20}[Traceback]{'-'*20}")
-            log_summarized_traceback(log_file)
+            write_log_traceback(log_file)
             write_log(log_file, f"{'-'*51}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")

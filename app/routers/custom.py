@@ -5,7 +5,7 @@ from ..DB.main import SessionLocal
 from app.routers.models import CustomeBulkMemberData, CustomeMemberReport, CustomMemberData, Member_model, CustomeBulkMemberReport, CustomeDepartmentData, CustomeDepartmentReport
 from app.helpers import get_pydantic_members
 from datetime import timedelta, datetime
-from app.routers.logging import write_log, log_summarized_traceback
+from app.routers.logging import write_log, write_log_traceback
 router = APIRouter()
 
 @router.post("/members/bulk", status_code=201, response_model=CustomeBulkMemberReport)
@@ -57,7 +57,7 @@ def custom_bulk_members(data: CustomeBulkMemberData):
             session.rollback()
             write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{e}\n\033[31m{'-'*67}\033[0m")
             write_log(log_file, f"{'-'*20}[Traceback]{'-'*20}")
-            log_summarized_traceback(log_file)
+            write_log_traceback(log_file)
             write_log(log_file, f"{'-'*51}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
@@ -113,7 +113,7 @@ def custom_member(body: List[CustomMemberData]):
         except Exception as e:
             write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing event ❌]\033[31m{'-'*20}\033[0m\n{e}\n\033[31m{'-'*67}\033[0m")
             write_log(log_file, f"{'-'*20}[Traceback]{'-'*20}")
-            log_summarized_traceback(log_file)
+            write_log_traceback(log_file)
             write_log(log_file, f"{'-'*51}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
@@ -154,6 +154,6 @@ def custom_departments(body: CustomeDepartmentData):
         except Exception as e:
             write_log(log_file, f"\033[31m{'-'*20}\033[0m[Error processing departments ❌]\033[31m{'-'*20}\033[0m\n{e}\n\033[31m{'-'*67}\033[0m")
             write_log(log_file, f"{'-'*20}[Traceback]{'-'*20}")
-            log_summarized_traceback(log_file)
+            write_log_traceback(log_file)
             write_log(log_file, f"{'-'*51}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")

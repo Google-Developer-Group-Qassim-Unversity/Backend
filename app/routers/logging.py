@@ -1,27 +1,60 @@
-from os import makedirs, path
+from os import path
 from sys import exc_info
-import traceback
-# Logging stuff
+from traceback import extract_tb, format_exception
+from datetime import datetime
+from pathlib import Path
+from json import dump, dumps
+from pprint import pprint
+LOG_FILE = "logs"
 
-makedirs("event_logs", exist_ok=True)
+def create_log_file(end_point: str):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    file_path = Path(f"{LOG_FILE}/{end_point}/[{timestamp}]/messages.log")
+    file_path.parent.mkdir(exist_ok=True, parents=True)
+    file_path.touch()
 
-def write_log(file: str, message: str):
-    try:
-        with open(f"event_logs/{file}", 'x') as f:
-            pass
-    except FileExistsError:
-        pass
+    return file_path
 
+def write_log(file: Path, message: str):
     print(message)
-    with open(f"event_logs/{file}", "a") as f:
+    with open(file, "a") as f:
         f.write(message + "\n")
 
-def log_summarized_traceback(log_file: str):
+def write_file(file: Path, message: str):
+    with open(file, "a") as f:
+        f.write(message + "\n")
+
+def write_log_title(file: Path, title: str):
+    write_log(file, f"\033[34m{'-'*20}\033[0m[{title}]\033[34m{'-'*20}\033[0m")
+    write_log(file, "\n\033[33mLog\033[0m 🧾:")
+
+def write_log_json(file: Path, json: str):
+    write_log(file, "\n\033[33mJSON Body\033[0m 📦:")
+    file = file.with_name("body.json")
+    
+    with open(file, 'w', encoding='utf-8') as f:
+        dump(json, f, indent=4, ensure_ascii=False)
+    print(dumps(json, indent=4, ensure_ascii=False))
+
+
+def write_log_traceback(file: Path):
+    write_log(file, "\n\033[33msummrized traceback\033[0m 🗂️:")
+    file = file.with_name("traceback.log")
     tb = exc_info()[2]
-    for frame in traceback.extract_tb(tb):
-        write_log(log_file, f"...{path.sep.join(frame.filename.split(path.sep)[-3:])}, line {frame.lineno}:{frame.colno}")
+    for frame in extract_tb(tb):
+        f = f"...{path.sep.join(frame.filename.split(path.sep)[-3:])}, line {frame.lineno}:{frame.colno}"
+        write_log(file, f)
+
+    exc_type, exc, _ = exc_info()
+    full = "".join(format_exception(exc_type, exc, tb))
+    write_file(file, 3*'\n' + full)
 
 def print_summarized_traceback() -> str:
     tb = exc_info()[2]
-    for frame in traceback.extract_tb(tb):
+    for frame in extract_tb(tb):
         print(f"...{path.sep.join(frame.filename.split(path.sep)[-3:])}, line {frame.lineno}:{frame.colno}\n")
+
+def write_log_exception(file: Path, err: Exception):
+    write_log(file, "\n\033[33mError\033[0m ❌:")
+    file = file.with_name("error.log")
+    write_log(file, str(err))

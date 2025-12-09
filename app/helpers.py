@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import pandas as pd
 from pydantic import HttpUrl
 import os
+from sys import exit
 
 def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
     if isinstance(source, HttpUrl):
@@ -46,7 +47,7 @@ def get_uni_id_from_credentials(credentials) -> str:
     return uni_id
 
 def get_database_url():
-    ''''
+    '''
     This function is so that you use the fake DB while running localhost
     but when you deploy it, it  will automatically uses the actual DB
     Make sure to set the DEV_DATABASE_URL in your .env file locally @albrrak773
@@ -58,10 +59,14 @@ def get_database_url():
     # If DEV_DATABASE_URL doesn't exist, return the string "DATABASE_URL"
     url = os.getenv("DATABASE_URL")
     if url is None or url == "":
-        raise ValueError("DATABASE_URL is not set in the environment variables.")
+        raise ValueError(f"\n⚠️ DATABASE_URL is not set in the environment variables.\n")
     else:
         return "DATABASE_URL" 
-
+def is_clerk_dev():
+    clerk_dev = os.getenv("CLERK_ENV")
+    if clerk_dev:
+        return True
+    return False
 
 if __name__ == "__main__":
     url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTI-xnfTaaEhNO4G4Vx1dJejKq2kDtHSi5yWtcrFGNfKJJxqRvIpBXk2_M9dxDc49NrDY-dD5SiJ6pR/pub?gid=1781104695&single=true&output=csv"

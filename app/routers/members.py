@@ -24,17 +24,18 @@ def get_member_by_id(member_id: int):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} not found")
     return member
 
-@router.post("/", status_code=status.HTTP_201_CREATED, response_model=list[Member_model], responses={409: {"model": NotFoundResponse, "description": "Member already exists"}})
-def create_members(members: list[Member_model]):
-    with SessionLocal() as session:
-        created_members = []
-        for member in members:
-            new_member = member_queries.create_member(session, member)
-            if not new_member:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"member with the uni_id '{member.uni_id}' already exists")
-            created_members.append(new_member)
-        session.commit()
-    return created_members
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=Member_model)
+def create_member(member: Member_model, credentials: HTTPAuthorizationCredentials = Depends(clerk_auth_guard)):
+    try:
+        with SessionLocal() as session:
+            new_member, doesExist = member_queries.create_member_if_not_exists(session, member)
+            session.commit()
+        return new_member, doesExist
+    except Exception:
+        session.rollback()
+        print(e)
+        
+
 
 
 @router.put("/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}, 409: {"model": NotFoundResponse, "description": "Member already exists"}})
