@@ -24,7 +24,7 @@ class Member_model(BaseClassModel):
     name: str
     email: EmailStr
     phone_number: str | None
-    uni_id: int
+    uni_id: str
     gender: Literal["Male", "Female"]
 
     @field_validator("uni_id")
@@ -43,6 +43,10 @@ class Member_model(BaseClassModel):
     #     if len(str(value)) != 10:
     #         raise ValueError("phone_number must contain 10 digits")
     #     return value
+
+class MeberCreate_model(BaseClassModel):
+    member: Member_model
+    already_exists: bool
 
 class MemberHistory_model(BaseClassModel):
     name: str

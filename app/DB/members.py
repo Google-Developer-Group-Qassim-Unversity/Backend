@@ -24,12 +24,13 @@ def create_member(session: Session, member: Member_model):
 def create_member_if_not_exists(session: Session, member: Member_model) -> tuple[Members, bool]:
     existing_member = session.scalar(select(Members).where(Members.uni_id == member.uni_id))
     if existing_member:
-        doesExist = True
+        already_exist = True
+        updated_member = update_member(session, existing_member)
         session.flush()
-        return existing_member, doesExist
-    doesExist = False
-    return create_member(session, member), doesExist
-
+        return updated_member, already_exist
+    already_exist = False
+    return create_member(session, member), already_exist
+    
 def get_members(session: Session):
     statement = select(Members)
     member = session.scalars(statement).all()
@@ -46,22 +47,16 @@ def get_member_by_uni_id(session: Session, uni_id: str):
     member = session.scalars(statement).first()
     return member
 
-def update_member(session: Session, member_id: int, member: Member_model):
-    existing_member = session.scalar(select(Members).where(Members.id == member_id))
+def update_member(session: Session, member: Member_model):
+    existing_member = session.scalar(select(Members).where(Members.id == member.id))
     print(f"Updating member: {existing_member.name}")
     if not existing_member:
         return None
-    try:
-        existing_member.uni_id = member.uni_id
-        session.flush()
-    except IntegrityError as e:
-        session.rollback()
-        print(f"IntegrityError in update_member: {str(e)[:50]}...")
-        return -1
     existing_member.name = member.name
     existing_member.email = member.email
     existing_member.phone_number = member.phone_number
     existing_member.gender = member.gender
+    
     session.flush()
     print(f"Updated member: {existing_member.name}")
     return existing_member

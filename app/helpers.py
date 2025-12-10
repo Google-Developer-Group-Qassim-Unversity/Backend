@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import pandas as pd
 from pydantic import HttpUrl
 import os
+from json import dumps
 from sys import exit
 
 def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
@@ -41,10 +42,31 @@ def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
     print(f"[2] Extracted \x1b[32m{len(members_and_date)}\x1b[0m members from {source_type}")
     return members_and_date
 
-def get_uni_id_from_credentials(credentials) -> str:
+def get_uni_id_from_credentials(credentials):
     decoded = credentials.model_dump()['decoded']
+    print("Got decoded credentials 🔒:")
+    print(dumps(credentials.model_dump(), ensure_ascii=False, indent=4))
     uni_id = decoded['metadata']['uni_id']
     return uni_id
+
+def credentials_to_member_model(credentials) -> Member_model:
+    credentials_dict = credentials.model_dump()
+    credentials_str = dumps(credentials.model_dump(), ensure_ascii=False, indent=4)
+    if not credentials_dict['decoded']['metadata']:
+        print(f"Invalid credentials structure:\n{credentials_str}")
+        raise ValueError("Invalid credentials: 'decoded' or 'metadata' missing")
+    print(f"got credentials:\n{credentials_str}")
+    metadata = credentials_dict['decoded']['metadata']
+    print(f"got metadata:\n{dumps(metadata, ensure_ascii=False, indent=4)}")
+    member = Member_model(
+        name=metadata.get('fullArabicName'),
+        email=metadata.get('personalEmail'),
+        phone_number=metadata.get('saudiPhone'),
+        uni_id=metadata.get('uni_id'),
+        gender=metadata.get('gender')
+    )
+    print(f"Converted to Member_model:\n{member.model_dump()}")
+    return member
 
 def get_database_url():
     '''
@@ -62,6 +84,7 @@ def get_database_url():
         raise ValueError(f"\n⚠️ DATABASE_URL is not set in the environment variables.\n")
     else:
         return "DATABASE_URL" 
+        
 def is_clerk_dev():
     clerk_dev = os.getenv("CLERK_ENV")
     if clerk_dev:
