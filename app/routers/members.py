@@ -6,7 +6,7 @@ from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.routers.auth import clerk_auth_guard
 import json
 from app.helpers import get_uni_id_from_credentials, credentials_to_member_model
-from app.routers.logging import write_log_exception, write_log_traceback, create_log_file, write_log, write_log_title
+from app.routers.logging import write_log_exception, write_log_traceback, create_log_file, write_log, write_log_title, write_log_json
 router = APIRouter()
 
 
@@ -40,6 +40,8 @@ def create_member(credentials: HTTPAuthorizationCredentials = Depends(clerk_auth
             write_log_exception(log_file, e)
             write_log_traceback(log_file)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while creating the member")
+        finally:
+            write_log_json(log_file, member.model_dump())
 
 
 

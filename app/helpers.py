@@ -63,7 +63,7 @@ def credentials_to_member_model(credentials) -> Member_model:
         email=metadata.get('personalEmail'),
         phone_number=metadata.get('saudiPhone'),
         uni_id=metadata.get('uni_id'),
-        gender=metadata.get('gender')
+        gender=metadata.get("gender").title()
     )
     print(f"Converted to Member_model:\n{member.model_dump()}")
     return member

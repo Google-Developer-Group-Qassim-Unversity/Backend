@@ -24,9 +24,9 @@ def create_member(session: Session, member: Member_model):
 def create_member_if_not_exists(session: Session, member: Member_model) -> tuple[Members, bool]:
     existing_member = session.scalar(select(Members).where(Members.uni_id == member.uni_id))
     if existing_member:
+        member.id = existing_member.id
         already_exist = True
-        updated_member = update_member(session, existing_member)
-        session.flush()
+        updated_member = update_member(session, member)
         return updated_member, already_exist
     already_exist = False
     return create_member(session, member), already_exist
@@ -49,9 +49,9 @@ def get_member_by_uni_id(session: Session, uni_id: str):
 
 def update_member(session: Session, member: Member_model):
     existing_member = session.scalar(select(Members).where(Members.id == member.id))
-    print(f"Updating member: {existing_member.name}")
     if not existing_member:
         return None
+    print(f"Updating member: {existing_member.name}")
     existing_member.name = member.name
     existing_member.email = member.email
     existing_member.phone_number = member.phone_number
