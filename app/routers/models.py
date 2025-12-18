@@ -11,11 +11,11 @@ class Events_model(BaseClassModel):
     id: int | None = None
     name: str
     description: str | None = None
-    location_type: Literal['online', 'on-site']
+    location_type: Literal['online', 'on-site', 'none']
     location: str
     start_datetime: datetime
     end_datetime: datetime
-    status: Literal['annonced', 'open', 'closed']
+    status: Literal['announced', 'open', 'closed']
     image_url: str | None = None
 
 

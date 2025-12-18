@@ -36,20 +36,30 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event = session.scalar(select(Events).where(Events.id == event_id))
     if not existing_event:
         return None
+    
+    # only update the name if changed
+    if existing_event.name != event_data.name:
+        name_conflict = session.scalar(
+            select(Events).where(Events.name == event_data.name, Events.id != event_id)
+        )
+        if name_conflict:
+            return -1
+    
     try:
         existing_event.name = event_data.name
+        existing_event.location_type = event_data.location_type
+        existing_event.location = event_data.location
+        existing_event.start_datetime = event_data.start_datetime
+        existing_event.end_datetime = event_data.end_datetime
+        existing_event.description = event_data.description
+        existing_event.status = event_data.status
+        existing_event.image_url = event_data.image_url
         session.flush()
+        return existing_event
     except IntegrityError as e:
         session.rollback()
-        print(f"IntegrityError in update_event: {str(e)[:50]}...")
+        print(f"IntegrityError in update_event: {str(e)}")
         return -1
-    existing_event.location_type = event_data.location_type
-    existing_event.location = event_data.location
-    existing_event.start_datetime = event_data.start_datetime
-    existing_event.end_datetime = event_data.end_datetime
-    existing_event.description = event_data.description
-
-    return existing_event
 
 def delete_event(session: Session, event_id: int):
     event_to_delete = session.scalar(select(Events).where(Events.id == event_id))
