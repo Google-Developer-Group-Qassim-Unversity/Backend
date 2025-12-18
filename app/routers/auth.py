@@ -2,17 +2,15 @@ from fastapi import APIRouter, Depends
 from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer, HTTPAuthorizationCredentials
 from app.DB import members
 from app.DB.main import SessionLocal
-from app.helpers import get_uni_id_from_credentials, is_clerk_dev
+from app.helpers import get_uni_id_from_credentials
+from app.config import config
 from json import dumps
+
 router = APIRouter()
 
 
 # Main auth guard used across the app
-if is_clerk_dev():
-    print("Using DEV Clerk ⚠️")
-    clerk_config = ClerkConfig(jwks_url="https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json") 
-else:
-    clerk_config = ClerkConfig(jwks_url="https://clerk.gdg-q.com/.well-known/jwks.json")
+clerk_config = ClerkConfig(jwks_url=config.CLERK_JWKS_URL)
 clerk_auth_guard = ClerkHTTPBearer(config=clerk_config)
 
 

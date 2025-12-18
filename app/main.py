@@ -1,9 +1,11 @@
 from fastapi import FastAPI
-from app.routers import upload, members, events, departments, action, complex_events, custom, edit, auth,card
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
 from fastapi.responses import RedirectResponse
-app  = FastAPI()
+from fastapi.staticfiles import StaticFiles
+from app.routers import upload, members, events, departments, action, complex_events, custom, edit, auth, card
+from app.config import config
+
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,4 +28,6 @@ app.include_router(action.router, prefix="/actions", tags=["actions"])
 app.include_router(custom.router, prefix="/custom", tags=["custom"])
 app.include_router(edit.router, prefix="/edit", tags=["edit"])
 app.include_router(auth.router, tags=["auth"])
-app.include_router(card.router,prefix="/card", tags=["Card"])
+app.include_router(card.router, prefix="/card", tags=["Card"])
+
+app.mount("/files", StaticFiles(directory=config.UPLOAD_DIR), name="files")

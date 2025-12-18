@@ -5,18 +5,17 @@ from datetime import date, datetime
 from fastapi import APIRouter, HTTPException, UploadFile, Depends
 import pandas as pd
 from pydantic import EmailStr, ValidationError, BaseModel
+from app.config import config
 
 router = APIRouter()
 
-UPLOAD_DIR = "./uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 async def _uploaded_file(file: UploadFile) -> tuple[str, str]:
 	file_id = str(uuid.uuid4())
 	extension = os.path.splitext(file.filename)[1]
 	file_name = file_id + extension
-	file_location = os.path.join(UPLOAD_DIR, file_name)
+	file_location = os.path.join(config.UPLOAD_DIR, file_name)
 
 	try:
 		with open(file_location, "wb") as f:
