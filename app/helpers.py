@@ -52,7 +52,6 @@ def credentials_to_member_model(credentials) -> Member_model:
     if not credentials_dict['decoded']['metadata']:
         print(f"Invalid credentials structure:\n{credentials_str}")
         raise ValueError("Invalid credentials: 'decoded' or 'metadata' missing")
-    print(f"got credentials:\n{credentials_str}")
     metadata = credentials_dict['decoded']['metadata']
     print(f"got metadata:\n{dumps(metadata, ensure_ascii=False, indent=4)}")
     member = Member_model(

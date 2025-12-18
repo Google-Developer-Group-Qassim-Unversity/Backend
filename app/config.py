@@ -21,7 +21,7 @@ CLERK_PROD = "https://clerk.gdg-q.com/.well-known/jwks.json"
 CLERK_DEV = "https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json"
 
 UPLOAD_DIR = "uploads"
-
+LOG_DIR = "logs"
 # =============================================================================
 # 
 # =============================================================================
@@ -40,7 +40,10 @@ class Config:
     def DATABASE_URL(self) -> str:
         url = env_or_except("DATABASE_URL")
         if self.is_dev:
-            return url.replace(DB_PROD, DB_DEV)
+            parts = url.rsplit('/', 1)
+            if len(parts) == 2:
+                url = f"{parts[0]}/{DB_DEV}"
+            return url
         return url
     
     @property
@@ -52,6 +55,10 @@ class Config:
     @property
     def UPLOAD_DIR(self) -> str:
         return UPLOAD_DIR
+
+    @property
+    def LOG_DIR(self) -> str:
+        return LOG_DIR
 
 
 def env_or_except(key: str, default: Optional[str] = None) -> str:

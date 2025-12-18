@@ -5,11 +5,12 @@ from datetime import datetime
 from pathlib import Path
 from json import dump, dumps
 from pprint import pprint
-LOG_FILE = "logs"
+from app.config import config
+
 
 def create_log_file(end_point: str):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    file_path = Path(f"{LOG_FILE}/{end_point}/[{timestamp}]/messages.log")
+    file_path = Path(f"{config.LOG_DIR}/{end_point}/[{timestamp}]/messages.log")
     file_path.parent.mkdir(exist_ok=True, parents=True)
     file_path.touch()
 
