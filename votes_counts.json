@@ -1,0 +1,38 @@
+{
+    "1": {
+        "votes": 3,
+        "department_name": "Development"
+    },
+    "2": {
+        "votes": 1,
+        "department_name": "Program and Event Management"
+    },
+    "3": {
+        "votes": 0,
+        "department_name": "Media and Reports"
+    },
+    "4": {
+        "votes": 0,
+        "department_name": "Design"
+    },
+    "5": {
+        "votes": 0,
+        "department_name": "Organization and Meetings"
+    },
+    "6": {
+        "votes": 0,
+        "department_name": "Robotics"
+    },
+    "7": {
+        "votes": 0,
+        "department_name": "Cybersecurity"
+    },
+    "8": {
+        "votes": 0,
+        "department_name": "Artificial Intelligence and Data Analysis"
+    },
+    "9": {
+        "votes": 0,
+        "department_name": "Business"
+    }
+}

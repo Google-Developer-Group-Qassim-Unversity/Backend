@@ -1,0 +1,9 @@
+__pycache__
+.venv
+*.xls
+*.xlsx
+*.csv
+.env
+event_logs/
+logs
+uploads
