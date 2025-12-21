@@ -14,7 +14,7 @@ load_dotenv()
 # Configuration Constants (add more here and then expose them via Config class)
 # =============================================================================
 
-DB_PROD = "scores"
+DB_PROD = "scoresTest" # temporarly replacing prod with test until we migrate the prod db, leave as is for now
 DB_DEV = "scoresTest"
 
 CLERK_PROD = "https://clerk.gdg-q.com/.well-known/jwks.json"
