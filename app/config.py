@@ -39,11 +39,11 @@ class Config:
     @property
     def DATABASE_URL(self) -> str:
         url = env_or_except("DATABASE_URL")
-        if self.is_dev:
-            parts = url.rsplit('/', 1)
-            if len(parts) == 2:
-                url = f"{parts[0]}/{DB_DEV}"
-            return url
+        parts = url.rsplit('/', 1)
+        if len(parts) == 2:
+            url = f"{parts[0]}/{DB_DEV}"
+        else:
+            raise ValueError(f"⚠️ Invalid DATABASE_URL format excpected to end with /<dbname>, got: {url}")
         return url
     
     @property
