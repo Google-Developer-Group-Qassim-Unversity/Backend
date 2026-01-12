@@ -22,6 +22,16 @@ CLERK_DEV = "https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json"
 
 UPLOAD_DIR = "uploads"
 LOG_DIR = "logs"
+
+# Pagination settings
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 100
+
+# Sorting settings
+DEFAULT_SORT_ORDER = "DESC"
+DEFAULT_EVENTS_SORT_BY = "start_datetime"
+ALLOWED_EVENTS_SORT_BY = ["start_datetime"]
+
 # =============================================================================
 # 
 # =============================================================================
@@ -59,6 +69,26 @@ class Config:
     @property
     def LOG_DIR(self) -> str:
         return LOG_DIR
+    
+    @property
+    def DEFAULT_PAGE_SIZE(self) -> int:
+        return DEFAULT_PAGE_SIZE
+    
+    @property
+    def MAX_PAGE_SIZE(self) -> int:
+        return MAX_PAGE_SIZE
+    
+    @property
+    def DEFAULT_SORT_ORDER(self) -> str:
+        return DEFAULT_SORT_ORDER
+    
+    @property
+    def DEFAULT_EVENTS_SORT_BY(self) -> str:
+        return DEFAULT_EVENTS_SORT_BY
+    
+    @property
+    def ALLOWED_EVENTS_SORT_BY(self) -> list[str]:
+        return ALLOWED_EVENTS_SORT_BY
 
 
 def env_or_except(key: str, default: Optional[str] = None) -> str:

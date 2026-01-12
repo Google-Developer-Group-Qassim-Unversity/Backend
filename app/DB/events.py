@@ -4,8 +4,20 @@ from sqlalchemy import select
 from .schema import Events, Logs
 from ..routers.models import Events_model
 
-def get_events(session: Session):
+def get_events(session: Session, limit: int = None, offset: int = 0, sort_by: str = "start_datetime", sort_order: str = "DESC"):
     statement = select(Events)
+    
+    # Apply sorting
+    if sort_by == "start_datetime":
+        if sort_order == "ASC":
+            statement = statement.order_by(Events.start_datetime.asc())
+        else:
+            statement = statement.order_by(Events.start_datetime.desc())
+    
+    # Apply pagination
+    if limit is not None:
+        statement = statement.limit(limit).offset(offset)
+    
     events = session.scalars(statement).all()
     return events
 

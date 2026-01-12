@@ -1,14 +1,20 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Query
 from app.DB import events as events_queries
 from app.DB import forms as form_queries
 from ..DB.main import SessionLocal
 from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model
+from app.config import config
 router = APIRouter()
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
-def get_all_events():
+def get_all_events(
+    limit: int = Query(default=config.DEFAULT_PAGE_SIZE, le=config.MAX_PAGE_SIZE, ge=1, description="Number of events to return"),
+    offset: int = Query(default=0, ge=0, description="Number of events to skip"),
+    sort_by: str = Query(default=config.DEFAULT_EVENTS_SORT_BY, description="Field to sort by"),
+    sort_order: str = Query(default=config.DEFAULT_SORT_ORDER, description="Sort order (ASC or DESC)")
+):
     with SessionLocal() as session:
-        events = events_queries.get_events(session)
+        events = events_queries.get_events(session, limit=limit, offset=offset, sort_by=sort_by, sort_order=sort_order.upper())
     return events
 
 @router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
