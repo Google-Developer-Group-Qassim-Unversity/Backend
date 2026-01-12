@@ -1,25 +1,12 @@
 from typing import Optional
 import datetime
 
-from sqlalchemy import BigInteger, Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, JSON, String, Table, Text, text
-from sqlalchemy.dialects.mysql import DATETIME, ENUM, INTEGER, TEXT, VARCHAR
+from sqlalchemy import Date, DateTime, Enum, ForeignKeyConstraint, Index, String, Text, text
+from sqlalchemy.dialects.mysql import ENUM, INTEGER, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
     pass
-
-
-class PrismaMigrations(Base):
-    __tablename__ = '_prisma_migrations'
-
-    id: Mapped[str] = mapped_column(VARCHAR(36), primary_key=True)
-    checksum: Mapped[str] = mapped_column(VARCHAR(64), nullable=False)
-    migration_name: Mapped[str] = mapped_column(VARCHAR(255), nullable=False)
-    started_at: Mapped[datetime.datetime] = mapped_column(DATETIME(fsp=3), nullable=False, server_default=text('CURRENT_TIMESTAMP(3)'))
-    applied_steps_count: Mapped[int] = mapped_column(INTEGER, nullable=False, server_default=text("'0'"))
-    finished_at: Mapped[Optional[datetime.datetime]] = mapped_column(DATETIME(fsp=3))
-    logs: Mapped[Optional[str]] = mapped_column(TEXT)
-    rolled_back_at: Mapped[Optional[datetime.datetime]] = mapped_column(DATETIME(fsp=3))
 
 
 class Actions(Base):
@@ -49,22 +36,6 @@ class Departments(Base):
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='department')
 
 
-t_departments_points = Table(
-    'departments_points', Base.metadata,
-    Column('department_id', INTEGER, server_default=text("'0'")),
-    Column('department_name', String(50)),
-    Column('department_log_id', INTEGER, server_default=text("'0'")),
-    Column('log_id', INTEGER, server_default=text("'0'")),
-    Column('start_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
-    Column('end_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
-    Column('event_name', String(150)),
-    Column('action_points', INTEGER),
-    Column('action_name', String(60)),
-    Column('mod_value', INTEGER),
-    Column('mod_type', Enum('bonus', 'discount'))
-)
-
-
 class Events(Base):
     __tablename__ = 'events'
     __table_args__ = (
@@ -82,34 +53,10 @@ class Events(Base):
     status: Mapped[str] = mapped_column(ENUM('announced', 'open', 'closed'), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
     image_url: Mapped[Optional[str]] = mapped_column(String(100))
+    is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1), server_default=text("'0'"))
 
     forms: Mapped[list['Forms']] = relationship('Forms', back_populates='event')
     logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event')
-
-
-t_expanded_logs = Table(
-    'expanded logs', Base.metadata,
-    Column('log_id', INTEGER, server_default=text("'0'")),
-    Column('event_id', INTEGER),
-    Column('action_id', INTEGER),
-    Column('event_name', String(150)),
-    Column('event_description', Text),
-    Column('event_start', DateTime, server_default=text("'2025-01-01 00:00:00'")),
-    Column('event_end', DateTime, server_default=text("'2025-01-01 00:00:00'")),
-    Column('action_name', String(60)),
-    Column('action_points', INTEGER),
-    Column('action_type', Enum('composite', 'department', 'member', 'bonus'))
-)
-
-
-t_expanded_members_logs = Table(
-    'expanded_members_logs', Base.metadata,
-    Column('log_id', INTEGER, server_default=text("'0'")),
-    Column('event_name', String(150)),
-    Column('action_name', String(60)),
-    Column('action_type', Enum('composite', 'department', 'member', 'bonus')),
-    Column('members', JSON)
-)
 
 
 class Members(Base):
@@ -129,24 +76,6 @@ class Members(Base):
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='member')
 
 
-t_members_points = Table(
-    'members_points', Base.metadata,
-    Column('member_id', INTEGER, server_default=text("'0'")),
-    Column('member_name', String(50)),
-    Column('member_log_id', INTEGER, server_default=text("'0'")),
-    Column('member_gender', Enum('Male', 'Female')),
-    Column('log_id', INTEGER, server_default=text("'0'")),
-    Column('event_name', String(150)),
-    Column('start_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
-    Column('end_date', DateTime, server_default=text("'2025-01-01 00:00:00'")),
-    Column('action_points', INTEGER),
-    Column('action_name', String(60)),
-    Column('mod_value', INTEGER),
-    Column('mod_type', Enum('bonus', 'discount')),
-    Column('total_absences', BigInteger, server_default=text("'0'"))
-)
-
-
 class Forms(Base):
     __tablename__ = 'forms'
     __table_args__ = (
@@ -155,10 +84,11 @@ class Forms(Base):
     )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    refresh_token: Mapped[str] = mapped_column(String(500), nullable=False)
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+    google_form_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
 
     event: Mapped[Optional['Events']] = relationship('Events', back_populates='forms')
-    questions: Mapped[list['Questions']] = relationship('Questions', back_populates='form')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='form')
 
 
@@ -234,21 +164,6 @@ class Modifications(Base):
     log: Mapped['Logs'] = relationship('Logs', back_populates='modifications')
 
 
-class Questions(Base):
-    __tablename__ = 'questions'
-    __table_args__ = (
-        ForeignKeyConstraint(['form_id'], ['forms.id'], ondelete='CASCADE', onupdate='CASCADE', name='questions_ibfk_1'),
-        Index('questions_ibfk_1', 'form_id')
-    )
-
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    value: Mapped[str] = mapped_column(String(200), nullable=False)
-    form_id: Mapped[Optional[int]] = mapped_column(INTEGER)
-
-    form: Mapped[Optional['Forms']] = relationship('Forms', back_populates='questions')
-    responses: Mapped[list['Responses']] = relationship('Responses', back_populates='question')
-
-
 class Submissions(Base):
     __tablename__ = 'submissions'
     __table_args__ = (
@@ -261,10 +176,10 @@ class Submissions(Base):
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     form_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
     member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    is_accepted: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
 
     form: Mapped['Forms'] = relationship('Forms', back_populates='submissions')
     member: Mapped['Members'] = relationship('Members', back_populates='submissions')
-    responses: Mapped[list['Responses']] = relationship('Responses', back_populates='submission')
 
 
 class Absence(Base):
@@ -279,19 +194,3 @@ class Absence(Base):
     member_log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
 
     member_log: Mapped['MembersLogs'] = relationship('MembersLogs', back_populates='absence')
-
-
-class Responses(Base):
-    __tablename__ = 'responses'
-    __table_args__ = (
-        ForeignKeyConstraint(['question_id'], ['questions.id'], ondelete='CASCADE', onupdate='CASCADE', name='responses_ibfk_2'),
-        ForeignKeyConstraint(['submission_id'], ['submissions.id'], ondelete='CASCADE', onupdate='CASCADE', name='responses_ibfk_1'),
-        Index('responses_ibfk_2', 'question_id')
-    )
-
-    submission_id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    question_id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    value: Mapped[Optional[str]] = mapped_column(Text)
-
-    question: Mapped['Questions'] = relationship('Questions', back_populates='responses')
-    submission: Mapped['Submissions'] = relationship('Submissions', back_populates='responses')

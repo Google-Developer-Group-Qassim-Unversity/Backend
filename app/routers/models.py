@@ -17,6 +17,7 @@ class Events_model(BaseClassModel):
     end_datetime: datetime
     status: Literal['announced', 'open', 'closed']
     image_url: str | None = None
+    is_official: int | None = None
 
 
 class Member_model(BaseClassModel):
@@ -47,6 +48,12 @@ class Member_model(BaseClassModel):
 class MeberCreate_model(BaseClassModel):
     member: Member_model
     already_exists: bool
+
+class Form_model(BaseClassModel):
+    id: int | None = None
+    event_id: int
+    google_form_id: str | None = None
+    refresh_token: str
 
 class MemberHistory_model(BaseClassModel):
     name: str

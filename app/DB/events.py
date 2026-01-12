@@ -23,14 +23,15 @@ def create_event(session: Session, event_data: Events_model):
             start_datetime=event_data.start_datetime,
             end_datetime=event_data.end_datetime,
             description=event_data.description,
-            status=event_data.status
+            status=event_data.status,
+            is_official=event_data.is_official
         )
         session.add(new_event)
         session.flush()
         return new_event
     except IntegrityError as e:
         session.rollback()
-        return e
+        return None
 
 def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event = session.scalar(select(Events).where(Events.id == event_id))

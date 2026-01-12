@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from app.routers import upload, members, events, departments, action, complex_events, custom, edit, auth, card
+from app.routers import upload, members, events, departments, action, complex_events, custom, edit, auth, card, form
 from app.config import config
 
 app = FastAPI()
@@ -29,5 +29,6 @@ app.include_router(custom.router, prefix="/custom", tags=["custom"])
 app.include_router(edit.router, prefix="/edit", tags=["edit"])
 app.include_router(auth.router, tags=["auth"])
 app.include_router(card.router, prefix="/card", tags=["Card"])
+app.include_router(form.router, prefix="/forms", tags=["Forms"])
 
 app.mount("/files", StaticFiles(directory=config.UPLOAD_DIR), name="files")
