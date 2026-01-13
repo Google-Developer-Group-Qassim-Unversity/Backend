@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Request
 from app.routers.models import Form_model, NotFoundResponse
 from app.DB import forms as form_queries
 from ..DB.main import SessionLocal
-from app.routers.logging import write_log_exception, write_log_traceback, create_log_file, write_log_title, write_log_json
+from app.routers.logging import write_log_exception, write_log_traceback, create_log_file, write_log_title, write_log_json, write_log
+import base64
+import json
 
 router = APIRouter()
 
@@ -90,3 +92,69 @@ def delete_form(form_id: int):
             write_log_exception(log_file, e)
             write_log_traceback(log_file)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while deleting the form")
+
+
+@router.post("/google/webhook", status_code=status.HTTP_200_OK)
+async def google_forms_webhook(request: Request):
+    log_file = create_log_file("google forms webhook")
+    try:
+        write_log_title(log_file, "Google Forms Webhook Notification")
+        
+        # Parse the incoming request body
+        body = await request.json()
+        
+        # Validate it's a Pub/Sub message
+        if "message" not in body:
+            write_log_json(log_file, {"status": "ignored", "reason": "not_pubsub_message", "body": body})
+            return {"status": "ignored", "reason": "not_pubsub_message"}
+        
+        # Validate message contains data field
+        write_log(log_file, f"Received Pub/Sub message: {body}")
+        if "data" not in body["message"]:
+            write_log_json(log_file, {"status": "ignored", "reason": "missing_data_field", "body": body})
+            return {"status": "ignored", "reason": "missing_data_field"}
+        
+        # Decode the base64 encoded message data
+        encoded_data = body["message"]["data"]
+        decoded_json = base64.b64decode(encoded_data).decode("utf-8")
+        notification = json.loads(decoded_json)
+        
+        write_log_json(log_file, {"notification": notification, "raw_body": body})
+        
+        # Extract form information
+        form_id = notification.get("formId")
+        watch_id = notification.get("watchId")
+        notification_id = notification.get("notificationId")
+        
+        if not form_id:
+            write_log_json(log_file, {"status": "ignored", "reason": "missing_form_id"})
+            return {"status": "ignored", "reason": "missing_form_id"}
+        
+        # TODO: Implement form sync logic here
+        # For now, just log the notification
+        write_log_json(log_file, {
+            "status": "received",
+            "form_id": form_id,
+            "watch_id": watch_id,
+            "notification_id": notification_id
+        })
+        
+        return {
+            "status": "received",
+            "form_id": form_id,
+            "notification_id": notification_id
+        }
+        
+    except json.JSONDecodeError as e:
+        write_log_exception(log_file, e)
+        write_log_traceback(log_file)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON in message data")
+    except KeyError as e:
+        write_log_exception(log_file, e)
+        write_log_traceback(log_file)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Missing required field: {str(e)}")
+    except Exception as e:
+        write_log_exception(log_file, e)
+        write_log_traceback(log_file)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while processing the webhook")
+

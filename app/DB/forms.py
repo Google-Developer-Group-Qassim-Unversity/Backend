@@ -21,7 +21,6 @@ def create_form(session: Session, form: Form_model):
         print(f"IntegrityError in create_form: {str(e)[:50]}...")
         return None
 
-
 def get_forms(session: Session):
     """Get all forms from the database"""
     statement = select(Forms)
@@ -79,3 +78,4 @@ def delete_form(session: Session, form_id: int):
     session.delete(form)
     session.flush()
     return form
+
