@@ -108,23 +108,24 @@ async def google_forms_webhook(request: Request):
             write_log_json(log_file, {"status": "ignored", "reason": "not_pubsub_message", "body": body})
             return {"status": "ignored", "reason": "not_pubsub_message"}
         
-        # Validate message contains data field
         write_log(log_file, f"Received Pub/Sub message: {body}")
-        if "data" not in body["message"]:
-            write_log_json(log_file, {"status": "ignored", "reason": "missing_data_field", "body": body})
-            return {"status": "ignored", "reason": "missing_data_field"}
         
-        # Decode the base64 encoded message data
-        encoded_data = body["message"]["data"]
-        decoded_json = base64.b64decode(encoded_data).decode("utf-8")
-        notification = json.loads(decoded_json)
+        message = body["message"]
         
-        write_log_json(log_file, {"notification": notification, "raw_body": body})
+        # Validate message contains attributes field
+        if "attributes" not in message:
+            write_log_json(log_file, {"status": "ignored", "reason": "missing_attributes_field", "body": body})
+            return {"status": "ignored", "reason": "missing_attributes_field"}
         
-        # Extract form information
-        form_id = notification.get("formId")
-        watch_id = notification.get("watchId")
-        notification_id = notification.get("notificationId")
+        attributes = message["attributes"]
+        
+        # Extract form information from attributes
+        form_id = attributes.get("formId")
+        watch_id = attributes.get("watchId")
+        event_type = attributes.get("eventType")
+        message_id = message.get("messageId") or message.get("message_id")
+        publish_time = message.get("publishTime") or message.get("publish_time")
+        subscription = body.get("subscription")
         
         if not form_id:
             write_log_json(log_file, {"status": "ignored", "reason": "missing_form_id"})
@@ -136,13 +137,17 @@ async def google_forms_webhook(request: Request):
             "status": "received",
             "form_id": form_id,
             "watch_id": watch_id,
-            "notification_id": notification_id
+            "event_type": event_type,
+            "message_id": message_id,
+            "publish_time": publish_time,
+            "subscription": subscription
         })
         
         return {
             "status": "received",
             "form_id": form_id,
-            "notification_id": notification_id
+            "event_type": event_type,
+            "message_id": message_id
         }
         
     except json.JSONDecodeError as e:
