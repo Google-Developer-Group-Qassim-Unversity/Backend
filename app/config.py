@@ -5,6 +5,7 @@ All environment variables and global configuration should be accessed through th
 from dotenv import load_dotenv
 import os
 from typing import Optional
+from pathlib import Path
 
 # Load environment variables
 load_dotenv()
@@ -20,7 +21,8 @@ DB_DEV = "scoresTest2"
 CLERK_PROD = "https://clerk.gdg-q.com/.well-known/jwks.json"
 CLERK_DEV = "https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json"
 
-UPLOAD_DIR = "uploads"
+UPLOAD_DIR_DEV = "uploads"
+UPLOAD_DIR_PROD = str(Path.home() / "GDG-Files")
 LOG_DIR = "logs"
 
 # Pagination settings
@@ -39,12 +41,12 @@ ALLOWED_EVENTS_SORT_BY = ["start_datetime"]
 class Config:
     
     def __init__(self):
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        os.makedirs(LOG_DIR, exist_ok=True)
     
     @property
     def is_dev(self) -> bool:
         env = env_or_except("ENV", "Production")
-        return env.lower() == "development"
+        return env.lower() == "development" 
     
     @property
     def DATABASE_URL(self) -> str:
@@ -64,7 +66,12 @@ class Config:
     
     @property
     def UPLOAD_DIR(self) -> str:
-        return UPLOAD_DIR
+        if self.is_dev:
+            os.makedirs(UPLOAD_DIR_DEV, exist_ok=True)
+            return UPLOAD_DIR_DEV
+        else: 
+            os.makedirs(UPLOAD_DIR_PROD, exist_ok=True)
+        return UPLOAD_DIR_PROD
 
     @property
     def LOG_DIR(self) -> str:
