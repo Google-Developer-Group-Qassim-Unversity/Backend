@@ -19,7 +19,15 @@ class Events_model(BaseClassModel):
     image_url: str | None = None
     is_official: int | None = None
 
+class Open_Events_model(Events_model):
+    form_type: Literal['google', 'none']
+    form_id: int
+    google_form_id: str | None = None
+    
 
+class submission_exists_model(BaseClassModel):
+    submitted: bool
+    
 class Member_model(BaseClassModel):
     id: int | None = None
     name: str
@@ -52,8 +60,10 @@ class MeberCreate_model(BaseClassModel):
 class Form_model(BaseClassModel):
     id: int | None = None
     event_id: int
+    form_type: Literal['google', 'none']
     google_form_id: str | None = None
-    refresh_token: str
+    google_refresh_token: str | None = None
+    google_watch_id: str | None = None
 
 class MemberHistory_model(BaseClassModel):
     name: str
@@ -78,16 +88,11 @@ class Action_model(BaseClassModel):
     action_description: str 
     points: int
 
-    
-
-
 class Categorized_action(BaseClassModel):
     composite_actions: List[conlist(Action_model, min_length=2, max_length=2)]
     department_actions: List[Action_model]
     member_actions: List[Action_model] 
     custom_actions: List[Action_model]
-
-
 
 class ConflictResponse(BaseClassModel):
     detail: str

@@ -1,7 +1,7 @@
 from typing import Optional
 import datetime
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKeyConstraint, Index, String, Text, text
+from sqlalchemy import Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, JSON, String, Table, Text, text
 from sqlalchemy.dialects.mysql import ENUM, INTEGER, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -76,6 +76,24 @@ class Members(Base):
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='member')
 
 
+t_open_events = Table(
+    'open_events', Base.metadata,
+    Column('id', INTEGER, server_default=text("'0'")),
+    Column('name', String(150)),
+    Column('description', Text),
+    Column('location_type', Enum('online', 'on-site', 'none')),
+    Column('location', String(100)),
+    Column('start_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('end_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('status', Enum('announced', 'open', 'closed')),
+    Column('image_url', String(100)),
+    Column('is_official', TINYINT(1), server_default=text("'0'")),
+    Column('form_id', INTEGER, server_default=text("'0'")),
+    Column('form_type', Enum('google', 'none')),
+    Column('google_form_id', String(100))
+)
+
+
 class Forms(Base):
     __tablename__ = 'forms'
     __table_args__ = (
@@ -84,11 +102,13 @@ class Forms(Base):
     )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    refresh_token: Mapped[str] = mapped_column(String(500), nullable=False)
-    event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+    event_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    form_type: Mapped[str] = mapped_column(Enum('google', 'none'), nullable=False)
     google_form_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
+    google_refresh_token: Mapped[Optional[str]] = mapped_column(VARCHAR(500))
+    google_watch_id: Mapped[Optional[str]] = mapped_column(String(100))
 
-    event: Mapped[Optional['Events']] = relationship('Events', back_populates='forms')
+    event: Mapped['Events'] = relationship('Events', back_populates='forms')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='form')
 
 
@@ -177,6 +197,9 @@ class Submissions(Base):
     form_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
     member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
     is_accepted: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    submitted_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    google_submission_id: Mapped[Optional[str]] = mapped_column(String(100))
+    value: Mapped[Optional[dict]] = mapped_column(JSON)
 
     form: Mapped['Forms'] = relationship('Forms', back_populates='submissions')
     member: Mapped['Members'] = relationship('Members', back_populates='submissions')

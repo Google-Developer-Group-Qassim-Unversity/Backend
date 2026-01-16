@@ -33,6 +33,7 @@ def create_form(form: Form_model):
             write_log_title(log_file, "Creating New Form")
             new_form = form_queries.create_form(session, form)
             if new_form is None:
+                write_log_exception(log_file, f"HTTP 409: Form with event_id {form.event_id} already exists")
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Form with event_id {form.event_id} already exists")
             session.commit()
             return new_form

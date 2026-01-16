@@ -10,7 +10,9 @@ def create_form(session: Session, form: Form_model):
     try:
         new_form = Forms(
             google_form_id=form.google_form_id,
-            refresh_token=form.refresh_token,
+            form_type=form.form_type,
+            google_refresh_token=form.google_refresh_token,
+            google_watch_id=form.google_watch_id,
             event_id=form.event_id
         )
         session.add(new_form)
@@ -18,7 +20,7 @@ def create_form(session: Session, form: Form_model):
         return new_form
     except IntegrityError as e:
         session.rollback()
-        print(f"IntegrityError in create_form: {str(e)[:50]}...")
+        print(f"IntegrityError in create_form: {e}...")
         return None
 
 def get_forms(session: Session):
@@ -61,7 +63,9 @@ def update_form(session: Session, form_id: int, form: Form_model):
     
     print(f"Updating form: {existing_form.id}")
     existing_form.google_form_id = form.google_form_id
-    existing_form.refresh_token = form.refresh_token
+    existing_form.google_refresh_token = form.google_refresh_token
+    existing_form.google_watch_id = form.google_watch_id
+    existing_form.form_type = form.form_type
     existing_form.event_id = form.event_id
     
     session.flush()

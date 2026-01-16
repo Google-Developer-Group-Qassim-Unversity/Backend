@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from app.DB import events as events_queries
 from app.DB import forms as form_queries
 from ..DB.main import SessionLocal
-from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model
+from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model
 from app.config import config
 router = APIRouter()
 
@@ -26,6 +26,7 @@ def get_event_by_id(event_id: int):
         session.flush()
     return event
 
+        
 
 @router.get("/{event_id:int}/form", status_code=status.HTTP_200_OK, response_model=Form_model, responses={404: {"model": NotFoundResponse, "description": "Form not found"}})
 def get_event_form(event_id: int):
@@ -35,6 +36,11 @@ def get_event_form(event_id: int):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
     return form
 
+@router.get("/open", status_code=status.HTTP_200_OK, response_model=list[Open_Events_model])
+def get_registrable_events():
+    with SessionLocal() as session:
+        open_events = events_queries.get_open_events(session)
+    return open_events
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=Events_model, responses={409: {"model": ConflictResponse, "description": "Event already exists"}})
 def create_event(event: Events_model):

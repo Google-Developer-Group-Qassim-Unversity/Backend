@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from .schema import Events, Logs
+from .schema import Events, Forms, t_open_events
 from ..routers.models import Events_model
 
 def get_events(session: Session, limit: int = None, offset: int = 0, sort_by: str = "start_datetime", sort_order: str = "DESC"):
@@ -20,6 +20,12 @@ def get_events(session: Session, limit: int = None, offset: int = 0, sort_by: st
     
     events = session.scalars(statement).all()
     return events
+
+def get_open_events(session: Session):
+    statement = select(t_open_events)
+    results = session.execute(statement).all()
+    # Convert Row objects to dictionaries
+    return [dict(row._mapping) for row in results]
 
 def get_event_by_id(session: Session, event_id: int):
     statement = select(Events).where(Events.id == event_id)
