@@ -72,6 +72,7 @@ class Members(Base):
     gender: Mapped[str] = mapped_column(Enum('Male', 'Female'), nullable=False)
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
 
+    admins: Mapped[list['Admins']] = relationship('Admins', back_populates='member')
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='member')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='member')
 
@@ -94,6 +95,21 @@ t_open_events = Table(
 )
 
 
+class Admins(Base):
+    __tablename__ = 'admins'
+    __table_args__ = (
+        ForeignKeyConstraint(['member_id'], ['members.id'], name='admins_members_FK'),
+        Index('admins_unique', 'member_id', unique=True)
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    can_give_points: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    google_refresh_token: Mapped[Optional[str]] = mapped_column(String(100))
+
+    member: Mapped['Members'] = relationship('Members', back_populates='admins')
+
+
 class Forms(Base):
     __tablename__ = 'forms'
     __table_args__ = (
@@ -107,6 +123,7 @@ class Forms(Base):
     google_form_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
     google_refresh_token: Mapped[Optional[str]] = mapped_column(VARCHAR(500))
     google_watch_id: Mapped[Optional[str]] = mapped_column(String(100))
+    google_responders_id: Mapped[Optional[str]] = mapped_column(String(100))
 
     event: Mapped['Events'] = relationship('Events', back_populates='forms')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='form')

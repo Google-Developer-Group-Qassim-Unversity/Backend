@@ -3,7 +3,7 @@ from app.DB import events as events_queries, forms as form_queries
 from ..DB.main import SessionLocal
 from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, createEvent_model
 from app.config import config
-from app.routers.logging import create_log_file, write_log_exception, write_log, write_log_json, write_log_traceback
+from app.routers.logging import create_log_file, write_log_exception, write_log, write_log_json, write_log_title, write_log_traceback
 from app.helpers import admin_guard
 router = APIRouter()
 
@@ -48,6 +48,7 @@ def create_event(event: createEvent_model, credentials = Depends(admin_guard)):
     with SessionLocal() as session:
         log_file = create_log_file("create event")
         try:
+            write_log_title(log_file, "Creating New Event and Associated Form")
             # 1. create event
             new_event = events_queries.create_event(session, event)
 
@@ -57,12 +58,13 @@ def create_event(event: createEvent_model, credentials = Depends(admin_guard)):
             write_log(log_file, f"Created Event [{new_event.id}]: {event.name}")
 
             # 2. create associated form
-            new_form = form_queries.create_form(session, new_event.id, Form_model(
+            new_form = form_queries.create_form(session, Form_model(
                 event_id=new_event.id,
                 form_type=event.form_type,
                 google_form_id=event.google_form_id,
                 google_refresh_token=event.google_refresh_token,
-                google_watch_id=event.google_watch_id
+                google_watch_id=event.google_watch_id,
+                google_responders_id=event.google_responders_id
             ))
 
             if new_form is None:
@@ -82,7 +84,7 @@ def create_event(event: createEvent_model, credentials = Depends(admin_guard)):
             write_log_traceback(log_file)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while creating the event")
         finally:
-            write_log_json(log_file, event.model_dump())
+            write_log_json(log_file, event.model_dump(mode="json"))
 
 @router.put("/{event_id}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}, 409: {"model": ConflictResponse, "description": "Event already exists"}})
 def update_event(event_id: int, event: Events_model, credentials = Depends(admin_guard)):

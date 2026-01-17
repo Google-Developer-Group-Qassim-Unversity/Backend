@@ -13,6 +13,7 @@ def create_form(session: Session, form: Form_model):
             form_type=form.form_type,
             google_refresh_token=form.google_refresh_token,
             google_watch_id=form.google_watch_id,
+            google_responders_id=form.google_responders_id,
             event_id=form.event_id
         )
         session.add(new_form)
