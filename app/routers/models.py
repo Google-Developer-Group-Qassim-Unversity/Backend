@@ -24,7 +24,7 @@ class createEvent_model(Events_model):
     google_form_id: str | None = None
     google_refresh_token: str | None = None
     google_watch_id: str | None = None
-    google_responders_id: str | None = None
+    google_responders_url: str | None = None
 
 
 class Open_Events_model(Events_model):
@@ -72,7 +72,7 @@ class Form_model(BaseClassModel):
     google_form_id: str | None = None
     google_refresh_token: str | None = None
     google_watch_id: str | None = None
-    google_responders_id: str | None = None
+    google_responders_url: str | None = None
 
 class MemberHistory_model(BaseClassModel):
     name: str

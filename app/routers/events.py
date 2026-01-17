@@ -64,7 +64,7 @@ def create_event(event: createEvent_model, credentials = Depends(admin_guard)):
                 google_form_id=event.google_form_id,
                 google_refresh_token=event.google_refresh_token,
                 google_watch_id=event.google_watch_id,
-                google_responders_id=event.google_responders_id
+                google_responders_url=event.google_responders_url
             ))
 
             if new_form is None:

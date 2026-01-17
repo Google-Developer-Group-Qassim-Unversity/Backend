@@ -13,7 +13,7 @@ def create_form(session: Session, form: Form_model):
             form_type=form.form_type,
             google_refresh_token=form.google_refresh_token,
             google_watch_id=form.google_watch_id,
-            google_responders_id=form.google_responders_id,
+            google_responders_url=form.google_responders_url,
             event_id=form.event_id
         )
         session.add(new_form)
@@ -66,6 +66,7 @@ def update_form(session: Session, form_id: int, form: Form_model):
     existing_form.google_form_id = form.google_form_id
     existing_form.google_refresh_token = form.google_refresh_token
     existing_form.google_watch_id = form.google_watch_id
+    existing_form.google_responders_url = form.google_responders_url
     existing_form.form_type = form.form_type
     existing_form.event_id = form.event_id
     

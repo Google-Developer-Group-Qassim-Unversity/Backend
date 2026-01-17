@@ -123,7 +123,7 @@ class Forms(Base):
     google_form_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
     google_refresh_token: Mapped[Optional[str]] = mapped_column(VARCHAR(500))
     google_watch_id: Mapped[Optional[str]] = mapped_column(String(100))
-    google_responders_id: Mapped[Optional[str]] = mapped_column(String(100))
+    google_responders_url: Mapped[Optional[str]] = mapped_column(String(100))
 
     event: Mapped['Events'] = relationship('Events', back_populates='forms')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='form')
