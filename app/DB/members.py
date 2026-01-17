@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from .schema import Actions, Members, MembersLogs, Logs, Events
+from .schema import Actions, Members, MembersLogs, Logs, Events, Admins
 from ..routers.models import Member_model
 
 def create_member(session: Session, member: Member_model):

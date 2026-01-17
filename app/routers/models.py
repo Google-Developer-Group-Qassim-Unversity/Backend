@@ -89,6 +89,7 @@ class Department_model(BaseClassModel):
     type: Literal['administrative', 'practical']
 
 
+
 class Action_model(BaseClassModel):
     id: int 
     action_name: str

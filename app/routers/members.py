@@ -5,7 +5,7 @@ from app.routers.models import Member_model, NotFoundResponse, MemberHistory_mod
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from  app.config import config
 import json
-from app.helpers import get_uni_id_from_credentials, credentials_to_member_model
+from app.helpers import admin_guard, get_uni_id_from_credentials, credentials_to_member_model
 from app.routers.logging import write_log_exception, write_log_traceback, create_log_file, write_log, write_log_title, write_log_json
 router = APIRouter()
 
