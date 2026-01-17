@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from app.routers.models import Form_model, NotFoundResponse
 from app.DB import forms as form_queries
 from ..DB.main import SessionLocal
 from app.routers.logging import write_log_exception, write_log_traceback, create_log_file, write_log_title, write_log_json, write_log
-import base64
+from app.helpers import admin_guard, is_admin
+from app.config import config
 import json
 
 router = APIRouter()
@@ -26,7 +27,8 @@ def get_form_by_id(form_id: int):
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=Form_model)
-def create_form(form: Form_model):
+def create_form(form: Form_model, credentials = Depends(admin_guard)):
+
     with SessionLocal() as session:
         log_file = create_log_file("create form")
         try:
@@ -50,7 +52,7 @@ def create_form(form: Form_model):
 
 
 @router.put("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=Form_model, responses={404: {"model": NotFoundResponse, "description": "Form not found"}, 409: {"model": NotFoundResponse, "description": "Form with event_id already exists"}})
-def update_form(form_id: int, form: Form_model):
+def update_form(form_id: int, form: Form_model, credentials = Depends(admin_guard)):
     with SessionLocal() as session:
         log_file = create_log_file("update form")
         try:
@@ -75,7 +77,7 @@ def update_form(form_id: int, form: Form_model):
 
 
 @router.delete("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=Form_model, responses={404: {"model": NotFoundResponse, "description": "Form not found"}})
-def delete_form(form_id: int):
+def delete_form(form_id: int, credentials = Depends(admin_guard)):
     with SessionLocal() as session:
         log_file = create_log_file("delete form")
         try:

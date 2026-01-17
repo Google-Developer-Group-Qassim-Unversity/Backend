@@ -1,3 +1,5 @@
+from fastapi import Depends, HTTPException, HTTPException, status
+from app.config import config
 from app.routers.models import Member_model
 from typing import List, Union
 import pandas as pd
@@ -41,10 +43,24 @@ def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
 
 def get_uni_id_from_credentials(credentials):
     decoded = credentials.model_dump()['decoded']
-    print("Got decoded credentials 🔒:")
-    print(dumps(credentials.model_dump(), ensure_ascii=False, indent=4))
+    # print("Got decoded credentials 🔒:")
+    # print(dumps(credentials.model_dump(), ensure_ascii=False, indent=4))
     uni_id = decoded['metadata']['uni_id']
     return uni_id
+
+def is_admin(credentials) -> bool:
+    decoded = credentials.model_dump()['decoded']
+    is_admin = decoded['metadata'].get('is_admin', False)
+    return is_admin
+
+def admin_guard(credentials=Depends(config.CLERK_GUARD)):
+    print("🔒 User authenticated, checking admin privileges...")
+    if not is_admin(credentials):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    return credentials
 
 def credentials_to_member_model(credentials) -> Member_model:
     credentials_dict = credentials.model_dump()

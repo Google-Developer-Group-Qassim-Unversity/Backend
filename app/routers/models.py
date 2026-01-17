@@ -19,6 +19,13 @@ class Events_model(BaseClassModel):
     image_url: str | None = None
     is_official: int | None = None
 
+class createEvent_model(Events_model):
+    form_type: Literal['google', 'none']
+    google_form_id: str | None = None
+    google_refresh_token: str | None = None
+    google_watch_id: str | None = None
+
+
 class Open_Events_model(Events_model):
     form_type: Literal['google', 'none']
     form_id: int

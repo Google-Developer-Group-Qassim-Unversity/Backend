@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import os
 from typing import Optional
 from pathlib import Path
-
+from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
 # Load environment variables
 load_dotenv()
 
@@ -59,10 +59,13 @@ class Config:
         return url
     
     @property
-    def CLERK_JWKS_URL(self) -> str:
+    def CLERK_GUARD(self) -> str:
         if self.is_dev:
-            return CLERK_DEV
-        return CLERK_PROD
+            clerk_config = ClerkConfig(jwks_url=CLERK_DEV)
+        else:
+            clerk_config = ClerkConfig(jwks_url=CLERK_PROD)
+        clerk_auth_guard = ClerkHTTPBearer(config=clerk_config)
+        return clerk_auth_guard
     
     @property
     def UPLOAD_DIR(self) -> str:

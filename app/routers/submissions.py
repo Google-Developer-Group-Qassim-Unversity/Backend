@@ -2,15 +2,15 @@ from fastapi import APIRouter, Depends, status, HTTPException
 from app.DB.main import SessionLocal
 from app.DB import submissions as submission_queries, members as member_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.routers.auth import clerk_auth_guard
-from app.helpers import get_uni_id_from_credentials
+from app.helpers import admin_guard, get_uni_id_from_credentials
+from app.config import config
 from app.routers.models import submission_exists_model
 router = APIRouter()
 
 
 
 @router.post("/{form_id:int}", status_code=status.HTTP_200_OK)
-def register_for_event(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(clerk_auth_guard)):
+def register_for_event(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     with SessionLocal() as session:
         try:
             uni_id = get_uni_id_from_credentials(credentials)
@@ -25,7 +25,7 @@ def register_for_event(form_id: int, credentials: HTTPAuthorizationCredentials =
             raise
         
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
-def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(clerk_auth_guard)):
+def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     with SessionLocal() as session:
         try:
             uni_id = get_uni_id_from_credentials(credentials)

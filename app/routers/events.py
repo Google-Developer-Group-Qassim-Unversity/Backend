@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from app.DB import events as events_queries
-from app.DB import forms as form_queries
+from app.DB import events as events_queries, forms as form_queries
 from ..DB.main import SessionLocal
-from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model
+from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, createEvent_model
 from app.config import config
+from app.routers.logging import create_log_file, write_log_exception, write_log, write_log_json, write_log_traceback
+from app.helpers import admin_guard
 router = APIRouter()
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
@@ -43,17 +44,48 @@ def get_registrable_events():
     return open_events
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=Events_model, responses={409: {"model": ConflictResponse, "description": "Event already exists"}})
-def create_event(event: Events_model):
+def create_event(event: createEvent_model, credentials = Depends(admin_guard)):
     with SessionLocal() as session:
-        new_event = events_queries.create_event(session, event)
-        if not new_event:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{event.name}' already exists")
-        session.commit()
-        session.refresh(new_event)
-    return new_event
+        log_file = create_log_file("create event")
+        try:
+            # 1. create event
+            new_event = events_queries.create_event(session, event)
+
+            if new_event is None:
+                write_log_exception(log_file, f"HTTP 409: An event with the name '{event.name}' already exists")
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{event.name}' already exists")
+            write_log(log_file, f"Created Event [{new_event.id}]: {event.name}")
+
+            # 2. create associated form
+            new_form = form_queries.create_form(session, new_event.id, Form_model(
+                event_id=new_event.id,
+                form_type=event.form_type,
+                google_form_id=event.google_form_id,
+                google_refresh_token=event.google_refresh_token,
+                google_watch_id=event.google_watch_id
+            ))
+
+            if new_form is None:
+                write_log_exception(log_file, f"HTTP 409: Form with event_id {new_event.id} already exists")
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Form with event_id {new_event.id} already exists")
+            write_log(log_file, f"Created Form [{new_form.id}] for Event [{new_event.id}]")
+
+            session.commit()
+            session.refresh(new_event)
+            return new_event
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while creating the event")
+        finally:
+            write_log_json(log_file, event.model_dump())
 
 @router.put("/{event_id}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}, 409: {"model": ConflictResponse, "description": "Event already exists"}})
-def update_event(event_id: int, event: Events_model):
+def update_event(event_id: int, event: Events_model, credentials = Depends(admin_guard)):
     with SessionLocal() as session:
         updated_event = events_queries.update_event(session, event_id, event)
         if updated_event is None:
@@ -64,7 +96,7 @@ def update_event(event_id: int, event: Events_model):
     return updated_event
 
 @router.delete("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
-def delete_event(event_id: int):
+def delete_event(event_id: int, credentials = Depends(admin_guard)):
     with SessionLocal() as session:
         deleted_event = events_queries.delete_event(session, event_id)
         if not deleted_event:
