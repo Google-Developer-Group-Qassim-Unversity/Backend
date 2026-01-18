@@ -14,6 +14,7 @@ def create_form(session: Session, form: Form_model):
             google_refresh_token=form.google_refresh_token,
             google_watch_id=form.google_watch_id,
             google_responders_url=form.google_responders_url,
+            google_form_schema=form.google_form_schema,
             event_id=form.event_id
         )
         session.add(new_form)
@@ -23,31 +24,6 @@ def create_form(session: Session, form: Form_model):
         session.rollback()
         print(f"IntegrityError in create_form: {e}...")
         return None
-
-def get_forms(session: Session):
-    """Get all forms from the database"""
-    statement = select(Forms)
-    forms = session.scalars(statement).all()
-    return forms
-
-
-def get_form_by_id(session: Session, form_id: int):
-    """Get a specific form by ID"""
-    statement = select(Forms).where(Forms.id == form_id)
-    form = session.scalars(statement).first()
-    return form
-
-
-def get_form_by_event_id(session: Session, event_id: int):
-    """Get a form by event ID"""
-    statement = select(Forms).where(Forms.event_id == event_id)
-    form = session.scalars(statement).first()
-    return form
-
-def get_from_by_google_form_id(session: Session, google_form_id: str):
-    statement = select(Forms).where(Forms.google_form_id == google_form_id)
-    form = session.scalars(statement).first()
-    return form
 
 def update_form(session: Session, form_id: int, form: Form_model):
     """Update an existing form"""
@@ -73,10 +49,37 @@ def update_form(session: Session, form_id: int, form: Form_model):
     existing_form.google_responders_url = form.google_responders_url
     existing_form.form_type = form.form_type
     existing_form.event_id = form.event_id
+    existing_form.google_form_schema = form.google_form_schema
     
     session.flush()
     print(f"Updated form: {existing_form.id}")
     return existing_form
+
+def get_forms(session: Session):
+    """Get all forms from the database"""
+    statement = select(Forms)
+    forms = session.scalars(statement).all()
+    return forms
+
+
+def get_form_by_id(session: Session, form_id: int):
+    """Get a specific form by ID"""
+    statement = select(Forms).where(Forms.id == form_id)
+    form = session.scalars(statement).first()
+    return form
+
+
+def get_form_by_event_id(session: Session, event_id: int):
+    """Get a form by event ID"""
+    statement = select(Forms).where(Forms.event_id == event_id)
+    form = session.scalars(statement).first()
+    return form
+
+def get_form_by_google_form_id(session: Session, google_form_id: str):
+    statement = select(Forms).where(Forms.google_form_id == google_form_id)
+    form = session.scalars(statement).first()
+    return form
+
 
 
 def delete_form(session: Session, form_id: int):

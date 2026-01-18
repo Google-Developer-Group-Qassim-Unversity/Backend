@@ -32,26 +32,60 @@ def get_google_credentials(refresh_token: str):
     
     return credentials
 
-@router.get("/test-google-forms/{google_form_id}", status_code=status.HTTP_200_OK)
-def fetch_form_responses(google_form_id: str):
-    log_file = create_log_file(f"google forms fetch {google_form_id}")
-    """Fetch all responses from a Google Form"""
+
+def get_uni_id_question_id(form_id: int) -> str:
+    """
+    Get the Google Forms question ID for the uni_id field by parsing the form schema.
+    Looks for the question with title "الرقم الجامعي" (University Number).
+    """
+    with SessionLocal() as session:
+        form = form_queries.get_form_by_id(session, form_id)
+        
+        if not form:
+            raise ValueError(f"Form not found with id: {form_id}")
+        
+        if not form.google_form_schema:
+            raise ValueError(f"Form {form_id} does not have a google_form_schema")
+        
+        # Parse the schema (it should be stored as JSON)
+        schema = form.google_form_schema
+        if isinstance(schema, str):
+            schema = json.loads(schema)
+        
+        # Look through items for the question with title "الرقم الجامعي"
+        items = schema.get('items', [])
+        for item in items:
+            title = item.get('title', '')
+            if title == "الرقم الجامعي":
+                question_item = item.get('questionItem')
+                if question_item:
+                    question = question_item.get('question')
+                    if question:
+                        question_id = question.get('questionId')
+                        if question_id:
+                            return question_id
+        
+        raise ValueError(f"Could not find question with title 'الرقم الجامعي' in form {form_id} schema:\n\n{json.dumps(schema, indent=2)}")
+
+def fetch_form_responses(google_form_id: str, log_file=None):
+    """Fetch all responses from a Google Form and return them"""
     try:
-        write_log(log_file, f"\n=== Fetching responses for form: {google_form_id} ===")
+        write_log_title(log_file, f"Fetching responses for form: {google_form_id}")
         
         # Get form details from database to retrieve refresh token
         with SessionLocal() as session:
-            form = form_queries.get_from_by_google_form_id(session, google_form_id)
+            form = form_queries.get_form_by_google_form_id(session, google_form_id)
             
             if not form:
                 write_log(log_file, f"ERROR: Form not found in database for google_form_id: {google_form_id}")
-                return
+                return None
             
             if not form.google_refresh_token:
                 write_log(log_file, f"ERROR: No refresh token available for form: {google_form_id}")
-                return
+                return None
             
             write_log(log_file, f"Found form in database with ID: {form.id}")
+            form_id = form.id
             
             # Get Google credentials
             credentials = get_google_credentials(form.google_refresh_token)
@@ -66,16 +100,156 @@ def fetch_form_responses(google_form_id: str):
             responses = result.get('responses', [])
             write_log(log_file, f"\nTotal responses found: {len(responses)}")
             
-            # Print all responses
+            # Log all responses
             for idx, response in enumerate(responses, 1):
                 write_log(log_file, f"\n--- Response #{idx} ---")
                 write_log_json(log_file, response)
             
             write_log(log_file, "\n=== Finished fetching responses ===")
             
+            return {
+                'form_id': form_id,
+                'google_form_id': google_form_id,
+                'responses': responses
+            }
+            
     except Exception as e:
         write_log_exception(log_file, e)
         write_log_traceback(log_file)
+        return None
+
+
+def sync_form_submissions(google_form_id: str, log_file):
+    """
+    Sync Google Form responses with partial submissions in the database.
+    Matches responses by uni_id and updates submission type from 'partial' to 'google'.
+    """
+    try:
+        write_log_title(log_file, f"Syncing submissions google_form_id: {google_form_id}")
+        
+        # Fetch Google Form responses
+        fetch_result = fetch_form_responses(google_form_id, log_file)
+        
+        if not fetch_result:
+            write_log(log_file, "ERROR: Failed to fetch form responses")
+            return
+        
+        form_id = fetch_result['form_id']
+        google_responses = fetch_result['responses']
+        
+        write_log(log_file, f"Form ID: {form_id}")
+        write_log(log_file, f"Google responses count: {len(google_responses)}")
+        
+        # Get partial submissions from database
+        with SessionLocal() as session:
+            partial_submissions = submission_queries.get_partial_submissions_by_form_id(session, form_id)
+            write_log(log_file, f"Partial submissions count: {len(partial_submissions)}")
+            
+            if not partial_submissions:
+                write_log(log_file, "No partial submissions to sync")
+                return
+            
+            # Get the question ID for uni_id field
+            try:
+                uni_id_question_id = get_uni_id_question_id(form_id)
+                write_log(log_file, f"Found uni_id question ID: {uni_id_question_id}")
+            except Exception as e:
+                write_log(log_file, f"ERROR: Failed to get uni_id question ID: {str(e)}")
+                write_log_exception(log_file, e)
+                return
+            
+            # Create a mapping of uni_id to partial submissions
+            partial_by_uni_id = {}
+            for submission in partial_submissions:
+                uni_id = submission.uni_id
+                partial_by_uni_id[uni_id] = submission
+                write_log(log_file, f"Partial submission: ID={submission.id}, uni_id={uni_id}")
+            
+            # Match Google responses to partial submissions
+            matched_count = 0
+            unmatched_responses = []
+            
+            for response in google_responses:
+                # Extract uni_id from response answers
+                response_id = response.get('responseId')
+                answers = response.get('answers', {})
+                
+                # Get the uni_id answer from the response
+                uni_id_answer = answers.get(uni_id_question_id)
+                
+                if not uni_id_answer:
+                    write_log(log_file, f"Response {response_id}: No uni_id answer found")
+                    unmatched_responses.append(response_id)
+                    continue
+                
+                # Extract the actual uni_id value from the answer
+                # Google Forms stores answers in a specific format
+                text_answers = uni_id_answer.get('textAnswers', {})
+                answers_list = text_answers.get('answers', [])
+                
+                if not answers_list:
+                    write_log(log_file, f"Response {response_id}: No text answers found")
+                    unmatched_responses.append(response_id)
+                    continue
+                
+                uni_id = answers_list[0].get('value', '').strip()
+                
+                if not uni_id:
+                    write_log(log_file, f"Response {response_id}: Empty uni_id value")
+                    unmatched_responses.append(response_id)
+                    continue
+                
+                write_log(log_file, f"Response {response_id}: uni_id={uni_id}")
+                
+                # Check if this uni_id has a partial submission
+                if uni_id in partial_by_uni_id:
+                    partial_submission = partial_by_uni_id[uni_id]
+                    
+                    # Update submission with Google response data
+                    updated = submission_queries.update_submission(
+                        session, 
+                        partial_submission.id, 
+                        submission_type='google',
+                        google_submission_id=response_id,
+                        google_submission_value=uni_id
+                    )
+                    
+                    if updated:
+                        matched_count += 1
+                        write_log(log_file, f"✓ Matched and updated submission ID {partial_submission.id} for uni_id {uni_id}")
+                        write_log(log_file, f"  - Google response ID: {response_id}")
+                    else:
+                        write_log(log_file, f"✗ Failed to update submission ID {partial_submission.id}")
+                else:
+                    write_log(log_file, f"Response {response_id}: No matching partial submission for uni_id {uni_id}")
+                    unmatched_responses.append(response_id)
+            
+            # Commit all updates
+            session.commit()
+            
+            # Summary
+            write_log(log_file, "\n=== Sync Summary ===")
+            write_log(log_file, f"Total Google responses: {len(google_responses)}")
+            write_log(log_file, f"Total partial submissions: {len(partial_submissions)}")
+            write_log(log_file, f"Successfully matched: {matched_count}")
+            write_log(log_file, f"Unmatched responses: {len(unmatched_responses)}")
+            
+            if unmatched_responses:
+                write_log(log_file, f"Unmatched response IDs: {unmatched_responses}")
+            
+            write_log(log_file, "\n=== Sync Complete ===")
+            
+    except Exception as e:
+        write_log_exception(log_file, e)
+        write_log_traceback(log_file)
+
+
+@router.get("/test-google-forms/{google_form_id}", status_code=status.HTTP_200_OK)
+def test_fetch_form_responses(google_form_id: str):
+    """Test endpoint to manually fetch form responses"""
+    log_file = create_log_file(f"google forms fetch {google_form_id}")
+    result = fetch_form_responses(google_form_id, log_file)
+    return result
 
 
 @router.post("/{form_id:int}", status_code=status.HTTP_200_OK)
@@ -113,7 +287,7 @@ def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredenti
 async def google_forms_webhook(request: Request, background_tasks: BackgroundTasks):
     log_file = create_log_file("google forms webhook")
     try:
-        write_log_title(log_file, "Google Forms Webhook Notification")
+        write_log_title(log_file, "⚓ Google Forms Webhook Notification ⚓")
         
         # Parse the incoming request body
         body = await request.json()
@@ -122,16 +296,12 @@ async def google_forms_webhook(request: Request, background_tasks: BackgroundTas
         if "message" not in body:
             write_log_json(log_file, {"status": "ignored", "reason": "not_pubsub_message", "body": body})
             return {"status": "ignored", "reason": "not_pubsub_message"}
+        if "attributes" not in body["message"]:
+            write_log_json(log_file, {"status": "ignored", "reason": "missing_attributes"})
+            return {"status": "ignored", "reason": "missing_attributes"}
         
         write_log(log_file, f"Received Pub/Sub message: {body}")
-        
         message = body["message"]
-        
-        # Validate message contains attributes field
-        if "attributes" not in message:
-            write_log_json(log_file, {"status": "ignored", "reason": "missing_attributes_field", "body": body})
-            return {"status": "ignored", "reason": "missing_attributes_field"}
-        
         attributes = message["attributes"]
         
         # Extract form information from attributes
@@ -157,9 +327,9 @@ async def google_forms_webhook(request: Request, background_tasks: BackgroundTas
             "subscription": subscription
         })
         
-        # Fetch form responses in the background
-        background_tasks.add_task(fetch_form_responses, form_id, log_file)
-        write_log(log_file, f"Background task scheduled to fetch responses for form: {form_id}")
+        # Sync form submissions in the background
+        background_tasks.add_task(sync_form_submissions, form_id, log_file)
+        write_log(log_file, f"Background task scheduled to sync submissions for form: {form_id}")
         
         return {
             "status": "received",
@@ -168,10 +338,6 @@ async def google_forms_webhook(request: Request, background_tasks: BackgroundTas
             "message_id": message_id
         }
         
-    except json.JSONDecodeError as e:
-        write_log_exception(log_file, e)
-        write_log_traceback(log_file)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON in message data")
     except KeyError as e:
         write_log_exception(log_file, e)
         write_log_traceback(log_file)

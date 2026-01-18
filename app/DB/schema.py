@@ -61,15 +61,16 @@ class Events(Base):
 
 t_forms_submissions = Table(
     'forms_submissions', Base.metadata,
-    Column('form_id', INTEGER),
+    Column('id', INTEGER, server_default=text("'0'")),
+    Column('submitted_at', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('form_type', Enum('google', 'none')),
-    Column('member_id', INTEGER),
+    Column('submission_type', Enum('none', 'partial', 'google')),
+    Column('uni_id', String(9)),
     Column('is_accepted', TINYINT(1), server_default=text("'0'")),
     Column('google_submission_id', String(100)),
     Column('google_submission_value', JSON),
-    Column('submitted_at', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
-    Column('id', INTEGER, server_default=text("'0'")),
     Column('event_id', INTEGER),
+    Column('form_id', INTEGER, server_default=text("'0'")),
     Column('google_form_id', String(100))
 )
 
@@ -106,7 +107,7 @@ t_open_events = Table(
     Column('is_official', TINYINT(1), server_default=text("'0'")),
     Column('form_id', INTEGER, server_default=text("'0'")),
     Column('form_type', Enum('google', 'none')),
-    Column('google_responders_url', String(100))
+    Column('google_responders_url', String(150))
 )
 
 
@@ -138,7 +139,8 @@ class Forms(Base):
     google_form_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
     google_refresh_token: Mapped[Optional[str]] = mapped_column(VARCHAR(500))
     google_watch_id: Mapped[Optional[str]] = mapped_column(String(100))
-    google_responders_url: Mapped[Optional[str]] = mapped_column(String(100))
+    google_responders_url: Mapped[Optional[str]] = mapped_column(VARCHAR(150))
+    google_form_schema: Mapped[Optional[dict]] = mapped_column(JSON)
 
     event: Mapped['Events'] = relationship('Events', back_populates='forms')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='form')

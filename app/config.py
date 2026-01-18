@@ -53,7 +53,11 @@ class Config:
         url = env_or_except("DATABASE_URL")
         parts = url.rsplit('/', 1)
         if len(parts) == 2:
-            url = f"{parts[0]}/{DB_DEV}"
+            if self.is_dev:
+                url = f"{parts[0]}/{DB_DEV}"
+                print(f"Using database: {DB_DEV}" if self.is_dev else f"Using database: {DB_PROD}")
+            else:
+                url = f"{parts[0]}/{DB_PROD}"
         else:
             raise ValueError(f"⚠️ Invalid DATABASE_URL format excpected to end with /<dbname>, got: {url}")
         return url
