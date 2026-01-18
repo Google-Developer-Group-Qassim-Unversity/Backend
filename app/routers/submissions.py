@@ -120,10 +120,6 @@ def fetch_form_responses(google_form_id: str, log_file=None):
 
 
 def sync_form_submissions(google_form_id: str, log_file):
-    """
-    Sync Google Form responses with partial submissions in the database.
-    Matches responses by uni_id and updates submission type from 'partial' to 'google'.
-    """
     try:
         write_log_title(log_file, f"Syncing submissions google_form_id: {google_form_id}")
         
@@ -211,7 +207,7 @@ def sync_form_submissions(google_form_id: str, log_file):
                         partial_submission.id, 
                         submission_type='google',
                         google_submission_id=response_id,
-                        google_submission_value=uni_id
+                        google_submission_value=answers
                     )
                     
                     if updated:
