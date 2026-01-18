@@ -30,11 +30,12 @@ class createEvent_model(Events_model):
 class Open_Events_model(Events_model):
     form_type: Literal['google', 'none']
     form_id: int
-    google_form_id: str | None = None
+    google_responders_url: str | None = None
     
 
 class submission_exists_model(BaseClassModel):
-    submitted: bool
+    submission_status: Literal[False, True, 'partial']
+    submission_timestamp: datetime | None = None
     
 class Member_model(BaseClassModel):
     id: int | None = None

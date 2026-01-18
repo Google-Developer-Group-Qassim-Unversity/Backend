@@ -99,6 +99,14 @@ class Config:
     @property
     def ALLOWED_EVENTS_SORT_BY(self) -> list[str]:
         return ALLOWED_EVENTS_SORT_BY
+    
+    @property
+    def GOOGLE_CLIENT_ID(self) -> str:
+        return env_or_except("GOOGLE_CLIENT_ID")
+    
+    @property
+    def GOOGLE_CLIENT_SECRET(self) -> str:
+        return env_or_except("GOOGLE_CLIENT_SECRET")
 
 
 def env_or_except(key: str, default: Optional[str] = None) -> str:

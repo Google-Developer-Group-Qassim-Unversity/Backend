@@ -44,6 +44,10 @@ def get_form_by_event_id(session: Session, event_id: int):
     form = session.scalars(statement).first()
     return form
 
+def get_from_by_google_form_id(session: Session, google_form_id: str):
+    statement = select(Forms).where(Forms.google_form_id == google_form_id)
+    form = session.scalars(statement).first()
+    return form
 
 def update_form(session: Session, form_id: int, form: Form_model):
     """Update an existing form"""

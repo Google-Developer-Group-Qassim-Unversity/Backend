@@ -4,7 +4,7 @@ from sqlalchemy import select
 from .schema import Submissions
 
 
-def create_submission(session: Session, form_id: int, member_id: int):
+def create_submission(session: Session, form_id: int, submission_type: str, member_id: int):
     exists = session.execute(
         select(Submissions).where(
             Submissions.form_id == form_id,
@@ -17,7 +17,8 @@ def create_submission(session: Session, form_id: int, member_id: int):
     submission = Submissions(
         form_id=form_id,
         member_id=member_id,
-        is_accepted=0
+        is_accepted=0,
+        submission_type=submission_type
     )
     session.add(submission)
     session.flush()

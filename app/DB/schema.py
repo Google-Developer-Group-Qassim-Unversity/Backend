@@ -59,6 +59,21 @@ class Events(Base):
     logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event')
 
 
+t_forms_submissions = Table(
+    'forms_submissions', Base.metadata,
+    Column('form_id', INTEGER),
+    Column('form_type', Enum('google', 'none')),
+    Column('member_id', INTEGER),
+    Column('is_accepted', TINYINT(1), server_default=text("'0'")),
+    Column('google_submission_id', String(100)),
+    Column('google_submission_value', JSON),
+    Column('submitted_at', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
+    Column('id', INTEGER, server_default=text("'0'")),
+    Column('event_id', INTEGER),
+    Column('google_form_id', String(100))
+)
+
+
 class Members(Base):
     __tablename__ = 'members'
     __table_args__ = (
@@ -91,7 +106,7 @@ t_open_events = Table(
     Column('is_official', TINYINT(1), server_default=text("'0'")),
     Column('form_id', INTEGER, server_default=text("'0'")),
     Column('form_type', Enum('google', 'none')),
-    Column('google_form_id', String(100))
+    Column('google_responders_url', String(100))
 )
 
 
@@ -215,8 +230,9 @@ class Submissions(Base):
     member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
     is_accepted: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
     submitted_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    submission_type: Mapped[str] = mapped_column(Enum('none', 'partial', 'google'), nullable=False)
     google_submission_id: Mapped[Optional[str]] = mapped_column(String(100))
-    value: Mapped[Optional[dict]] = mapped_column(JSON)
+    google_submission_value: Mapped[Optional[dict]] = mapped_column(JSON)
 
     form: Mapped['Forms'] = relationship('Forms', back_populates='submissions')
     member: Mapped['Members'] = relationship('Members', back_populates='submissions')
