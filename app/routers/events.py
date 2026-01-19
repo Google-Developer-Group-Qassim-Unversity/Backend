@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from app.DB import events as events_queries, forms as form_queries
+from fastapi_clerk_auth import HTTPAuthorizationCredentials
+from app.DB import events as events_queries, forms as form_queries, submissions as submission_queries
 from ..DB.main import SessionLocal
-from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, createEvent_model
+from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, Submission_model, createEvent_model, Member_model
 from app.config import config
 from app.routers.logging import create_log_file, write_log_exception, write_log, write_log_json, write_log_title, write_log_traceback
 from app.helpers import admin_guard
@@ -105,3 +106,41 @@ def delete_event(event_id: int, credentials = Depends(admin_guard)):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         session.commit()
     return deleted_event
+
+@router.get("/submissions/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Submission_model])
+def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        try:
+            submissions_data = submission_queries.get_submissions_by_event_id(session, event_id)
+            
+            # Transform to Submission_model objects
+            submissions = []
+            for row in submissions_data:
+                member = Member_model(
+                    id=row.id,
+                    name=row.name,
+                    email=row.email,
+                    phone_number=row.phone_number,
+                    uni_id=row.uni_id,
+                    gender=row.gender,
+                    uni_level=row.uni_level,
+                    uni_college=row.uni_college
+                )
+                
+                submission = Submission_model(
+                    member=member,
+                    submission_id=row.submission_id,
+                    submitted_at=row.submitted_at,
+                    form_type=row.form_type,
+                    submission_type=row.submission_type,
+                    is_accepted=bool(row.is_accepted),
+                    google_submission_value=row.google_submission_value,
+                    event_id=row.event_id,
+                    form_id=row.form_id,
+                    google_form_id=row.google_form_id
+                )
+                submissions.append(submission)
+            
+            return submissions
+        except Exception as e:
+            raise

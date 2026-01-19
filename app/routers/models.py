@@ -89,7 +89,7 @@ class Submission_model(BaseClassModel):
     google_submission_value: JsonValue | None = None
     event_id: int
     form_id: int
-    googl_form_id: str | None = None
+    google_form_id: str | None = None
 
 class MemberHistory_model(BaseClassModel):
     name: str

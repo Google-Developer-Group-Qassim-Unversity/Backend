@@ -48,44 +48,6 @@ def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredenti
         except Exception as e:
             raise
 
-@router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Submission_model])
-def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
-    with SessionLocal() as session:
-        try:
-            submissions_data = submission_queries.get_submissions_by_event_id(session, event_id)
-            
-            # Transform to Submission_model objects
-            submissions = []
-            for row in submissions_data:
-                member = Member_model(
-                    id=row.id,
-                    name=row.name,
-                    email=row.email,
-                    phone_number=row.phone_number,
-                    uni_id=row.uni_id,
-                    gender=row.gender,
-                    uni_level=row.uni_level,
-                    uni_college=row.uni_college
-                )
-                
-                submission = Submission_model(
-                    member=member,
-                    submission_id=row.submission_id,
-                    submitted_at=row.submitted_at,
-                    form_type=row.form_type,
-                    submission_type=row.submission_type,
-                    is_accepted=bool(row.is_accepted),
-                    google_submission_value=row.google_submission_value,
-                    event_id=row.event_id,
-                    form_id=row.form_id,
-                    googl_form_id=row.google_form_id
-                )
-                submissions.append(submission)
-            
-            return submissions
-        except Exception as e:
-            raise
-
 def get_google_credentials(refresh_token: str):
     """Get Google credentials from refresh token"""
     credentials = Credentials(
