@@ -33,9 +33,32 @@ def get_google_credentials(refresh_token: str):
     return credentials
 
 
+def fetch_schema(google_form_id: str):
+    """Fetch the form schema from Google Forms API"""
+    with SessionLocal() as session:
+        form = form_queries.get_form_by_google_form_id(session, google_form_id)
+        
+        if not form:
+            raise ValueError(f"Form not found in database for google_form_id: {google_form_id}")
+        
+        if not form.google_refresh_token:
+            raise ValueError(f"Form does not have a refresh token")
+        
+        # Get Google credentials
+        credentials = get_google_credentials(form.google_refresh_token)
+        
+        # Build the Forms API service
+        service = build('forms', 'v1', credentials=credentials)
+        
+        # Fetch the form schema from Google
+        schema = service.forms().get(formId=google_form_id).execute()
+        
+        return schema
+
+
 def get_uni_id_question_id(form_id: int) -> str:
     """
-    Get the Google Forms question ID for the uni_id field by parsing the form schema.
+    Get the Google Forms question ID for the uni_id field by fetching the form schema from Google API.
     Looks for the question with title "الرقم الجامعي" (University Number).
     """
     with SessionLocal() as session:
@@ -44,13 +67,8 @@ def get_uni_id_question_id(form_id: int) -> str:
         if not form:
             raise ValueError(f"Form not found with id: {form_id}")
         
-        if not form.google_form_schema:
-            raise ValueError(f"Form {form_id} does not have a google_form_schema")
-        
-        # Parse the schema (it should be stored as JSON)
-        schema = form.google_form_schema
-        if isinstance(schema, str):
-            schema = json.loads(schema)
+        # Fetch the form schema
+        schema = fetch_schema(form.google_form_id)
         
         # Look through items for the question with title "الرقم الجامعي"
         items = schema.get('items', [])
@@ -65,7 +83,7 @@ def get_uni_id_question_id(form_id: int) -> str:
                         if question_id:
                             return question_id
         
-        raise ValueError(f"Could not find question with title 'الرقم الجامعي' in form {form_id} schema:\n\n{json.dumps(schema, indent=2)}")
+        raise ValueError(f"Could not find question with title 'الرقم الجامعي' in form {form_id} schema")
 
 def fetch_form_responses(google_form_id: str, log_file=None):
     """Fetch all responses from a Google Form and return them"""
@@ -242,10 +260,14 @@ def sync_form_submissions(google_form_id: str, log_file):
 
 @router.get("/test-google-forms/{google_form_id}", status_code=status.HTTP_200_OK)
 def test_fetch_form_responses(google_form_id: str):
-    """Test endpoint to manually fetch form responses"""
-    log_file = create_log_file(f"google forms fetch {google_form_id}")
-    result = fetch_form_responses(google_form_id, log_file)
-    return result
+    responses = fetch_form_responses(google_form_id)
+    schema = fetch_schema(google_form_id)
+    print("\n\n=== Responses ===\n")
+    print(json.dumps(responses, indent=4, ensure_ascii=False))
+    print("\n\n=== Schema ===\n")
+    print(json.dumps(schema, indent=4, ensure_ascii=False))
+    
+    return schema
 
 
 @router.post("/{form_id:int}", status_code=status.HTTP_200_OK)
@@ -285,7 +307,6 @@ async def google_forms_webhook(request: Request, background_tasks: BackgroundTas
     try:
         write_log_title(log_file, "⚓ Google Forms Webhook Notification ⚓")
         
-        # Parse the incoming request body
         body = await request.json()
         
         # Validate it's a Pub/Sub message

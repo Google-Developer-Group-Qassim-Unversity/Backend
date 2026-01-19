@@ -75,7 +75,6 @@ class Form_model(BaseClassModel):
     google_refresh_token: str | None = None
     google_watch_id: str | None = None
     google_responders_url: str | None = None
-    google_form_schema: JsonValue | None = None
 
 class MemberHistory_model(BaseClassModel):
     name: str

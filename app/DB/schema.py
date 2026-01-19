@@ -140,7 +140,6 @@ class Forms(Base):
     google_refresh_token: Mapped[Optional[str]] = mapped_column(VARCHAR(500))
     google_watch_id: Mapped[Optional[str]] = mapped_column(String(100))
     google_responders_url: Mapped[Optional[str]] = mapped_column(VARCHAR(150))
-    google_form_schema: Mapped[Optional[dict]] = mapped_column(JSON)
 
     event: Mapped['Events'] = relationship('Events', back_populates='forms')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='form')
