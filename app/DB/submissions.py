@@ -33,17 +33,6 @@ def get_submission_by_form_and_member(session: Session, form_id: int, member_id:
     ).scalar_one_or_none()
     return submission
 
-# These function use the view 'form_submissions' not the table 'submissions'
-
-def get_partial_submissions_by_form_id(session: Session, form_id: int):
-    submissions = session.execute(
-        select(t_forms_submissions).where(
-            t_forms_submissions.c.form_id == form_id,
-            t_forms_submissions.c.submission_type == 'partial'
-        )
-    ).all()
-    return submissions
-
 def update_submission(session: Session, submission_id: int, submission_type: str = None, google_submission_id: str = None, google_submission_value: str = None):
     """Update submission fields including type and Google response data"""
     submission = session.execute(
@@ -59,3 +48,22 @@ def update_submission(session: Session, submission_id: int, submission_type: str
     
     session.flush()
     return submission
+
+# These function use the view 'form_submissions' not the table 'submissions'
+
+def get_partial_submissions_by_form_id(session: Session, form_id: int):
+    submissions = session.execute(
+        select(t_forms_submissions).where(
+            t_forms_submissions.c.form_id == form_id,
+            t_forms_submissions.c.submission_type == 'partial'
+        )
+    ).all()
+    return submissions
+
+def get_submissions_by_event_id(session: Session, event_id: int):
+    submissions = session.execute(
+        select(t_forms_submissions).where(
+            t_forms_submissions.c.event_id == event_id
+        )
+    ).all()
+    return submissions

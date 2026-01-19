@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from .schema import Actions, Members, MembersLogs, Logs, Events, Admins
+from .schema import Actions, Members, MembersLogs, Logs, Events
 from ..routers.models import Member_model
 
 def create_member(session: Session, member: Member_model):
@@ -11,7 +11,9 @@ def create_member(session: Session, member: Member_model):
             email=member.email,
             phone_number=member.phone_number,
             uni_id=member.uni_id,
-            gender=member.gender
+            gender=member.gender,
+            uni_level=member.uni_level,
+            uni_college=member.uni_college
         )
         session.add(new_member)
         session.flush()

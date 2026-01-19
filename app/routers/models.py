@@ -45,6 +45,8 @@ class Member_model(BaseClassModel):
     phone_number: str | None
     uni_id: str
     gender: Literal["Male", "Female"]
+    uni_level: int
+    uni_college: str
 
     @field_validator("uni_id")
     def validate_uni_id(cls, value):
@@ -76,6 +78,19 @@ class Form_model(BaseClassModel):
     google_watch_id: str | None = None
     google_responders_url: str | None = None
 
+
+class Submission_model(BaseClassModel):
+    member: Member_model
+    submission_id: int
+    submitted_at: datetime
+    form_type: Literal['google', 'none']
+    submission_type: Literal['none', 'partial', 'google']
+    is_accepted: bool
+    google_submission_value: JsonValue | None = None
+    event_id: int
+    form_id: int
+    googl_form_id: str | None = None
+
 class MemberHistory_model(BaseClassModel):
     name: str
     description: str | None = None
@@ -101,7 +116,7 @@ class Action_model(BaseClassModel):
     points: int
 
 class Categorized_action(BaseClassModel):
-    composite_actions: List[conlist(Action_model, min_length=2, max_length=2)]
+    # composite_actions: List[conlist(Action_model, min_length=2, max_length=2)]
     department_actions: List[Action_model]
     member_actions: List[Action_model] 
     custom_actions: List[Action_model]

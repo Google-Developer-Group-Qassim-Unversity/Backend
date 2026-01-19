@@ -1,7 +1,7 @@
 from typing import Optional
 import datetime
 
-from sqlalchemy import Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, JSON, String, Table, Text, text
+from sqlalchemy import Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, String, Table, Text, text
 from sqlalchemy.dialects.mysql import ENUM, INTEGER, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -61,13 +61,19 @@ class Events(Base):
 
 t_forms_submissions = Table(
     'forms_submissions', Base.metadata,
-    Column('id', INTEGER, server_default=text("'0'")),
+    Column('submission_id', INTEGER, server_default=text("'0'")),
     Column('submitted_at', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('form_type', Enum('google', 'none')),
     Column('submission_type', Enum('none', 'partial', 'google')),
+    Column('id', INTEGER, server_default=text("'0'")),
+    Column('name', String(50)),
+    Column('email', String(100)),
+    Column('phone_number', String(20)),
     Column('uni_id', String(9)),
+    Column('gender', Enum('Male', 'Female')),
+    Column('uni_level', Integer),
+    Column('uni_college', String(100)),
     Column('is_accepted', TINYINT(1), server_default=text("'0'")),
-    Column('google_submission_id', String(100)),
     Column('google_submission_value', JSON),
     Column('event_id', INTEGER),
     Column('form_id', INTEGER, server_default=text("'0'")),
@@ -86,9 +92,10 @@ class Members(Base):
     email: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
     uni_id: Mapped[str] = mapped_column(String(9), nullable=False)
     gender: Mapped[str] = mapped_column(Enum('Male', 'Female'), nullable=False)
+    uni_level: Mapped[int] = mapped_column(Integer, nullable=False)
+    uni_college: Mapped[str] = mapped_column(String(100), nullable=False)
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
 
-    admins: Mapped[list['Admins']] = relationship('Admins', back_populates='member')
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='member')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='member')
 
@@ -109,21 +116,6 @@ t_open_events = Table(
     Column('form_type', Enum('google', 'none')),
     Column('google_responders_url', String(150))
 )
-
-
-class Admins(Base):
-    __tablename__ = 'admins'
-    __table_args__ = (
-        ForeignKeyConstraint(['member_id'], ['members.id'], name='admins_members_FK'),
-        Index('admins_unique', 'member_id', unique=True)
-    )
-
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    can_give_points: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
-    member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    google_refresh_token: Mapped[Optional[str]] = mapped_column(String(100))
-
-    member: Mapped['Members'] = relationship('Members', back_populates='admins')
 
 
 class Forms(Base):

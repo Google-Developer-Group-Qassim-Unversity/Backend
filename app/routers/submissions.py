@@ -7,7 +7,7 @@ from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import admin_guard, get_uni_id_from_credentials
 from app.config import config
 from app.routers.logging import create_log_file, write_log, write_log_exception, write_log_json, write_log_title, write_log_traceback
-from app.routers.models import submission_exists_model
+from app.routers.models import Submission_model, submission_exists_model, Member_model
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request as GoogleRequest
@@ -15,6 +15,76 @@ import os
 
 router = APIRouter()
 
+
+
+@router.post("/{form_id:int}", status_code=status.HTTP_200_OK)
+def create_submission(form_id: int, submission_type: Literal['none', 'partial'], credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        try:
+            uni_id = get_uni_id_from_credentials(credentials)
+            member_id = member_queries.get_member_by_uni_id(session, uni_id).id
+            new_submission = submission_queries.create_submission(session, form_id, submission_type, member_id)
+            if not new_submission:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission already exists")
+            session.commit()
+            return new_submission
+        except Exception as e:
+            session.rollback()
+            raise
+        
+@router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
+def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        try:
+            uni_id = get_uni_id_from_credentials(credentials)
+            member_id = member_queries.get_member_by_uni_id(session, uni_id).id
+            submission = submission_queries.get_submission_by_form_and_member(session, form_id, member_id)
+            if submission is None:
+                return {'submission_status': False}
+            submission_type = submission.submission_type 
+            if submission_type == 'partial':
+                return {'submission_status': 'partial', "submission_timestamp": submission.submitted_at}
+            return {'submission_status': True, "submission_timestamp": submission.submitted_at}
+        except Exception as e:
+            raise
+
+@router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Submission_model])
+def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        try:
+            submissions_data = submission_queries.get_submissions_by_event_id(session, event_id)
+            
+            # Transform to Submission_model objects
+            submissions = []
+            for row in submissions_data:
+                member = Member_model(
+                    id=row.id,
+                    name=row.name,
+                    email=row.email,
+                    phone_number=row.phone_number,
+                    uni_id=row.uni_id,
+                    gender=row.gender,
+                    uni_level=row.uni_level,
+                    uni_college=row.uni_college
+                )
+                
+                submission = Submission_model(
+                    member=member,
+                    submission_id=row.submission_id,
+                    submitted_at=row.submitted_at,
+                    form_type=row.form_type,
+                    submission_type=row.submission_type,
+                    is_accepted=bool(row.is_accepted),
+                    google_submission_value=row.google_submission_value,
+                    event_id=row.event_id,
+                    form_id=row.form_id,
+                    googl_form_id=row.google_form_id
+                )
+                submissions.append(submission)
+            
+            return submissions
+        except Exception as e:
+            raise
 
 def get_google_credentials(refresh_token: str):
     """Get Google credentials from refresh token"""
@@ -31,7 +101,6 @@ def get_google_credentials(refresh_token: str):
         credentials.refresh(GoogleRequest())
     
     return credentials
-
 
 def fetch_schema(google_form_id: str):
     """Fetch the form schema from Google Forms API"""
@@ -257,10 +326,10 @@ def sync_form_submissions(google_form_id: str, log_file):
         write_log_exception(log_file, e)
         write_log_traceback(log_file)
 
-
 @router.get("/test-google-forms/{google_form_id}", status_code=status.HTTP_200_OK)
 def test_fetch_form_responses(google_form_id: str):
-    responses = fetch_form_responses(google_form_id)
+    log_file = create_log_file("test google forms fetch")
+    responses = fetch_form_responses(google_form_id, log_file)
     schema = fetch_schema(google_form_id)
     print("\n\n=== Responses ===\n")
     print(json.dumps(responses, indent=4, ensure_ascii=False))
@@ -268,38 +337,6 @@ def test_fetch_form_responses(google_form_id: str):
     print(json.dumps(schema, indent=4, ensure_ascii=False))
     
     return schema
-
-
-@router.post("/{form_id:int}", status_code=status.HTTP_200_OK)
-def register_for_event(form_id: int, submission_type: Literal['none', 'partial'], credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
-    with SessionLocal() as session:
-        try:
-            uni_id = get_uni_id_from_credentials(credentials)
-            member_id = member_queries.get_member_by_uni_id(session, uni_id).id
-            new_submission = submission_queries.create_submission(session, form_id, submission_type, member_id)
-            if not new_submission:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission already exists")
-            session.commit()
-            return new_submission
-        except Exception as e:
-            session.rollback()
-            raise
-        
-@router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
-def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
-    with SessionLocal() as session:
-        try:
-            uni_id = get_uni_id_from_credentials(credentials)
-            member_id = member_queries.get_member_by_uni_id(session, uni_id).id
-            submission = submission_queries.get_submission_by_form_and_member(session, form_id, member_id)
-            if submission is None:
-                return {'submission_status': False}
-            submission_type = submission.submission_type 
-            if submission_type == 'partial':
-                return {'submission_status': 'partial', "submission_timestamp": submission.submitted_at}
-            return {'submission_status': True, "submission_timestamp": submission.submitted_at}
-        except Exception as e:
-            raise
 
 @router.post("/google/webhook", status_code=status.HTTP_200_OK)
 async def google_forms_webhook(request: Request, background_tasks: BackgroundTasks):
