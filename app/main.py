@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from app.routers import upload, members, events, departments, action, complex_events, custom, edit, auth, card, forms, submissions
+from app.routers import upload, members, events, departments, action, complex_events, custom, edit, auth, card, forms, submissions, submissions_manual
 from app.config import config
 
 app = FastAPI()
@@ -33,6 +33,7 @@ app.include_router(auth.router, tags=["auth"])
 app.include_router(card.router, prefix="/card", tags=["Card"])
 app.include_router(forms.router, prefix="/forms", tags=["Forms"])
 app.include_router(submissions.router, prefix="/submissions", tags=["Submissions"])
+app.include_router(submissions_manual.router, prefix="/submissions_manual", tags=["Submissions Manual"])
 
 # TODO: replace this with nginx for production
 app.mount("/files", StaticFiles(directory=config.UPLOAD_DIR), name="files")

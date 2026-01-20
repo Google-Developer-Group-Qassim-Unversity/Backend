@@ -251,7 +251,7 @@ def sync_form_submissions(google_form_id: str, log_file):
                     partial_submission = partial_by_uni_id[uni_id]
                     
                     # Update submission with Google response data
-                    updated = submission_queries.update_submission(
+                    updated = submission_queries.update_google_submission(
                         session, 
                         partial_submission.id, 
                         submission_type='google',

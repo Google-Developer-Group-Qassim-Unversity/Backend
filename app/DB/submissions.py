@@ -24,6 +24,39 @@ def create_submission(session: Session, form_id: int, submission_type: str, memb
     session.flush()
     return submission
 
+def create_google_submission(
+    session: Session,
+    *,
+    form_id: int,
+    member_id: int,
+    google_submission_id: str | None,
+    google_submission_value: dict | None
+):
+    """
+    Create a new submission with type 'google'.
+    Returns None if a submission already exists for (form_id, member_id).
+    """
+    exists = session.execute(
+        select(Submissions).where(
+            Submissions.form_id == form_id,
+            Submissions.member_id == member_id
+        )
+    ).first()
+    if exists:
+        return None
+
+    submission = Submissions(
+        form_id=form_id,
+        member_id=member_id,
+        is_accepted=0,
+        submission_type='google',
+        google_submission_id=google_submission_id,
+        google_submission_value=google_submission_value,
+    )
+    session.add(submission)
+    session.flush()
+    return submission
+
 def get_submission_by_form_and_member(session: Session, form_id: int, member_id: int):
     submission = session.execute(
         select(Submissions).where(
@@ -33,7 +66,7 @@ def get_submission_by_form_and_member(session: Session, form_id: int, member_id:
     ).scalar_one_or_none()
     return submission
 
-def update_submission(session: Session, submission_id: int, submission_type: str = None, google_submission_id: str = None, google_submission_value: str = None):
+def update_google_submission(session: Session, submission_id: int, submission_type: str = None, google_submission_id: str = None, google_submission_value: str = None):
     """Update submission fields including type and Google response data"""
     submission = session.execute(
         select(Submissions).where(Submissions.id == submission_id)
