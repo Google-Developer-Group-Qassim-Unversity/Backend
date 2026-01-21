@@ -1,3 +1,4 @@
+from pandas.core.indexes.base import format_object_summary
 from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist
 from typing import List, Literal
 from datetime import datetime
@@ -37,6 +38,10 @@ class Open_Events_model(Events_model):
 class submission_exists_model(BaseClassModel):
     submission_status: Literal[False, True, 'partial']
     submission_timestamp: datetime | None = None
+
+class submission_accept_model(BaseClassModel):
+    submission_id: int
+    is_accepted: bool
     
 class Member_model(BaseClassModel):
     id: int | None = None
@@ -79,7 +84,7 @@ class Form_model(BaseClassModel):
     google_responders_url: str | None = None
 
 
-class Submission_model(BaseClassModel):
+class Get_Submission_model(BaseClassModel):
     member: Member_model
     submission_id: int
     submitted_at: datetime
@@ -90,6 +95,16 @@ class Submission_model(BaseClassModel):
     event_id: int
     form_id: int
     google_form_id: str | None = None
+
+class Create_Google_Submission_model(BaseClassModel):
+    id: int | None = None
+    form_id: int
+    member_id: int
+    submission_type: Literal['none', 'partial', 'google']
+    is_accepted: bool
+    submitted_at: datetime | None = None
+    google_submission_id: str | None = None
+    google_submission_value: JsonValue | None = None
 
 class MemberHistory_model(BaseClassModel):
     name: str

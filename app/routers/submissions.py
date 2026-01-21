@@ -7,14 +7,13 @@ from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import admin_guard, get_uni_id_from_credentials
 from app.config import config
 from app.routers.logging import create_log_file, write_log, write_log_exception, write_log_json, write_log_title, write_log_traceback
-from app.routers.models import Submission_model, submission_exists_model, Member_model
+from app.routers.models import Get_Submission_model, submission_exists_model, Member_model, submission_accept_model
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request as GoogleRequest
 import os
 
 router = APIRouter()
-
 
 
 @router.post("/{form_id:int}", status_code=status.HTTP_200_OK)
@@ -31,6 +30,7 @@ def create_submission(form_id: int, submission_type: Literal['none', 'partial'],
         except Exception as e:
             session.rollback()
             raise
+
         
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
 def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
@@ -48,8 +48,24 @@ def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredenti
         except Exception as e:
             raise
 
+@router.put("/accept", status_code=status.HTTP_200_OK)
+def accept_submission(submissions: list[submission_accept_model], credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        try:
+            for submission in submissions:
+                submission = submission_queries.update_is_accepted(session, submission.submission_id, submission.is_accepted)
+                if submission is None:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission not found")
+            session.commit()
+            return {"status": "success"}
+        except Exception as e:
+            raise
+
+# ====================== Google Forms API ======================
+
+# ==============================================================
+
 def get_google_credentials(refresh_token: str):
-    """Get Google credentials from refresh token"""
     credentials = Credentials(
         None,
         refresh_token=refresh_token,

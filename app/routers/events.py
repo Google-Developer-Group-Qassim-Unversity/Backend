@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import events as events_queries, forms as form_queries, submissions as submission_queries
 from ..DB.main import SessionLocal
-from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, Submission_model, createEvent_model, Member_model
+from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, Get_Submission_model, createEvent_model, Member_model
 from app.config import config
 from app.routers.logging import create_log_file, write_log_exception, write_log, write_log_json, write_log_title, write_log_traceback
 from app.helpers import admin_guard
@@ -29,7 +29,6 @@ def get_event_by_id(event_id: int):
     return event
 
         
-
 @router.get("/{event_id:int}/form", status_code=status.HTTP_200_OK, response_model=Form_model, responses={404: {"model": NotFoundResponse, "description": "Form not found"}})
 def get_event_form(event_id: int):
     with SessionLocal() as session:
@@ -107,7 +106,7 @@ def delete_event(event_id: int, credentials = Depends(admin_guard)):
         session.commit()
     return deleted_event
 
-@router.get("/submissions/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Submission_model])
+@router.get("/submissions/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Get_Submission_model])
 def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     with SessionLocal() as session:
         try:
@@ -127,7 +126,7 @@ def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCreden
                     uni_college=row.uni_college
                 )
                 
-                submission = Submission_model(
+                submission = Get_Submission_model(
                     member=member,
                     submission_id=row.submission_id,
                     submitted_at=row.submitted_at,

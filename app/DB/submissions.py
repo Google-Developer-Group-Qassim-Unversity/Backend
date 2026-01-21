@@ -24,6 +24,17 @@ def create_submission(session: Session, form_id: int, submission_type: str, memb
     session.flush()
     return submission
 
+
+def get_submission_by_form_and_member(session: Session, form_id: int, member_id: int):
+    submission = session.execute(
+        select(Submissions).where(
+            Submissions.form_id == form_id,
+            Submissions.member_id == member_id
+        )
+    ).scalar_one_or_none()
+    return submission
+
+# ====================== Google Sync Functions ======================
 def create_google_submission(
     session: Session,
     *,
@@ -32,10 +43,6 @@ def create_google_submission(
     google_submission_id: str | None,
     google_submission_value: dict | None
 ):
-    """
-    Create a new submission with type 'google'.
-    Returns None if a submission already exists for (form_id, member_id).
-    """
     exists = session.execute(
         select(Submissions).where(
             Submissions.form_id == form_id,
@@ -57,17 +64,8 @@ def create_google_submission(
     session.flush()
     return submission
 
-def get_submission_by_form_and_member(session: Session, form_id: int, member_id: int):
-    submission = session.execute(
-        select(Submissions).where(
-            Submissions.form_id == form_id,
-            Submissions.member_id == member_id
-        )
-    ).scalar_one_or_none()
-    return submission
 
 def update_google_submission(session: Session, submission_id: int, submission_type: str = None, google_submission_id: str = None, google_submission_value: str = None):
-    """Update submission fields including type and Google response data"""
     submission = session.execute(
         select(Submissions).where(Submissions.id == submission_id)
     ).scalar_one_or_none()
@@ -82,8 +80,8 @@ def update_google_submission(session: Session, submission_id: int, submission_ty
     session.flush()
     return submission
 
-# These function use the view 'form_submissions' not the table 'submissions'
 
+# ====================== submissions 'view' functions ======================
 def get_partial_submissions_by_form_id(session: Session, form_id: int):
     submissions = session.execute(
         select(t_forms_submissions).where(
@@ -100,3 +98,15 @@ def get_submissions_by_event_id(session: Session, event_id: int):
         )
     ).all()
     return submissions
+
+def update_is_accepted(session: Session, submission_id: int, is_accepted: bool):
+    submission = session.execute(
+        select(Submissions).where(
+            Submissions.id == submission_id
+        )
+    ).scalar_one_or_none()
+    if not submission:
+        return None
+    submission.is_accepted = is_accepted
+    session.flush()
+    return submission
