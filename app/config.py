@@ -111,6 +111,10 @@ class Config:
     @property
     def GOOGLE_CLIENT_SECRET(self) -> str:
         return env_or_except("GOOGLE_CLIENT_SECRET")
+    
+    @property
+    def JWT_SECRET(self) -> str:
+        return env_or_except("JWT_SECRET")
 
 
 def env_or_except(key: str, default: Optional[str] = None) -> str:

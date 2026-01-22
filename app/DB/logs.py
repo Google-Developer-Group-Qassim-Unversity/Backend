@@ -24,18 +24,16 @@ def create_member_log(session: Session, member_id: int, log_id: int):
 	session.flush()
 	return new_member_log
 
-def delete_member_log(session: Session, log_id: int, member_id: int):
-	member_log_to_delete = session.scalar(
-		select(MembersLogs).where(
-			MembersLogs.log_id == log_id,
-			MembersLogs.member_id == member_id
-		)
+def get_member_log(session: Session, member_id: int, log_id: int):
+	stmt = select(MembersLogs).where(
+		MembersLogs.member_id == member_id,
+		MembersLogs.log_id == log_id
 	)
-	if not member_log_to_delete:
+	member_log = session.scalar(stmt)
+	if not member_log:
 		return None
-	session.delete(member_log_to_delete)
-	session.flush()
-	return member_log_to_delete
+	return member_log
+
 
 def create_log(session: Session, event_id: int, action_id: int):
 	new_log = Logs(
@@ -129,3 +127,14 @@ def get_expanded_department_logs(session: Session):
 	)
 	
 	return query.all()
+
+def get_attendable_logs(session: Session, event_id: int):
+    ATTENDABLE_ACTION_IDS = [76, 77, 78, 79]
+    stmt = select(Logs).where(
+        Logs.event_id == event_id,
+        Logs.action_id.in_(ATTENDABLE_ACTION_IDS)
+    )
+    log = session.scalar(stmt)  
+    if not log:
+        return None
+    return log

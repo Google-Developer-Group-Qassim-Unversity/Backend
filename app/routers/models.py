@@ -145,6 +145,11 @@ class ConflictResponse(BaseClassModel):
 class NotFoundResponse(BaseClassModel):
     detail: str
 
+class BadRequestResponse(BaseClassModel):
+    detail: str
+
+class InternalServerErrorResponse(BaseClassModel):
+    detail: str
 
 class Complex_EventData(BaseClassModel):
     event_info: Events_model

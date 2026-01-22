@@ -1,10 +1,12 @@
 from fastapi import Depends, HTTPException, HTTPException, status
 from app.config import config
 from app.routers.models import Member_model
-from typing import List, Union
+from typing import List, Union, Optional
 import pandas as pd
 from pydantic import HttpUrl
 from json import dumps
+import jwt
+from datetime import datetime
 
 def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
     if isinstance(source, HttpUrl):
@@ -79,6 +81,47 @@ def credentials_to_member_model(credentials) -> Member_model:
     )
     print(f"Converted to Member_model:\n{member.model_dump()}")
     return member
+
+def validate_attendance_token(token: str, expected_event_id: int) -> dict:
+    try:
+        # 1. Decode & Verify
+        payload = jwt.decode(
+            token,
+            config.JWT_SECRET,
+            algorithms=["HS256"],
+            options={"require": ["exp", "eventId"]}
+        )
+        
+        # 2. Extract Data
+        token_event_id = payload.get('eventId')
+        
+        if int(token_event_id) != int(expected_event_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Token event ID does not match the requested event"
+            )
+        
+        return {
+            'valid': True,
+            'event_id': token_event_id,
+            'payload': payload
+        }
+        
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, # 401 is usually better for expired tokens
+            detail="Attendance token has expired"
+        )
+    except jwt.MissingRequiredClaimError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Token missing required claim: {e}"
+        )
+    except jwt.InvalidTokenError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid attendance token"
+        )
 
 
 if __name__ == "__main__":

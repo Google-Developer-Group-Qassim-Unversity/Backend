@@ -2,7 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from app.routers import upload, members, events, departments, action, complex_events, custom, edit, auth, card, forms, submissions, submissions_manual
+from app.routers import (
+    upload, members, events, departments,
+     action, complex_events, custom, edit,
+     auth, card, forms, submissions,
+     submissions_manual
+)
 from app.config import config
 
 app = FastAPI()
