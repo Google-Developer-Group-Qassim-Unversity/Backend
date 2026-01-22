@@ -51,7 +51,7 @@ class Events(Base):
     location: Mapped[str] = mapped_column(String(100), nullable=False)
     start_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
     end_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
-    status: Mapped[str] = mapped_column(ENUM('announced', 'open', 'closed'), nullable=False)
+    status: Mapped[str] = mapped_column(ENUM('draft', 'open', 'active', 'closed'), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
     image_url: Mapped[Optional[str]] = mapped_column(String(100))
     is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1), server_default=text("'0'"))
@@ -64,8 +64,8 @@ t_forms_submissions = Table(
     'forms_submissions', Base.metadata,
     Column('submission_id', INTEGER, server_default=text("'0'")),
     Column('submitted_at', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
-    Column('form_type', Enum('google', 'none')),
-    Column('submission_type', Enum('none', 'partial', 'google')),
+    Column('form_type', Enum('none', 'registration', 'google')),
+    Column('submission_type', Enum('none', 'registration', 'partial', 'google')),
     Column('id', INTEGER, server_default=text("'0'")),
     Column('name', String(50)),
     Column('email', String(100)),
@@ -110,11 +110,11 @@ t_open_events = Table(
     Column('location', String(100)),
     Column('start_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
     Column('end_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
-    Column('status', Enum('announced', 'open', 'closed')),
+    Column('status', Enum('draft', 'open', 'active', 'closed')),
     Column('image_url', String(100)),
     Column('is_official', TINYINT(1), server_default=text("'0'")),
     Column('form_id', INTEGER, server_default=text("'0'")),
-    Column('form_type', Enum('google', 'none')),
+    Column('form_type', Enum('none', 'registration', 'google')),
     Column('google_responders_url', String(150))
 )
 
@@ -128,7 +128,7 @@ class Forms(Base):
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     event_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    form_type: Mapped[str] = mapped_column(Enum('google', 'none'), nullable=False)
+    form_type: Mapped[str] = mapped_column(ENUM('none', 'registration', 'google'), nullable=False)
     google_form_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
     google_refresh_token: Mapped[Optional[str]] = mapped_column(VARCHAR(500))
     google_watch_id: Mapped[Optional[str]] = mapped_column(String(100))
@@ -225,7 +225,7 @@ class Submissions(Base):
     member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
     is_accepted: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
     submitted_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
-    submission_type: Mapped[str] = mapped_column(Enum('none', 'partial', 'google'), nullable=False)
+    submission_type: Mapped[str] = mapped_column(ENUM('none', 'registration', 'partial', 'google'), nullable=False)
     google_submission_id: Mapped[Optional[str]] = mapped_column(String(100))
     google_submission_value: Mapped[Optional[dict]] = mapped_column(JSON)
 

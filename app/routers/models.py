@@ -17,14 +17,14 @@ class Events_model(BaseClassModel):
     location: str
     start_datetime: datetime
     end_datetime: datetime
-    status: Literal['announced', 'open', 'closed']
+    status: Literal['draft', 'open', 'active', 'closed']
     image_url: str | None = None
     is_official: int | None = None
 
 class Form_model(BaseClassModel):
     id: int | None = None
     event_id: int
-    form_type: Literal['google', 'none']
+    form_type: Literal['google', 'none', 'registration']
     google_form_id: str | None = None
     google_refresh_token: str | None = None
     google_watch_id: str | None = None
@@ -32,7 +32,7 @@ class Form_model(BaseClassModel):
 
 class createEvent_model(BaseClassModel):
     event: Events_model
-    form_type: Literal['google', 'none']
+    form_type: Literal['google', 'none', 'registration']
     department_action_id: int
     member_action_id: int
     department_id: int
@@ -40,7 +40,7 @@ class createEvent_model(BaseClassModel):
 
 
 class Open_Events_model(Events_model):
-    form_type: Literal['google', 'none']
+    form_type: Literal['google', 'none', 'registration']
     form_id: int
     google_responders_url: str | None = None
     
@@ -90,8 +90,8 @@ class Get_Submission_model(BaseClassModel):
     member: Member_model
     submission_id: int
     submitted_at: datetime
-    form_type: Literal['google', 'none']
-    submission_type: Literal['none', 'partial', 'google']
+    form_type: Literal['google', 'none', 'registration']
+    submission_type: Literal['none', 'partial', 'google', 'registration']
     is_accepted: bool
     google_submission_value: JsonValue | None = None
     event_id: int
@@ -102,7 +102,7 @@ class Create_Google_Submission_model(BaseClassModel):
     id: int | None = None
     form_id: int
     member_id: int
-    submission_type: Literal['none', 'partial', 'google']
+    submission_type: Literal['none', 'partial', 'google', 'registration']
     is_accepted: bool
     submitted_at: datetime | None = None
     google_submission_id: str | None = None
