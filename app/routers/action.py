@@ -11,7 +11,7 @@ def get_action_by_id(actions, action_id: int):
             return action
     return None
 
-@router.get("/", status_code=status.HTTP_200_OK, response_model=Categorized_action)
+@router.get("", status_code=status.HTTP_200_OK, response_model=Categorized_action)
 def get_all_actions():
 
     # These are to link department and member actions into composite actions

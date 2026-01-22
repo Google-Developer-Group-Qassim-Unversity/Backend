@@ -37,7 +37,7 @@ def delete_member_log(session: Session, log_id: int, member_id: int):
 	session.flush()
 	return member_log_to_delete
 
-def create_log(session: Session, event_id: int | None, action_id: int):
+def create_log(session: Session, event_id: int, action_id: int):
 	new_log = Logs(
 		event_id=event_id,
 		action_id=action_id

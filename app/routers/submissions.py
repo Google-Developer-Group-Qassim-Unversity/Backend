@@ -61,6 +61,15 @@ def accept_submission(submissions: list[submission_accept_model], credentials: H
         except Exception as e:
             raise
 
+# @router.post("/commit", status_code=status.HTTP_201_OK)
+# def commit_submission(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+#     with SessionLocal() as session:
+#         try:
+
+#             session.commit()
+#             return {"status": "success"}
+#         except Exception as e:
+#             raise
 # ====================== Google Forms API ======================
 
 # ==============================================================

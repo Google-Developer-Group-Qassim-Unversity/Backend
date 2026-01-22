@@ -9,7 +9,7 @@ from app.helpers import get_uni_id_from_credentials
 import json
 router = APIRouter()
 
-@router.get("/", status_code=status.HTTP_200_OK, response_model=list[Department_model])
+@router.get("", status_code=status.HTTP_200_OK, response_model=list[Department_model])
 def get_all_departments():
 	with SessionLocal() as session:
 		departments = departments_queries.get_departments(session)

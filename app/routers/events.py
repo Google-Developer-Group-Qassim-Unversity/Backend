@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.DB import events as events_queries, forms as form_queries, submissions as submission_queries
+from app.DB import events as events_queries, forms as form_queries, submissions as submission_queries, logs as log_queries
 from ..DB.main import SessionLocal
 from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, Get_Submission_model, createEvent_model, Member_model
 from app.config import config
@@ -44,33 +44,39 @@ def get_registrable_events():
     return open_events
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=Events_model, responses={409: {"model": ConflictResponse, "description": "Event already exists"}})
-def create_event(event: createEvent_model, credentials = Depends(admin_guard)):
+def create_event(event_data: createEvent_model, credentials = Depends(admin_guard)):
     with SessionLocal() as session:
         log_file = create_log_file("create event")
         try:
             write_log_title(log_file, "Creating New Event and Associated Form")
             # 1. create event
-            new_event = events_queries.create_event(session, event)
+            new_event = events_queries.create_event(session, event_data.event)
 
             if new_event is None:
-                write_log_exception(log_file, f"HTTP 409: An event with the name '{event.name}' already exists")
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{event.name}' already exists")
-            write_log(log_file, f"Created Event [{new_event.id}]: {event.name}")
+                write_log_exception(log_file, f"HTTP 409: An event with the name '{event_data.event.name}' already exists")
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{event_data.event.name}' already exists")
+            write_log(log_file, f"Created Event [{new_event.id}]: {new_event.name}")
 
             # 2. create associated form
             new_form = form_queries.create_form(session, Form_model(
                 event_id=new_event.id,
-                form_type=event.form_type,
-                google_form_id=event.google_form_id,
-                google_refresh_token=event.google_refresh_token,
-                google_watch_id=event.google_watch_id,
-                google_responders_url=event.google_responders_url
+                form_type=event_data.form_type,
             ))
 
             if new_form is None:
                 write_log_exception(log_file, f"HTTP 409: Form with event_id {new_event.id} already exists")
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Form with event_id {new_event.id} already exists")
             write_log(log_file, f"Created Form [{new_form.id}] for Event [{new_event.id}]")
+
+            # 3. create logs for event
+            department_log = log_queries.create_log(session, new_event.id, event_data.department_action_id)
+            member_log = log_queries.create_log(session, new_event.id, event_data.member_action_id)
+            log_queries.create_department_log(session, event_data.department_id, department_log.id)
+
+            write_log(log_file, f"Created logs for event department: [{event_data.department_action_id}] and member: [{event_data.member_action_id}]")
+
+
+
 
             session.commit()
             session.refresh(new_event)
@@ -84,7 +90,7 @@ def create_event(event: createEvent_model, credentials = Depends(admin_guard)):
             write_log_traceback(log_file)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while creating the event")
         finally:
-            write_log_json(log_file, event.model_dump(mode="json"))
+            write_log_json(log_file, event_data.model_dump(mode="json"))
 
 @router.put("/{event_id}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}, 409: {"model": ConflictResponse, "description": "Event already exists"}})
 def update_event(event_id: int, event: Events_model, credentials = Depends(admin_guard)):

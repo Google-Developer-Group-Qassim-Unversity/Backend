@@ -21,12 +21,22 @@ class Events_model(BaseClassModel):
     image_url: str | None = None
     is_official: int | None = None
 
-class createEvent_model(Events_model):
+class Form_model(BaseClassModel):
+    id: int | None = None
+    event_id: int
     form_type: Literal['google', 'none']
     google_form_id: str | None = None
     google_refresh_token: str | None = None
     google_watch_id: str | None = None
     google_responders_url: str | None = None
+
+class createEvent_model(BaseClassModel):
+    event: Events_model
+    form_type: Literal['google', 'none']
+    department_action_id: int
+    member_action_id: int
+    department_id: int
+
 
 
 class Open_Events_model(Events_model):
@@ -74,14 +84,6 @@ class MeberCreate_model(BaseClassModel):
     member: Member_model
     already_exists: bool
 
-class Form_model(BaseClassModel):
-    id: int | None = None
-    event_id: int
-    form_type: Literal['google', 'none']
-    google_form_id: str | None = None
-    google_refresh_token: str | None = None
-    google_watch_id: str | None = None
-    google_responders_url: str | None = None
 
 
 class Get_Submission_model(BaseClassModel):
@@ -118,6 +120,7 @@ class MemberHistory_model(BaseClassModel):
 class Department_model(BaseClassModel):
     id: int | None = None
     name: str
+    arabic_name: str
     type: Literal['administrative', 'practical']
 
 
@@ -126,12 +129,12 @@ class Action_model(BaseClassModel):
     id: int 
     action_name: str
     arabic_action_name: str 
-    action_type: Literal["composite", "department", "member"] 
+    action_type: Literal["composite", "department", "member", "bonus"] 
     action_description: str 
     points: int
 
 class Categorized_action(BaseClassModel):
-    # composite_actions: List[conlist(Action_model, min_length=2, max_length=2)]
+    composite_actions: List[conlist(Action_model, min_length=2, max_length=2)]
     department_actions: List[Action_model]
     member_actions: List[Action_model] 
     custom_actions: List[Action_model]

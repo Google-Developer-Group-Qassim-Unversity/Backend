@@ -32,6 +32,7 @@ class Departments(Base):
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     type: Mapped[str] = mapped_column(Enum('administrative', 'practical'), nullable=False)
+    arabic_name: Mapped[str] = mapped_column(String(100), nullable=False)
 
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='department')
 
@@ -149,10 +150,10 @@ class Logs(Base):
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     action_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+    event_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
 
     action: Mapped['Actions'] = relationship('Actions', back_populates='logs')
-    event: Mapped[Optional['Events']] = relationship('Events', back_populates='logs')
+    event: Mapped['Events'] = relationship('Events', back_populates='logs')
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='log')
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='log')
     modifications: Mapped[list['Modifications']] = relationship('Modifications', back_populates='log')
@@ -188,6 +189,7 @@ class MembersLogs(Base):
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
     log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
 
     log: Mapped['Logs'] = relationship('Logs', back_populates='members_logs')
     member: Mapped['Members'] = relationship('Members', back_populates='members_logs')
