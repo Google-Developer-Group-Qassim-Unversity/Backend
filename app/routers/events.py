@@ -167,13 +167,14 @@ def create_event(event_data: createEvent_model, credentials = Depends(admin_guar
             # 3. create logs for event
             department_log = log_queries.create_log(session, new_event.id, event_data.department_action_id)
             member_log = log_queries.create_log(session, new_event.id, event_data.member_action_id)
-            log_queries.create_department_log(session, event_data.department_id, department_log.id)
+
+            # 4. give department points for each day
+            days = (event_data.event.end_datetime - event_data.event.start_datetime).days + 1
+            for day in range(days):
+                write_log(log_file, f"Giving department points for day [{day + 1}]/[{days}]")
+                log_queries.create_department_log(session, event_data.department_id, department_log.id)
 
             write_log(log_file, f"Created logs for event department: [{event_data.department_action_id}] and member: [{event_data.member_action_id}]")
-
-
-
-
             session.commit()
             session.refresh(new_event)
             return new_event
