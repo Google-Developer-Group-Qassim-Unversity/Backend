@@ -1,10 +1,10 @@
 from sqlalchemy.orm import Session
-from app.DB.schema import Events, Actions, DepartmentsLogs, Logs, Members, MembersLogs, Modifications, Absence, Departments
+from app.DB.schema import Events, Actions, DepartmentsLogs, Logs, Members, MembersLogs, Modifications
 from typing import Literal
 from sqlalchemy import select, func, case
 from sqlalchemy.orm import aliased, Session
 from json import loads
-
+from datetime import datetime
 def create_department_log(session: Session, department_id: int, log_id: int, attendance_number: int | None = None):
 	new_department_log = DepartmentsLogs(
 		department_id=department_id,
@@ -18,21 +18,22 @@ def create_department_log(session: Session, department_id: int, log_id: int, att
 def create_member_log(session: Session, member_id: int, log_id: int):
 	new_member_log = MembersLogs(
 		member_id=member_id,
-		log_id=log_id
+		log_id=log_id,
+        date=datetime.now()
 	)
 	session.add(new_member_log)
 	session.flush()
 	return new_member_log
 
-def get_member_log(session: Session, member_id: int, log_id: int):
+def get_member_logs(session: Session, member_id: int, log_id: int):
 	stmt = select(MembersLogs).where(
 		MembersLogs.member_id == member_id,
 		MembersLogs.log_id == log_id
 	)
-	member_log = session.scalar(stmt)
-	if not member_log:
+	member_logs = session.scalars(stmt).all()
+	if not member_logs:
 		return None
-	return member_log
+	return member_logs
 
 
 def create_log(session: Session, event_id: int, action_id: int):
@@ -54,18 +55,20 @@ def create_modification(session: Session, log_id: int, type: Literal['bonus', 'd
 	session.flush()
 	return new_modification
 
-def create_absence(session: Session, member_log_id: int, date):
-	new_absence = Absence(
-		member_log_id=member_log_id,
-		date=date
-	)
-	session.add(new_absence)
-	session.flush()
-	return new_absence
+# absence was remove @jan 23 2026
+# def create_absence(session: Session, member_log_id: int, date):
+# 	new_absence = Absence(
+# 		member_log_id=member_log_id,
+# 		date=date
+# 	)
+# 	session.add(new_absence)
+# 	session.flush()
+# 	return new_absence
 
 
 def get_expanded_members_logs(session: Session):
-    Abs = aliased(Absence)
+    # absence was remove @jan 23 2026
+    # Abs = aliased(Absence)
     stmt = (
         session.query(
             Logs.id.label('log_id'),
@@ -95,7 +98,7 @@ def get_expanded_members_logs(session: Session):
                     'id', Members.id,
                     'name', Members.name,
                     'uni_id', Members.uni_id,
-                    'absence_date', Abs.date
+                    # 'absence_date', Abs.date
                 )
             ).label('members')
         )
@@ -103,7 +106,7 @@ def get_expanded_members_logs(session: Session):
         .join(Actions, Logs.action_id == Actions.id)
         .join(MembersLogs, Logs.id == MembersLogs.log_id)
         .join(Members, MembersLogs.member_id == Members.id)
-        .outerjoin(Abs, MembersLogs.id == Abs.member_log_id)
+        # .outerjoin(Abs, MembersLogs.id == Abs.member_log_id)
         .outerjoin(Modifications, Logs.id == Modifications.log_id)
         .filter(Actions.action_type.in_(['member', 'composite']))
         .group_by(Logs.id)

@@ -71,15 +71,15 @@ def credentials_to_member_model(credentials) -> Member_model:
         print(f"Invalid credentials structure:\n{credentials_str}")
         raise ValueError("Invalid credentials: 'decoded' or 'metadata' missing")
     metadata = credentials_dict['decoded']['metadata']
-    print(f"got metadata:\n{dumps(metadata, ensure_ascii=False, indent=4)}")
     member = Member_model(
         name=metadata.get('fullArabicName'),
         email=metadata.get('personalEmail'),
         phone_number=metadata.get('saudiPhone'),
         uni_id=metadata.get('uni_id'),
-        gender=metadata.get("gender").title()
+        gender=metadata.get("gender").title(),
+        uni_level=metadata.get('uni_level'),
+        uni_college=metadata.get('uni_college')
     )
-    print(f"Converted to Member_model:\n{member.model_dump()}")
     return member
 
 def validate_attendance_token(token: str, expected_event_id: int) -> dict:

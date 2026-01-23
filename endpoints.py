@@ -2,8 +2,8 @@ from sqlalchemy import select, exists
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import JSONResponse, HTMLResponse
 from app.DB.schema import *
-from helpers import get_pydantic_members
-from models import (
+from app.helpers import get_pydantic_members
+from app.routers.models import (
     CompositeFormData, Member, Action, Categorized_action, CompositeFormData,
     Department, DepartmentFormData, OrganizerData, MemberFormData, CustomMembersFormData,
     CustomDepartmentsFormData, parse_composite_form, Events_table, EventData
@@ -163,13 +163,14 @@ def handle_events(parsed: tuple = Depends(parse_composite_form)):
                 session.add(new_members_logs)
                 session.flush()
 
-                for i, day in enumerate(days_present): # [present, absent, absent]
-                    if day == "Absent":
-                        new_absence = Absence(
-                            member_log_id=new_members_logs.id,
-                            date=event_start_date + datetime.timedelta(days=i)
-                        )
-                        session.add(new_absence)
+                # absence was remove @jan 23 2026
+                # for i, day in enumerate(days_present): # [present, absent, absent]
+                #     if day == "Absent":
+                #         new_absence = Absence(
+                #             member_log_id=new_members_logs.id,
+                #             date=event_start_date + datetime.timedelta(days=i)
+                #         )
+                #         session.add(new_absence)
                 
             # Flow for organizers
             organizers = len(form_data.organizers) if form_data.organizers != None else 0
@@ -213,15 +214,16 @@ def handle_events(parsed: tuple = Depends(parse_composite_form)):
 
                     session.add(new_members_logs)
 
-                    for i, day in enumerate(member.attendance):
-                        if day == "absent":
-                            new_absence = Absence(
-                                member_log_id = db_member.id, 
-                                date = event_start_date + datetime.timedelta(days=i)
-                            )
+                    # absence was remove @jan 23 2026
+                    # for i, day in enumerate(member.attendance):
+                    #     if day == "absent":
+                    #         new_absence = Absence(
+                    #             member_log_id = db_member.id, 
+                    #             date = event_start_date + datetime.timedelta(days=i)
+                    #         )
 
-                            session.add(new_absence)
-                            session.flush()
+                    #         session.add(new_absence)
+                    #         session.flush()
 
                 print(f"processed organizer: \x1b[32m{len(form_data.organizers) if form_data.organizers != None else 0}\x1b[0m")
             else:
@@ -349,16 +351,17 @@ def handle_departments(form_data: DepartmentFormData):
                     session.flush()
 
 
+                    # absence was remove @jan 23 2026
                     # processing attendance for organizers
-                    attendance = member.attendance
-                    for i, day in enumerate(attendance):
-                        if day == "absent":
-                            new_absence=Absence(
-                                member_log_id=new_members_log.id,
-                                date=form_data.event_info.start_date + datetime.timedelta(days=i)
-                            )
+                    # attendance = member.attendance
+                    # for i, day in enumerate(attendance):
+                    #     if day == "absent":
+                    #         new_absence=Absence(
+                    #             member_log_id=new_members_log.id,
+                    #             date=form_data.event_info.start_date + datetime.timedelta(days=i)
+                    #         )
 
-                            session.add(new_absence)
+                    #         session.add(new_absence)
 
                 print(f"processed organizer: \x1b[32m{len(form_data.organizers) if form_data.organizers != None else 0}\x1b[0m")
             else:

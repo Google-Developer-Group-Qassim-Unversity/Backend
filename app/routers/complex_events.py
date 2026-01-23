@@ -56,10 +56,11 @@ async def create_composite_event(body: CompositeEventData, request: Request):
                 member_log = logs.create_member_log(session, db_member.id, log_members.id)
                 write_log(log_file, f"[3] Created members_log: \x1b[33m{member_log.id}\x1b[0m")
 
-                for i, day in enumerate(days_present): # [present, absent, absent]
-                    if day == "Absent":
-                        absence = logs.create_absence(session, member_log.id, body.event_info.start_datetime + timedelta(days=i))
-                        write_log(log_file, f"[3] Created absence: \x1b[33m{absence.id}\x1b[0m")
+                # absence was remove @jan 23 2026
+                # for i, day in enumerate(days_present): # [present, absent, absent]
+                #     if day == "Absent":
+                #         absence = logs.create_absence(session, member_log.id, body.event_info.start_datetime + timedelta(days=i))
+                #         write_log(log_file, f"[3] Created absence: \x1b[33m{absence.id}\x1b[0m")
 
             # 4. give departments points create a log for department and create a department_log and add bonuses
             log_department = logs.create_log(session, new_event.id, body.department_action_id)

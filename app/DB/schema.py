@@ -1,7 +1,7 @@
 from typing import Optional
 import datetime
 
-from sqlalchemy import Column, Date, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, String, Table, Text, text
+from sqlalchemy import Column, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, String, Table, Text, text
 from sqlalchemy.dialects.mysql import ENUM, INTEGER, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -183,17 +183,17 @@ class MembersLogs(Base):
         ForeignKeyConstraint(['log_id'], ['logs.id'], ondelete='CASCADE', onupdate='CASCADE', name='members_logs_logs_FK'),
         ForeignKeyConstraint(['member_id'], ['members.id'], name='fk_members_id'),
         Index('fk_members_id', 'member_id'),
-        Index('members_logs_unique', 'log_id', 'member_id', unique=True)
+        Index('idx_members_logs_log_id', 'log_id'),
+        Index('unique_member_log_day', 'member_id', 'log_id', unique=True)
     )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
     log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
 
     log: Mapped['Logs'] = relationship('Logs', back_populates='members_logs')
     member: Mapped['Members'] = relationship('Members', back_populates='members_logs')
-    absence: Mapped[list['Absence']] = relationship('Absence', back_populates='member_log')
 
 
 class Modifications(Base):
@@ -231,17 +231,3 @@ class Submissions(Base):
 
     form: Mapped['Forms'] = relationship('Forms', back_populates='submissions')
     member: Mapped['Members'] = relationship('Members', back_populates='submissions')
-
-
-class Absence(Base):
-    __tablename__ = 'absence'
-    __table_args__ = (
-        ForeignKeyConstraint(['member_log_id'], ['members_logs.id'], ondelete='CASCADE', onupdate='CASCADE', name='absence_members_logs_FK'),
-        Index('absence_members_logs_FK', 'member_log_id')
-    )
-
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
-    member_log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-
-    member_log: Mapped['MembersLogs'] = relationship('MembersLogs', back_populates='absence')

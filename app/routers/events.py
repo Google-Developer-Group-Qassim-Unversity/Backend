@@ -5,7 +5,7 @@ from ..DB.main import SessionLocal
 from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, Get_Submission_model, createEvent_model, Member_model, BadRequestResponse, InternalServerErrorResponse
 from app.config import config
 from app.routers.logging import create_log_file, write_log_exception, write_log, write_log_json, write_log_title, write_log_traceback
-from app.helpers import admin_guard, get_uni_id_from_credentials, validate_attendance_token
+from app.helpers import admin_guard, get_uni_id_from_credentials, validate_attendance_token, credentials_to_member_model
 from datetime import datetime
 router = APIRouter()
 
@@ -46,7 +46,7 @@ def mark_attendance(
 ):
     log_file = create_log_file("mark attendance")
     
-    # Validate attendance token if provided
+    # Validate attendance token 
     if token:
         write_log(log_file, f"validating attendance token for event [{event_id}]")
         try:
@@ -56,12 +56,13 @@ def mark_attendance(
             write_log_exception(log_file, f"Token validation failed: {e.detail}")
             raise
     else:
-        write_log(log_file, f"No attendance token provided, using Clerk authentication only")
+        write_log(log_file, f"HTTP 400:No attendance token provided")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance token provided")
     
     with SessionLocal() as session:
         try: 
             member = member_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
+            write_log_title(log_file, f"Marking attendance for member [{member.name}] with uni_id [{member.uni_id}]")
             # 1. check if event exists
             event = events_queries.get_event_by_id(session, event_id)
             if not event:
@@ -77,12 +78,19 @@ def mark_attendance(
             
 
             # 2. check if already marked attendance for today
-            member_log = log_queries.get_member_log(session, member.id, event_log.id)
-            if member_log is not None:
-                # check if its for today
-                if member_log.date.date() == datetime.now().date(): # the .date() removes the time part of the datetime
-                    write_log(log_file, f"Member [{member.id}] has already marked attendance for today")
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You have already marked attendance for today")
+            member_logs = log_queries.get_member_logs(session, member.id, event_log.id)
+            if member_logs is None:
+                write_log(log_file, f"No member logs found for member [{member.id}] and event [{event.name}]")
+            else:
+                write_log(log_file, f"Found [{len(member_logs)}] member logs for member [{member.id}] and event [{event.name}]")
+                for member_log in member_logs:
+                    write_log(log_file, f"Checking member log id: [{member_log.id}], log_id: [{member_log.log_id}], Date: [{member_log.date}]")
+                    # check if its for today
+                    if member_log.date.date() == datetime.now().date(): # the .date() removes the time part of the datetime
+                        write_log(log_file, f"Member [{member.id}] has already marked attendance for today the [{member_log.date.day}]th")
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You have already marked attendance for today")
+                    else:
+                        write_log(log_file, f"Member [{member.id}] was attended for the [{member_log.date.day}]th")
 
             # 3. get form registration type
             form = form_queries.get_form_by_event_id(session, event_id)
@@ -108,9 +116,9 @@ def mark_attendance(
                     write_log_exception(log_file, f"HTTP 400: Member [{member.id}] has not been accepted to the event [{event.name}]")
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You have not been accepted to the event")
 
-                write_log(log_file, f"Member [{member.id}] has been accepted to the event [{event.name}]")
+                write_log(log_file, f"Member [{member.id}] has submitted the form and been accepted to the event [{event.name}], marking attendance...")
                 log_queries.create_member_log(session, member.id, event_log.id)
-                write_log(log_file, f"Member marked attendance for event [{event.name}]")
+                write_log(log_file, f"Member marked attendance for today the [{datetime.now().date().day}]th for event [{event.name}]")
 
             session.commit()
             return
@@ -123,8 +131,6 @@ def mark_attendance(
             write_log_exception(log_file, e)
             write_log_traceback(log_file)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        finally:
-            write_log_json(log_file, {"member_id": member.id, "event_id": event_id})
 
 
 @router.get("/open", status_code=status.HTTP_200_OK, response_model=list[Open_Events_model])
