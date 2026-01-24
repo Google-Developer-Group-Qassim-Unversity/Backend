@@ -1,7 +1,7 @@
 from typing import Optional
 import datetime
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, String, Table, Text, text
+from sqlalchemy import Column, DECIMAL, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, String, Table, Text, text
 from sqlalchemy.dialects.mysql import ENUM, INTEGER, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -82,6 +82,19 @@ t_forms_submissions = Table(
 )
 
 
+t_member_event_history = Table(
+    'member_event_history', Base.metadata,
+    Column('member_id', INTEGER, server_default=text("'0'")),
+    Column('member_name', String(50)),
+    Column('event_id', INTEGER, server_default=text("'0'")),
+    Column('event_name', String(150)),
+    Column('start_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('end_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('points', DECIMAL(54, 0)),
+    Column('action_name', Text)
+)
+
+
 class Members(Base):
     __tablename__ = 'members'
     __table_args__ = (
@@ -99,6 +112,14 @@ class Members(Base):
 
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='member')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='member')
+
+
+t_members_points = Table(
+    'members_points', Base.metadata,
+    Column('member_id', INTEGER, server_default=text("'0'")),
+    Column('member_name', String(50)),
+    Column('total_points', DECIMAL(54, 0), server_default=text("'0'"))
+)
 
 
 t_open_events = Table(
