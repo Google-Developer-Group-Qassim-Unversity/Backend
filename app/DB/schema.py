@@ -40,6 +40,7 @@ t_departments_points = Table(
     'departments_points', Base.metadata,
     Column('department_id', INTEGER, server_default=text("'0'")),
     Column('department_name', String(50)),
+    Column('department_type', Enum('administrative', 'practical')),
     Column('ar_department_name', String(100)),
     Column('total_points', DECIMAL(55, 0), server_default=text("'0'"))
 )

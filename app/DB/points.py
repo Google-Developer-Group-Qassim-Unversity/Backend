@@ -28,6 +28,8 @@ def get_all_departments_points(session: Session):
 def get_department_points(session: Session, department_id: int):
     statement = select(t_departments_points).where(t_departments_points.c.department_id == department_id)
     department_points = session.execute(statement).first()
+    if department_points is None:
+        return None
     return dict(department_points._mapping)
 
 def get_department_points_history(session: Session, department_id: int):

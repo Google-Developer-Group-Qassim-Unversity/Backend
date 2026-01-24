@@ -29,7 +29,12 @@ class Department_points_model(BaseClassModel):
     department_id: int
     department_name: str
     ar_department_name: str
+    department_type: str
     total_points: int
+
+class Response_department_points_model(BaseClassModel):
+    administrative: list[Department_points_model]
+    practical: list[Department_points_model]
 
 class Department_points_history_model(BaseClassModel):
     department: Department_points_model
@@ -54,16 +59,21 @@ def get_member_points(member_id: int):
         events=member_points_history
     )
 
-@router.get("/departments/total", status_code=status.HTTP_200_OK, response_model=list[Department_points_model])
+@router.get("/departments/total", status_code=status.HTTP_200_OK, response_model=Response_department_points_model)
 def get_all_departments_points():
     with SessionLocal() as session:
         departments_points = points_queries.get_all_departments_points(session)
-    return departments_points
+    return Response_department_points_model(
+        administrative=[department for department in departments_points if department['department_type'] == 'administrative'], 
+        practical=[department for department in departments_points if department['department_type'] == 'practical']
+    )
 
 @router.get("/departments/{department_id}", status_code=status.HTTP_200_OK, response_model=Department_points_history_model)
 def get_department_points(department_id: int):
     with SessionLocal() as session:
         department_points = points_queries.get_department_points(session, department_id)
+        if department_points is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department points not found or department with id {department_id} does not exist")
         department_points_history = points_queries.get_department_points_history(session, department_id)
     return Department_points_history_model(
         department=department_points,
