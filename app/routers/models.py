@@ -120,7 +120,7 @@ class MemberHistory_model(BaseClassModel):
 class Department_model(BaseClassModel):
     id: int | None = None
     name: str
-    arabic_name: str
+    ar_name: str
     type: Literal['administrative', 'practical']
 
 

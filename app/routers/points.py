@@ -1,8 +1,10 @@
-from fastapi import APIRouter, status, HTTPException
+from fastapi import APIRouter, status, HTTPException, Query, Depends
 from app.DB import points as points_queries
 from app.DB.main import SessionLocal
 from app.routers.models import BaseClassModel
 from datetime import datetime
+from app.helpers import admin_guard
+from app.config import config
 router = APIRouter()
 
 # ============ models ============
@@ -39,6 +41,9 @@ class Response_department_points_model(BaseClassModel):
 class Department_points_history_model(BaseClassModel):
     department: Department_points_model
     events: list[Event_model]
+# ============ guard ============
+
+
 
 # ============ routes ============
 @router.get("/members/total", status_code=status.HTTP_200_OK, response_model=list[Member_points_model])
