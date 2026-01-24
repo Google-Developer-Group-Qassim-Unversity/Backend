@@ -1,4 +1,4 @@
-from fastapi import APIRouter, status
+from fastapi import APIRouter, status, HTTPException
 from app.DB import points as points_queries
 from app.DB.main import SessionLocal
 from app.routers.models import BaseClassModel
@@ -19,13 +19,20 @@ class Event_model(BaseClassModel):
     end_datetime: datetime
     points: int
     action_name: str
-    en_action_name: str | None = None
     ar_action_name: str | None = None
 
 class Member_event_history_model(BaseClassModel):
-    member_id: int
-    member_name: str
+    member: Member_points_model
+    events: list[Event_model]
+
+class Department_points_model(BaseClassModel):
+    department_id: int
+    department_name: str
+    ar_department_name: str
     total_points: int
+
+class Department_points_history_model(BaseClassModel):
+    department: Department_points_model
     events: list[Event_model]
 
 # ============ routes ============
@@ -39,11 +46,11 @@ def get_all_members_points():
 def get_member_points(member_id: int):
     with SessionLocal() as session:
         member_points = points_queries.get_member_points(session, member_id)
+        if member_points is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member points not found or member with id {member_id} does not exist")
         member_points_history = points_queries.get_member_points_history(session, member_id)
     return Member_event_history_model(
-        member_id=member_points['member_id'],
-        member_name=member_points['member_name'],
-        total_points=member_points['total_points'],
+        member=member_points,
         events=member_points_history
     )
 
@@ -52,3 +59,13 @@ def get_all_departments_points():
     with SessionLocal() as session:
         departments_points = points_queries.get_all_departments_points(session)
     return departments_points
+
+@router.get("/departments/{department_id}", status_code=status.HTTP_200_OK, response_model=Department_points_history_model)
+def get_department_points(department_id: int):
+    with SessionLocal() as session:
+        department_points = points_queries.get_department_points(session, department_id)
+        department_points_history = points_queries.get_department_points_history(session, department_id)
+    return Department_points_history_model(
+        department=department_points,
+        events=department_points_history
+    )

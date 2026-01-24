@@ -16,8 +16,7 @@ class Actions(Base):
     action_name: Mapped[str] = mapped_column(VARCHAR(60), nullable=False)
     points: Mapped[int] = mapped_column(INTEGER, nullable=False)
     action_type: Mapped[str] = mapped_column(Enum('composite', 'department', 'member', 'bonus'), nullable=False)
-    action_description: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
-    arabic_action_name: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
+    ar_action_name: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
 
     logs: Mapped[list['Logs']] = relationship('Logs', back_populates='action')
 
@@ -32,9 +31,33 @@ class Departments(Base):
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     type: Mapped[str] = mapped_column(Enum('administrative', 'practical'), nullable=False)
-    arabic_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    ar_name: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
 
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='department')
+
+
+t_departments_points = Table(
+    'departments_points', Base.metadata,
+    Column('department_id', INTEGER, server_default=text("'0'")),
+    Column('department_name', String(50)),
+    Column('ar_department_name', String(100)),
+    Column('total_points', DECIMAL(55, 0), server_default=text("'0'"))
+)
+
+
+t_departments_points_history = Table(
+    'departments_points_history', Base.metadata,
+    Column('department_id', INTEGER),
+    Column('department_name', String(50)),
+    Column('ar_department_name', String(100)),
+    Column('event_id', INTEGER),
+    Column('event_name', String(150)),
+    Column('start_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('end_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('action_name', String(60)),
+    Column('ar_action_name', String(100)),
+    Column('points', DECIMAL(54, 0))
+)
 
 
 class Events(Base):
@@ -91,7 +114,8 @@ t_member_event_history = Table(
     Column('start_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
     Column('end_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
     Column('points', DECIMAL(54, 0)),
-    Column('action_name', Text)
+    Column('action_name', Text),
+    Column('ar_action_name', Text)
 )
 
 
