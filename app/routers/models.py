@@ -128,9 +128,8 @@ class Department_model(BaseClassModel):
 class Action_model(BaseClassModel):
     id: int 
     action_name: str
-    arabic_action_name: str 
+    ar_action_name: str 
     action_type: Literal["composite", "department", "member", "bonus"] 
-    action_description: str 
     points: int
 
 class Categorized_action(BaseClassModel):
