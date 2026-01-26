@@ -304,6 +304,16 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials = Dep
         finally:
             write_log_json(log_file, event_data.model_dump(mode="json"))
 
+@router.post("/{event_id:int}/publish", status_code=status.HTTP_200_OK)
+def publish_event(event_id: int, credentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        event = events_queries.get_event_by_id(session, event_id)
+        if not event:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+        event.status = 'open'
+        session.commit()
+    return event
+
 @router.delete("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
 def delete_event(event_id: int, credentials = Depends(admin_guard)):
     with SessionLocal() as session:
