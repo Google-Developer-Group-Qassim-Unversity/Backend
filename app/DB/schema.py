@@ -211,13 +211,12 @@ class DepartmentsLogs(Base):
         ForeignKeyConstraint(['department_id'], ['departments.id'], ondelete='CASCADE', onupdate='CASCADE', name='departments_logs_departments_FK'),
         ForeignKeyConstraint(['log_id'], ['logs.id'], ondelete='CASCADE', onupdate='CASCADE', name='departments_logs_logs_FK'),
         Index('departments_logs_departments_FK', 'department_id'),
-        Index('departments_logs_unique', 'log_id', 'department_id', unique=True)
+        Index('departments_logs_idx', 'log_id', 'department_id')
     )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     department_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
     log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    attendants_number: Mapped[Optional[int]] = mapped_column(INTEGER, server_default=text("'0'"))
 
     department: Mapped['Departments'] = relationship('Departments', back_populates='departments_logs')
     log: Mapped['Logs'] = relationship('Logs', back_populates='departments_logs')

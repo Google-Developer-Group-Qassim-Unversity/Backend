@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import events as events_queries, forms as form_queries, submissions as submission_queries, logs as log_queries, members as member_queries
 from ..DB.main import SessionLocal
-from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, Get_Submission_model, createEvent_model, Member_model, BadRequestResponse, InternalServerErrorResponse
+from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, Get_Submission_model, createEvent_model, Member_model, BadRequestResponse, InternalServerErrorResponse, UpdateEvent_model, event_actions_model
 from app.config import config
 from app.routers.logging import create_log_file, write_log_exception, write_log, write_log_json, write_log_title, write_log_traceback
 from app.helpers import admin_guard, get_uni_id_from_credentials, validate_attendance_token, credentials_to_member_model
@@ -139,6 +139,18 @@ def get_registrable_events():
         open_events = events_queries.get_open_events(session)
     return open_events
 
+@router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEvent_model)
+def get_event_details(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        event = events_queries.get_event_by_id(session, event_id)
+        actions = events_queries.get_actions_by_event_id(session, event_id)
+        if not event or not actions:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    return {
+        "event": event,
+        "actions": actions
+    }
+
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=Events_model, responses={409: {"model": ConflictResponse, "description": "Event already exists"}})
 def create_event(event_data: createEvent_model, credentials = Depends(admin_guard)):
     with SessionLocal() as session:
@@ -189,16 +201,108 @@ def create_event(event_data: createEvent_model, credentials = Depends(admin_guar
         finally:
             write_log_json(log_file, event_data.model_dump(mode="json"))
 
-@router.put("/{event_id}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}, 409: {"model": ConflictResponse, "description": "Event already exists"}})
-def update_event(event_id: int, event: Events_model, credentials = Depends(admin_guard)):
+@router.put("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}, 409: {"model": ConflictResponse, "description": "Event already exists"}, 500: {"model": InternalServerErrorResponse, "description": "Internal server error"}})
+def update_event(event_id: int, event_data: UpdateEvent_model, credentials = Depends(admin_guard)):
+    log_file = create_log_file("update event")
     with SessionLocal() as session:
-        updated_event = events_queries.update_event(session, event_id, event)
-        if updated_event is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-        if updated_event == -1:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{event.name}' already exists")
-        session.commit()
-    return updated_event
+        try:
+            write_log_title(log_file, f"Updating Event [{event_id}]")
+            
+            # 1. Validate event exists and update event fields
+            updated_event = events_queries.update_event(session, event_id, event_data.event)
+            if updated_event is None:
+                write_log_exception(log_file, f"HTTP 404: Event [{event_id}] not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+            if updated_event == -1:
+                write_log_exception(log_file, f"HTTP 409: An event with the name '{event_data.event.name}' already exists")
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{event_data.event.name}' already exists")
+            write_log(log_file, f"Updated Event [{event_id}]: {updated_event.name}")
+
+            # 2. Get all logs for this event
+            logs = log_queries.get_logs_by_event_id(session, event_id)
+            if not logs or len(logs) < 2:
+                write_log_exception(log_file, f"HTTP 500: Event [{event_id}] does not have expected logs")
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Event logs not found")
+            write_log(log_file, f"Found [{len(logs)}] logs for event [{event_id}]")
+
+            # 3. Identify department log and member log
+            # Department log has DepartmentsLogs entries, member log doesn't
+            department_log = None
+            member_log = None
+            for log in logs:
+                current_dept_id = log_queries.get_department_id_from_log(session, log.id)
+                if current_dept_id is not None:
+                    department_log = log
+                else:
+                    member_log = log
+            
+            if not department_log or not member_log:
+                write_log_exception(log_file, f"HTTP 500: Could not identify department and member logs for event [{event_id}]")
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not identify logs")
+
+            # 4. Actions list: first = department action, second = member action
+            department_action = event_data.actions[0]
+            member_action = event_data.actions[1]
+            write_log(log_file, f"Department action: [{department_action.action_id}], Member action: [{member_action.action_id}]")
+
+            # 5. Update department log action_id
+            log_queries.update_log_action_id(session, department_log.id, department_action.action_id)
+            write_log(log_file, f"Updated department log [{department_log.id}] action_id to [{department_action.action_id}]")
+
+            # 6. Update member log action_id
+            log_queries.update_log_action_id(session, member_log.id, member_action.action_id)
+            write_log(log_file, f"Updated member log [{member_log.id}] action_id to [{member_action.action_id}]")
+
+            # 7. Handle department_id and/or days change
+            current_dept_id = log_queries.get_department_id_from_log(session, department_log.id)
+            new_dept_id = department_action.department_id
+            current_dept_logs_count = log_queries.get_department_logs_count(session, department_log.id)
+            new_days = (updated_event.end_datetime - updated_event.start_datetime).days + 1
+            
+            write_log(log_file, f"Current: dept_id=[{current_dept_id}], days=[{current_dept_logs_count}]. New: dept_id=[{new_dept_id}], days=[{new_days}]")
+            
+            if new_dept_id is not None and current_dept_id != new_dept_id:
+                # Department changed - delete all and recreate
+                write_log(log_file, f"Department changed from [{current_dept_id}] to [{new_dept_id}]")
+                
+                deleted_count = log_queries.delete_department_logs_by_log_id(session, department_log.id)
+                write_log(log_file, f"Deleted [{deleted_count}] old department logs for log [{department_log.id}]")
+                
+                for day in range(new_days):
+                    log_queries.create_department_log(session, new_dept_id, department_log.id)
+                write_log(log_file, f"Created [{new_days}] department logs for new department [{new_dept_id}]")
+                
+            elif current_dept_logs_count != new_days:
+                # Same department but days changed
+                dept_id_to_use = new_dept_id if new_dept_id is not None else current_dept_id
+                
+                if new_days > current_dept_logs_count:
+                    # Days increased - add more department logs
+                    days_to_add = new_days - current_dept_logs_count
+                    write_log(log_file, f"Days increased from [{current_dept_logs_count}] to [{new_days}], adding [{days_to_add}] department logs")
+                    for _ in range(days_to_add):
+                        log_queries.create_department_log(session, dept_id_to_use, department_log.id)
+                else:
+                    # Days decreased - remove some department logs
+                    days_to_remove = current_dept_logs_count - new_days
+                    write_log(log_file, f"Days decreased from [{current_dept_logs_count}] to [{new_days}], removing [{days_to_remove}] department logs")
+                    log_queries.delete_n_department_logs(session, department_log.id, days_to_remove)
+            
+            session.commit()
+            session.refresh(updated_event)
+            write_log(log_file, f"Event [{event_id}] updated successfully")
+            return updated_event
+            
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while updating the event")
+        finally:
+            write_log_json(log_file, event_data.model_dump(mode="json"))
 
 @router.delete("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
 def delete_event(event_id: int, credentials = Depends(admin_guard)):

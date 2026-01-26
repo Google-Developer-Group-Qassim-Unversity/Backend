@@ -37,6 +37,15 @@ class createEvent_model(BaseClassModel):
     member_action_id: int
     department_id: int
 
+class event_actions_model(BaseClassModel):
+    action_id: int
+    ar_action_name: str
+    department_id: int | None = None
+    department_ar_name: str | None = None
+
+class UpdateEvent_model(BaseClassModel):
+    event: Events_model
+    actions: List[event_actions_model]
 
 
 class Open_Events_model(Events_model):

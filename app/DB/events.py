@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from .schema import Events, Forms, t_open_events
+from .schema import Events, Forms, t_open_events, Logs, DepartmentsLogs, Actions, Departments
 from ..routers.models import Events_model
 
 def get_events(session: Session, limit: int = None, offset: int = 0, sort_by: str = "start_datetime", sort_order: str = "DESC"):
@@ -24,8 +24,35 @@ def get_events(session: Session, limit: int = None, offset: int = 0, sort_by: st
 def get_open_events(session: Session):
     statement = select(t_open_events)
     results = session.execute(statement).all()
-    # Convert Row objects to dictionaries
     return [dict(row._mapping) for row in results]
+
+def get_actions_by_event_id(session: Session, event_id: int):
+    stmt = (
+    select(
+        Actions.id.label("action_id"),
+        Actions.ar_action_name,
+        Departments.ar_name.label("department_ar_name"),
+        Departments.id.label("department_id"),
+    )
+    .select_from(Events)
+    .join(Logs, Events.id == Logs.event_id)
+    .join(Actions, Logs.action_id == Actions.id)
+    .outerjoin(DepartmentsLogs, Logs.id == DepartmentsLogs.log_id)
+    .outerjoin(Departments, DepartmentsLogs.department_id == Departments.id)
+    .where(Events.id == event_id)
+    .group_by(
+        Actions.id,
+        Actions.ar_action_name,
+        Departments.ar_name,
+        Departments.id,
+        Events.id,
+    )
+    .order_by(Actions.id.asc())
+)
+    row = session.execute(stmt).all()
+    if not row:
+        return None
+    return [dict(row._mapping) for row in row]
 
 def get_event_by_id(session: Session, event_id: int):
     statement = select(Events).where(Events.id == event_id)

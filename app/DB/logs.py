@@ -1,15 +1,15 @@
 from sqlalchemy.orm import Session
-from app.DB.schema import Events, Actions, DepartmentsLogs, Logs, Members, MembersLogs, Modifications
+from app.DB.schema import Events, Actions, DepartmentsLogs, Departments, Logs, Members, MembersLogs, Modifications
 from typing import Literal
 from sqlalchemy import select, func, case
 from sqlalchemy.orm import aliased, Session
 from json import loads
 from datetime import datetime
+
 def create_department_log(session: Session, department_id: int, log_id: int, attendance_number: int | None = None):
 	new_department_log = DepartmentsLogs(
 		department_id=department_id,
 		log_id=log_id,
-		attendants_number=attendance_number
 	)
 	session.add(new_department_log)
 	session.flush()
@@ -141,3 +141,45 @@ def get_attendable_logs(session: Session, event_id: int):
     if not log:
         return None
     return log
+
+def delete_department_logs_by_log_id(session: Session, log_id: int):
+    stmt = select(DepartmentsLogs).where(DepartmentsLogs.log_id == log_id)
+    department_logs = session.scalars(stmt).all()
+    for dept_log in department_logs:
+        session.delete(dept_log)
+    session.flush()
+    return len(department_logs)
+
+def get_logs_by_event_id(session: Session, event_id: int):
+    stmt = select(Logs).where(Logs.event_id == event_id)
+    logs = session.scalars(stmt).all()
+    return logs
+
+def update_log_action_id(session: Session, log_id: int, new_action_id: int):
+    stmt = select(Logs).where(Logs.id == log_id)
+    log = session.scalar(stmt)
+    if not log:
+        return None
+    log.action_id = new_action_id
+    session.flush()
+    return log
+
+def get_department_id_from_log(session: Session, log_id: int):
+    stmt = select(DepartmentsLogs).where(DepartmentsLogs.log_id == log_id)
+    dept_log = session.scalar(stmt)
+    if not dept_log:
+        return None
+    return dept_log.department_id
+
+def get_department_logs_count(session: Session, log_id: int):
+    stmt = select(DepartmentsLogs).where(DepartmentsLogs.log_id == log_id)
+    department_logs = session.scalars(stmt).all()
+    return len(department_logs)
+
+def delete_n_department_logs(session: Session, log_id: int, count: int):
+    stmt = select(DepartmentsLogs).where(DepartmentsLogs.log_id == log_id).limit(count)
+    department_logs = session.scalars(stmt).all()
+    for dept_log in department_logs:
+        session.delete(dept_log)
+    session.flush()
+    return len(department_logs)
