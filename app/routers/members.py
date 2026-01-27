@@ -29,6 +29,7 @@ def get_member_by_id(member_id: int):
 def create_member(credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
     with SessionLocal() as session:
         log_file = create_log_file("create member")
+        member = None
         try:
             member = credentials_to_member_model(credentials)
             write_log_title(log_file, f"Creating Member {member.uni_id}")
@@ -41,7 +42,11 @@ def create_member(credentials: HTTPAuthorizationCredentials = Depends(config.CLE
             write_log_traceback(log_file)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while creating the member")
         finally:
-            write_log_json(log_file, member.model_dump())
+            if new_member is not None:
+                write_log_json(log_file, member.model_dump())
+                write_log(log_file, f"member {new_member.uni_id} {"Created" if not already_exist else "Updated"} successfully")
+            else:
+                write_log_json(log_file, credentials.model_dump())
 
 
 
