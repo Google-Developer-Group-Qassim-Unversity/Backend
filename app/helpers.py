@@ -77,8 +77,8 @@ def credentials_to_member_model(credentials) -> Member_model:
         phone_number=metadata.get('saudiPhone'),
         uni_id=metadata.get('uni_id'),
         gender=metadata.get("gender").title(),
-        uni_level=metadata.get('uni_level'),
-        uni_college=metadata.get('uni_college')
+        uni_level=metadata.get('uniLevel'),
+        uni_college=metadata.get('uniCollege')
     )
     return member
 
