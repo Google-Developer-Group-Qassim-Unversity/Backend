@@ -40,10 +40,6 @@ ALLOWED_EVENTS_SORT_BY = ["start_datetime"]
 # =============================================================================
 
 class Config:
-    
-    def __init__(self):
-        os.makedirs(LOG_DIR, exist_ok=True)
-    
     @property
     def is_dev(self) -> bool:
         env = env_or_except("ENV", "Production")
