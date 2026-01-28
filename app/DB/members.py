@@ -12,7 +12,7 @@ def create_member(session: Session, member: Member_model):
             phone_number=member.phone_number,
             uni_id=member.uni_id,
             gender=member.gender,
-            uni_level=member.uni_level,
+            uni_level=member.uniLevel,
             uni_college=member.uni_college
         )
         session.add(new_member)
@@ -58,7 +58,8 @@ def update_member(session: Session, member: Member_model):
     existing_member.email = member.email
     existing_member.phone_number = member.phone_number
     existing_member.gender = member.gender
-    
+    existing_member.uni_level = member.uni_level
+    existing_member.uni_college = member.uni_college
     session.flush()
     print(f"Updated member: {existing_member.name}")
     return existing_member

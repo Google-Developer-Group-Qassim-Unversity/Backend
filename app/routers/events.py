@@ -10,14 +10,9 @@ from datetime import datetime
 router = APIRouter()
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
-def get_all_events(
-    limit: int = Query(default=config.DEFAULT_PAGE_SIZE, le=config.MAX_PAGE_SIZE, ge=1, description="Number of events to return"),
-    offset: int = Query(default=0, ge=0, description="Number of events to skip"),
-    sort_by: str = Query(default=config.DEFAULT_EVENTS_SORT_BY, description="Field to sort by"),
-    sort_order: str = Query(default=config.DEFAULT_SORT_ORDER, description="Sort order (ASC or DESC)")
-):
+def get_all_events():
     with SessionLocal() as session:
-        events = events_queries.get_events(session, limit=limit, offset=offset, sort_by=sort_by, sort_order=sort_order.upper())
+        events = events_queries.get_events(session)
     return events
 
 @router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
@@ -303,6 +298,17 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials = Dep
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while updating the event")
         finally:
             write_log_json(log_file, event_data.model_dump(mode="json"))
+            
+@router.post("/{event_id:int}/close", status_code=status.HTTP_200_OK)
+def close_event(event_id: int, credentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        event = events_queries.get_event_by_id(session, event_id)
+        if not event:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+        event.status = 'closed'
+        session.commit()
+        session.refresh(event)
+    return event
 
 @router.post("/{event_id:int}/publish", status_code=status.HTTP_200_OK)
 def publish_event(event_id: int, credentials = Depends(admin_guard)):
