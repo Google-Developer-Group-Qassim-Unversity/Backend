@@ -23,7 +23,8 @@ CLERK_DEV = "https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json"
 
 UPLOAD_DIR_DEV = "uploads"
 UPLOAD_DIR_PROD = str(Path.home() / "GDG-Files")
-LOG_DIR = "logs"
+LOG_DIR_DEV = "logs"
+LOG_DIR_PROD = str(Path.home() / "GDG-Logs")
 
 # Pagination settings
 DEFAULT_PAGE_SIZE = 50
@@ -82,7 +83,12 @@ class Config:
 
     @property
     def LOG_DIR(self) -> str:
-        return LOG_DIR
+        if self.is_dev:
+            os.makedirs(LOG_DIR_DEV, exist_ok=True)
+            return LOG_DIR_DEV
+        else:
+            os.makedirs(LOG_DIR_PROD, exist_ok=True)
+            return LOG_DIR_PROD
     
     @property
     def DEFAULT_PAGE_SIZE(self) -> int:
