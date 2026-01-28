@@ -379,6 +379,10 @@ async def google_forms_webhook(request: Request, background_tasks: BackgroundTas
             "message_id": message_id
         }
         
+    except json.JSONDecodeError as e:
+        write_log_exception(log_file, e)
+        write_log_traceback(log_file)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid JSON: {str(e)}")
     except KeyError as e:
         write_log_exception(log_file, e)
         write_log_traceback(log_file)
