@@ -11,17 +11,20 @@ from app.routers.logging import (
 )
 
 # Reuse Google Forms helpers from the existing submissions router
-from app.routers.submissions import fetch_form_responses, get_uni_id_question_id
+from app.routers.submissions import fetch_form_responses, get_uni_id_question_id, sync_form_submissions
 
 router = APIRouter()
 
 
 def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
+    """
+    differs from the scheduled job in that it creates new submissions instead of updating partial ones
+    """
     try:
         write_log_title(log_file, f"Manual sync submissions for google_form_id: {google_form_id} (limit={limit})")
 
         fetch_result = fetch_form_responses(google_form_id, log_file)
-        if not fetch_result:
+        if fetch_result is None:
             write_log(log_file, "ERROR: Failed to fetch form responses")
             return {
                 "created": 0,
@@ -129,7 +132,7 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
 
 
 @router.post("/google/{google_form_id}", status_code=status.HTTP_200_OK)
-def manual_sync_google_form_submissions(
+def manual_create_google_submissions(
     google_form_id: str,
     limit: int = Query(default=50, ge=1, le=2000),
 ):
@@ -146,3 +149,13 @@ def manual_sync_google_form_submissions(
             detail="An error occurred while syncing submissions",
         )
 
+@router.post("/google/run/{google_form_id}", status_code=status.HTTP_200_OK)
+def manual_run_google_form_submissions(google_form_id: str):
+    log_file = create_log_file("manual google submissions sync")
+    try:
+        return sync_form_submissions(google_form_id, log_file)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while syncing submissions",
+        )

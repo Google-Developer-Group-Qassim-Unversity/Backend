@@ -195,13 +195,13 @@ def fetch_form_responses(google_form_id: str, log_file=None):
 
 def sync_form_submissions(google_form_id: str, log_file):
     try:
-        write_log_title(log_file, f"Syncing submissions google_form_id: {google_form_id}")
+        write_log_title(log_file, f"Running scheduled job: sync for google_form_id: {google_form_id}")
         
         # Fetch Google Form responses
         fetch_result = fetch_form_responses(google_form_id, log_file)
         
-        if not fetch_result:
-            write_log(log_file, "ERROR: Failed to fetch form responses")
+        if fetch_result is None:
+            write_log(log_file, "Error: Failed to fetch form responses")
             return
         
         form_id = fetch_result['form_id']
@@ -233,7 +233,7 @@ def sync_form_submissions(google_form_id: str, log_file):
             for submission in partial_submissions:
                 uni_id = submission.uni_id
                 partial_by_uni_id[uni_id] = submission
-                write_log(log_file, f"Partial submission: ID={submission.id}, uni_id={uni_id}")
+                write_log(log_file, f"Partial submission: ID={submission.submission_id}, uni_id={uni_id}")
             
             # Match Google responses to partial submissions
             matched_count = 0
@@ -278,7 +278,7 @@ def sync_form_submissions(google_form_id: str, log_file):
                     # Update submission with Google response data
                     updated = submission_queries.update_google_submission(
                         session, 
-                        partial_submission.id, 
+                        partial_submission.submission_id, 
                         submission_type='google',
                         google_submission_id=response_id,
                         google_submission_value=answers
