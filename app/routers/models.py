@@ -47,6 +47,9 @@ class UpdateEvent_model(BaseClassModel):
     event: Events_model
     actions: List[event_actions_model]
 
+class UpdateEventStatus_model(BaseClassModel):
+    status: Literal['draft', 'open', 'active', 'closed']
+
 
 class Open_Events_model(Events_model):
     form_type: Literal['google', 'none', 'registration']

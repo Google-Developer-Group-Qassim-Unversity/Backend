@@ -83,6 +83,8 @@ def credentials_to_member_model(credentials) -> Member_model:
     return member
 
 def validate_attendance_token(token: str, expected_event_id: int) -> dict:
+    print(f"got token [{token}] to validate for event [{expected_event_id}]")
+    print(f"DANGOURS SECRET ⚠⚠⚠, JWT SECRET: [{config.JWT_SECRET}]")
     try:
         # 1. Decode & Verify
         payload = jwt.decode(
@@ -115,12 +117,39 @@ def validate_attendance_token(token: str, expected_event_id: int) -> dict:
     except jwt.MissingRequiredClaimError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Token missing required claim: {e}"
+            detail=f"Token missing required claim: {e.claim}",
         )
-    except jwt.InvalidTokenError as e:
+
+    # More specific "invalid token" causes:
+    except jwt.InvalidSignatureError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid attendance token signature",
+        )
+
+    except jwt.InvalidAlgorithmError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid attendance token"
+            detail="Invalid attendance token algorithm",
+        )
+
+    except jwt.DecodeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Malformed attendance token",
+        )
+
+    except jwt.ImmatureSignatureError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Attendance token not yet valid",
+        )
+
+    except jwt.InvalidTokenError as e:
+        # Catch-all for anything else JWT-related
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid attendance token ({type(e).__name__})",
         )
 
 

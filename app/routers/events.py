@@ -2,17 +2,24 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import events as events_queries, forms as form_queries, submissions as submission_queries, logs as log_queries, members as member_queries
 from ..DB.main import SessionLocal
-from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, Get_Submission_model, createEvent_model, Member_model, BadRequestResponse, InternalServerErrorResponse, UpdateEvent_model, event_actions_model
+from app.routers.models import Events_model, ConflictResponse, NotFoundResponse, Form_model, Open_Events_model, Get_Submission_model, createEvent_model, Member_model, BadRequestResponse, InternalServerErrorResponse, UpdateEvent_model, event_actions_model, UpdateEventStatus_model
 from app.config import config
 from app.routers.logging import create_log_file, write_log_exception, write_log, write_log_json, write_log_title, write_log_traceback
 from app.helpers import admin_guard, get_uni_id_from_credentials, validate_attendance_token, credentials_to_member_model
 from datetime import datetime
+from time import perf_counter
 router = APIRouter()
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
 def get_all_events():
+    log_file = create_log_file("get all events")
+    write_log_title(log_file, "Fetching all events")
+    start = perf_counter()
     with SessionLocal() as session:
+        write_log(log_file, "Querying events from database")
         events = events_queries.get_events(session)
+        end = perf_counter()
+        write_log(log_file, f"fetched [{len(events)}] events DB took [{(end - start) * 1000 :.2f}]ms to execute")
     return events
 
 @router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
@@ -48,7 +55,7 @@ def mark_attendance(
             token_validation = validate_attendance_token(token, event_id)
             write_log(log_file, f"Token validated successfully for event [{event_id}]")
         except HTTPException as e:
-            write_log_exception(log_file, f"Token validation failed: {e.detail}")
+            write_log_exception(log_file, f"Token validation failed reason: '{e.detail}'")
             raise
     else:
         write_log(log_file, f"HTTP 400:No attendance token provided")
@@ -299,25 +306,15 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials = Dep
         finally:
             write_log_json(log_file, event_data.model_dump(mode="json"))
             
-@router.post("/{event_id:int}/close", status_code=status.HTTP_200_OK)
-def close_event(event_id: int, credentials = Depends(admin_guard)):
+@router.put("/{event_id:int}/status", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
+def update_event_status(event_id: int, status_data: UpdateEventStatus_model, credentials = Depends(admin_guard)):
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
         if not event:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-        event.status = 'closed'
+        event.status = status_data.status
         session.commit()
         session.refresh(event)
-    return event
-
-@router.post("/{event_id:int}/publish", status_code=status.HTTP_200_OK)
-def publish_event(event_id: int, credentials = Depends(admin_guard)):
-    with SessionLocal() as session:
-        event = events_queries.get_event_by_id(session, event_id)
-        if not event:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-        event.status = 'open'
-        session.commit()
     return event
 
 @router.delete("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model, responses={404: {"model": NotFoundResponse, "description": "Event not found"}})
