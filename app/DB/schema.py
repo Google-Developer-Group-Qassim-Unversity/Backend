@@ -2,7 +2,7 @@ from typing import Optional
 import datetime
 
 from sqlalchemy import Column, DECIMAL, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, String, Table, Text, text
-from sqlalchemy.dialects.mysql import ENUM, INTEGER, TINYINT, VARCHAR
+from sqlalchemy.dialects.mysql import ENUM, INTEGER, TEXT, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
@@ -15,18 +15,14 @@ class Actions(Base):
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     action_name: Mapped[str] = mapped_column(VARCHAR(60), nullable=False)
     points: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    action_type: Mapped[str] = mapped_column(Enum('composite', 'department', 'member', 'bonus'), nullable=False)
-    ar_action_name: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
+    action_type: Mapped[str] = mapped_column(ENUM('composite', 'department', 'member', 'bonus'), nullable=False)
+    ar_action_name: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
 
     logs: Mapped[list['Logs']] = relationship('Logs', back_populates='action')
 
 
 class Departments(Base):
     __tablename__ = 'departments'
-    __table_args__ = (
-        Index('departments_name_IDX', 'name'),
-        Index('departments_type_IDX', 'type')
-    )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -72,12 +68,12 @@ class Events(Base):
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     name: Mapped[str] = mapped_column(VARCHAR(150), nullable=False)
     location_type: Mapped[str] = mapped_column(ENUM('online', 'on-site', 'none'), nullable=False)
-    location: Mapped[str] = mapped_column(String(100), nullable=False)
+    location: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
     start_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
     end_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
     status: Mapped[str] = mapped_column(ENUM('draft', 'open', 'active', 'closed'), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    image_url: Mapped[Optional[str]] = mapped_column(String(100))
+    description: Mapped[Optional[str]] = mapped_column(TEXT)
+    image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
     is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1), server_default=text("'0'"))
 
     forms: Mapped[list['Forms']] = relationship('Forms', back_populates='event')
@@ -94,7 +90,7 @@ t_forms_submissions = Table(
     Column('name', String(50)),
     Column('email', String(100)),
     Column('phone_number', String(20)),
-    Column('uni_id', String(9)),
+    Column('uni_id', String(50)),
     Column('gender', Enum('Male', 'Female')),
     Column('uni_level', Integer),
     Column('uni_college', String(100)),
@@ -128,11 +124,11 @@ class Members(Base):
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
-    email: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
-    uni_id: Mapped[str] = mapped_column(String(9), nullable=False)
+    uni_id: Mapped[str] = mapped_column(String(50), nullable=False)
     gender: Mapped[str] = mapped_column(Enum('Male', 'Female'), nullable=False)
     uni_level: Mapped[int] = mapped_column(Integer, nullable=False)
-    uni_college: Mapped[str] = mapped_column(String(100), nullable=False)
+    uni_college: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(100))
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
 
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='member')
@@ -190,16 +186,15 @@ class Logs(Base):
         ForeignKeyConstraint(['action_id'], ['actions.id'], ondelete='CASCADE', onupdate='CASCADE', name='logs_ibfk_1'),
         ForeignKeyConstraint(['event_id'], ['events.id'], ondelete='CASCADE', name='fk_events'),
         Index('action_id', 'action_id'),
-        Index('action_id_event_id_idx', 'action_id', 'event_id'),
         Index('fk_events', 'event_id')
     )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     action_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    event_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
 
     action: Mapped['Actions'] = relationship('Actions', back_populates='logs')
-    event: Mapped['Events'] = relationship('Events', back_populates='logs')
+    event: Mapped[Optional['Events']] = relationship('Events', back_populates='logs')
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='log')
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='log')
     modifications: Mapped[list['Modifications']] = relationship('Modifications', back_populates='log')
@@ -229,13 +224,13 @@ class MembersLogs(Base):
         ForeignKeyConstraint(['member_id'], ['members.id'], name='fk_members_id'),
         Index('fk_members_id', 'member_id'),
         Index('idx_members_logs_log_id', 'log_id'),
-        Index('unique_member_log_day', 'member_id', 'log_id', unique=True)
+        Index('unique_member_log_day', 'member_id', 'log_id', 'date', unique=True)
     )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
     log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
 
     log: Mapped['Logs'] = relationship('Logs', back_populates='members_logs')
     member: Mapped['Members'] = relationship('Members', back_populates='members_logs')
