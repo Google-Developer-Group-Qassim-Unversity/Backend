@@ -41,7 +41,7 @@ def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredenti
 
             uni_id = get_uni_id_from_credentials(credentials)
 
-            write_log(log_file, f"Querying DB for form_id [{form_id}] and member_id [{member_id}]")
+            write_log(log_file, f"Querying DB for form_id [{form_id}] and uni_id [{uni_id}]")
             start = perf_counter()
             member_id = member_queries.get_member_by_uni_id(session, uni_id).id
             submission = submission_queries.get_submission_by_form_and_member(session, form_id, member_id)
