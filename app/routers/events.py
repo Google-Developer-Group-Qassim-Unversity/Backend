@@ -7,6 +7,7 @@ from app.config import config
 from app.routers.logging import create_log_file, write_log_exception, write_log, write_log_json, write_log_title, write_log_traceback
 from app.helpers import admin_guard, get_uni_id_from_credentials, validate_attendance_token, credentials_to_member_model
 from datetime import datetime
+import time
 from time import perf_counter
 router = APIRouter()
 
@@ -82,7 +83,7 @@ def mark_attendance(
             # 2. check if already marked attendance for today
             member_logs = log_queries.get_member_logs(session, member.id, event_log.id)
             if member_logs is None:
-                write_log(log_file, f"No member logs found for member [{member.id}] and event [{event.name}]")
+                write_log(log_file, f"No member logs found for member [{member.id}] and event [{event.name}] (has not marked attendance yet)")
             else:
                 write_log(log_file, f"Found [{len(member_logs)}] member logs for member [{member.id}] and event [{event.name}]")
                 for member_log in member_logs:
@@ -137,8 +138,13 @@ def mark_attendance(
 
 @router.get("/open", status_code=status.HTTP_200_OK, response_model=list[Open_Events_model])
 def get_registrable_events():
+    log_file = create_log_file("get open events")
     with SessionLocal() as session:
+        start = perf_counter()
+        write_log(log_file, "Querying open events from database")
         open_events = events_queries.get_open_events(session)
+        end = perf_counter()
+        write_log(log_file, f"fetched [{len(open_events)}] open events DB took [{(end - start) * 1000 :.2f}]ms to execute")
     return open_events
 
 @router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEvent_model)

@@ -1,4 +1,5 @@
 import json
+from time import perf_counter
 from typing import Literal
 from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks
 from app.DB.main import SessionLocal
@@ -34,11 +35,18 @@ def create_submission(form_id: int, submission_type: Literal['none', 'partial'],
         
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
 def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    log_file = create_log_file("check submission exists")
     with SessionLocal() as session:
         try:
+
             uni_id = get_uni_id_from_credentials(credentials)
+
+            write_log(log_file, f"Querying DB for form_id [{form_id}] and member_id [{member_id}]")
+            start = perf_counter()
             member_id = member_queries.get_member_by_uni_id(session, uni_id).id
             submission = submission_queries.get_submission_by_form_and_member(session, form_id, member_id)
+            end = perf_counter()
+            write_log(log_file, f"got member [{member_id}], found submission [{submission}]  DB took [{(end - start) * 1000 :.2f}]ms to execute")
             if submission is None:
                 return {'submission_status': False}
             submission_type = submission.submission_type 
