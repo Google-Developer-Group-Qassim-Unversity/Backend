@@ -83,8 +83,6 @@ def credentials_to_member_model(credentials) -> Member_model:
     return member
 
 def validate_attendance_token(token: str, expected_event_id: int) -> dict:
-    print(f"got token [{token}] to validate for event [{expected_event_id}]")
-    print(f"DANGOURS SECRET ⚠⚠⚠, JWT SECRET: [{config.JWT_SECRET}]")
     try:
         # 1. Decode & Verify
         payload = jwt.decode(
