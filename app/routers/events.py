@@ -42,11 +42,7 @@ def get_event_form(event_id: int):
     return form
 
 @router.post("/{event_id:int}/attend", status_code=status.HTTP_200_OK, responses={404: {"model": NotFoundResponse, "description": "Event not found"}, 400: {"model": BadRequestResponse, "description": "..."}, 500: {"model": InternalServerErrorResponse, "description": "Internal server error"}})
-def mark_attendance(
-    event_id: int, 
-    token: str = Query(None, description="Optional attendance token for QR code links"),
-    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)
-):
+def mark_attendance(event_id: int, token: str = Query(None, description="Optional attendance token for QR code links"), credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
     log_file = create_log_file("mark attendance")
     
     # Validate attendance token 
@@ -138,6 +134,7 @@ def mark_attendance(
 
 @router.get("/open", status_code=status.HTTP_200_OK, response_model=list[Open_Events_model])
 def get_registrable_events():
+    """returns events + their associated form """
     log_file = create_log_file("get open events")
     with SessionLocal() as session:
         start = perf_counter()
@@ -149,6 +146,7 @@ def get_registrable_events():
 
 @router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEvent_model)
 def get_event_details(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    """return an event + its associated actions, this is needed by the frontend to populate the update event form with the current event data and associated actions"""
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
         actions = events_queries.get_actions_by_event_id(session, event_id)
