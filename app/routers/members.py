@@ -34,12 +34,15 @@ def create_member(credentials: HTTPAuthorizationCredentials = Depends(config.CLE
             member = credentials_to_member_model(credentials)
             write_log_title(log_file, f"Creating Member {member.uni_id}")
             new_member, already_exist = member_queries.create_member_if_not_exists(session, member, is_authenticated=True)
+            if not already_exist:
+                write_log(log_file, f"Member with uni_id {member.uni_id} created successfully with ID {new_member.id}")
+            else:
+                write_log(log_file, f"Member with uni_id {member.uni_id} already exists with ID {new_member.id}, updated data successfully")
             # === Special case starting from 2026-02-08. giving members 10 points for creating an account ===
             SIGNUP_LOG_ID=208
             write_log(log_file, f"Giving points for creating account, on log_id: {SIGNUP_LOG_ID}")
             new_log = logs_queries.create_member_log(session, new_member.id, SIGNUP_LOG_ID)
             write_log(log_file, f"Points given successfully for creating account")
-
             session.commit()
             return {"member": new_member, "already_exists": already_exist}
         except Exception as e:

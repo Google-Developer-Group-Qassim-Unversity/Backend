@@ -49,8 +49,8 @@ t_departments_points_history = Table(
     Column('ar_department_name', String(100)),
     Column('event_id', INTEGER),
     Column('event_name', String(150)),
-    Column('start_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
-    Column('end_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('start_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
+    Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('action_name', String(60)),
     Column('ar_action_name', String(100)),
     Column('points', DECIMAL(54, 0))
@@ -69,8 +69,8 @@ class Events(Base):
     name: Mapped[str] = mapped_column(VARCHAR(150), nullable=False)
     location_type: Mapped[str] = mapped_column(ENUM('online', 'on-site', 'none'), nullable=False)
     location: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
-    start_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
-    end_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("'2025-01-01 00:00:00'"))
+    start_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    end_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
     status: Mapped[str] = mapped_column(ENUM('draft', 'open', 'active', 'closed'), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(TEXT)
     image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
@@ -108,8 +108,8 @@ t_member_event_history = Table(
     Column('member_name', String(50)),
     Column('event_id', INTEGER, server_default=text("'0'")),
     Column('event_name', String(150)),
-    Column('start_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
-    Column('end_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('start_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
+    Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('points', DECIMAL(54, 0)),
     Column('action_name', Text),
     Column('ar_action_name', Text)
@@ -153,8 +153,8 @@ t_open_events = Table(
     Column('description', Text),
     Column('location_type', Enum('online', 'on-site', 'none')),
     Column('location', String(100)),
-    Column('start_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
-    Column('end_datetime', DateTime, server_default=text("'2025-01-01 00:00:00'")),
+    Column('start_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
+    Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('status', Enum('draft', 'open', 'active', 'closed')),
     Column('image_url', String(100)),
     Column('is_official', TINYINT(1), server_default=text("'0'")),

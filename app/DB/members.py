@@ -13,7 +13,7 @@ def create_member(session: Session, member: Member_model, is_authenticated: bool
             phone_number=member.phone_number,
             uni_id=member.uni_id,
             gender=member.gender,
-            uni_level=member.uniLevel,
+            uni_level=member.uni_level,
             uni_college=member.uni_college,
             created_at=datetime.now(),
             updated_at=datetime.now(),

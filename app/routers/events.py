@@ -52,7 +52,7 @@ def mark_attendance(event_id: int, token: str = Query(None, description="Optiona
             token_validation = validate_attendance_token(token, event_id)
             write_log(log_file, f"Token validated successfully for event [{event_id}]")
         except HTTPException as e:
-            write_log_exception(log_file, f"Token validation failed reason: '{e.detail}'")
+            write_log_exception(log_file, Exception(f"Token validation failed reason: '{e.detail}'"))
             raise
     else:
         write_log(log_file, f"HTTP 400:No attendance token provided")
@@ -65,8 +65,9 @@ def mark_attendance(event_id: int, token: str = Query(None, description="Optiona
             # 1. check if event exists
             event = events_queries.get_event_by_id(session, event_id)
             if not event:
-                write_log_exception(log_file, f"HTTP 404: Event [{event_id}] not found")
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+                write_log_exception(log_file, excep)
+                raise excep
             write_log(log_file, f"Attendace for event [{event.name}] for member [{member.name}]")
 
             event_log = log_queries.get_attendable_logs(session, event_id)
