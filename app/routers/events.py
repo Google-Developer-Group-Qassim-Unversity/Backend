@@ -132,6 +132,16 @@ def mark_attendance(event_id: int, token: str = Query(None, description="Optiona
             write_log_traceback(log_file)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+@router.get("/{event_id:int}/attendance", status_code=status.HTTP_200_OK)
+def get_event_attendance(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        event = events_queries.get_event_by_id(session, event_id)
+        if not event:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+        attendance = log_queries.get_event_attendance(session, event_id)
+        attendance_count = len(attendance)
+    return {"attendance_count": attendance_count, "attendance": attendance}
+
 @router.get("/open", status_code=status.HTTP_200_OK, response_model=list[Open_Events_model])
 def get_registrable_events():
     """returns events + their associated form """

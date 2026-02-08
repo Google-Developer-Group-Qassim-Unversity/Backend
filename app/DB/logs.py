@@ -1,3 +1,4 @@
+from ast import stmt
 from sqlalchemy.orm import Session
 from app.DB.schema import Events, Actions, DepartmentsLogs, Departments, Logs, Members, MembersLogs, Modifications
 from typing import Literal
@@ -175,6 +176,19 @@ def get_department_logs_count(session: Session, log_id: int):
     stmt = select(DepartmentsLogs).where(DepartmentsLogs.log_id == log_id)
     department_logs = session.scalars(stmt).all()
     return len(department_logs)
+
+def get_event_attendance(session: Session, event_id: int):
+    stmt = (
+    select(Members)
+    .select_from(Events)
+    .join(Logs, Logs.event_id == Events.id)
+    .join(MembersLogs, MembersLogs.log_id == Logs.id)
+    .join(Members, Members.id == MembersLogs.member_id)
+    .where(Events.id == 136)
+)
+
+    attendance = session.execute(stmt).scalars().all()
+    return attendance
 
 def delete_n_department_logs(session: Session, log_id: int, count: int):
     stmt = select(DepartmentsLogs).where(DepartmentsLogs.log_id == log_id).limit(count)
