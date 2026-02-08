@@ -8,7 +8,7 @@ from json import dumps
 import jwt
 from datetime import datetime
 
-def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
+def get_pydantic_members(source: Union[str, HttpUrl]):
     if isinstance(source, HttpUrl):
         print(f"[2] Got link: \x1b[33m{source}\x1b[0m")
         df = pd.read_csv(source.__str__())
@@ -16,7 +16,7 @@ def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
         print(f"[2] Got file: \x1b[33m{source}\x1b[0m")
         df = pd.read_excel(f"uploads/{source}")
     
-    members_and_date = []
+    members: List[Member_model] = []
     
     # Get column names
     df.columns = df.columns.str.strip()
@@ -31,18 +31,16 @@ def get_pydantic_members(source: Union[str, HttpUrl]) -> List[tuple]:
             email=str(row.get("email")),
             phone_number=None if pd.isna(row.get("phone number")) or row.get("phone number") == "" else str(row.get("phone number")),
             uni_id=str(row.get("uni id")),
-            gender=row.get("gender")
+            gender=row.get("gender"),
+            uni_level=0 if pd.isna(row.get("uni level")) or row.get("uni level") == "" else int(row.get("uni level")),
+            uni_college="unknown" if pd.isna(row.get("uni college")) or row.get("uni college") == "" else str(row.get("uni college"))
         )
         
-        # Collecting all date columns (assuming first 5 columns are member data)
-        date_columns = [row[col] for col in columns[5:]]
-        
-        members_and_date.append((member, date_columns))
+        members.append(member)
     
-    source_type = "URL" if isinstance(source, str) else "file"
-    print(f"[2] Extracted \x1b[32m{len(members_and_date)}\x1b[0m members from {source_type}")
-    return members_and_date
-
+    source_type = "URL" if isinstance(source, HttpUrl) else "file"
+    print(f"[2] Extracted \x1b[32m{len(members)}\x1b[0m members from {source_type}")
+    return members
 def get_uni_id_from_credentials(credentials):
     decoded = credentials.model_dump()['decoded']
     # print("Got decoded credentials 🔒:")

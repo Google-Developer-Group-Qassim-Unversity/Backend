@@ -27,7 +27,7 @@ def create_member(session: Session, member: Member_model, is_authenticated: bool
         print(f"IntegrityError in create_member: {str(e)[:50]}...")
         return None
 
-def create_member_if_not_exists(session: Session, member: Member_model, is_authenticated: bool=False) -> tuple[Members, bool]:
+def create_member_if_not_exists(session: Session, member: Member_model, is_authenticated: bool=False) -> tuple[Members | None, bool]:
     existing_member = session.scalar(select(Members).where(Members.uni_id == member.uni_id))
     if existing_member:
         member.id = existing_member.id

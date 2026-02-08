@@ -367,3 +367,42 @@ def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCreden
             return submissions
         except Exception as e:
             raise
+    
+@router.post("/{event_id:int}/add_members", status_code=status.HTTP_200_OK)
+def add_members_to_event(event_id: int, members: list[Member_model]):
+    """
+    this is a manual endpoint for backwards compatibility, it adds members to an event without going through the form submission process,
+    this is needed for the old events that did not go through the event creation flow with attendance that is.
+    """
+    # Only allow in development environment
+    if not config.is_dev:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This endpoint is only available in development mode")
+    
+    log_file = create_log_file("add members to event")
+    with SessionLocal() as session:
+        event = events_queries.get_event_by_id(session, event_id)
+        if not event:
+            excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+            write_log_exception(log_file, excep)
+            raise excep
+        write_log(log_file, f"Adding members to event [{event.name}]")
+        log_member = log_queries.get_attendable_logs(session, event_id)
+        if not log_member:
+            excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event logs not found")
+            write_log_exception(log_file, excep)
+            raise excep
+        write_log(log_file, f"Found attendable log [{log_member.id}] for event [{event.id}]")
+        members_len = len(members)
+        write_log(log_file, f"Adding [{members_len}] members to event [{event.name}]")
+        for i, member in enumerate(members):
+            write_log(log_file, f"Processing member [{i + 1}/{members_len}] with ID [{member}]")
+            found_member = member_queries.get_member_by_id(session, member.id)
+            if not found_member:
+                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member.id} not found")
+                write_log_exception(log_file, excep)
+                raise excep
+            write_log(log_file, f"Found member [{found_member.name}] with ID [{found_member.id}]")
+            log_queries.create_member_log(session, found_member.id, log_member.id)
+            write_log(log_file, f"Added member [{found_member.name}] to event [{event.name}]")
+        session.commit()
+    return {"message": f"[{members_len}] Members added to event successfully"}

@@ -153,6 +153,9 @@ class Categorized_action(BaseClassModel):
     member_actions: List[Action_model] 
     custom_actions: List[Action_model]
 
+class manual_members(BaseClassModel):
+    members_sheet: HttpUrl
+
 class ConflictResponse(BaseClassModel):
     detail: str
 
