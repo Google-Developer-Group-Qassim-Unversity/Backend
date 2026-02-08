@@ -3,8 +3,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from .schema import Actions, Members, MembersLogs, Logs, Events
 from ..routers.models import Member_model
+from datetime import datetime
 
-def create_member(session: Session, member: Member_model):
+def create_member(session: Session, member: Member_model, is_authenticated: bool=False):
     try:
         new_member = Members(
             name=member.name,
@@ -13,7 +14,10 @@ def create_member(session: Session, member: Member_model):
             uni_id=member.uni_id,
             gender=member.gender,
             uni_level=member.uniLevel,
-            uni_college=member.uni_college
+            uni_college=member.uni_college,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            is_authenticated=is_authenticated
         )
         session.add(new_member)
         session.flush()
@@ -23,15 +27,15 @@ def create_member(session: Session, member: Member_model):
         print(f"IntegrityError in create_member: {str(e)[:50]}...")
         return None
 
-def create_member_if_not_exists(session: Session, member: Member_model) -> tuple[Members, bool]:
+def create_member_if_not_exists(session: Session, member: Member_model, is_authenticated: bool=False) -> tuple[Members, bool]:
     existing_member = session.scalar(select(Members).where(Members.uni_id == member.uni_id))
     if existing_member:
         member.id = existing_member.id
         already_exist = True
-        updated_member = update_member(session, member)
+        updated_member = update_member(session, member, is_authenticated)
         return updated_member, already_exist
     already_exist = False
-    return create_member(session, member), already_exist
+    return create_member(session, member, is_authenticated), already_exist
     
 def get_members(session: Session):
     statement = select(Members)
@@ -49,7 +53,7 @@ def get_member_by_uni_id(session: Session, uni_id: str):
     member = session.scalars(statement).first()
     return member
 
-def update_member(session: Session, member: Member_model):
+def update_member(session: Session, member: Member_model, is_authenticated: bool=False):
     existing_member = session.scalar(select(Members).where(Members.id == member.id))
     if not existing_member:
         return None
@@ -60,6 +64,8 @@ def update_member(session: Session, member: Member_model):
     existing_member.gender = member.gender
     existing_member.uni_level = member.uni_level
     existing_member.uni_college = member.uni_college
+    existing_member.updated_at = datetime.now()
+    existing_member.is_authenticated = is_authenticated
     session.flush()
     print(f"Updated member: {existing_member.name}")
     return existing_member

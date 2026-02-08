@@ -128,6 +128,9 @@ class Members(Base):
     gender: Mapped[str] = mapped_column(Enum('Male', 'Female'), nullable=False)
     uni_level: Mapped[int] = mapped_column(Integer, nullable=False)
     uni_college: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    is_authenticated: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
     email: Mapped[Optional[str]] = mapped_column(String(100))
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
 

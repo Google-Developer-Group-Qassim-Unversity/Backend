@@ -131,7 +131,6 @@ def mark_attendance(event_id: int, token: str = Query(None, description="Optiona
             write_log_traceback(log_file)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
 @router.get("/open", status_code=status.HTTP_200_OK, response_model=list[Open_Events_model])
 def get_registrable_events():
     """returns events + their associated form """

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, status, Depends
-from app.DB import members as member_queries
+from app.DB import members as member_queries, logs as logs_queries
 from ..DB.main import SessionLocal
 from app.routers.models import Member_model, NotFoundResponse, MemberHistory_model, MeberCreate_model
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
@@ -33,7 +33,13 @@ def create_member(credentials: HTTPAuthorizationCredentials = Depends(config.CLE
         try:
             member = credentials_to_member_model(credentials)
             write_log_title(log_file, f"Creating Member {member.uni_id}")
-            new_member, already_exist = member_queries.create_member_if_not_exists(session, member)
+            new_member, already_exist = member_queries.create_member_if_not_exists(session, member, is_authenticated=True)
+            # === Special case starting from 2026-02-08. giving members 10 points for creating an account ===
+            SIGNUP_LOG_ID=208
+            write_log(log_file, f"Giving points for creating account, on log_id: {SIGNUP_LOG_ID}")
+            new_log = logs_queries.create_member_log(session, new_member.id, SIGNUP_LOG_ID)
+            write_log(log_file, f"Points given successfully for creating account")
+
             session.commit()
             return {"member": new_member, "already_exists": already_exist}
         except Exception as e:
@@ -50,17 +56,17 @@ def create_member(credentials: HTTPAuthorizationCredentials = Depends(config.CLE
 
 
 
-
-@router.put("/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}, 409: {"model": NotFoundResponse, "description": "Member already exists"}})
-def update_member(member_id: int, member: Member_model):
-    with SessionLocal() as session:
-        updated_member = member_queries.update_member(session, member_id, member)
-        if updated_member is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} not found")
-        if updated_member == -1:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"member with the uni_id '{member.uni_id}' already exists")
-        session.commit()
-    return updated_member
+# OLD, needs auth and correct update_member parameters (member model not id, and is_authenticated)
+# @router.put("/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}, 409: {"model": NotFoundResponse, "description": "Member already exists"}})
+# def update_member(member_id: int, member: Member_model):
+#     with SessionLocal() as session:
+#         updated_member = member_queries.update_member(session, member_id, member)
+#         if updated_member is None:
+#             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} not found")
+#         if updated_member == -1:
+#             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"member with the uni_id '{member.uni_id}' already exists")
+#         session.commit()
+#     return updated_member
 
 @router.get("/history", status_code=status.HTTP_200_OK)
 def get_member_history(credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):

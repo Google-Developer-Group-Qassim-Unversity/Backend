@@ -74,6 +74,9 @@ class Member_model(BaseClassModel):
     gender: Literal["Male", "Female"]
     uni_level: int
     uni_college: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    is_authenticated: bool | None = None
 
     @field_validator("uni_id")
     def validate_uni_id(cls, value):
