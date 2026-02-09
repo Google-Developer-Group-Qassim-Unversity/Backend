@@ -14,13 +14,13 @@ router = APIRouter()
 
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Member_model])
-def get_all_members():
+def get_all_members(credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     with SessionLocal() as session:
         members = member_queries.get_members(session)
     return members
 
 @router.get("/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}})
-def get_member_by_id(member_id: int):
+def get_member_by_id(member_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     with SessionLocal() as session:
         member = member_queries.get_member_by_id(session, member_id)
         if not member:
