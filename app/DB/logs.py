@@ -1,60 +1,72 @@
 from ast import stmt
 from sqlalchemy.orm import Session
-from app.DB.schema import Events, Actions, DepartmentsLogs, Departments, Logs, Members, MembersLogs, Modifications
+from app.DB.schema import (
+    Events,
+    Actions,
+    DepartmentsLogs,
+    Departments,
+    Logs,
+    Members,
+    MembersLogs,
+    Modifications,
+)
 from typing import Literal
 from sqlalchemy import select, func, case
 from sqlalchemy.orm import aliased, Session
 from json import loads
-from datetime import datetime
+from datetime import datetime, timedelta
 
-def create_department_log(session: Session, department_id: int, log_id: int, attendance_number: int | None = None):
-	new_department_log = DepartmentsLogs(
-		department_id=department_id,
-		log_id=log_id,
-	)
-	session.add(new_department_log)
-	session.flush()
-	return new_department_log
 
-def create_member_log(session: Session, member_id: int, log_id: int):
-	new_member_log = MembersLogs(
-		member_id=member_id,
-		log_id=log_id,
-        date=datetime.now()
-	)
-	session.add(new_member_log)
-	session.flush()
-	return new_member_log
+def create_department_log(
+    session: Session,
+    department_id: int,
+    log_id: int,
+):
+    new_department_log = DepartmentsLogs(
+        department_id=department_id,
+        log_id=log_id,
+    )
+    session.add(new_department_log)
+    session.flush()
+    return new_department_log
+
+
+def create_member_log(session: Session, member_id: int, log_id: int, date: datetime = None):
+    if date is None:
+        date = datetime.now()
+    new_member_log = MembersLogs(
+        member_id=member_id, log_id=log_id, date=date
+    )
+    session.add(new_member_log)
+    session.flush()
+    return new_member_log
+
 
 def get_member_logs(session: Session, member_id: int, log_id: int):
-	stmt = select(MembersLogs).where(
-		MembersLogs.member_id == member_id,
-		MembersLogs.log_id == log_id
-	)
-	member_logs = session.scalars(stmt).all()
-	if not member_logs:
-		return None
-	return member_logs
+    stmt = select(MembersLogs).where(
+        MembersLogs.member_id == member_id, MembersLogs.log_id == log_id
+    )
+    member_logs = session.scalars(stmt).all()
+    if not member_logs:
+        return None
+    return member_logs
 
 
 def create_log(session: Session, event_id: int, action_id: int):
-	new_log = Logs(
-		event_id=event_id,
-		action_id=action_id
-	)
-	session.add(new_log)
-	session.flush()
-	return new_log
+    new_log = Logs(event_id=event_id, action_id=action_id)
+    session.add(new_log)
+    session.flush()
+    return new_log
 
-def create_modification(session: Session, log_id: int, type: Literal['bonus', 'discount'], value: int):
-	new_modification = Modifications(
-		log_id=log_id,
-		type=type,
-		value=value
-	)
-	session.add(new_modification)
-	session.flush()
-	return new_modification
+
+def create_modification(
+    session: Session, log_id: int, type: Literal["bonus", "discount"], value: int
+):
+    new_modification = Modifications(log_id=log_id, type=type, value=value)
+    session.add(new_modification)
+    session.flush()
+    return new_modification
+
 
 # absence was remove @jan 23 2026
 # def create_absence(session: Session, member_log_id: int, date):
@@ -72,9 +84,9 @@ def get_expanded_members_logs(session: Session):
     # Abs = aliased(Absence)
     stmt = (
         session.query(
-            Logs.id.label('log_id'),
-			Events.id.label('event_id'),
-            Events.name.label('event_name'),
+            Logs.id.label("log_id"),
+            Events.id.label("event_id"),
+            Events.name.label("event_name"),
             Events.start_datetime,
             Events.end_datetime,
             Events.location_type,
@@ -83,25 +95,22 @@ def get_expanded_members_logs(session: Session):
             Actions.action_name,
             Actions.action_type,
             func.sum(
-                case(
-                    (Modifications.type == 'bonus', Modifications.value),
-                    else_=0
-                )
-            ).label('bonus'),
+                case((Modifications.type == "bonus", Modifications.value), else_=0)
+            ).label("bonus"),
             func.sum(
-                case(
-                    (Modifications.type == 'discount', Modifications.value),
-                    else_=0
-                )
-            ).label('discount'),
+                case((Modifications.type == "discount", Modifications.value), else_=0)
+            ).label("discount"),
             func.JSON_ARRAYAGG(
                 func.JSON_OBJECT(
-                    'id', Members.id,
-                    'name', Members.name,
-                    'uni_id', Members.uni_id,
+                    "id",
+                    Members.id,
+                    "name",
+                    Members.name,
+                    "uni_id",
+                    Members.uni_id,
                     # 'absence_date', Abs.date
                 )
-            ).label('members')
+            ).label("members"),
         )
         .join(Events, Logs.event_id == Events.id)
         .join(Actions, Logs.action_id == Actions.id)
@@ -109,39 +118,43 @@ def get_expanded_members_logs(session: Session):
         .join(Members, MembersLogs.member_id == Members.id)
         # .outerjoin(Abs, MembersLogs.id == Abs.member_log_id)
         .outerjoin(Modifications, Logs.id == Modifications.log_id)
-        .filter(Actions.action_type.in_(['member', 'composite']))
+        .filter(Actions.action_type.in_(["member", "composite"]))
         .group_by(Logs.id)
     )
 
     return [
-        {**row._asdict(), 'members': loads(row.members), 'bonus': row.bonus/len(loads(row.members)) if row.bonus else 0, 'discount': row.discount/len(loads(row.members)) if row.discount else 0}
+        {
+            **row._asdict(),
+            "members": loads(row.members),
+            "bonus": row.bonus / len(loads(row.members)) if row.bonus else 0,
+            "discount": row.discount / len(loads(row.members)) if row.discount else 0,
+        }
         for row in stmt.all()
     ]
 
+
 def get_expanded_department_logs(session: Session):
-	query = (
-    session.query(
-        Logs.id,
-        Departments.name
+    query = (
+        session.query(Logs.id, Departments.name)
+        .join(Actions, Actions.id == Logs.action_id)
+        .join(DepartmentsLogs, DepartmentsLogs.log_id == Logs.id)
+        .join(Departments, Departments.id == DepartmentsLogs.department_id)
+        .filter(Actions.action_type == "composite")
     )
-    .join(Actions, Actions.id == Logs.action_id)
-    .join(DepartmentsLogs, DepartmentsLogs.log_id == Logs.id)
-    .join(Departments, Departments.id == DepartmentsLogs.department_id)
-    .filter(Actions.action_type == 'composite')
-	)
-	
-	return query.all()
+
+    return query.all()
+
 
 def get_attendable_logs(session: Session, event_id: int):
     ATTENDABLE_ACTION_IDS = [76, 77, 78, 79]
     stmt = select(Logs).where(
-        Logs.event_id == event_id,
-        Logs.action_id.in_(ATTENDABLE_ACTION_IDS)
+        Logs.event_id == event_id, Logs.action_id.in_(ATTENDABLE_ACTION_IDS)
     )
-    log = session.scalar(stmt)  
+    log = session.scalar(stmt)
     if not log:
         return None
     return log
+
 
 def delete_department_logs_by_log_id(session: Session, log_id: int):
     stmt = select(DepartmentsLogs).where(DepartmentsLogs.log_id == log_id)
@@ -151,10 +164,12 @@ def delete_department_logs_by_log_id(session: Session, log_id: int):
     session.flush()
     return len(department_logs)
 
+
 def get_logs_by_event_id(session: Session, event_id: int):
     stmt = select(Logs).where(Logs.event_id == event_id)
     logs = session.scalars(stmt).all()
     return logs
+
 
 def update_log_action_id(session: Session, log_id: int, new_action_id: int):
     stmt = select(Logs).where(Logs.id == log_id)
@@ -165,6 +180,7 @@ def update_log_action_id(session: Session, log_id: int, new_action_id: int):
     session.flush()
     return log
 
+
 def get_department_id_from_log(session: Session, log_id: int):
     stmt = select(DepartmentsLogs).where(DepartmentsLogs.log_id == log_id)
     dept_log = session.scalar(stmt)
@@ -172,23 +188,62 @@ def get_department_id_from_log(session: Session, log_id: int):
         return None
     return dept_log.department_id
 
+
 def get_department_logs_count(session: Session, log_id: int):
     stmt = select(DepartmentsLogs).where(DepartmentsLogs.log_id == log_id)
     department_logs = session.scalars(stmt).all()
     return len(department_logs)
 
-def get_event_attendance(session: Session, event_id: int):
-    stmt = (
-    select(Members)
-    .select_from(Events)
-    .join(Logs, Logs.event_id == Events.id)
-    .join(MembersLogs, MembersLogs.log_id == Logs.id)
-    .join(Members, Members.id == MembersLogs.member_id)
-    .where(Events.id == 136)
-)
 
-    attendance = session.execute(stmt).scalars().all()
-    return attendance
+def get_event_attendance(session: Session, event_id: int, day: str | int | None = None):
+    # Get event start date to calculate day offset
+    event = session.query(Events).filter(Events.id == event_id).first()
+    if not event:
+        return []
+    
+    # Calculate total event days
+    event_days = (event.end_datetime.date() - event.start_datetime.date()).days + 1
+    
+    stmt = (
+        select(
+            Members,
+            func.JSON_ARRAYAGG(MembersLogs.date).label('dates')
+        )
+        .select_from(Events)
+        .join(Logs, Logs.event_id == Events.id)
+        .join(MembersLogs, MembersLogs.log_id == Logs.id)
+        .join(Members, Members.id == MembersLogs.member_id)
+        .where(Events.id == event_id)
+    )
+    
+    # Filter by specific day if requested
+    if day and day != "all" and day != "exclusive_all":
+        try:
+            day_num = int(day)
+            if day_num > 0:
+                target_date = event.start_datetime.date()
+                
+                target_date = target_date + timedelta(days=day_num - 1)
+                stmt = stmt.where(func.DATE(MembersLogs.date) == target_date)
+        except (ValueError, TypeError):
+            pass
+    
+    stmt = stmt.group_by(Members.id).order_by(func.MAX(MembersLogs.date).desc())
+
+    rows = session.execute(stmt).all()
+    result = [
+        {
+            **row._asdict(),
+            'dates': sorted(loads(row.dates) if row.dates else [], reverse=True)
+        }
+        for row in rows
+    ]
+    
+    # Filter for exclusive_all: only members who attended all days
+    if day == "exclusive_all":
+        result = [r for r in result if len(r['dates']) == event_days]
+    
+    return result
 
 def delete_n_department_logs(session: Session, log_id: int, count: int):
     stmt = select(DepartmentsLogs).where(DepartmentsLogs.log_id == log_id).limit(count)

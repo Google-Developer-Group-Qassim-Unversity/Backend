@@ -7,3 +7,4 @@ __pycache__
 event_logs/
 logs
 uploads
+.ruff_cache

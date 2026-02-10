@@ -42,11 +42,13 @@ def get_members(session: Session):
     member = session.scalars(statement).all()
     return member
 
-def get_member_by_id(session: Session, member_id: int):
-    statement = select(Members).where(Members.id == member_id)
-    member = session.scalars(statement).first()
-    
-    return member
+def get_member_by_id(session: Session, member_id: int | list[int]):
+    if isinstance(member_id, list):
+        statement = select(Members).where(Members.id.in_(member_id))
+        return session.scalars(statement).all()
+    else:
+        statement = select(Members).where(Members.id == member_id)
+        return session.scalars(statement).first()
 
 def get_member_by_uni_id(session: Session, uni_id: str):
     statement = select(Members).where(Members.uni_id == uni_id)
