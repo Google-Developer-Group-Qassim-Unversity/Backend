@@ -6,6 +6,12 @@ from pydantic.types import JsonValue
 from enum import Enum
 
 
+class RoleEnum(str, Enum):
+    admin = "admin"
+    super_admin = "super_admin"
+    none = "none"
+
+
 class BaseClassModel(BaseModel):
     class Config:
         from_attributes = True
@@ -108,6 +114,10 @@ class Member_model(BaseClassModel):
 class MeberCreate_model(BaseClassModel):
     member: Member_model
     already_exists: bool
+
+
+class MemberWithRole_model(Member_model):
+    role: RoleEnum
 
 
 class Get_Submission_model(BaseClassModel):
@@ -236,57 +246,6 @@ class DepartmentEventData(BaseClassModel):
     bonus: int
 
 
-class CustomeBulkMemberData(BaseClassModel):
-    members_attendance: str
-    action_name: str
-    action_points: int
-
-    @field_validator("members_attendance")
-    def file_or_url(cls, v: str):
-        if v.startswith("https://"):
-            if "docs.google.com/spreadsheets" not in v and not v.endswith("output=csv"):
-                raise ValueError(
-                    "The Url must be a Google Sheets link with 'output=csv' parameter"
-                )
-            else:
-                return HttpUrl(v)
-        elif v.endswith(".xlsx") or v.endswith(".csv"):
-            return v
-        else:
-            raise ValueError(
-                "members_attendance must be a valid file path ending with .xlsx or .csv, or a Google Sheets URL"
-            )
-
-
-class CustomeBulkMemberReport(BaseClassModel):
-    members_count: int
-    members_points: int
-    action_name: str
-
-
-class CustomMemberData(Member_model):
-    action_name: str
-    points: int
-
-
-class CustomeMemberReport(BaseClassModel):
-    member_name: str
-    action_name: str
-    points: int
-
-
-class CustomeDepartmentData(BaseClassModel):
-    department_id: int
-    action_name: str
-    points: int
-
-
-class CustomeDepartmentReport(BaseClassModel):
-    department_name: str
-    action_name: str
-    points: int
-
-
 class CardData(BaseClassModel):
     name: str
     url: str
@@ -319,3 +278,9 @@ class CertificateJobResponse(BaseModel):
     folder_name: str
     status: JobStatus
     message: str
+
+class customeDepartmentsPoints_model(BaseClassModel):
+    department_id: int
+    points: int
+    action_id: int
+    events_id: int

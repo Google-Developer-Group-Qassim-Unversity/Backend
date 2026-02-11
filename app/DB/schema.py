@@ -134,6 +134,7 @@ class Members(Base):
     email: Mapped[Optional[str]] = mapped_column(String(100))
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
 
+    role: Mapped[list['Role']] = relationship('Role', back_populates='member')
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='member')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='member')
 
@@ -201,6 +202,20 @@ class Logs(Base):
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='log')
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='log')
     modifications: Mapped[list['Modifications']] = relationship('Modifications', back_populates='log')
+
+
+class Role(Base):
+    __tablename__ = 'role'
+    __table_args__ = (
+        ForeignKeyConstraint(['member_id'], ['members.id'], ondelete='CASCADE', onupdate='CASCADE', name='fk_role_member'),
+        Index('fk_role_member', 'member_id')
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    role: Mapped[str] = mapped_column(Enum('admin', 'super_admin'), nullable=False)
+
+    member: Mapped['Members'] = relationship('Members', back_populates='role')
 
 
 class DepartmentsLogs(Base):

@@ -19,8 +19,29 @@ def create_action(session: Session, name: str, points: int, type: str):
     new_action = Actions(
         action_name=name,
         points=points,
-        action_type=type
+        action_type=type,
+        ar_action_name=name,
     )
     session.add(new_action)
     session.flush()
     return new_action
+
+def get_bonus_action(session: Session):
+    statement = select(Actions).where(Actions.action_name == "Bonus")
+    action = session.scalars(statement).first()
+    if not action:
+        new_action = create_action(session, "Bonus", 0, "composite")
+        session.flush()
+        return new_action
+    session.flush()
+    return action
+
+def get_discount_action(session: Session):
+    statement = select(Actions).where(Actions.action_name == "Discount")
+    action = session.scalars(statement).first()
+    if not action:
+        new_action = create_action(session, "Discount", 0, "composite")
+        session.flush()
+        return new_action
+    session.flush()
+    return action

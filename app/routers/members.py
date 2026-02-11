@@ -2,11 +2,11 @@ from datetime import date
 from fastapi import APIRouter, HTTPException, status, Depends
 from app.DB import members as member_queries, logs as logs_queries
 from ..DB.main import SessionLocal
-from app.routers.models import Member_model, NotFoundResponse, MemberHistory_model, MeberCreate_model, manual_members
+from app.routers.models import Member_model, NotFoundResponse, MemberHistory_model, MeberCreate_model, manual_members, MemberWithRole_model, RoleEnum
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from  app.config import config
 import json
-from app.helpers import admin_guard, get_uni_id_from_credentials, credentials_to_member_model, get_pydantic_members
+from app.helpers import admin_guard, get_uni_id_from_credentials, credentials_to_member_model, get_pydantic_members, super_admin_guard
 from app.routers.upload import validate_sheet
 from app.routers.logging import write_log_exception, write_log_traceback, create_log_file, write_log, write_log_title, write_log_json
 router = APIRouter()
@@ -20,12 +20,20 @@ def get_all_members(credentials: HTTPAuthorizationCredentials = Depends(admin_gu
     return members
 
 @router.get("/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}})
-def get_member_by_id(member_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def get_member_by_id(member_id: int, credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
     with SessionLocal() as session:
         member = member_queries.get_member_by_id(session, member_id)
         if not member:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} not found")
     return member
+
+@router.get("/uni", status_code=status.HTTP_200_OK, response_model=list[Member_model])
+def get_member_by_uni_id(uni_id: list[str], credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        members = member_queries.get_member_by_uni_id(session, uni_id)
+        if not members:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with uni_id {uni_id} not found")
+    return members
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=MeberCreate_model, responses={403: {"model": NotFoundResponse, "description": "You can only create your own member profile"}})
 def create_member(credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
@@ -58,6 +66,22 @@ def create_member(credentials: HTTPAuthorizationCredentials = Depends(config.CLE
                 write_log(log_file, f"member {new_member.uni_id} {"Created" if not already_exist else "Updated"} successfully")
             else:
                 write_log_json(log_file, credentials.model_dump())
+
+
+@router.get("/roles", status_code=status.HTTP_200_OK, response_model=list[MemberWithRole_model])
+def get_member_roles(credentials: HTTPAuthorizationCredentials = Depends(super_admin_guard)):
+    with SessionLocal() as session:
+        roles = member_queries.get_member_roles(session)
+    return roles
+
+@router.post("/roles", status_code=status.HTTP_200_OK, response_model=MemberWithRole_model)
+def update_member_roles(member_id: int, new_role: RoleEnum, credentials: HTTPAuthorizationCredentials = Depends(super_admin_guard)):
+    with SessionLocal() as session:
+        updated_member = member_queries.update_member_role(session, member_id, new_role.value)
+        if not updated_member:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} not found")
+        session.commit()
+    return updated_member
 
 @router.post("/manual", status_code=status.HTTP_201_CREATED)
 def create_member_manual(members_sheet: manual_members):

@@ -53,12 +53,26 @@ def is_admin(credentials) -> bool:
     is_admin = decoded['metadata'].get('is_admin', False)
     return is_admin
 
+def is_super_admin(credentials) -> bool:
+    decoded = credentials.model_dump()['decoded']
+    is_super_admin = decoded['metadata'].get('is_super_admin', False)
+    return is_super_admin
+
 def admin_guard(credentials=Depends(config.CLERK_GUARD)):
     print("🔒 User authenticated, checking admin privileges...")
     if not is_admin(credentials):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required",
+        )
+    return credentials
+
+def super_admin_guard(credentials=Depends(config.CLERK_GUARD)):
+    print("🔒 User authenticated, checking super 🦸‍♂ admin privileges...")
+    if not is_super_admin(credentials):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super admin privileges required",
         )
     return credentials
 

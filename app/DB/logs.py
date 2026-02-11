@@ -59,9 +59,7 @@ def create_log(session: Session, event_id: int, action_id: int):
     return new_log
 
 
-def create_modification(
-    session: Session, log_id: int, type: Literal["bonus", "discount"], value: int
-):
+def create_modification(session: Session, log_id: int, type: Literal["bonus", "discount"], value: int):
     new_modification = Modifications(log_id=log_id, type=type, value=value)
     session.add(new_modification)
     session.flush()

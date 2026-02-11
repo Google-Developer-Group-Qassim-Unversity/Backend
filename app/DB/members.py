@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from .schema import Actions, Members, MembersLogs, Logs, Events
+from .schema import Actions, Members, MembersLogs, Logs, Events, Role
 from ..routers.models import Member_model
 from datetime import datetime
 
@@ -50,10 +50,13 @@ def get_member_by_id(session: Session, member_id: int | list[int]):
         statement = select(Members).where(Members.id == member_id)
         return session.scalars(statement).first()
 
-def get_member_by_uni_id(session: Session, uni_id: str):
-    statement = select(Members).where(Members.uni_id == uni_id)
-    member = session.scalars(statement).first()
-    return member
+def get_member_by_uni_id(session: Session, uni_id: str | list[str]):
+    if isinstance(uni_id, list):
+        statement = select(Members).where(Members.uni_id.in_(uni_id))
+        return session.scalars(statement).all()
+    else:
+        statement = select(Members).where(Members.uni_id == uni_id)
+        return session.scalars(statement).all()
 
 def update_member(session: Session, member: Member_model, is_authenticated: bool=False):
     existing_member = session.scalar(select(Members).where(Members.id == member.id))
@@ -95,3 +98,60 @@ def get_member_history(session: Session, uni_id: str):
     return [row._asdict() for row in query.all()]
 
 
+def get_member_roles(session: Session):
+    query = (
+        session.query(
+            Members.id,
+            Members.name,
+            Members.email,
+            Members.phone_number,
+            Members.uni_id,
+            Members.gender,
+            Members.uni_level,
+            Members.uni_college,
+            Members.is_authenticated,
+            Members.created_at,
+            Members.updated_at,
+            Role.role
+        )
+        .join(Role, Members.id == Role.member_id)
+    )
+    
+    return [row._asdict() for row in query.all()]
+
+def update_member_role(session: Session, member_id: int, new_role: str):
+    # Check if member exists
+    existing_member = session.scalar(select(Members).where(Members.id == member_id))
+    if not existing_member:
+        return None
+    
+    # Check if member already has a role
+    existing_role = session.scalar(select(Role).where(Role.member_id == member_id))
+    
+    if existing_role:
+        # Update existing role
+        existing_role.role = new_role
+    else:
+        # Create new role entry
+        new_role_entry = Role(member_id=member_id, role=new_role)
+        session.add(new_role_entry)
+    
+    session.flush()
+    
+    # Return member with role using the same query structure as get_member_roles
+    result = session.query(
+        Members.id,
+        Members.name,
+        Members.email,
+        Members.phone_number,
+        Members.uni_id,
+        Members.gender,
+        Members.uni_level,
+        Members.uni_college,
+        Members.is_authenticated,
+        Members.created_at,
+        Members.updated_at,
+        Role.role
+    ).join(Role, Members.id == Role.member_id).filter(Members.id == member_id).first()
+    
+    return result._asdict() if result else None
