@@ -77,11 +77,19 @@ def get_member_roles(credentials: HTTPAuthorizationCredentials = Depends(super_a
 @router.post("/roles", status_code=status.HTTP_200_OK, response_model=MemberWithRole_model)
 def update_member_roles(member_id: int, new_role: RoleEnum, credentials: HTTPAuthorizationCredentials = Depends(super_admin_guard)):
     with SessionLocal() as session:
-        updated_member = member_queries.update_member_role(session, member_id, new_role.value)
-        if not updated_member:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} not found")
-        session.commit()
-    return updated_member
+        log_file = create_log_file("update member role")
+        try:
+            write_log_title(log_file, f"Updating role for member_id {member_id} to {new_role.value}")
+            updated_member = member_queries.update_member_role(session, member_id, new_role.value)
+            if not updated_member:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} not found")
+            session.commit()
+            return updated_member
+        except Exception as e:
+            session.rollback()
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while updating the member's role")
 
 @router.post("/manual", status_code=status.HTTP_201_CREATED)
 def create_member_manual(members_sheet: manual_members):

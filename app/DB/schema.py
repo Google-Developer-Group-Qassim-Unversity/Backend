@@ -213,7 +213,7 @@ class Role(Base):
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    role: Mapped[str] = mapped_column(Enum('admin', 'super_admin'), nullable=False)
+    role: Mapped[str] = mapped_column(ENUM('admin', 'super_admin', 'none'), nullable=False)
 
     member: Mapped['Members'] = relationship('Members', back_populates='role')
 
