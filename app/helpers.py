@@ -45,7 +45,7 @@ def get_uni_id_from_credentials(credentials):
     decoded = credentials.model_dump()['decoded']
     # print("Got decoded credentials 🔒:")
     # print(dumps(credentials.model_dump(), ensure_ascii=False, indent=4))
-    uni_id = decoded['metadata']['uni_id']
+    uni_id: str = str(decoded['metadata']['uni_id'])
     return uni_id
 
 def is_admin(credentials) -> bool:

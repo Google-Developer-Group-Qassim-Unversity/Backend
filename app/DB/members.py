@@ -50,13 +50,9 @@ def get_member_by_id(session: Session, member_id: int | list[int]):
         statement = select(Members).where(Members.id == member_id)
         return session.scalars(statement).first()
 
-def get_member_by_uni_id(session: Session, uni_id: str | list[str]):
-    if isinstance(uni_id, list):
-        statement = select(Members).where(Members.uni_id.in_(uni_id))
-        return session.scalars(statement).all()
-    else:
-        statement = select(Members).where(Members.uni_id == uni_id)
-        return session.scalars(statement).all()
+def get_member_by_uni_id(session: Session, uni_id: str):
+    statement = select(Members).where(Members.uni_id == uni_id)
+    return session.scalars(statement).first()
 
 def update_member(session: Session, member: Member_model, is_authenticated: bool=False):
     existing_member = session.scalar(select(Members).where(Members.id == member.id))

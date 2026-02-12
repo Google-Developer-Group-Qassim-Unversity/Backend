@@ -27,14 +27,6 @@ def get_member_by_id(member_id: int, credentials: HTTPAuthorizationCredentials =
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} not found")
     return member
 
-@router.get("/uni", status_code=status.HTTP_200_OK, response_model=list[Member_model])
-def get_member_by_uni_id(uni_id: list[str], credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
-    with SessionLocal() as session:
-        members = member_queries.get_member_by_uni_id(session, uni_id)
-        if not members:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with uni_id {uni_id} not found")
-    return members
-
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=MeberCreate_model, responses={403: {"model": NotFoundResponse, "description": "You can only create your own member profile"}})
 def create_member(credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
     with SessionLocal() as session:
