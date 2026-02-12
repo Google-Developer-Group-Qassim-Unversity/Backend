@@ -172,9 +172,7 @@ def give_department_custom_points(
 
 
 @router.get("/departments/{event_id}", response_model=CustomDepartmentPointsResponse)
-def get_department_custom_points(
-    event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
-):
+def get_department_custom_points(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     """Retrieve all custom department points for a specific event."""
     log_file = create_log_file("get_custom_department_points")
     with SessionLocal() as session:
