@@ -219,6 +219,16 @@ def get_event_attendance(
         attendance_count = len(attendance)
     return {"attendance_count": attendance_count, "attendance": attendance}
 
+@router.get("/{event_id:int}/attendance/count", status_code=status.HTTP_200_OK)
+def get_event_attendance_count(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+    with SessionLocal() as session:
+        event = events_queries.get_event_by_id(session, event_id)
+        if not event:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
+            )
+        attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
+        return {"attendance_count": len(attendance)}
 
 @router.post(
     "/{event_id:int}/certificates",
