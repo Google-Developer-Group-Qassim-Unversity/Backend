@@ -16,7 +16,10 @@ def get_member_points(session: Session, member_id: int):
     return dict(member_points._mapping)
 
 def get_member_points_history(session: Session, member_id: int):
-    statement = select(t_member_event_history).where(t_member_event_history.c.member_id == member_id)
+    statement = select(t_member_event_history).where(
+        t_member_event_history.c.member_id == member_id,
+        t_member_event_history.c.location_type != 'hidden'
+    )
     member_points = session.execute(statement).all()
     return [dict(row._mapping) for row in member_points]
 
@@ -33,6 +36,9 @@ def get_department_points(session: Session, department_id: int):
     return dict(department_points._mapping)
 
 def get_department_points_history(session: Session, department_id: int):
-    statement = select(t_departments_points_history).where(t_departments_points_history.c.department_id == department_id)
+    statement = select(t_departments_points_history).where(
+        t_departments_points_history.c.department_id == department_id,
+        t_departments_points_history.c.location_type != 'hidden'
+    )
     department_points = session.execute(statement).all()
     return [dict(row._mapping) for row in department_points]

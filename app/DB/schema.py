@@ -53,6 +53,7 @@ t_departments_points_history = Table(
     Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('action_name', String(60)),
     Column('ar_action_name', String(100)),
+    Column('location_type', Enum('online', 'on-site', 'none')),
     Column('points', DECIMAL(54, 0))
 )
 
@@ -110,6 +111,7 @@ t_member_event_history = Table(
     Column('event_name', String(150)),
     Column('start_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
+    Column('location_type', Enum('online', 'on-site', 'none')),
     Column('points', DECIMAL(54, 0)),
     Column('action_name', Text),
     Column('ar_action_name', Text)

@@ -20,6 +20,8 @@ from app.routers.logging import (
     write_log_json,
     write_log_title,
 )
+from app.routers.models import LocationTypeEnum
+import json
 
 router = APIRouter()
 
@@ -36,6 +38,7 @@ class CustomDepartmentPointsRequest(BaseClassModel):
     start_datetime: datetime
     end_datetime: datetime
     event_name: str
+    location_type: LocationTypeEnum
     point_deatils: List[DepartmentPointDetails]
 
 
@@ -75,15 +78,11 @@ def give_department_custom_points(
                     )
             else:
                 # an existing event is not provided, create a new one with default values
-                write_log(
-                    log_file,
-                    f"No event id provided, creating a new event with name {body.event_name}",
-                )
                 new_event_model = Events_model(
                     name=body.event_name,
                     description=None,
-                    location="none",
-                    location_type="none",
+                    location= "none",
+                    location_type= body.location_type,
                     start_datetime=body.start_datetime,
                     end_datetime=body.end_datetime,
                     status="closed",
@@ -104,31 +103,23 @@ def give_department_custom_points(
                 # [2] validate action
                 write_log(log_file, f"Processing point detail [{i + 1}/{details_len}]")
                 if point_detail.action_id:
-                    write_log(
-                        log_file, f"Validating action with id {point_detail.action_id}"
-                    )
-                    action = actions_queries.get_action_by_id(
-                        session, point_detail.action_id
-                    )
+                    write_log(log_file, f"Validating action with id {point_detail.action_id}")
+                    action = actions_queries.get_action_by_id(session, point_detail.action_id)
                     if not action:
-                        raise HTTPException(
-                            status_code=status.HTTP_404_NOT_FOUND,
-                            detail=f"Action with id {point_detail.action_id} not found",
-                        )
+                        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Action with id {point_detail.action_id} not found")
                 else:
-                    write_log(log_file, f"No action id provided, infering with points ")
-                    if point_detail.points > 0:
-                        action = actions_queries.get_bonus_action(session)
-                        write_log(
-                            log_file,
-                            f"Points are {point_detail.points}, using Bonus action {action.action_name} with id {action.id}",
-                        )
+                    write_log(log_file, f"No action id provided, checking name")
+                    if point_detail.action_name:
+                        write_log(log_file, f"Action name provided creating action with name {point_detail.action_name}")
+                        action = actions_queries.create_action(session, point_detail.action_name, point_detail.points, "bonus")
                     else:
-                        action = actions_queries.get_discount_action(session)
-                        write_log(
-                            log_file,
-                            f"Points are {point_detail.points}, using Discount action {action.action_name} with id {action.id}",
-                        )
+                        write_log(log_file, f"No action name provided, inferring from points value")
+                        if point_detail.points > 0:
+                            action = actions_queries.get_bonus_action(session)
+                            write_log(log_file, f"Points are {point_detail.points}, using Bonus action {action.action_name} with id {action.id}")
+                        else:
+                            action = actions_queries.get_discount_action(session)
+                            write_log(log_file, f"Points are {point_detail.points}, using Discount action {action.action_name} with id {action.id}")
 
                 # [3] using the action and event to give points
                 new_log = log_queries.create_log(session, event.id, action.id)
@@ -137,7 +128,7 @@ def give_department_custom_points(
                     f"Created log with id {new_log.id} for event {event.name} and action {action.action_name}",
                 )
 
-                # [4] creating bunus/discount modificatoin
+                # [4] creating bonus/discount modification
                 mod_type = "bonus" if point_detail.points > 0 else "discount"
                 mod_value = abs(point_detail.points)
                 log_queries.create_modification(
@@ -169,6 +160,9 @@ def give_department_custom_points(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An error occurred while giving custom points to the department",
             )
+        finally:
+            write_log_json(log_file, body.model_dump(mode="json"))
+            write_log(log_file, "Finished processing custom department points request")
 
 
 @router.get("/departments/{event_id}", response_model=CustomDepartmentPointsResponse)

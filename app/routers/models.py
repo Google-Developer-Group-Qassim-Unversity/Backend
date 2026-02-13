@@ -17,11 +17,17 @@ class BaseClassModel(BaseModel):
         from_attributes = True
 
 
+class LocationTypeEnum(str, Enum):
+    online = "online"
+    on_site = "on-site"
+    none = "none"
+    hidden = "hidden"
+
 class Events_model(BaseClassModel):
     id: int | None = None
     name: str
     description: str | None = None
-    location_type: Literal["online", "on-site", "none"]
+    location_type: LocationTypeEnum
     location: str
     start_datetime: datetime
     end_datetime: datetime
