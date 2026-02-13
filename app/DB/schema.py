@@ -53,7 +53,7 @@ t_departments_points_history = Table(
     Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('action_name', String(60)),
     Column('ar_action_name', String(100)),
-    Column('location_type', Enum('online', 'on-site', 'none')),
+    Column('location_type', Enum('online', 'on-site', 'none', 'hidden')),
     Column('points', DECIMAL(54, 0))
 )
 
@@ -68,7 +68,7 @@ class Events(Base):
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
     name: Mapped[str] = mapped_column(VARCHAR(150), nullable=False)
-    location_type: Mapped[str] = mapped_column(ENUM('online', 'on-site', 'none'), nullable=False)
+    location_type: Mapped[str] = mapped_column(ENUM('online', 'on-site', 'none', 'hidden'), nullable=False)
     location: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
     start_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
     end_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
@@ -111,7 +111,7 @@ t_member_event_history = Table(
     Column('event_name', String(150)),
     Column('start_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
-    Column('location_type', Enum('online', 'on-site', 'none')),
+    Column('location_type', Enum('online', 'on-site', 'none', 'hidden')),
     Column('points', DECIMAL(54, 0)),
     Column('action_name', Text),
     Column('ar_action_name', Text)
@@ -154,7 +154,7 @@ t_open_events = Table(
     Column('id', INTEGER, server_default=text("'0'")),
     Column('name', String(150)),
     Column('description', Text),
-    Column('location_type', Enum('online', 'on-site', 'none')),
+    Column('location_type', Enum('online', 'on-site', 'none', 'hidden')),
     Column('location', String(100)),
     Column('start_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
