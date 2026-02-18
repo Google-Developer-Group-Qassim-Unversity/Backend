@@ -212,9 +212,7 @@ def get_event_attendance(
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
         if not event:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         attendance = log_queries.get_event_attendance(session, event_id, day)
         attendance_count = len(attendance)
     return {"attendance_count": attendance_count, "attendance": attendance}
