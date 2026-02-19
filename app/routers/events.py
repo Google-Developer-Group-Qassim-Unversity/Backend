@@ -102,11 +102,7 @@ def get_event_form(event_id: int):
         },
     },
 )
-def mark_attendance(
-    event_id: int,
-    token: str = Query(None, description="Optional attendance token for QR code links"),
-    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
-):
+def mark_attendance(event_id: int, token: str = Query(None, description="Optional attendance token for QR code links"), credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
     log_file = create_log_file("mark attendance")
 
     # Validate attendance token
@@ -137,7 +133,7 @@ def mark_attendance(
                 excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
                 write_log_exception(log_file, excep)
                 raise excep
-            write_log(log_file,f"Attendace for event [{event.name}] for member [{member.name}]")
+            write_log(log_file, f"Attendace for event [{event.name}] for member [{member.name}]")
 
             event_log = log_queries.get_attendable_logs(session, event_id)
             if not event_log:
@@ -201,11 +197,7 @@ def mark_attendance(
 
 
 @router.get("/{event_id:int}/attendance", status_code=status.HTTP_200_OK)
-def get_event_attendance(
-    event_id: int, 
-    day: str = Query("all", description="Filter by event day: 'all', 'exclusive_all', '1', '2', '3', etc."),
-    credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
-):
+def get_event_attendance(event_id: int, day: str = Query("all", description="Filter by event day: 'all', 'exclusive_all', '1', '2', '3', etc."), credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
         if not event:
@@ -214,25 +206,23 @@ def get_event_attendance(
         attendance_count = len(attendance)
     return {"attendance_count": attendance_count, "attendance": attendance}
 
+
 @router.get("/{event_id:int}/attendance/count", status_code=status.HTTP_200_OK)
 def get_event_attendance_count(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
         if not event:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
         return {"attendance_count": len(attendance)}
+
 
 @router.post(
     "/{event_id:int}/certificates",
     status_code=status.HTTP_200_OK,
     response_model=CertificateJobResponse,
 )
-async def send_certificates(
-    event_id: int,  credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
-):
+async def send_certificates(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     log_file = create_log_file("send certificates")
     with SessionLocal() as session:
         try:
@@ -254,7 +244,7 @@ async def send_certificates(
             if attendance_count == 0:
                 write_log_exception(log_file, HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendees who completed all days found for this event"))
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendees who completed all days found for this event")
-            
+
             # Format date based on event duration
             days = (event.end_datetime.date() - event.start_datetime.date()).days
             if days == 0:
@@ -265,10 +255,7 @@ async def send_certificates(
 
             # Transform members to simplified format
             # Extract Members object from the new attendance structure
-            simplified_members = [
-                SimplifiedMember(name=attendee["Members"].name, email=attendee["Members"].email, gender=attendee["Members"].gender)
-                for attendee in attendance
-            ]
+            simplified_members = [SimplifiedMember(name=attendee["Members"].name, email=attendee["Members"].email, gender=attendee["Members"].gender) for attendee in attendance]
             write_log(log_file, f"Transformed [{len(simplified_members)}] members to simplified format")
 
             # Build certificate request payload
@@ -304,9 +291,7 @@ async def send_certificates(
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while sending certificates")
 
 
-@router.get(
-    "/open", status_code=status.HTTP_200_OK, response_model=list[Open_Events_model]
-)
+@router.get("/open", status_code=status.HTTP_200_OK, response_model=list[Open_Events_model])
 def get_registrable_events():
     """returns events + their associated form"""
     log_file = create_log_file("get open events")
@@ -327,9 +312,7 @@ def get_registrable_events():
     status_code=status.HTTP_200_OK,
     response_model=UpdateEvent_model,
 )
-def get_event_details(
-    event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
-):
+def get_event_details(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     """return an event + its associated actions, this is needed by the frontend to populate the update event form with the current event data and associated actions"""
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
@@ -373,12 +356,8 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             write_log(log_file, f"Created Form [{new_form.id}] for Event [{new_event.id}]")
 
             # 3. create logs for event
-            department_log = log_queries.create_log(
-                session, new_event.id, event_data.department_action_id
-            )
-            member_log = log_queries.create_log(
-                session, new_event.id, event_data.member_action_id
-            )
+            department_log = log_queries.create_log(session, new_event.id, event_data.department_action_id)
+            member_log = log_queries.create_log(session, new_event.id, event_data.member_action_id)
 
             # 4. give department points for each day
             days = (event_data.event.end_datetime - event_data.event.start_datetime).days + 1
@@ -415,9 +394,7 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
         },
     },
 )
-def update_event(
-    event_id: int, event_data: UpdateEvent_model, credentials=Depends(admin_guard)
-):
+def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depends(admin_guard)):
     log_file = create_log_file("update event")
     with SessionLocal() as session:
         try:
@@ -445,9 +422,7 @@ def update_event(
             department_log = None
             member_log = None
             for log in logs:
-                current_dept_id = log_queries.get_department_id_from_log(
-                    session, log.id
-                )
+                current_dept_id = log_queries.get_department_id_from_log(session, log.id)
                 if current_dept_id is not None:
                     department_log = log
                 else:
@@ -536,9 +511,7 @@ def update_event_status(
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
         if not event:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         event.status = status_data.status
         session.commit()
         session.refresh(event)
@@ -565,14 +538,10 @@ def delete_event(event_id: int, credentials=Depends(admin_guard)):
     status_code=status.HTTP_200_OK,
     response_model=list[Get_Submission_model],
 )
-def get_submissions_by_event(
-    event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
-):
+def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     with SessionLocal() as session:
         try:
-            submissions_data = submission_queries.get_submissions_by_event_id(
-                session, event_id
-            )
+            submissions_data = submission_queries.get_submissions_by_event_id(session, event_id)
 
             # Transform to Submission_model objects
             submissions = []
@@ -588,11 +557,7 @@ def get_submissions_by_event(
 
 
 @router.post("/{event_id:int}/add_members", status_code=status.HTTP_200_OK)
-def add_members_to_event(
-    event_id: int, 
-    members: list[Member_model],
-    day: int = Query(1, description="Event day number (1, 2, 3, etc.)")
-):
+def add_members_to_event(event_id: int, members: list[Member_model], day: int = Query(1, description="Event day number (1, 2, 3, etc.)")):
     """
     this is a manual endpoint for backwards compatibility, it adds members to an event without going through the form submission process,
     this is needed for the old events that did not go through the event creation flow with attendance that is.
@@ -609,11 +574,11 @@ def add_members_to_event(
             write_log_exception(log_file, excep)
             raise excep
         write_log(log_file, f"Adding members to event [{event.name}] for day [{day}]")
-        
+
         # Calculate the date based on event day
         attendance_date = event.start_datetime + timedelta(days=day - 1)
         write_log(log_file, f"Attendance date calculated as [{attendance_date}]")
-        
+
         log_member = log_queries.get_attendable_logs(session, event_id)
         if not log_member:
             excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event logs not found")

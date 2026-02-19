@@ -146,7 +146,7 @@ def get_expanded_department_logs(session: Session):
 
 
 def get_attendable_logs(session: Session, event_id: int):
-    ATTENDABLE_ACTION_IDS = [76, 77, 78, 79]
+    ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89]
     stmt = select(Logs).where(
         Logs.event_id == event_id, Logs.action_id.in_(ATTENDABLE_ACTION_IDS)
     )
