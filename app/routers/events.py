@@ -120,7 +120,7 @@ def mark_attendance(
             raise
     else:
         write_log(log_file, f"HTTP 400:No attendance token provided")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance token provided")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance token provided!")
 
     with SessionLocal() as session:
         try:
@@ -148,10 +148,7 @@ def mark_attendance(
             # 2. check if already marked attendance for today
             member_logs = log_queries.get_member_logs(session, member.id, event_log.id)
             if member_logs is None:
-                write_log(
-                    log_file,
-                    f"No member logs found for member [{member.id}] and event [{event.name}] (has not marked attendance yet)",
-                )
+                write_log(log_file, f"No member logs found for member [{member.id}] and event [{event.name}] (has not marked attendance yet)")
             else:
                 write_log(log_file, f"Found [{len(member_logs)}] member logs for member [{member.id}] and event [{event.name}]")
                 for member_log in member_logs:
@@ -159,7 +156,7 @@ def mark_attendance(
                     # check if its for today
                     if member_log.date.date() == datetime.now().date():  # the .date() removes the time part of the datetime
                         write_log(log_file, f"Member [{member.id}] has already marked attendance for today the [{member_log.date.day}]th")
-                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You have already marked attendance for today")
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="سجلت حضورك اليوم خلاص")
                     else:
                         write_log(log_file, f"Member [{member.id}] was attended for the [{member_log.date.day}]th")
 
@@ -181,10 +178,10 @@ def mark_attendance(
                 submissions = submission_queries.get_submission_by_form_and_member(session, form.id, member.id)
                 if not submissions:
                     write_log_exception(log_file, f"HTTP 400: Member [{member.id}] has not submitted the form [{form.id}]")
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You have not submitted the form for this event")
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما عبيت فورم الحدث")
                 if submissions.is_accepted == 0:
                     write_log_exception(log_file, f"HTTP 400: Member [{member.id}] has not been accepted to the event [{event.name}]")
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You have not been accepted to the event")
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما انقبلت في الحدث")
 
                 write_log(log_file, f"Member [{member.id}] has submitted the form and been accepted to the event [{event.name}], marking attendance...")
                 log_queries.create_member_log(session, member.id, event_log.id)

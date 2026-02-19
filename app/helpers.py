@@ -122,7 +122,7 @@ def validate_attendance_token(token: str, expected_event_id: int) -> dict:
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, # 401 is usually better for expired tokens
-            detail="Attendance token has expired"
+            detail="رابط الحضور هذا منتهي الصلاحية. الرجاء التواصل مع المنظم للحصول على رابط جديد."
         )
     except jwt.MissingRequiredClaimError as e:
         raise HTTPException(
