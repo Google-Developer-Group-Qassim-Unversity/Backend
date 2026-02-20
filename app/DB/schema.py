@@ -62,8 +62,7 @@ class Events(Base):
     __tablename__ = 'events'
     __table_args__ = (
         Index('event_name', 'name'),
-        Index('events_id_IDX', 'id', 'name'),
-        Index('events_unique', 'name', unique=True)
+        Index('events_id_IDX', 'id', 'name')
     )
 
     id: Mapped[int] = mapped_column(INTEGER, primary_key=True)

@@ -117,6 +117,7 @@ def create_member_manual(members_sheet: manual_members):
                     new_count += 1
                     created_members.append(created_member)
                 else:
+                    write_log(log_file, f"Existing member found with ID {existing_member.id}, skipping ⏩")
                     created_members.append(existing_member)
                     existing_count += 1
             session.commit()

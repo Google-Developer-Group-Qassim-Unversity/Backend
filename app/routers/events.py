@@ -152,7 +152,7 @@ def mark_attendance(event_id: int, token: str = Query(None, description="Optiona
                     # check if its for today
                     if member_log.date.date() == datetime.now().date():  # the .date() removes the time part of the datetime
                         write_log(log_file, f"Member [{member.id}] has already marked attendance for today the [{member_log.date.day}]th")
-                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="سجلت حضورك اليوم خلاص")
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="!انت سجلت حضورك لهذا الحدث اليوم")
                     else:
                         write_log(log_file, f"Member [{member.id}] was attended for the [{member_log.date.day}]th")
 
@@ -337,8 +337,9 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             new_event = events_queries.create_event(session, event_data.event)
 
             if new_event is None:
-                write_log_exception(log_file, f"HTTP 409: An event with the name '{event_data.event.name}' already exists")
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{event_data.event.name}' already exists")
+                exception = HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create event due to database error")
+                write_log_exception(log_file, exception)
+                raise exception
             write_log(log_file, f"Created Event [{new_event.id}]: {new_event.name}")
 
             # 2. create associated form
@@ -392,7 +393,7 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             "model": InternalServerErrorResponse,
             "description": "Internal server error",
         },
-    },
+    }
 )
 def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depends(admin_guard)):
     log_file = create_log_file("update event")
@@ -405,9 +406,6 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
             if updated_event is None:
                 write_log_exception(log_file, f"HTTP 404: Event [{event_id}] not found")
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-            if updated_event == -1:
-                write_log_exception(log_file, f"HTTP 409: An event with the name '{event_data.event.name}' already exists")
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"An event with the name '{event_data.event.name}' already exists")
             write_log(log_file, f"Updated Event [{event_id}]: {updated_event.name}")
 
             # 2. Get all logs for this event
@@ -568,34 +566,43 @@ def add_members_to_event(event_id: int, members: list[Member_model], day: int = 
 
     log_file = create_log_file("add members to event")
     with SessionLocal() as session:
-        event = events_queries.get_event_by_id(session, event_id)
-        if not event:
-            excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-            write_log_exception(log_file, excep)
-            raise excep
-        write_log(log_file, f"Adding members to event [{event.name}] for day [{day}]")
-
-        # Calculate the date based on event day
-        attendance_date = event.start_datetime + timedelta(days=day - 1)
-        write_log(log_file, f"Attendance date calculated as [{attendance_date}]")
-
-        log_member = log_queries.get_attendable_logs(session, event_id)
-        if not log_member:
-            excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event logs not found")
-            write_log_exception(log_file, excep)
-            raise excep
-        write_log(log_file, f"Found attendable log [{log_member.id}] for event [{event.id}]")
-        members_len = len(members)
-        write_log(log_file, f"Adding [{members_len}] members to event [{event.name}]")
-        for i, member in enumerate(members):
-            write_log(log_file, f"Processing member [{i + 1}/{members_len}] with ID [{member}]")
-            found_member = member_queries.get_member_by_id(session, member.id)
-            if not found_member:
-                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member.id} not found")
+        try:
+            event = events_queries.get_event_by_id(session, event_id)
+            if not event:
+                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
                 write_log_exception(log_file, excep)
                 raise excep
-            write_log(log_file, f"Found member [{found_member.name}] with ID [{found_member.id}]")
-            log_queries.create_member_log(session, found_member.id, log_member.id, attendance_date)
-            write_log(log_file, f"Added member [{found_member.name}] to event [{event.name}] for date [{attendance_date}]")
-        session.commit()
-    return {"message": f"[{members_len}] Members added to event successfully for day [{day}]"}
+            write_log(log_file, f"Adding members to event [{event.name}] for day [{day}]")
+
+            # Calculate the date based on event day
+            attendance_date = event.start_datetime + timedelta(days=day - 1)
+            write_log(log_file, f"Attendance date calculated as [{attendance_date}]")
+
+            log_member = log_queries.get_attendable_logs(session, event_id)
+            if not log_member:
+                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event logs not found")
+                write_log_exception(log_file, excep)
+                raise excep
+            write_log(log_file, f"Found attendable log [{log_member.id}] for event [{event.id}]")
+            members_len = len(members)
+            write_log(log_file, f"Adding [{members_len}] members to event [{event.name}]")
+            for i, member in enumerate(members):
+                write_log(log_file, f"Processing member [{i + 1}/{members_len}] with ID [{member}]")
+                found_member = member_queries.get_member_by_id(session, member.id)
+                if not found_member:
+                    excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member.id} not found")
+                    write_log_exception(log_file, excep)
+                    raise excep
+                write_log(log_file, f"Found member [{found_member.name}] with ID [{found_member.id}]")
+                log_queries.create_member_log(session, found_member.id, log_member.id, attendance_date)
+                write_log(log_file, f"Added member [{found_member.name}] to event [{event.name}] for date [{attendance_date}]")
+            session.commit()
+            return {"message": f"[{members_len}] Members added to event successfully for day [{day}]"}
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while adding members to the event")
