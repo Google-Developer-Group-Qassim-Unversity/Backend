@@ -361,3 +361,68 @@ def get_department_ids_by_log_id(session: Session, log_id: int):
     stmt = select(DepartmentsLogs.department_id).where(DepartmentsLogs.log_id == log_id)
     department_ids = session.scalars(stmt).all()
     return list(department_ids)
+
+
+def get_custom_member_points_by_event(session: Session, event_id: int):
+    query = (
+        session.query(
+            Logs.id.label("log_id"),
+            Events.id.label("event_id"),
+            Events.name.label("event_name"),
+            Events.start_datetime,
+            Events.end_datetime,
+            Actions.id.label("action_id"),
+            Actions.action_name,
+            Actions.points.label("action_points"),
+            Modifications.type.label("mod_type"),
+            Modifications.value.label("mod_value"),
+            func.JSON_ARRAYAGG(MembersLogs.member_id).label("member_ids"),
+        )
+        .join(Events, Logs.event_id == Events.id)
+        .join(Actions, Logs.action_id == Actions.id)
+        .outerjoin(Modifications, Logs.id == Modifications.log_id)
+        .join(MembersLogs, Logs.id == MembersLogs.log_id)
+        .filter(Events.id == event_id)
+        .group_by(
+            Logs.id,
+            Events.id,
+            Events.name,
+            Events.start_datetime,
+            Events.end_datetime,
+            Actions.id,
+            Actions.action_name,
+            Actions.points,
+            Modifications.type,
+            Modifications.value,
+        )
+    )
+
+    results = query.all()
+    return [
+        {
+            "log_id": row.log_id,
+            "event_id": row.event_id,
+            "event_name": row.event_name,
+            "start_datetime": row.start_datetime,
+            "end_datetime": row.end_datetime,
+            "action_id": row.action_id,
+            "action_name": row.action_name,
+            "mod_type": row.mod_type
+            if row.mod_type
+            else ("bonus" if row.action_points >= 0 else "discount"),
+            "mod_value": row.mod_value
+            if row.mod_value is not None
+            else abs(row.action_points),
+            "member_ids": loads(row.member_ids) if row.member_ids else [],
+        }
+        for row in results
+    ]
+
+
+def delete_member_logs_by_log_id(session: Session, log_id: int):
+    stmt = select(MembersLogs).where(MembersLogs.log_id == log_id)
+    member_logs = session.scalars(stmt).all()
+    for ml in member_logs:
+        session.delete(ml)
+    session.flush()
+    return len(member_logs)
