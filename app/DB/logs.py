@@ -255,7 +255,8 @@ def delete_n_department_logs(session: Session, log_id: int, count: int):
 def get_custom_department_points_by_event(session: Session, event_id: int):
     """
     Retrieve all custom department points for a specific event.
-    Returns logs with event, action, modification, and department details.
+    Returns logs with event, action, modification (if any), and department details.
+    For predefined actions without modifications, points come from the action itself.
     """
     query = (
         session.query(
@@ -266,13 +267,14 @@ def get_custom_department_points_by_event(session: Session, event_id: int):
             Events.end_datetime,
             Actions.id.label("action_id"),
             Actions.action_name,
+            Actions.points.label("action_points"),
             Modifications.type.label("mod_type"),
             Modifications.value.label("mod_value"),
             func.JSON_ARRAYAGG(DepartmentsLogs.department_id).label("department_ids"),
         )
         .join(Events, Logs.event_id == Events.id)
         .join(Actions, Logs.action_id == Actions.id)
-        .join(Modifications, Logs.id == Modifications.log_id)
+        .outerjoin(Modifications, Logs.id == Modifications.log_id)
         .join(DepartmentsLogs, Logs.id == DepartmentsLogs.log_id)
         .filter(Events.id == event_id)
         .group_by(
@@ -283,6 +285,7 @@ def get_custom_department_points_by_event(session: Session, event_id: int):
             Events.end_datetime,
             Actions.id,
             Actions.action_name,
+            Actions.points,
             Modifications.type,
             Modifications.value,
         )
@@ -298,8 +301,13 @@ def get_custom_department_points_by_event(session: Session, event_id: int):
             "end_datetime": row.end_datetime,
             "action_id": row.action_id,
             "action_name": row.action_name,
-            "mod_type": row.mod_type,
-            "mod_value": row.mod_value,
+            # If no modification, use action's points; otherwise use modification
+            "mod_type": row.mod_type
+            if row.mod_type
+            else ("bonus" if row.action_points >= 0 else "discount"),
+            "mod_value": row.mod_value
+            if row.mod_value is not None
+            else abs(row.action_points),
             "department_ids": loads(row.department_ids) if row.department_ids else [],
         }
         for row in results
@@ -335,6 +343,17 @@ def update_modification(
     modification.value = value
     session.flush()
     return modification
+
+
+def delete_modification(session: Session, modification_id: int):
+    """Delete a modification by its ID."""
+    stmt = select(Modifications).where(Modifications.id == modification_id)
+    modification = session.scalar(stmt)
+    if not modification:
+        return False
+    session.delete(modification)
+    session.flush()
+    return True
 
 
 def get_department_ids_by_log_id(session: Session, log_id: int):
