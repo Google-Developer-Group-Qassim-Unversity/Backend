@@ -103,12 +103,8 @@ def give_department_custom_points(
                 # [2] validate action
                 write_log(log_file, f"Processing point detail [{i + 1}/{details_len}]")
                 if point_detail.action_id:
-                    write_log(
-                        log_file, f"Validating action with id {point_detail.action_id}"
-                    )
-                    action = actions_queries.get_action_by_id(
-                        session, point_detail.action_id
-                    )
+                    write_log(log_file, f"Validating action with id {point_detail.action_id}")
+                    action = actions_queries.get_action_by_id(session, point_detail.action_id)
                     if not action:
                         raise HTTPException(
                             status_code=status.HTTP_404_NOT_FOUND,
@@ -152,14 +148,14 @@ def give_department_custom_points(
                     f"Created log with id {new_log.id} for event {event.name} and action {action.action_name}",
                 )
 
-                # [4] creating bonus/discount modification - only for custom/default actions
-                # When a predefined action_id is provided, the action itself already has points
-                if point_detail.action_id is None:
+                # [4] creating bonus/discount modification - only for default actions
+                # When action_id is provided: predefined action with its own points
+                # When action_name is provided: new custom action created with points embedded
+                # Only create modification when using default Bonus/Discount (no action_id AND no action_name)
+                if point_detail.action_id is None and point_detail.action_name is None:
                     mod_type = "bonus" if point_detail.points > 0 else "discount"
                     mod_value = abs(point_detail.points)
-                    log_queries.create_modification(
-                        session, new_log.id, mod_type, mod_value
-                    )
+                    log_queries.create_modification(session, new_log.id, mod_type, mod_value)
                     write_log(
                         log_file,
                         f"Created modification for log id {new_log.id} with type {mod_type} and value {mod_value}",
@@ -167,17 +163,13 @@ def give_department_custom_points(
                 else:
                     write_log(
                         log_file,
-                        f"Skipping modification - using predefined action points ({action.points})",
+                        f"Skipping modification - using action points ({action.points})",
                     )
 
                 # [5] give points to departments
                 for department_id in point_detail.departments_id:
-                    write_log(
-                        log_file, f"Giving points to department with id {department_id}"
-                    )
-                    department_log = log_queries.create_department_log(
-                        session, department_id, new_log.id
-                    )
+                    write_log(log_file, f"Giving points to department with id {department_id}")
+                    department_log = log_queries.create_department_log(session, department_id, new_log.id)
 
             session.commit()
             write_log(log_file, "Successfully given custom points to departments")
@@ -197,16 +189,12 @@ def give_department_custom_points(
 
 
 @router.get("/departments/{event_id}", response_model=CustomDepartmentPointsResponse)
-def get_department_custom_points(
-    event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
-):
+def get_department_custom_points(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     """Retrieve all custom department points for a specific event."""
     log_file = create_log_file("get_custom_department_points")
     with SessionLocal() as session:
         try:
-            write_log_title(
-                log_file, f"Get Custom Department Points for Event {event_id}"
-            )
+            write_log_title(log_file, f"Get Custom Department Points for Event {event_id}")
 
             # [1] Validate event exists
             write_log(log_file, f"Validating event with id {event_id}")
@@ -218,21 +206,13 @@ def get_department_custom_points(
                 )
 
             # [2] Get all custom department points for this event
-            write_log(
-                log_file, f"Fetching custom department points for event {event_id}"
-            )
-            raw_points = log_queries.get_custom_department_points_by_event(
-                session, event_id
-            )
+            write_log(log_file, f"Fetching custom department points for event {event_id}")
+            raw_points = log_queries.get_custom_department_points_by_event(session, event_id)
 
             # [3] Transform the data to match the response model
             point_details = []
             for point_data in raw_points:
-                points = (
-                    point_data["mod_value"]
-                    if point_data["mod_type"] == "bonus"
-                    else -point_data["mod_value"]
-                )
+                points = point_data["mod_value"] if point_data["mod_type"] == "bonus" else -point_data["mod_value"]
                 point_details.append(
                     {
                         "log_id": point_data["log_id"],
@@ -278,22 +258,14 @@ def update_department_custom_points(
     log_file = create_log_file("update_custom_department_points")
     with SessionLocal() as session:
         try:
-            write_log_title(
-                log_file, f"Update Custom Department Points for Log {log_id}"
-            )
+            write_log_title(log_file, f"Update Custom Department Points for Log {log_id}")
 
             # [1] Validate log exists
             write_log(log_file, f"Validating log with id {log_id}")
             existing_log = log_queries.get_log_by_id(session, log_id)
             if not existing_log:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Log with id {log_id} not found",
-                )
-            write_log(
-                log_file,
-                f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}",
-            )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
+            write_log(log_file, f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
 
             # [2] Validate or infer action
             if body.action_id:
@@ -305,9 +277,7 @@ def update_department_custom_points(
                         detail=f"Action with id {body.action_id} not found",
                     )
             else:
-                write_log(
-                    log_file, f"No action id provided, inferring from points value"
-                )
+                write_log(log_file, f"No action id provided, inferring from points value")
                 if body.points > 0:
                     action = actions_queries.get_bonus_action(session)
                     write_log(
@@ -339,11 +309,12 @@ def update_department_custom_points(
                 )
                 log_queries.update_log_action_id(session, log_id, action.id)
 
-            # [5] Update the modification - only for custom/default actions
-            # When a predefined action_id is provided, the action itself already has points
+            # [5] Update the modification - only for default actions (no action_id AND no action_name)
+            # When action_id is provided: predefined action with its own points
+            # When action_name is provided: custom action (created or existing) with points embedded
             modification = log_queries.get_modification_by_log_id(session, log_id)
-            if body.action_id is None:
-                # Custom/default action: need a modification for points
+            if body.action_id is None and body.action_name is None:
+                # Default action: need a modification for points
                 mod_type = "bonus" if body.points > 0 else "discount"
                 mod_value = abs(body.points)
                 if modification:
@@ -351,35 +322,27 @@ def update_department_custom_points(
                         log_file,
                         f"Updating modification for log {log_id}: type={mod_type}, value={mod_value}",
                     )
-                    log_queries.update_modification(
-                        session, modification.id, mod_type, mod_value
-                    )
+                    log_queries.update_modification(session, modification.id, mod_type, mod_value)
                 else:
                     write_log(log_file, f"No modification found, creating new one")
-                    log_queries.create_modification(
-                        session, log_id, mod_type, mod_value
-                    )
+                    log_queries.create_modification(session, log_id, mod_type, mod_value)
             else:
-                # Predefined action: remove any existing modification (action has its own points)
+                # Custom/predefined action: remove any existing modification (action has its own points)
                 if modification:
                     write_log(
                         log_file,
-                        f"Removing modification for log {log_id} - using predefined action points ({action.points})",
+                        f"Removing modification for log {log_id} - using action points ({action.points})",
                     )
                     log_queries.delete_modification(session, modification.id)
                 else:
                     write_log(
                         log_file,
-                        f"No modification to remove - using predefined action points ({action.points})",
+                        f"No modification to remove - using action points ({action.points})",
                     )
 
             # [6] Update department associations
-            deleted_count = log_queries.delete_department_logs_by_log_id(
-                session, log_id
-            )
-            write_log(
-                log_file, f"Deleted {deleted_count} existing department associations"
-            )
+            deleted_count = log_queries.delete_department_logs_by_log_id(session, log_id)
+            write_log(log_file, f"Deleted {deleted_count} existing department associations")
 
             write_log(
                 log_file,
@@ -387,9 +350,7 @@ def update_department_custom_points(
             )
             for dept_id in body.departments_id:
                 log_queries.create_department_log(session, dept_id, log_id)
-                write_log(
-                    log_file, f"Associated department {dept_id} with log {log_id}"
-                )
+                write_log(log_file, f"Associated department {dept_id} with log {log_id}")
 
             session.commit()
             write_log(log_file, "Successfully updated custom department points")
