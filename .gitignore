@@ -1,9 +1,12 @@
 __pycache__
 .venv
+venv
 *.xls
 *.xlsx
 *.csv
-.env
+# env files
+.env*
+!.env.example
 event_logs/
 logs
 uploads
