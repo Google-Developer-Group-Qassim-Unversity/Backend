@@ -23,6 +23,7 @@ class LocationTypeEnum(str, Enum):
     none = "none"
     hidden = "hidden"
 
+
 class Events_model(BaseClassModel):
     id: int | None = None
     name: str
@@ -285,8 +286,28 @@ class CertificateJobResponse(BaseModel):
     status: JobStatus
     message: str
 
+
 class customeDepartmentsPoints_model(BaseClassModel):
     department_id: int
     points: int
     action_id: int
     events_id: int
+
+
+class ManualCertificateRequest(BaseModel):
+    members: list[SimplifiedMember]
+
+    @field_validator("members")
+    def validate_members(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("At least one member is required")
+        return v
+
+
+class MemberUpdate_model(BaseModel):
+    name: str | None = None
+    email: EmailStr | None = None
+    phone_number: str | None = None
+    gender: Literal["Male", "Female"] | None = None
+    uni_level: int | None = None
+    uni_college: str | None = None
