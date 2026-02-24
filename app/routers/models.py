@@ -176,6 +176,29 @@ class Action_model(BaseClassModel):
     points: int
 
 
+class ActionWithUsage_model(BaseClassModel):
+    id: int
+    action_name: str
+    ar_action_name: str
+    action_type: Literal["composite", "department", "member", "bonus"]
+    points: int
+    usage_count: int = 0
+
+
+class CreateAction_model(BaseClassModel):
+    action_name: str
+    ar_action_name: str
+    action_type: Literal["composite", "department", "member", "bonus"]
+    points: int
+
+
+class UpdateAction_model(BaseClassModel):
+    action_name: str | None = None
+    ar_action_name: str | None = None
+    action_type: Literal["composite", "department", "member", "bonus"] | None = None
+    points: int | None = None
+
+
 class Categorized_action(BaseClassModel):
     composite_actions: List[conlist(Action_model, min_length=2, max_length=2)]
     department_actions: List[Action_model]
