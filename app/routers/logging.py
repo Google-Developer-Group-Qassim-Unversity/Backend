@@ -37,6 +37,12 @@ def write_log_json(file: Path, json: str):
         dump(json, f, indent=4, ensure_ascii=False)
     print(dumps(json, indent=4, ensure_ascii=False))
 
+# Good helper... but doesn't work with linters (because they won't do type narrowing)
+def Assert(file: Path, condition: bool, message: str):
+    assert message is not None, "Assert message must be provided"
+    if not condition:
+        write_log(file, f"\n\033[31mAssertion Failed\033[0m ❌:\n{message}")
+        assert condition, message
 
 def write_log_traceback(file: Path):
     write_log(file, "\n\033[33msummrized traceback\033[0m 🗂️:")
