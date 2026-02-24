@@ -31,6 +31,7 @@ from app.routers.logging import (
     write_log_json,
     write_log_title,
     write_log_traceback,
+    Assert,
 )
 from app.helpers import (
     admin_guard,
@@ -327,80 +328,84 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
 
             # 1. Validate event exists and update event fields
             updated_event = events_queries.update_event(session, event_id, event_data.event)
+            assert updated_event != -1, f"Event with id [{event_id}] hit an IntegrityError while updating."
+
             if updated_event is None:
                 write_log_exception(log_file, f"HTTP 404: Event [{event_id}] not found")
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
             write_log(log_file, f"Updated Event [{event_id}]: {updated_event.name}")
 
-            # 2. Get all logs for this event
-            logs = log_queries.get_logs_by_event_id(session, event_id)
-            if not logs or len(logs) < 2:
-                write_log_exception(log_file, f"HTTP 500: Event [{event_id}] does not have expected logs")
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Event logs not found")
-            write_log(log_file, f"Found [{len(logs)}] logs for event [{event_id}]")
+            # ignore this step if event is custom, we only need to do this for "Full Events"
+            if updated_event.location_type != "none":
+                # 2. Get all logs for this event
+                logs = log_queries.get_logs_by_event_id(session, event_id)
+                if not logs or len(logs) < 2:
+                    write_log_exception(log_file, f"HTTP 500: Event [{event_id}] does not have expected logs")
+                    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Event logs not found")
+                write_log(log_file, f"Found [{len(logs)}] logs for event [{event_id}]")
 
-            # 3. Identify department log and member log
-            # Department log has DepartmentsLogs entries, member log doesn't
-            department_log = None
-            member_log = None
-            for log in logs:
-                current_dept_id = log_queries.get_department_id_from_log(session, log.id)
-                if current_dept_id is not None:
-                    department_log = log
-                else:
-                    member_log = log
+                # 3. Identify department log and member log
+                # Department log has DepartmentsLogs entries, member log doesn't
+                department_log = None
+                member_log = None
+                for log in logs:
+                    current_dept_id = log_queries.get_department_id_from_log(session, log.id)
+                    if current_dept_id is not None:
+                        department_log = log
+                    else:
+                        member_log = log
 
-            if not department_log or not member_log:
-                write_log_exception(log_file, f"HTTP 500: Could not identify department and member logs for event [{event_id}]")
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not identify logs")
+                if not department_log or not member_log:
+                    write_log_exception(log_file, f"HTTP 500: Could not identify department and member logs for event [{event_id}]")
+                    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not identify logs")
 
-            # 4. Actions list: first = department action, second = member action
-            department_action = event_data.actions[0]
-            member_action = event_data.actions[1]
-            write_log(log_file, f"Department action: [{department_action.action_id}], Member action: [{member_action.action_id}]")
+                # 4. Actions list: first = department action, second = member action
+                department_action = event_data.actions[0]
+                member_action = event_data.actions[1]
+                write_log(log_file, f"Department action: [{department_action.action_id}], Member action: [{member_action.action_id}]")
 
-            # 5. Update department log action_id
-            log_queries.update_log_action_id(session, department_log.id, department_action.action_id)
-            write_log(log_file, f"Updated department log [{department_log.id}] action_id to [{department_action.action_id}]")
+                # 5. Update department log action_id
+                log_queries.update_log_action_id(session, department_log.id, department_action.action_id)
+                write_log(log_file, f"Updated department log [{department_log.id}] action_id to [{department_action.action_id}]")
 
-            # 6. Update member log action_id
-            log_queries.update_log_action_id(session, member_log.id, member_action.action_id)
-            write_log(log_file, f"Updated member log [{member_log.id}] action_id to [{member_action.action_id}]")
+                # 6. Update member log action_id
+                log_queries.update_log_action_id(session, member_log.id, member_action.action_id)
+                write_log(log_file, f"Updated member log [{member_log.id}] action_id to [{member_action.action_id}]")
 
-            # 7. Handle department_id and/or days change
-            current_dept_id = log_queries.get_department_id_from_log(session, department_log.id)
-            new_dept_id = department_action.department_id
-            current_dept_logs_count = log_queries.get_department_logs_count(session, department_log.id)
-            new_days = (updated_event.end_datetime - updated_event.start_datetime).days + 1
+                # 7. Handle department_id and/or days change
+                current_dept_id = log_queries.get_department_id_from_log(session, department_log.id)
+                new_dept_id = department_action.department_id
+                current_dept_logs_count = log_queries.get_department_logs_count(session, department_log.id)
+                new_days = (updated_event.end_datetime - updated_event.start_datetime).days + 1
 
-            write_log(log_file, f"Current: dept_id=[{current_dept_id}], days=[{current_dept_logs_count}]. New: dept_id=[{new_dept_id}], days=[{new_days}]")
+                write_log(log_file, f"Current: dept_id=[{current_dept_id}], days=[{current_dept_logs_count}]. New: dept_id=[{new_dept_id}], days=[{new_days}]")
 
-            if new_dept_id is not None and current_dept_id != new_dept_id:
-                # Department changed - delete all and recreate
-                write_log(log_file, f"Department changed from [{current_dept_id}] to [{new_dept_id}]")
+                if new_dept_id is not None and current_dept_id != new_dept_id:
+                    # Department changed - delete all and recreate
+                    write_log(log_file, f"Department changed from [{current_dept_id}] to [{new_dept_id}]")
 
-                deleted_count = log_queries.delete_department_logs_by_log_id(session, department_log.id)
-                write_log(log_file, f"Deleted [{deleted_count}] old department logs for log [{department_log.id}]")
+                    deleted_count = log_queries.delete_department_logs_by_log_id(session, department_log.id)
+                    write_log(log_file, f"Deleted [{deleted_count}] old department logs for log [{department_log.id}]")
 
-                for day in range(new_days):
-                    log_queries.create_department_log(session, new_dept_id, department_log.id)
-                write_log(log_file, f"Created [{new_days}] department logs for new department [{new_dept_id}]")
+                    for day in range(new_days):
+                        log_queries.create_department_log(session, new_dept_id, department_log.id)
+                    write_log(log_file, f"Created [{new_days}] department logs for new department [{new_dept_id}]")
 
-            elif current_dept_logs_count != new_days:
-                # Same department but days changed
-                dept_id_to_use = new_dept_id if new_dept_id is not None else current_dept_id
+                elif current_dept_logs_count != new_days:
+                    # Same department but days changed
+                    dept_id_to_use = new_dept_id if new_dept_id is not None else current_dept_id
 
-                if new_days > current_dept_logs_count:
-                    # Days increased - add more department logs
-                    days_to_add = new_days - current_dept_logs_count
-                    write_log(log_file, f"Days increased from [{current_dept_logs_count}] to [{new_days}], adding [{days_to_add}] department logs")
-                    for _ in range(days_to_add):
-                        log_queries.create_department_log(session, dept_id_to_use, department_log.id)
-                else:
-                    # Days decreased - remove some department logs
-                    days_to_remove = current_dept_logs_count - new_days
-                    write_log(log_file, f"Days decreased from [{current_dept_logs_count}] to [{new_days}], removing [{days_to_remove}] department logs")
-                    log_queries.delete_n_department_logs(session, department_log.id, days_to_remove)
+                    if new_days > current_dept_logs_count:
+                        # Days increased - add more department logs
+                        days_to_add = new_days - current_dept_logs_count
+                        write_log(log_file, f"Days increased from [{current_dept_logs_count}] to [{new_days}], adding [{days_to_add}] department logs")
+                        for _ in range(days_to_add):
+                            log_queries.create_department_log(session, dept_id_to_use, department_log.id)
+                    else:
+                        # Days decreased - remove some department logs
+                        days_to_remove = current_dept_logs_count - new_days
+                        write_log(log_file, f"Days decreased from [{current_dept_logs_count}] to [{new_days}], removing [{days_to_remove}] department logs")
+                        log_queries.delete_n_department_logs(session, department_log.id, days_to_remove)
 
             session.commit()
             session.refresh(updated_event)
