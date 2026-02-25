@@ -633,6 +633,122 @@ def get_member_custom_points(
             )
 
 
+@router.delete("/departments/{log_id}")
+def delete_department_custom_points(
+    log_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(admin_guard),
+):
+    log_file = create_log_file("delete_custom_department_points")
+    with SessionLocal() as session:
+        try:
+            write_log_title(
+                log_file, f"Delete Custom Department Points for Log {log_id}"
+            )
+
+            write_log(log_file, f"Validating log with id {log_id}")
+            existing_log = log_queries.get_log_by_id(session, log_id)
+            if not existing_log:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Log with id {log_id} not found",
+                )
+
+            write_log(
+                log_file,
+                f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}",
+            )
+
+            deleted_mod_count = 0
+            modification = log_queries.get_modification_by_log_id(session, log_id)
+            if modification:
+                write_log(
+                    log_file,
+                    f"Deleting modification with id {modification.id}",
+                )
+                log_queries.delete_modification(session, modification.id)
+                deleted_mod_count = 1
+
+            deleted_dept_count = log_queries.delete_department_logs_by_log_id(
+                session, log_id
+            )
+            write_log(log_file, f"Deleted {deleted_dept_count} department associations")
+
+            log_queries.delete_log(session, log_id)
+            write_log(log_file, f"Deleted log {log_id}")
+
+            session.commit()
+            write_log(log_file, "Successfully deleted custom department points")
+            return {"message": "Successfully deleted custom department points"}
+
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while deleting custom department points",
+            )
+
+
+@router.delete("/members/{log_id}")
+def delete_member_custom_points(
+    log_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(admin_guard),
+):
+    log_file = create_log_file("delete_custom_member_points")
+    with SessionLocal() as session:
+        try:
+            write_log_title(log_file, f"Delete Custom Member Points for Log {log_id}")
+
+            write_log(log_file, f"Validating log with id {log_id}")
+            existing_log = log_queries.get_log_by_id(session, log_id)
+            if not existing_log:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Log with id {log_id} not found",
+                )
+
+            write_log(
+                log_file,
+                f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}",
+            )
+
+            modification = log_queries.get_modification_by_log_id(session, log_id)
+            if modification:
+                write_log(
+                    log_file,
+                    f"Deleting modification with id {modification.id}",
+                )
+                log_queries.delete_modification(session, modification.id)
+
+            deleted_member_count = log_queries.delete_member_logs_by_log_id(
+                session, log_id
+            )
+            write_log(log_file, f"Deleted {deleted_member_count} member associations")
+
+            log_queries.delete_log(session, log_id)
+            write_log(log_file, f"Deleted log {log_id}")
+
+            session.commit()
+            write_log(log_file, "Successfully deleted custom member points")
+            return {"message": "Successfully deleted custom member points"}
+
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while deleting custom member points",
+            )
+
+
 @router.put("/members/{log_id}")
 def update_member_custom_points(
     log_id: int,

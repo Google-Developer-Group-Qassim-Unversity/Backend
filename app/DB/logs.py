@@ -426,3 +426,13 @@ def delete_member_logs_by_log_id(session: Session, log_id: int):
         session.delete(ml)
     session.flush()
     return len(member_logs)
+
+
+def delete_log(session: Session, log_id: int):
+    stmt = select(Logs).where(Logs.id == log_id)
+    log = session.scalar(stmt)
+    if not log:
+        return False
+    session.delete(log)
+    session.flush()
+    return True
