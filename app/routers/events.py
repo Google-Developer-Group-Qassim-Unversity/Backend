@@ -215,7 +215,6 @@ def get_event_attendance_count(event_id: int, credentials: HTTPAuthorizationCred
         return {"attendance_count": len(attendance)}
 
 
-
 @router.get("/open", status_code=status.HTTP_200_OK, response_model=list[Open_Events_model])
 def get_registrable_events():
     """returns events + their associated form"""
@@ -288,7 +287,7 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             # 4. give department points for each day
             days = (event_data.event.end_datetime - event_data.event.start_datetime).days + 1
             for day in range(days):
-                write_log(log_file, f"Giving department points for day [{day + 1}]/[{days}]")
+                write_log(log_file, f"Giving department {event_data.department_id} points for day [{day + 1}]/[{days}]")
                 log_queries.create_department_log(session, event_data.department_id, department_log.id)
 
             write_log(log_file, f"Created logs for event department: [{event_data.department_action_id}] and member: [{event_data.member_action_id}]")
@@ -317,8 +316,8 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
         500: {
             "model": InternalServerErrorResponse,
             "description": "Internal server error",
-        },
-    }
+        }
+    },
 )
 def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depends(admin_guard)):
     log_file = create_log_file("update event")
@@ -348,6 +347,7 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
                 # Department log has DepartmentsLogs entries, member log doesn't
                 department_log = None
                 member_log = None
+                # TODO: This WRONG logs that don't havea department_id should not be assumed to be member logs
                 for log in logs:
                     current_dept_id = log_queries.get_department_id_from_log(session, log.id)
                     if current_dept_id is not None:
@@ -356,7 +356,7 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
                         member_log = log
 
                 if not department_log or not member_log:
-                    write_log_exception(log_file, f"HTTP 500: Could not identify department and member logs for event [{event_id}]")
+                    write_log_exception(log_file, f"HTTP 500: Could not identify department and member logs (logs table) for event [{event_id}]")
                     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not identify logs")
 
                 # 4. Actions list: first = department action, second = member action
@@ -380,8 +380,8 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
 
                 write_log(log_file, f"Current: dept_id=[{current_dept_id}], days=[{current_dept_logs_count}]. New: dept_id=[{new_dept_id}], days=[{new_days}]")
 
+                # Department changed - delete all and recreate
                 if new_dept_id is not None and current_dept_id != new_dept_id:
-                    # Department changed - delete all and recreate
                     write_log(log_file, f"Department changed from [{current_dept_id}] to [{new_dept_id}]")
 
                     deleted_count = log_queries.delete_department_logs_by_log_id(session, department_log.id)
