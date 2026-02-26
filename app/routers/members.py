@@ -101,6 +101,26 @@ def get_all_members(credentials: HTTPAuthorizationCredentials = Depends(admin_gu
 
 
 @router.get(
+    "/uni-id/{uni_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=Member_model,
+    responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
+)
+def get_member_by_uni_id(
+    uni_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(admin_guard),
+):
+    with SessionLocal() as session:
+        member = member_queries.get_member_by_uni_id(session, uni_id)
+        if not member:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Member with university ID {uni_id} not found",
+            )
+    return member
+
+
+@router.get(
     "/{member_id:int}",
     status_code=status.HTTP_200_OK,
     response_model=Member_model,
