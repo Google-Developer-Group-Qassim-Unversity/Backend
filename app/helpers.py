@@ -50,17 +50,19 @@ def get_uni_id_from_credentials(credentials):
 
 def is_admin(credentials) -> bool:
     decoded = credentials.model_dump()['decoded']
-    is_admin = decoded['metadata'].get('is_admin', False)
-    return is_admin
+    metadata = decoded.get('metadata', {})
+    return metadata.get('is_admin', False) or metadata.get('is_super_admin', False)
 
 def is_super_admin(credentials) -> bool:
     decoded = credentials.model_dump()['decoded']
-    is_super_admin = decoded['metadata'].get('is_super_admin', False)
-    return is_super_admin
+    metadata = decoded.get('metadata', {})
+    return metadata.get('is_super_admin', False)
 
 def admin_guard(credentials=Depends(config.CLERK_GUARD)):
     print("🔒 User authenticated, checking admin privileges...")
     if not is_admin(credentials):
+        metadata = credentials.model_dump().get('decoded', {}).get('metadata', {})
+        print(f"🚫 Access Denied! User Metadata: {metadata}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required",
