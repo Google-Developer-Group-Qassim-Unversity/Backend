@@ -369,7 +369,7 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             # 4. give department points for each day
             days = (event_data.event.end_datetime - event_data.event.start_datetime).days + 1
             for day in range(days):
-                write_log(log_file, f"Giving department points for day [{day + 1}]/[{days}]")
+                write_log(log_file, f"Giving department {event_data.department_id} points for day [{day + 1}]/[{days}]")
                 log_queries.create_department_log(session, event_data.department_id, department_log.id)
 
             write_log(
@@ -446,6 +446,7 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
                 # Department log has DepartmentsLogs entries, member log doesn't
                 department_log = None
                 member_log = None
+                # TODO: This WRONG logs that don't havea department_id should not be assumed to be member logs
                 for log in logs:
                     current_dept_id = log_queries.get_department_id_from_log(session, log.id)
                     if current_dept_id is not None:
