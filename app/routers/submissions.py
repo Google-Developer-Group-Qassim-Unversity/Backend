@@ -18,7 +18,7 @@ router = APIRouter()
 
 
 @router.post("/{form_id:int}", status_code=status.HTTP_200_OK)
-def create_submission(form_id: int, submission_type: Literal['none', 'partial'], credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def create_submission(form_id: int, submission_type: Literal['none', 'partial'], credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
     with SessionLocal() as session:
         try:
             uni_id = get_uni_id_from_credentials(credentials)
@@ -34,7 +34,7 @@ def create_submission(form_id: int, submission_type: Literal['none', 'partial'],
 
         
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
-def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
     log_file = create_log_file("check submission exists")
     with SessionLocal() as session:
         try:
