@@ -6,7 +6,32 @@ import pandas as pd
 from pydantic import HttpUrl
 from json import dumps
 import jwt
-from datetime import datetime
+from datetime import datetime, date, timedelta
+
+
+def get_effective_date(dt: datetime, threshold: int) -> date:
+    """
+    Get the intended/effective date for attendance purposes.
+
+    Times in early hours (00:00 to threshold-1) are considered part of the
+    previous day. This handles midnight-crossing events where late-night
+    attendance should count as the "intended" day.
+
+    Args:
+        dt: The datetime to convert
+        threshold: Hour threshold (0-23). Hours < threshold shift to previous day.
+
+    Returns:
+        The effective date.
+
+    Example:
+        With threshold=6:
+        - Mar 3, 2:00 AM → effective date is Mar 2
+        - Mar 3, 8:00 AM → effective date is Mar 3
+    """
+    if dt.hour < threshold:
+        return (dt - timedelta(days=1)).date()
+    return dt.date()
 
 
 def get_pydantic_members(source: Union[str, HttpUrl]):
@@ -30,11 +55,17 @@ def get_pydantic_members(source: Union[str, HttpUrl]):
         member = Member_model(
             name=row.get("name"),
             email=str(row.get("email")),
-            phone_number=None if pd.isna(row.get("phone number")) or row.get("phone number") == "" else str(row.get("phone number")),
+            phone_number=None
+            if pd.isna(row.get("phone number")) or row.get("phone number") == ""
+            else str(row.get("phone number")),
             uni_id=str(row.get("uni id")),
             gender=row.get("gender"),
-            uni_level=0 if pd.isna(row.get("uni level")) or row.get("uni level") == "" else int(row.get("uni level")),
-            uni_college="unknown" if pd.isna(row.get("uni college")) or row.get("uni college") == "" else str(row.get("uni college")),
+            uni_level=0
+            if pd.isna(row.get("uni level")) or row.get("uni level") == ""
+            else int(row.get("uni level")),
+            uni_college="unknown"
+            if pd.isna(row.get("uni college")) or row.get("uni college") == ""
+            else str(row.get("uni college")),
         )
 
         members.append(member)
@@ -47,7 +78,9 @@ def get_pydantic_members(source: Union[str, HttpUrl]):
 def get_uni_id_from_credentials(credentials):
     decoded = credentials.model_dump()["decoded"]
     assert "metadata" in decoded, "Decoded credentials missing 'metadata'"
-    assert "uni_id" in decoded["metadata"], "Decoded credentials metadata missing 'uni_id'"
+    assert "uni_id" in decoded["metadata"], (
+        "Decoded credentials metadata missing 'uni_id'"
+    )
     # print("Got decoded credentials 🔒:")
     # print(dumps(credentials.model_dump(), ensure_ascii=False, indent=4))
     uni_id: str = str(decoded["metadata"]["uni_id"])

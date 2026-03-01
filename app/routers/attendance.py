@@ -27,6 +27,7 @@ from app.helpers import (
     validate_attendance_token,
     credentials_to_member_model,
     is_admin,
+    get_effective_date,
 )
 from datetime import datetime
 
@@ -126,6 +127,26 @@ def mark_attendance(
                         log_file,
                         f"Checking member log id: [{member_log.id}], log_id: [{member_log.log_id}], Date: [{member_log.date}]",
                     )
+                    now_effective = get_effective_date(
+                        datetime.now(), config.ATTENDANCE_EARLY_HOURS_THRESHOLD
+                    )
+                    log_effective = get_effective_date(
+                        member_log.date, config.ATTENDANCE_EARLY_HOURS_THRESHOLD
+                    )
+                    if log_effective == now_effective:
+                        write_log(
+                            log_file,
+                            f"Member [{member.id}] has already marked attendance for today (effective date: {now_effective})",
+                        )
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="!انت سجلت حضورك لهذا الحدث اليوم",
+                        )
+                    else:
+                        write_log(
+                            log_file,
+                            f"Member [{member.id}] attended on effective date [{log_effective}]",
+                        )
                     # check if its for today
                     if (
                         member_log.date.date() == datetime.now().date()

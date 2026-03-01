@@ -1,4 +1,3 @@
-from ast import stmt
 from sqlalchemy.orm import Session
 from app.DB.schema import (
     Events,
@@ -11,11 +10,11 @@ from app.DB.schema import (
     Modifications,
 )
 from typing import Literal
-from sqlalchemy import select, func, case
-from sqlalchemy.orm import aliased, Session
+from sqlalchemy import select, func, case, text
 from json import loads
 from datetime import datetime, timedelta
 from app.routers.models import Member_model, AttendanceRecord_model
+from app.config import config
 
 
 def create_department_log(
@@ -33,7 +32,7 @@ def create_department_log(
 
 
 def create_member_log(
-    session: Session, member_id: int, log_id: int, date: datetime = None
+    session: Session, member_id: int, log_id: int, date: datetime | None = None
 ):
     if date is None:
         date = datetime.now()
@@ -205,7 +204,7 @@ def get_event_attendance(
     if not event:
         return []
 
-    event_days = (event.end_datetime.date() - event.start_datetime.date()).days + 1
+    event_days = (event.end_datetime - event.start_datetime).days + 1
 
     stmt = (
         select(Members, func.JSON_ARRAYAGG(MembersLogs.date).label("dates"))
@@ -216,13 +215,22 @@ def get_event_attendance(
         .where(Events.id == event_id)
     )
 
-    if day and day != "all" and day != "exclusive_all":
+    if isinstance(day, int):
         try:
-            day_num = int(day)
+            day_num = day
             if day_num > 0:
-                target_date = event.start_datetime.date()
-                target_date = target_date + timedelta(days=day_num - 1)
-                stmt = stmt.where(func.DATE(MembersLogs.date) == target_date)
+                threshold = config.ATTENDANCE_EARLY_HOURS_THRESHOLD
+                target_date = event.start_datetime.date() + timedelta(days=day_num - 1)
+                effective_date = case(
+                    (
+                        func.HOUR(MembersLogs.date) < threshold,
+                        func.DATE(
+                            func.DATE_SUB(MembersLogs.date, text("INTERVAL 1 DAY"))
+                        ),
+                    ),
+                    else_=func.DATE(MembersLogs.date),
+                )
+                stmt = stmt.where(effective_date == target_date)
         except (ValueError, TypeError):
             pass
 
