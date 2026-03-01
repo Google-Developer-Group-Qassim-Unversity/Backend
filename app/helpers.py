@@ -43,6 +43,8 @@ def get_pydantic_members(source: Union[str, HttpUrl]):
     return members
 def get_uni_id_from_credentials(credentials):
     decoded = credentials.model_dump()['decoded']
+    assert 'metadata' in decoded, "Decoded credentials missing 'metadata'"
+    assert 'uni_id' in decoded['metadata'], "Decoded credentials metadata missing 'uni_id'"
     # print("Got decoded credentials 🔒:")
     # print(dumps(credentials.model_dump(), ensure_ascii=False, indent=4))
     uni_id: str = str(decoded['metadata']['uni_id'])
@@ -79,11 +81,33 @@ def super_admin_guard(credentials=Depends(config.CLERK_GUARD)):
     return credentials
 
 def credentials_to_member_model(credentials) -> Member_model:
+    """Convert Clerk credentials into the internal ``Member_model``.
+
+    Returns:
+        Member_model | None:
+            A populated ``Member_model`` instance, or ``None`` if the credentials
+            are invalid or missing required fields.
+
+    Notes:
+        Current metadata fields set in clerk's publicMetadata by the authenticated repository:
+
+        - ``uni_id`` (str)
+        - ``fullArabicName`` (str)
+        - ``saudiPhone`` (str)
+        - ``gender`` (Literal["Male", "Female"])
+        - ``uniLevel`` (int)
+        - ``uniCollege`` (str)
+        - ``personalEmail`` (str)
+    """
+
+    # 1. decode and validate metadata from credentials
     credentials_dict = credentials.model_dump()
     credentials_str = dumps(credentials.model_dump(), ensure_ascii=False, indent=4)
     if not credentials_dict['decoded']['metadata']:
         print(f"Invalid credentials structure:\n{credentials_str}")
         raise ValueError("Invalid credentials: 'decoded' or 'metadata' missing")
+    
+    # 2. create Member_model from metadata
     metadata = credentials_dict['decoded']['metadata']
     member = Member_model(
         name=metadata.get('fullArabicName'),

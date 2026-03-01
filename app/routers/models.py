@@ -334,3 +334,13 @@ class MemberUpdate_model(BaseModel):
     gender: Literal["Male", "Female"] | None = None
     uni_level: int | None = None
     uni_college: str | None = None
+
+
+class AttendanceRecord_model(BaseClassModel):
+    Members: Member_model
+    dates: list[datetime]
+
+
+class EventAttendanceResponse(BaseClassModel):
+    attendance_count: int
+    attendance: list[AttendanceRecord_model] | None = None

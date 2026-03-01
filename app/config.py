@@ -71,12 +71,21 @@ class Config:
         return url
 
     @property
-    def CLERK_GUARD(self) -> str:
+    def CLERK_GUARD(self):
         if self.is_dev:
             clerk_config = ClerkConfig(jwks_url=CLERK_DEV)
         else:
             clerk_config = ClerkConfig(jwks_url=CLERK_PROD)
         clerk_auth_guard = ClerkHTTPBearer(config=clerk_config)
+        return clerk_auth_guard
+
+    @property
+    def CLERK_GUARD_optional(self):
+        if self.is_dev:
+            clerk_config = ClerkConfig(jwks_url=CLERK_DEV)
+        else:
+            clerk_config = ClerkConfig(jwks_url=CLERK_PROD)
+        clerk_auth_guard = ClerkHTTPBearer(config=clerk_config, auto_error=False)
         return clerk_auth_guard
 
     @property

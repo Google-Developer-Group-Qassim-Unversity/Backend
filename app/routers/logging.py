@@ -61,7 +61,10 @@ def print_summarized_traceback() -> str:
     for frame in extract_tb(tb):
         print(f"...{path.sep.join(frame.filename.split(path.sep)[-3:])}, line {frame.lineno}:{frame.colno}\n")
 
-def write_log_exception(file: Path, err: Exception):
+def write_log_exception(file: Path, err: Exception | str):
+    # this is Temp to shut up linters, TODO: fix all calls using strings instead of exceptions and remove this check
+    if isinstance(err, str):
+        err = Exception(err)
     write_log(file, "\n\033[33mError\033[0m ❌:")
     file = file.with_name("error.log")
     write_log(file, str(err))

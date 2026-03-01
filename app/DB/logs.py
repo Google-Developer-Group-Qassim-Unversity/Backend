@@ -15,6 +15,7 @@ from sqlalchemy import select, func, case
 from sqlalchemy.orm import aliased, Session
 from json import loads
 from datetime import datetime, timedelta
+from app.routers.models import Member_model, AttendanceRecord_model
 
 
 def create_department_log(
@@ -195,13 +196,15 @@ def get_department_logs_count(session: Session, log_id: int):
     return len(department_logs)
 
 
-def get_event_attendance(session: Session, event_id: int, day: str | int | None = None):
-    # Get event start date to calculate day offset
+def get_event_attendance(
+    session: Session,
+    event_id: int,
+    day: Literal["all", "exclusive_all"] | int | None = None,
+) -> list[AttendanceRecord_model]:
     event = session.query(Events).filter(Events.id == event_id).first()
     if not event:
         return []
 
-    # Calculate total event days
     event_days = (event.end_datetime.date() - event.start_datetime.date()).days + 1
 
     stmt = (
@@ -213,13 +216,11 @@ def get_event_attendance(session: Session, event_id: int, day: str | int | None 
         .where(Events.id == event_id)
     )
 
-    # Filter by specific day if requested
     if day and day != "all" and day != "exclusive_all":
         try:
             day_num = int(day)
             if day_num > 0:
                 target_date = event.start_datetime.date()
-
                 target_date = target_date + timedelta(days=day_num - 1)
                 stmt = stmt.where(func.DATE(MembersLogs.date) == target_date)
         except (ValueError, TypeError):
@@ -228,17 +229,14 @@ def get_event_attendance(session: Session, event_id: int, day: str | int | None 
     stmt = stmt.group_by(Members.id).order_by(func.MAX(MembersLogs.date).desc())
 
     rows = session.execute(stmt).all()
-    result = [
-        {
-            **row._asdict(),
-            "dates": sorted(loads(row.dates) if row.dates else [], reverse=True),
-        }
-        for row in rows
-    ]
+    result: list[AttendanceRecord_model] = []
+    for row in rows:
+        member = Member_model.model_validate(row.Members)
+        dates = sorted(loads(row.dates) if row.dates else [], reverse=True)
+        result.append(AttendanceRecord_model(Members=member, dates=dates))
 
-    # Filter for exclusive_all: only members who attended all days
     if day == "exclusive_all":
-        result = [r for r in result if len(r["dates"]) == event_days]
+        result = [r for r in result if len(r.dates) == event_days]
 
     return result
 
