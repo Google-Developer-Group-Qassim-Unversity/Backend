@@ -33,6 +33,7 @@ from datetime import datetime
 
 router = APIRouter()
 
+
 @router.post(
     "/{event_id:int}/attendance",
     status_code=status.HTTP_200_OK,
@@ -56,7 +57,7 @@ def mark_attendance(
     if token:
         write_log(log_file, f"validating attendance token for event [{event_id}]")
         try:
-            token_validation = validate_attendance_token(token, event_id)
+            validate_attendance_token(token, event_id)
             write_log(log_file, f"Token validated successfully for event [{event_id}]")
         except HTTPException as e:
             write_log_exception(
@@ -64,7 +65,7 @@ def mark_attendance(
             )
             raise
     else:
-        write_log(log_file, f"HTTP 400:No attendance token provided")
+        write_log(log_file, "HTTP 400:No attendance token provided")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No attendance token provided!",
@@ -282,3 +283,7 @@ def get_event_attendance(
                 attendance_count=len(member_attendance), attendance=member_attendance
             )
 
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid type '{type}'. Must be 'count', 'detailed', or 'me'.",
+        )
