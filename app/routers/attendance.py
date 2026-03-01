@@ -61,9 +61,7 @@ def mark_attendance(
             validate_attendance_token(token, event_id)
             write_log(log_file, f"Token validated successfully for event [{event_id}]")
         except HTTPException as e:
-            write_log_exception(
-                log_file, Exception(f"Token validation failed reason: '{e.detail}'")
-            )
+            write_log_exception(log_file, Exception(f"Token validation failed reason: '{e.detail}'"))
             raise
     else:
         write_log(log_file, "HTTP 400:No attendance token provided")
@@ -74,13 +72,9 @@ def mark_attendance(
 
     with SessionLocal() as session:
         try:
-            member = member_queries.get_member_by_uni_id(
-                session, credentials_to_member_model(credentials).uni_id
-            )
+            member = member_queries.get_member_by_uni_id(session, credentials_to_member_model(credentials).uni_id)
             if not member:
-                excep = HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Member not found"
-                )
+                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
                 write_log_exception(log_file, excep)
                 raise excep
             write_log_title(
@@ -91,9 +85,7 @@ def mark_attendance(
             # 1. check if event exists
             event = events_queries.get_event_by_id(session, event_id)
             if not event:
-                excep = HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-                )
+                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
                 write_log_exception(log_file, excep)
                 raise excep
             write_log(
@@ -127,12 +119,8 @@ def mark_attendance(
                         log_file,
                         f"Checking member log id: [{member_log.id}], log_id: [{member_log.log_id}], Date: [{member_log.date}]",
                     )
-                    now_effective = get_effective_date(
-                        datetime.now(), config.ATTENDANCE_EARLY_HOURS_THRESHOLD
-                    )
-                    log_effective = get_effective_date(
-                        member_log.date, config.ATTENDANCE_EARLY_HOURS_THRESHOLD
-                    )
+                    now_effective = get_effective_date(datetime.now(), config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+                    log_effective = get_effective_date(member_log.date, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
                     if log_effective == now_effective:
                         write_log(
                             log_file,
@@ -146,23 +134,6 @@ def mark_attendance(
                         write_log(
                             log_file,
                             f"Member [{member.id}] attended on effective date [{log_effective}]",
-                        )
-                    # check if its for today
-                    if (
-                        member_log.date.date() == datetime.now().date()
-                    ):  # the .date() removes the time part of the datetime
-                        write_log(
-                            log_file,
-                            f"Member [{member.id}] has already marked attendance for today the [{member_log.date.day}]th",
-                        )
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="!انت سجلت حضورك لهذا الحدث اليوم",
-                        )
-                    else:
-                        write_log(
-                            log_file,
-                            f"Member [{member.id}] was attended for the [{member_log.date.day}]th",
                         )
 
             # 3. get form registration type
@@ -182,18 +153,14 @@ def mark_attendance(
                     f"Form type is none (Doesn't require registeration), creating member log for member [{member.id}] and log [{event_log.id}]",
                 )
                 log_queries.create_member_log(session, member.id, event_log.id)
-                write_log(
-                    log_file, f"Member marked attendance for event [{event.name}]"
-                )
+                write_log(log_file, f"Member marked attendance for event [{event.name}]")
 
             if form_type == "google" or form_type == "registration":
                 write_log(
                     log_file,
                     f"Form type is google or registration, checking submissions for member [{member.id}] and form [{form.id}]",
                 )
-                submissions = submission_queries.get_submission_by_form_and_member(
-                    session, form.id, member.id
-                )
+                submissions = submission_queries.get_submission_by_form_and_member(session, form.id, member.id)
                 if not submissions:
                     write_log_exception(
                         log_file,
@@ -251,16 +218,12 @@ def get_event_attendance(
         "all",
         description="Filter by event day: 'all' (all days), 'exclusive_all' (only those atteded all days), int (specific day number 1-based index)",
     ),
-    credentials: HTTPAuthorizationCredentials | None = Depends(
-        config.CLERK_GUARD_optional
-    ),
+    credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
         if not event:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
         event_days = (event.end_datetime - event.start_datetime).days + 1
         if isinstance(day, int) and (day < 1 or day > event_days):
@@ -271,9 +234,7 @@ def get_event_attendance(
 
         if type == "count":
             attendance = log_queries.get_event_attendance(session, event_id, day)
-            return EventAttendanceResponse(
-                attendance_count=len(attendance), attendance=None
-            )
+            return EventAttendanceResponse(attendance_count=len(attendance), attendance=None)
 
         if type == "detailed":
             if not credentials or not is_admin(credentials):
@@ -282,9 +243,7 @@ def get_event_attendance(
                     detail="Admin privileges required for detailed attendance",
                 )
             attendance = log_queries.get_event_attendance(session, event_id, day)
-            return EventAttendanceResponse(
-                attendance_count=len(attendance), attendance=attendance
-            )
+            return EventAttendanceResponse(attendance_count=len(attendance), attendance=attendance)
 
         if type == "me":
             if not credentials:
@@ -295,14 +254,10 @@ def get_event_attendance(
             uni_id = credentials_to_member_model(credentials).uni_id
             member = member_queries.get_member_by_uni_id(session, uni_id)
             if not member:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Member not found"
-                )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
             attendance = log_queries.get_event_attendance(session, event_id, day)
             member_attendance = [a for a in attendance if a.Members.uni_id == uni_id]
-            return EventAttendanceResponse(
-                attendance_count=len(member_attendance), attendance=member_attendance
-            )
+            return EventAttendanceResponse(attendance_count=len(member_attendance), attendance=member_attendance)
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

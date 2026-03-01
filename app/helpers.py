@@ -55,17 +55,11 @@ def get_pydantic_members(source: Union[str, HttpUrl]):
         member = Member_model(
             name=row.get("name"),
             email=str(row.get("email")),
-            phone_number=None
-            if pd.isna(row.get("phone number")) or row.get("phone number") == ""
-            else str(row.get("phone number")),
+            phone_number=None if pd.isna(row.get("phone number")) or row.get("phone number") == "" else str(row.get("phone number")),
             uni_id=str(row.get("uni id")),
             gender=row.get("gender"),
-            uni_level=0
-            if pd.isna(row.get("uni level")) or row.get("uni level") == ""
-            else int(row.get("uni level")),
-            uni_college="unknown"
-            if pd.isna(row.get("uni college")) or row.get("uni college") == ""
-            else str(row.get("uni college")),
+            uni_level=0 if pd.isna(row.get("uni level")) or row.get("uni level") == "" else int(row.get("uni level")),
+            uni_college="unknown" if pd.isna(row.get("uni college")) or row.get("uni college") == "" else str(row.get("uni college")),
         )
 
         members.append(member)
@@ -78,9 +72,7 @@ def get_pydantic_members(source: Union[str, HttpUrl]):
 def get_uni_id_from_credentials(credentials):
     decoded = credentials.model_dump()["decoded"]
     assert "metadata" in decoded, "Decoded credentials missing 'metadata'"
-    assert "uni_id" in decoded["metadata"], (
-        "Decoded credentials metadata missing 'uni_id'"
-    )
+    assert "uni_id" in decoded["metadata"], "Decoded credentials metadata missing 'uni_id'"
     # print("Got decoded credentials 🔒:")
     # print(dumps(credentials.model_dump(), ensure_ascii=False, indent=4))
     uni_id: str = str(decoded["metadata"]["uni_id"])
