@@ -35,7 +35,7 @@ router = APIRouter()
 
 
 @router.post(
-    "/{event_id:int}/attendance",
+    "/{event_id:int}",
     status_code=status.HTTP_200_OK,
     responses={
         404: {"model": NotFoundResponse, "description": "Event not found"},
@@ -216,7 +216,7 @@ def mark_attendance(
 
 
 @router.get(
-    "/{event_id:int}/attendance",
+    "/{event_id:int}",
     status_code=status.HTTP_200_OK,
     response_model=EventAttendanceResponse,
 )
