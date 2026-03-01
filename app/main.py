@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from app.routers import (
-    certificates, upload, members, events, departments,
+    attendance, certificates, upload, members, events, departments,
      action, complex_events, custom, edit,
      auth, card, forms, submissions,
      submissions_manual, points
@@ -29,6 +29,7 @@ def root():
 app.include_router(members.router, prefix="/members", tags=["members"])
 app.include_router(events.router, prefix="/events", tags=["events"])
 app.include_router(points.router, prefix="/points", tags=["Points"])
+app.include_router(attendance.router, prefix="/attendance", tags=["Attendance"])
 app.include_router(certificates.router, prefix="/certificates", tags=["certificates"])
 app.include_router(departments.router, prefix="/departments", tags=["departments"])
 app.include_router(action.router, prefix="/actions", tags=["actions"])

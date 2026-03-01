@@ -17,7 +17,7 @@ load_dotenv()
 # =============================================================================
 
 DB_PROD = "scores"
-DB_DEV = "scores_dev"
+DB_DEV = "scores"
 
 CLERK_PROD = "https://clerk.gdg-q.com/.well-known/jwks.json"
 CLERK_DEV = "https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json"
@@ -38,6 +38,13 @@ MAX_PAGE_SIZE = 100
 DEFAULT_SORT_ORDER = "DESC"
 DEFAULT_EVENTS_SORT_BY = "start_datetime"
 ALLOWED_EVENTS_SORT_BY = ["start_datetime"]
+
+# Attendance settings
+# Hours before this threshold are considered part of the previous day.
+# This handles midnight-crossing events where late-night attendance should count
+# as the "intended" day (e.g., 2AM attendance counts as the night before).
+# Example: with threshold=6, attendance at 2AM on Mar 3 is treated as Mar 2.
+ATTENDANCE_EARLY_HOURS_THRESHOLD = 6
 
 # =============================================================================
 #
@@ -71,12 +78,21 @@ class Config:
         return url
 
     @property
-    def CLERK_GUARD(self) -> str:
+    def CLERK_GUARD(self):
         if self.is_dev:
             clerk_config = ClerkConfig(jwks_url=CLERK_DEV)
         else:
             clerk_config = ClerkConfig(jwks_url=CLERK_PROD)
         clerk_auth_guard = ClerkHTTPBearer(config=clerk_config)
+        return clerk_auth_guard
+
+    @property
+    def CLERK_GUARD_optional(self):
+        if self.is_dev:
+            clerk_config = ClerkConfig(jwks_url=CLERK_DEV)
+        else:
+            clerk_config = ClerkConfig(jwks_url=CLERK_PROD)
+        clerk_auth_guard = ClerkHTTPBearer(config=clerk_config, auto_error=False)
         return clerk_auth_guard
 
     @property
@@ -116,6 +132,10 @@ class Config:
     @property
     def ALLOWED_EVENTS_SORT_BY(self) -> list[str]:
         return ALLOWED_EVENTS_SORT_BY
+
+    @property
+    def ATTENDANCE_EARLY_HOURS_THRESHOLD(self) -> int:
+        return ATTENDANCE_EARLY_HOURS_THRESHOLD
 
     @property
     def GOOGLE_CLIENT_ID(self) -> str:

@@ -1,4 +1,3 @@
-from ast import stmt
 from sqlalchemy.orm import Session
 from app.DB.schema import (
     Events,
@@ -11,10 +10,11 @@ from app.DB.schema import (
     Modifications,
 )
 from typing import Literal
-from sqlalchemy import select, func, case
-from sqlalchemy.orm import aliased, Session
+from sqlalchemy import select, func, case, text
 from json import loads
 from datetime import datetime, timedelta
+from app.routers.models import Member_model, AttendanceRecord_model
+from app.config import config
 
 
 def create_department_log(
@@ -32,7 +32,7 @@ def create_department_log(
 
 
 def create_member_log(
-    session: Session, member_id: int, log_id: int, date: datetime = None
+    session: Session, member_id: int, log_id: int, date: datetime | None = None
 ):
     if date is None:
         date = datetime.now()
@@ -195,14 +195,16 @@ def get_department_logs_count(session: Session, log_id: int):
     return len(department_logs)
 
 
-def get_event_attendance(session: Session, event_id: int, day: str | int | None = None):
-    # Get event start date to calculate day offset
+def get_event_attendance(
+    session: Session,
+    event_id: int,
+    day: Literal["all", "exclusive_all"] | int | None = None,
+) -> list[AttendanceRecord_model]:
     event = session.query(Events).filter(Events.id == event_id).first()
     if not event:
         return []
 
-    # Calculate total event days
-    event_days = (event.end_datetime.date() - event.start_datetime.date()).days + 1
+    event_days = (event.end_datetime - event.start_datetime).days + 1
 
     stmt = (
         select(Members, func.JSON_ARRAYAGG(MembersLogs.date).label("dates"))
@@ -213,32 +215,36 @@ def get_event_attendance(session: Session, event_id: int, day: str | int | None 
         .where(Events.id == event_id)
     )
 
-    # Filter by specific day if requested
-    if day and day != "all" and day != "exclusive_all":
+    if isinstance(day, int):
         try:
-            day_num = int(day)
+            day_num = day
             if day_num > 0:
-                target_date = event.start_datetime.date()
-
-                target_date = target_date + timedelta(days=day_num - 1)
-                stmt = stmt.where(func.DATE(MembersLogs.date) == target_date)
+                threshold = config.ATTENDANCE_EARLY_HOURS_THRESHOLD
+                target_date = event.start_datetime.date() + timedelta(days=day_num - 1)
+                effective_date = case(
+                    (
+                        func.HOUR(MembersLogs.date) < threshold,
+                        func.DATE(
+                            func.DATE_SUB(MembersLogs.date, text("INTERVAL 1 DAY"))
+                        ),
+                    ),
+                    else_=func.DATE(MembersLogs.date),
+                )
+                stmt = stmt.where(effective_date == target_date)
         except (ValueError, TypeError):
             pass
 
     stmt = stmt.group_by(Members.id).order_by(func.MAX(MembersLogs.date).desc())
 
     rows = session.execute(stmt).all()
-    result = [
-        {
-            **row._asdict(),
-            "dates": sorted(loads(row.dates) if row.dates else [], reverse=True),
-        }
-        for row in rows
-    ]
+    result: list[AttendanceRecord_model] = []
+    for row in rows:
+        member = Member_model.model_validate(row.Members)
+        dates = sorted(loads(row.dates) if row.dates else [], reverse=True)
+        result.append(AttendanceRecord_model(Members=member, dates=dates))
 
-    # Filter for exclusive_all: only members who attended all days
     if day == "exclusive_all":
-        result = [r for r in result if len(r["dates"]) == event_days]
+        result = [r for r in result if len(r.dates) == event_days]
 
     return result
 
