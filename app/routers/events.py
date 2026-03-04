@@ -362,6 +362,57 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
             write_log_json(log_file, event_data.model_dump(mode="json"))
 
 
+@router.delete(
+    "/{event_id:int}",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"model": NotFoundResponse, "description": "Event not found"},
+        400: {"description": "Only draft events can be deleted"},
+    },
+)
+def delete_event(event_id: int, credentials=Depends(admin_guard)):
+    log_file = create_log_file("delete event")
+    with SessionLocal() as session:
+        try:
+            write_log_title(log_file, f"Deleting Event [{event_id}]")
+
+            event = events_queries.get_event_by_id(session, event_id)
+            if not event:
+                write_log_exception(log_file, f"HTTP 404: Event [{event_id}] not found")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Event not found",
+                )
+
+            if event.status != "draft":
+                write_log_exception(
+                    log_file,
+                    f"HTTP 400: Cannot delete event [{event_id}] with status [{event.status}]",
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only draft events can be deleted",
+                )
+
+            event_name = event.name
+            events_queries.delete_event(session, event_id)
+            session.commit()
+            write_log(log_file, f"Event [{event_id}]: {event_name} deleted successfully")
+            return {"detail": "Event deleted successfully"}
+
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while deleting the event",
+            )
+
+
 @router.put(
     "/{event_id:int}/status",
     status_code=status.HTTP_200_OK,

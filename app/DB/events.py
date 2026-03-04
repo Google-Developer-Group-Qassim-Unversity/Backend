@@ -68,6 +68,14 @@ def create_event(session: Session, event_data: Events_model):
         session.rollback()
         return None
 
+def delete_event(session: Session, event_id: int):
+    event = session.scalar(select(Events).where(Events.id == event_id))
+    if not event:
+        return None
+    session.delete(event)
+    session.flush()
+    return event
+
 def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event = session.scalar(select(Events).where(Events.id == event_id))
     if not existing_event:
