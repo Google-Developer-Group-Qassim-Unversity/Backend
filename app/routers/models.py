@@ -344,3 +344,14 @@ class AttendanceRecord_model(BaseClassModel):
 class EventAttendanceResponse(BaseClassModel):
     attendance_count: int
     attendance: list[AttendanceRecord_model] | None = None
+
+
+class ManualAttendanceRequest(BaseModel):
+    member_ids: list[int]
+    day: int | None = None
+    days: list[int] | None = None
+
+
+class CopyAttendanceRequest(BaseModel):
+    source_day: int
+    target_days: list[int]

@@ -15,6 +15,7 @@ from json import loads
 from datetime import datetime, timedelta
 from app.routers.models import Member_model, AttendanceRecord_model
 from app.config import config
+from app.helpers import get_effective_date
 
 
 def create_department_log(
@@ -432,6 +433,23 @@ def delete_member_logs_by_log_id(session: Session, log_id: int):
         session.delete(ml)
     session.flush()
     return len(member_logs)
+
+
+def delete_member_log(session: Session, member_id: int, log_id: int, target_date: datetime) -> bool:
+    stmt = select(MembersLogs).where(
+        MembersLogs.member_id == member_id,
+        MembersLogs.log_id == log_id,
+    )
+    member_logs = session.scalars(stmt).all()
+    threshold = config.ATTENDANCE_EARLY_HOURS_THRESHOLD
+    for ml in member_logs:
+        log_effective = get_effective_date(ml.date, threshold)
+        target_effective = get_effective_date(target_date, threshold)
+        if log_effective == target_effective:
+            session.delete(ml)
+            session.flush()
+            return True
+    return False
 
 
 def delete_log(session: Session, log_id: int):
