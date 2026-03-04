@@ -14,6 +14,7 @@ from app.routers.models import (
     BadRequestResponse,
     InternalServerErrorResponse,
     EventAttendanceResponse,
+    ManualAttendanceRequest,
 )
 from app.config import config
 from app.routers.logging import (
@@ -29,7 +30,7 @@ from app.helpers import (
     is_admin,
     get_effective_date,
 )
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 router = APIRouter()
@@ -263,3 +264,187 @@ def get_event_attendance(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid type '{type}'. Must be 'count', 'detailed', or 'me'.",
         )
+
+
+@router.post(
+    "/{event_id}/manual",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"model": NotFoundResponse, "description": "Event or member not found"},
+        400: {"model": BadRequestResponse, "description": "Already marked or invalid request"},
+        403: {"model": BadRequestResponse, "description": "Admin privileges required"},
+        500: {"model": InternalServerErrorResponse, "description": "Internal server error"},
+    },
+)
+def mark_attendance_manual(
+    event_id: int,
+    request: ManualAttendanceRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
+):
+    if not is_admin(credentials):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
+    log_file = create_log_file("mark attendance manual")
+
+    with SessionLocal() as session:
+        try:
+            write_log_title(
+                log_file,
+                f"Manual attendance for event [{event_id}], members {request.member_ids}",
+            )
+
+            event = events_queries.get_event_by_id(session, event_id)
+            if not event:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+            if event.status == "closed":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot mark attendance for a closed event",
+                )
+
+            event_log = log_queries.get_attendable_logs(session, event_id)
+            if not event_log:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Event has no attendable logs",
+                )
+
+            event_days = (event.end_datetime - event.start_datetime).days + 1
+
+            days_to_mark = request.days if request.days else ([request.day] if request.day else [None])
+
+            success_count = 0
+            failed_count = 0
+
+            for member_id in request.member_ids:
+                member = member_queries.get_member_by_id(session, member_id)
+                if not member:
+                    failed_count += 1
+                    continue
+
+                member_success = False
+                for day in days_to_mark:
+                    if day is not None:
+                        if day < 1 or day > event_days:
+                            continue
+                        target_date = event.start_datetime + timedelta(days=day - 1)
+                    else:
+                        target_date = datetime.now()
+
+                    member_logs = log_queries.get_member_logs(session, member.id, event_log.id)
+                    if member_logs:
+                        target_effective = get_effective_date(target_date, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+                        already_marked = False
+                        for member_log in member_logs:
+                            log_effective = get_effective_date(member_log.date, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+                            if log_effective == target_effective:
+                                already_marked = True
+                                break
+                        if already_marked:
+                            continue
+
+                    log_queries.create_member_log(session, member.id, event_log.id, target_date)
+                    member_success = True
+                    write_log(log_file, f"Manual attendance marked for member [{member.name}] on day [{day or 'today'}]")
+
+                if member_success:
+                    success_count += 1
+                else:
+                    failed_count += 1
+
+            session.commit()
+            return {"success": success_count, "failed": failed_count}
+
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.delete(
+    "/{event_id}/manual",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"model": NotFoundResponse, "description": "Event, member, or attendance not found"},
+        403: {"model": BadRequestResponse, "description": "Admin privileges required"},
+        500: {"model": InternalServerErrorResponse, "description": "Internal server error"},
+    },
+)
+def remove_attendance_manual(
+    event_id: int,
+    request: ManualAttendanceRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
+):
+    if not is_admin(credentials):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
+    log_file = create_log_file("remove attendance manual")
+
+    with SessionLocal() as session:
+        try:
+            write_log_title(
+                log_file,
+                f"Remove attendance for event [{event_id}], members {request.member_ids}",
+            )
+
+            event = events_queries.get_event_by_id(session, event_id)
+            if not event:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+            event_log = log_queries.get_attendable_logs(session, event_id)
+            if not event_log:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Event has no attendable logs",
+                )
+
+            event_days = (event.end_datetime - event.start_datetime).days + 1
+
+            if request.day is not None:
+                if request.day < 1 or request.day > event_days:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Day {request.day} is out of range. Event has {event_days} day(s).",
+                    )
+                target_date = event.start_datetime + timedelta(days=request.day - 1)
+            else:
+                target_date = datetime.now()
+
+            success_count = 0
+            failed_count = 0
+
+            for member_id in request.member_ids:
+                member = member_queries.get_member_by_id(session, member_id)
+                if not member:
+                    failed_count += 1
+                    continue
+
+                deleted = log_queries.delete_member_log(session, member.id, event_log.id, target_date)
+                if deleted:
+                    success_count += 1
+                    write_log(log_file, f"Attendance removed for member [{member.name}] on day [{request.day or 'today'}]")
+                else:
+                    failed_count += 1
+
+            session.commit()
+            return {"success": success_count, "failed": failed_count}
+
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
