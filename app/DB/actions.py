@@ -1,6 +1,6 @@
 from typing import Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete, update
 from .schema import Actions, Logs
 
 
@@ -19,11 +19,18 @@ def get_action_by_id(session: Session, action_id: int):
 
 
 def create_action(session: Session, name: str, points: int, type: str):
+    max_order_stmt = select(func.max(Actions.order))
+    max_order = session.scalar(max_order_stmt) or -1
+    
+    is_hidden = (type == "bonus")
+    
     new_action = Actions(
         action_name=name,
         points=points,
         action_type=type,
         ar_action_name=name,
+        order=max_order + 1,
+        is_hidden=is_hidden,
     )
     session.add(new_action)
     session.flush()
@@ -53,7 +60,7 @@ def get_discount_action(session: Session):
 
 
 def get_all_actions(session: Session):
-    statement = select(Actions).order_by(Actions.id)
+    statement = select(Actions).order_by(Actions.order)
     actions = session.scalars(statement).all()
     session.flush()
     return actions
@@ -72,6 +79,7 @@ def update_action(
     points: Optional[int] = None,
     action_type: Optional[str] = None,
     ar_action_name: Optional[str] = None,
+    is_hidden: Optional[bool] = None,
 ):
     statement = select(Actions).where(Actions.id == action_id)
     action = session.scalars(statement).first()
@@ -85,5 +93,33 @@ def update_action(
         action.action_type = action_type
     if ar_action_name is not None:
         action.ar_action_name = ar_action_name
+    if is_hidden is not None:
+        action.is_hidden = is_hidden
     session.flush()
     return action
+
+
+def update_actions_order(session: Session, action_orders: list[dict]):
+    for item in action_orders:
+        statement = select(Actions).where(Actions.id == item["id"])
+        action = session.scalars(statement).first()
+        if action:
+            action.order = item["order"]
+    session.flush()
+
+
+def get_action_usage_count(session: Session, action_id: int) -> int:
+    statement = select(func.count(Logs.id)).where(Logs.action_id == action_id)
+    return session.scalar(statement) or 0
+
+
+def update_logs_action(session: Session, old_action_id: int, new_action_id: int):
+    statement = update(Logs).where(Logs.action_id == old_action_id).values(action_id=new_action_id)
+    session.execute(statement)
+    session.flush()
+
+
+def delete_action_by_id(session: Session, action_id: int):
+    statement = delete(Actions).where(Actions.id == action_id)
+    session.execute(statement)
+    session.flush()
