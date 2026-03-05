@@ -8,6 +8,7 @@ from enum import Enum
 
 class RoleEnum(str, Enum):
     admin = "admin"
+    admin_points = "admin_points"
     super_admin = "super_admin"
     none = "none"
 
