@@ -137,8 +137,8 @@ class Actions(Base):
     points: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     action_type: Mapped[ActionsActionType] = mapped_column(Enum(ActionsActionType, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
     ar_action_name: Mapped[str] = mapped_column(VARCHAR(100, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'), nullable=False)
-    order: Mapped[int] = mapped_column(INTEGER, nullable=False, server_default=text('0'))
-    is_hidden: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text('0'))
+    order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("'99'"))
+    is_hidden: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
 
     logs: Mapped[list['Logs']] = relationship('Logs', back_populates='action')
 
