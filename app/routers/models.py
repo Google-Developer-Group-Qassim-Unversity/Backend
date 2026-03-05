@@ -1,6 +1,6 @@
 from pandas.core.indexes.base import format_object_summary
 from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist
-from typing import List, Literal
+from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
 from enum import Enum
@@ -174,6 +174,8 @@ class Action_model(BaseClassModel):
     ar_action_name: str
     action_type: Literal["composite", "department", "member", "bonus"]
     points: int
+    order: int = 0
+    is_hidden: bool = False
 
 
 class ActionWithUsage_model(BaseClassModel):
@@ -183,6 +185,8 @@ class ActionWithUsage_model(BaseClassModel):
     action_type: Literal["composite", "department", "member", "bonus"]
     points: int
     usage_count: int = 0
+    order: int = 0
+    is_hidden: bool = False
 
 
 class CreateAction_model(BaseClassModel):
@@ -197,6 +201,11 @@ class UpdateAction_model(BaseClassModel):
     ar_action_name: str | None = None
     action_type: Literal["composite", "department", "member", "bonus"] | None = None
     points: int | None = None
+    is_hidden: bool | None = None
+
+
+class ReorderActions_model(BaseClassModel):
+    action_orders: List[Dict[str, int]]
 
 
 class Categorized_action(BaseClassModel):

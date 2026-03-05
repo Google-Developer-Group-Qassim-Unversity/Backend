@@ -1,5 +1,6 @@
 from typing import Optional
 import datetime
+import enum
 
 from sqlalchemy import Column, DECIMAL, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, String, Table, Text, text
 from sqlalchemy.dialects.mysql import ENUM, INTEGER, TEXT, TINYINT, VARCHAR
@@ -9,14 +10,135 @@ class Base(DeclarativeBase):
     pass
 
 
+class ActionsActionType(str, enum.Enum):
+    COMPOSITE = 'composite'
+    DEPARTMENT = 'department'
+    MEMBER = 'member'
+    BONUS = 'bonus'
+
+
+class DepartmentsPointsDepartmentType(str, enum.Enum):
+    ADMINISTRATIVE = 'administrative'
+    PRACTICAL = 'practical'
+
+
+class DepartmentsPointsHistoryLocationType(str, enum.Enum):
+    ONLINE = 'online'
+    ON_SITE = 'on-site'
+    NONE = 'none'
+    HIDDEN = 'hidden'
+
+
+class DepartmentsPointsHistoryStatus(str, enum.Enum):
+    DRAFT = 'draft'
+    OPEN = 'open'
+    ACTIVE = 'active'
+    CLOSED = 'closed'
+
+
+class DepartmentsType(str, enum.Enum):
+    ADMINISTRATIVE = 'administrative'
+    PRACTICAL = 'practical'
+
+
+class EventsLocationType(str, enum.Enum):
+    ONLINE = 'online'
+    ON_SITE = 'on-site'
+    NONE = 'none'
+    HIDDEN = 'hidden'
+
+
+class EventsStatus(str, enum.Enum):
+    DRAFT = 'draft'
+    OPEN = 'open'
+    ACTIVE = 'active'
+    CLOSED = 'closed'
+
+
+class FormsFormType(str, enum.Enum):
+    NONE = 'none'
+    REGISTRATION = 'registration'
+    GOOGLE = 'google'
+
+
+class FormsSubmissionsFormType(str, enum.Enum):
+    NONE = 'none'
+    REGISTRATION = 'registration'
+    GOOGLE = 'google'
+
+
+class FormsSubmissionsGender(str, enum.Enum):
+    MALE = 'Male'
+    FEMALE = 'Female'
+
+
+class FormsSubmissionsSubmissionType(str, enum.Enum):
+    NONE = 'none'
+    REGISTRATION = 'registration'
+    PARTIAL = 'partial'
+    GOOGLE = 'google'
+
+
+class MemberEventHistoryLocationType(str, enum.Enum):
+    ONLINE = 'online'
+    ON_SITE = 'on-site'
+    NONE = 'none'
+    HIDDEN = 'hidden'
+
+
+class MembersGender(str, enum.Enum):
+    MALE = 'Male'
+    FEMALE = 'Female'
+
+
+class ModificationsType(str, enum.Enum):
+    BONUS = 'bonus'
+    DISCOUNT = 'discount'
+
+
+class OpenEventsFormType(str, enum.Enum):
+    NONE = 'none'
+    REGISTRATION = 'registration'
+    GOOGLE = 'google'
+
+
+class OpenEventsLocationType(str, enum.Enum):
+    ONLINE = 'online'
+    ON_SITE = 'on-site'
+    NONE = 'none'
+    HIDDEN = 'hidden'
+
+
+class OpenEventsStatus(str, enum.Enum):
+    DRAFT = 'draft'
+    OPEN = 'open'
+    ACTIVE = 'active'
+    CLOSED = 'closed'
+
+
+class RoleRole(str, enum.Enum):
+    ADMIN = 'admin'
+    SUPER_ADMIN = 'super_admin'
+    NONE = 'none'
+
+
+class SubmissionsSubmissionType(str, enum.Enum):
+    NONE = 'none'
+    REGISTRATION = 'registration'
+    PARTIAL = 'partial'
+    GOOGLE = 'google'
+
+
 class Actions(Base):
     __tablename__ = 'actions'
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    action_name: Mapped[str] = mapped_column(VARCHAR(60), nullable=False)
-    points: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    action_type: Mapped[str] = mapped_column(ENUM('composite', 'department', 'member', 'bonus'), nullable=False)
-    ar_action_name: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    action_name: Mapped[str] = mapped_column(VARCHAR(60, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'), nullable=False)
+    points: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    action_type: Mapped[ActionsActionType] = mapped_column(Enum(ActionsActionType, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
+    ar_action_name: Mapped[str] = mapped_column(VARCHAR(100, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'), nullable=False)
+    order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("'99'"))
+    is_hidden: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
 
     logs: Mapped[list['Logs']] = relationship('Logs', back_populates='action')
 
@@ -24,19 +146,19 @@ class Actions(Base):
 class Departments(Base):
     __tablename__ = 'departments'
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
-    type: Mapped[str] = mapped_column(Enum('administrative', 'practical'), nullable=False)
-    ar_name: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
+    type: Mapped[DepartmentsType] = mapped_column(Enum(DepartmentsType, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
+    ar_name: Mapped[str] = mapped_column(VARCHAR(100, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'), nullable=False)
 
     departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='department')
 
 
 t_departments_points = Table(
     'departments_points', Base.metadata,
-    Column('department_id', INTEGER, server_default=text("'0'")),
+    Column('department_id', INTEGER(unsigned=True), server_default=text("'0'")),
     Column('department_name', String(50)),
-    Column('department_type', Enum('administrative', 'practical')),
+    Column('department_type', Enum(DepartmentsPointsDepartmentType, values_callable=lambda cls: [member.value for member in cls])),
     Column('ar_department_name', String(100)),
     Column('total_points', DECIMAL(55, 0), server_default=text("'0'"))
 )
@@ -44,16 +166,17 @@ t_departments_points = Table(
 
 t_departments_points_history = Table(
     'departments_points_history', Base.metadata,
-    Column('department_id', INTEGER),
+    Column('department_id', INTEGER(unsigned=True)),
     Column('department_name', String(50)),
     Column('ar_department_name', String(100)),
-    Column('event_id', INTEGER),
+    Column('event_id', INTEGER(unsigned=True)),
     Column('event_name', String(150)),
     Column('start_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
+    Column('status', Enum(DepartmentsPointsHistoryStatus, values_callable=lambda cls: [member.value for member in cls])),
     Column('action_name', String(60)),
     Column('ar_action_name', String(100)),
-    Column('location_type', Enum('online', 'on-site', 'none', 'hidden')),
+    Column('location_type', Enum(DepartmentsPointsHistoryLocationType, values_callable=lambda cls: [member.value for member in cls])),
     Column('points', DECIMAL(54, 0))
 )
 
@@ -65,15 +188,15 @@ class Events(Base):
         Index('events_id_IDX', 'id', 'name')
     )
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    name: Mapped[str] = mapped_column(VARCHAR(150), nullable=False)
-    location_type: Mapped[str] = mapped_column(ENUM('online', 'on-site', 'none', 'hidden'), nullable=False)
-    location: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    name: Mapped[str] = mapped_column(VARCHAR(150, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'), nullable=False)
+    location_type: Mapped[EventsLocationType] = mapped_column(Enum(EventsLocationType, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
+    location: Mapped[str] = mapped_column(VARCHAR(100, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'), nullable=False)
     start_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
     end_datetime: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
-    status: Mapped[str] = mapped_column(ENUM('draft', 'open', 'active', 'closed'), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(TEXT)
-    image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
+    status: Mapped[EventsStatus] = mapped_column(Enum(EventsStatus, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(TEXT(charset='utf8mb4', collation='utf8mb4_0900_ai_ci'))
+    image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(100, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'))
     is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1), server_default=text("'0'"))
 
     forms: Mapped[list['Forms']] = relationship('Forms', back_populates='event')
@@ -82,35 +205,35 @@ class Events(Base):
 
 t_forms_submissions = Table(
     'forms_submissions', Base.metadata,
-    Column('submission_id', INTEGER, server_default=text("'0'")),
+    Column('submission_id', INTEGER(unsigned=True), server_default=text("'0'")),
     Column('submitted_at', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
-    Column('form_type', Enum('none', 'registration', 'google')),
-    Column('submission_type', Enum('none', 'registration', 'partial', 'google')),
-    Column('id', INTEGER, server_default=text("'0'")),
+    Column('form_type', Enum(FormsSubmissionsFormType, values_callable=lambda cls: [member.value for member in cls])),
+    Column('submission_type', Enum(FormsSubmissionsSubmissionType, values_callable=lambda cls: [member.value for member in cls])),
+    Column('id', INTEGER(unsigned=True), server_default=text("'0'")),
     Column('name', String(50)),
     Column('email', String(100)),
     Column('phone_number', String(20)),
     Column('uni_id', String(50)),
-    Column('gender', Enum('Male', 'Female')),
+    Column('gender', Enum(FormsSubmissionsGender, values_callable=lambda cls: [member.value for member in cls])),
     Column('uni_level', Integer),
     Column('uni_college', String(100)),
     Column('is_accepted', TINYINT(1), server_default=text("'0'")),
     Column('google_submission_value', JSON),
-    Column('event_id', INTEGER),
-    Column('form_id', INTEGER, server_default=text("'0'")),
+    Column('event_id', INTEGER(unsigned=True)),
+    Column('form_id', INTEGER(unsigned=True), server_default=text("'0'")),
     Column('google_form_id', String(100))
 )
 
 
 t_member_event_history = Table(
     'member_event_history', Base.metadata,
-    Column('member_id', INTEGER, server_default=text("'0'")),
+    Column('member_id', INTEGER(unsigned=True), server_default=text("'0'")),
     Column('member_name', String(50)),
-    Column('event_id', INTEGER, server_default=text("'0'")),
+    Column('event_id', INTEGER(unsigned=True), server_default=text("'0'")),
     Column('event_name', String(150)),
     Column('start_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
-    Column('location_type', Enum('online', 'on-site', 'none', 'hidden')),
+    Column('location_type', Enum(MemberEventHistoryLocationType, values_callable=lambda cls: [member.value for member in cls])),
     Column('points', DECIMAL(54, 0)),
     Column('action_name', Text),
     Column('ar_action_name', Text)
@@ -123,12 +246,12 @@ class Members(Base):
         Index('uni_id', 'uni_id', unique=True),
     )
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     uni_id: Mapped[str] = mapped_column(String(50), nullable=False)
-    gender: Mapped[str] = mapped_column(Enum('Male', 'Female'), nullable=False)
+    gender: Mapped[MembersGender] = mapped_column(Enum(MembersGender, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
     uni_level: Mapped[int] = mapped_column(Integer, nullable=False)
-    uni_college: Mapped[str] = mapped_column(VARCHAR(100), nullable=False)
+    uni_college: Mapped[str] = mapped_column(VARCHAR(100, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
     is_authenticated: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
@@ -142,7 +265,7 @@ class Members(Base):
 
 t_members_points = Table(
     'members_points', Base.metadata,
-    Column('member_id', INTEGER, server_default=text("'0'")),
+    Column('member_id', INTEGER(unsigned=True), server_default=text("'0'")),
     Column('member_name', String(50)),
     Column('total_points', DECIMAL(54, 0), server_default=text("'0'"))
 )
@@ -150,18 +273,18 @@ t_members_points = Table(
 
 t_open_events = Table(
     'open_events', Base.metadata,
-    Column('id', INTEGER, server_default=text("'0'")),
+    Column('id', INTEGER(unsigned=True), server_default=text("'0'")),
     Column('name', String(150)),
     Column('description', Text),
-    Column('location_type', Enum('online', 'on-site', 'none', 'hidden')),
+    Column('location_type', Enum(OpenEventsLocationType, values_callable=lambda cls: [member.value for member in cls])),
     Column('location', String(100)),
     Column('start_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column('end_datetime', DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
-    Column('status', Enum('draft', 'open', 'active', 'closed')),
+    Column('status', Enum(OpenEventsStatus, values_callable=lambda cls: [member.value for member in cls])),
     Column('image_url', String(100)),
     Column('is_official', TINYINT(1), server_default=text("'0'")),
-    Column('form_id', INTEGER, server_default=text("'0'")),
-    Column('form_type', Enum('none', 'registration', 'google')),
+    Column('form_id', INTEGER(unsigned=True), server_default=text("'0'")),
+    Column('form_type', Enum(OpenEventsFormType, values_callable=lambda cls: [member.value for member in cls])),
     Column('google_responders_url', String(150))
 )
 
@@ -173,13 +296,13 @@ class Forms(Base):
         Index('forms_unique_event_id', 'event_id', unique=True)
     )
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    event_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    form_type: Mapped[str] = mapped_column(ENUM('none', 'registration', 'google'), nullable=False)
-    google_form_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100))
-    google_refresh_token: Mapped[Optional[str]] = mapped_column(VARCHAR(500))
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    event_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    form_type: Mapped[FormsFormType] = mapped_column(Enum(FormsFormType, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
+    google_form_id: Mapped[Optional[str]] = mapped_column(VARCHAR(100, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'))
+    google_refresh_token: Mapped[Optional[str]] = mapped_column(VARCHAR(500, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'))
     google_watch_id: Mapped[Optional[str]] = mapped_column(String(100))
-    google_responders_url: Mapped[Optional[str]] = mapped_column(VARCHAR(150))
+    google_responders_url: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'))
 
     event: Mapped['Events'] = relationship('Events', back_populates='forms')
     submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='form')
@@ -194,9 +317,9 @@ class Logs(Base):
         Index('fk_events', 'event_id')
     )
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    action_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    event_id: Mapped[Optional[int]] = mapped_column(INTEGER)
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    action_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
     action: Mapped['Actions'] = relationship('Actions', back_populates='logs')
     event: Mapped[Optional['Events']] = relationship('Events', back_populates='logs')
@@ -212,9 +335,9 @@ class Role(Base):
         Index('fk_role_member', 'member_id')
     )
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    role: Mapped[str] = mapped_column(ENUM('admin', 'super_admin', 'none'), nullable=False)
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    role: Mapped[RoleRole] = mapped_column(Enum(RoleRole, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
 
     member: Mapped['Members'] = relationship('Members', back_populates='role')
 
@@ -228,9 +351,9 @@ class DepartmentsLogs(Base):
         Index('departments_logs_idx', 'log_id', 'department_id')
     )
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    department_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    log_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
 
     department: Mapped['Departments'] = relationship('Departments', back_populates='departments_logs')
     log: Mapped['Logs'] = relationship('Logs', back_populates='departments_logs')
@@ -246,9 +369,9 @@ class MembersLogs(Base):
         Index('unique_member_log_day', 'member_id', 'log_id', 'date', unique=True)
     )
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    log_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
 
     log: Mapped['Logs'] = relationship('Logs', back_populates='members_logs')
@@ -262,10 +385,10 @@ class Modifications(Base):
         Index('log_id', 'log_id')
     )
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    log_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    type: Mapped[str] = mapped_column(Enum('bonus', 'discount'), nullable=False)
-    value: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    log_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    type: Mapped[ModificationsType] = mapped_column(Enum(ModificationsType, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
+    value: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
 
     log: Mapped['Logs'] = relationship('Logs', back_populates='modifications')
 
@@ -279,12 +402,12 @@ class Submissions(Base):
         Index('submissions_unique', 'member_id', 'form_id', unique=True)
     )
 
-    id: Mapped[int] = mapped_column(INTEGER, primary_key=True)
-    form_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
-    member_id: Mapped[int] = mapped_column(INTEGER, nullable=False)
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    form_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     is_accepted: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
     submitted_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
-    submission_type: Mapped[str] = mapped_column(ENUM('none', 'registration', 'partial', 'google'), nullable=False)
+    submission_type: Mapped[SubmissionsSubmissionType] = mapped_column(Enum(SubmissionsSubmissionType, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
     google_submission_id: Mapped[Optional[str]] = mapped_column(String(100))
     google_submission_value: Mapped[Optional[dict]] = mapped_column(JSON)
 

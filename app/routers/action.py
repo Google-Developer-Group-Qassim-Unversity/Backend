@@ -1,5 +1,5 @@
-from typing import Literal
-from fastapi import APIRouter, status, HTTPException
+from typing import Literal, Optional
+from fastapi import APIRouter, status, HTTPException, Query
 from app.DB import actions as actions_queries
 from ..DB.main import SessionLocal
 from app.routers.models import (
@@ -8,6 +8,7 @@ from app.routers.models import (
     UpdateAction_model,
     Action_model,
     ActionWithUsage_model,
+    ReorderActions_model,
 )
 
 router = APIRouter()
@@ -84,6 +85,8 @@ def get_all_actions():
             action_type=action.action_type,
             points=action.points,
             usage_count=usage_counts.get(action.id, 0),
+            order=action.order,
+            is_hidden=bool(action.is_hidden),
         )
         for action in actions
     ]
@@ -104,7 +107,7 @@ def create_action(payload: CreateAction_model):
     return new_action
 
 
-@router.put("/{action_id}", status_code=status.HTTP_200_OK, response_model=Action_model)
+@router.put("/{action_id:int}", status_code=status.HTTP_200_OK, response_model=Action_model)
 def update_action(action_id: int, payload: UpdateAction_model):
     with SessionLocal() as session:
         updated_action = actions_queries.update_action(
@@ -114,9 +117,46 @@ def update_action(action_id: int, payload: UpdateAction_model):
             points=payload.points,
             action_type=payload.action_type,
             ar_action_name=payload.ar_action_name,
+            is_hidden=payload.is_hidden,
         )
         if not updated_action:
             raise HTTPException(status_code=404, detail="Action not found")
         session.commit()
         session.refresh(updated_action)
     return updated_action
+
+
+@router.put("/reorder", status_code=status.HTTP_200_OK)
+def reorder_actions(payload: ReorderActions_model):
+    with SessionLocal() as session:
+        actions_queries.update_actions_order(session, payload.action_orders)
+        session.commit()
+    return {"message": "Actions reordered successfully"}
+
+
+@router.delete("/{action_id:int}", status_code=status.HTTP_200_OK)
+def delete_action(action_id: int, replacement_id: Optional[int] = Query(None)):
+    with SessionLocal() as session:
+        action = actions_queries.get_action_by_id(session, action_id)
+        if not action:
+            raise HTTPException(status_code=404, detail="Action not found")
+        
+        usage_count = actions_queries.get_action_usage_count(session, action_id)
+        
+        if usage_count > 0 and replacement_id is None:
+            raise HTTPException(
+                status_code=400, 
+                detail="Must provide replacement_id when action has been used"
+            )
+        
+        if replacement_id:
+            replacement = actions_queries.get_action_by_id(session, replacement_id)
+            if not replacement:
+                raise HTTPException(status_code=404, detail="Replacement action not found")
+            
+            actions_queries.update_logs_action(session, action_id, replacement_id)
+        
+        actions_queries.delete_action_by_id(session, action_id)
+        session.commit()
+    
+    return {"message": "Action deleted successfully"}
