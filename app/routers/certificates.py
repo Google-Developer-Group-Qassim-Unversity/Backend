@@ -17,7 +17,7 @@ from app.routers.logging import (
     write_log_traceback,
     write_log_title,
 )
-from app.helpers import admin_guard
+from app.helpers import admin_guard, get_effective_date
 import httpx
 import json
 
@@ -70,21 +70,23 @@ async def send_certificates(
                     detail="No attendees who completed all days found for this event",
                 )
 
-            # Format date based on event duration
-            days = (event.end_datetime.date() - event.start_datetime.date()).days
+            # Format date based on event duration (using effective dates)
+            start_effective = get_effective_date(event.start_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+            end_effective = get_effective_date(event.end_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+            days = (end_effective - start_effective).days
             if days == 0:
-                date_str = event.start_datetime.strftime("%Y-%m-%d")
+                date_str = start_effective.strftime("%Y-%m-%d")
             else:
-                date_str = f"{event.start_datetime.strftime('%Y-%m-%d')} - {event.end_datetime.strftime('%Y-%m-%d')}"
+                date_str = f"{start_effective.strftime('%Y-%m-%d')} - {end_effective.strftime('%Y-%m-%d')}"
             write_log(log_file, f"Event date formatted as: [{date_str}]")
 
             # Transform members to simplified format
             # Extract Members object from the new attendance structure
             simplified_members = [
                 SimplifiedMember(
-                    name=attendee["Members"].name,
-                    email=attendee["Members"].email,
-                    gender=attendee["Members"].gender,
+                    name=attendee.Members.name,
+                    email=attendee.Members.email,
+                    gender=attendee.Members.gender,
                 )
                 for attendee in attendance
             ]
@@ -209,11 +211,14 @@ async def send_manual_certificates(
                 f"Received [{members_count}] manual members for certificate generation",
             )
 
-            days = (event.end_datetime.date() - event.start_datetime.date()).days
+            # Format date based on event duration (using effective dates)
+            start_effective = get_effective_date(event.start_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+            end_effective = get_effective_date(event.end_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+            days = (end_effective - start_effective).days
             if days == 0:
-                date_str = event.start_datetime.strftime("%Y-%m-%d")
+                date_str = start_effective.strftime("%Y-%m-%d")
             else:
-                date_str = f"{event.start_datetime.strftime('%Y-%m-%d')} - {event.end_datetime.strftime('%Y-%m-%d')}"
+                date_str = f"{start_effective.strftime('%Y-%m-%d')} - {end_effective.strftime('%Y-%m-%d')}"
             write_log(log_file, f"Event date formatted as: [{date_str}]")
 
             cert_request = CertificateRequest(
