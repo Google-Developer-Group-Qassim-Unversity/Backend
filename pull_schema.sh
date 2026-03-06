@@ -18,6 +18,7 @@ else
 fi
 
 # Generate the schema using sqlacodegen
+echo "Pulling from DB '$DATABASE_URL'"
 sqlacodegen --generator declarative --outfile "$OUTFILE" "$DATABASE_URL"
 if [ $? -eq 0 ]; then
   echo -e "\033[32m✅ Schema generated successfully and saved to $OUTFILE\033[0m"

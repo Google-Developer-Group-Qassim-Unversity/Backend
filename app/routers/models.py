@@ -1,4 +1,3 @@
-from pandas.core.indexes.base import format_object_summary
 from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist
 from typing import List, Literal, Dict
 from datetime import datetime
@@ -8,6 +7,7 @@ from enum import Enum
 
 class RoleEnum(str, Enum):
     admin = "admin"
+    admin_points = "admin_points"
     super_admin = "super_admin"
     none = "none"
 
@@ -209,7 +209,7 @@ class ReorderActions_model(BaseClassModel):
 
 
 class Categorized_action(BaseClassModel):
-    composite_actions: List[conlist(Action_model, min_length=2, max_length=2)]
+    composite_actions: List[conlist(Action_model, min_length=2, max_length=2)] # pyright: ignore[reportInvalidTypeForm]
     department_actions: List[Action_model]
     member_actions: List[Action_model]
     custom_actions: List[Action_model]
