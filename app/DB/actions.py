@@ -41,7 +41,7 @@ def get_bonus_action(session: Session):
     statement = select(Actions).where(Actions.action_name == "Bonus")
     action = session.scalars(statement).first()
     if not action:
-        new_action = create_action(session, "Bonus", 0, "composite")
+        new_action = create_action(session, "Bonus", 0, "bonus")
         session.flush()
         return new_action
     session.flush()
@@ -52,7 +52,7 @@ def get_discount_action(session: Session):
     statement = select(Actions).where(Actions.action_name == "Discount")
     action = session.scalars(statement).first()
     if not action:
-        new_action = create_action(session, "Discount", 0, "composite")
+        new_action = create_action(session, "Discount", 0, "bonus")
         session.flush()
         return new_action
     session.flush()

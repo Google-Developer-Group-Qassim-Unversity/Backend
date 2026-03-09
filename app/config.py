@@ -17,7 +17,7 @@ load_dotenv()
 # =============================================================================
 
 DB_PROD = "scores"
-DB_DEV = "scores_dev"
+DB_DEV = "scores"
 
 CLERK_PROD = "https://clerk.gdg-q.com/.well-known/jwks.json"
 CLERK_DEV = "https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json"
