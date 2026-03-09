@@ -1,3 +1,4 @@
+# OLD DEPRECATED FILE, no longer used, TODO: delete after confirming no references to it
 from fastapi import APIRouter, HTTPException, status, Request
 from app.DB import events, members, logs, actions, departments
 from ..DB.main import SessionLocal
