@@ -24,8 +24,8 @@ def get_action_by_id(actions, action_id: int):
 @router.get("", status_code=status.HTTP_200_OK, response_model=Categorized_action)
 def get_categorized_actions():
     # These are to link department and member actions into composite actions
-    department_ids = [51, 52, 53, 54, 86, 88, 90]
-    member_ids = [76, 77, 78, 79, 87, 89, 91]
+    department_ids = [51, 52, 53, 54, 86, 88, 90, 105]
+    member_ids = [76, 77, 78, 79, 87, 89, 91, 108]
 
     with SessionLocal() as session:
         actions = actions_queries.get_actions(session)
