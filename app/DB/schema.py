@@ -9,6 +9,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 class Base(DeclarativeBase):
     pass
 
+# IMPORTANT: For any relationship where the FK has ON DELETE CASCADE in the database,
+# add passive_deletes=True to let the database handle cascades. Without this,
+# SQLAlchemy may try to NULL out FK columns before delete, causing IntegrityErrors.
+
 
 class ActionsActionType(str, enum.Enum):
     COMPOSITE = 'composite'
@@ -141,7 +145,7 @@ class Actions(Base):
     order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("'99'"))
     is_hidden: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
 
-    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='action')
+    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='action', passive_deletes=True)
 
 
 class Departments(Base):
@@ -152,7 +156,7 @@ class Departments(Base):
     type: Mapped[DepartmentsType] = mapped_column(Enum(DepartmentsType, values_callable=lambda cls: [member.value for member in cls]), nullable=False)
     ar_name: Mapped[str] = mapped_column(VARCHAR(100, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'), nullable=False)
 
-    departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='department')
+    departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='department', passive_deletes=True)
 
 
 t_departments_points = Table(
@@ -200,8 +204,8 @@ class Events(Base):
     image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(100, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'))
     is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1), server_default=text("'0'"))
 
-    forms: Mapped[list['Forms']] = relationship('Forms', back_populates='event')
-    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event')
+    forms: Mapped[list['Forms']] = relationship('Forms', back_populates='event', passive_deletes=True)
+    logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event', passive_deletes=True)
 
 
 t_forms_submissions = Table(
@@ -259,9 +263,9 @@ class Members(Base):
     email: Mapped[Optional[str]] = mapped_column(String(100))
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
 
-    role: Mapped[list['Role']] = relationship('Role', back_populates='member')
+    role: Mapped[list['Role']] = relationship('Role', back_populates='member', passive_deletes=True)
     members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='member')
-    submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='member')
+    submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='member', passive_deletes=True)
 
 
 t_members_points = Table(
@@ -306,7 +310,7 @@ class Forms(Base):
     google_responders_url: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'))
 
     event: Mapped['Events'] = relationship('Events', back_populates='forms')
-    submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='form')
+    submissions: Mapped[list['Submissions']] = relationship('Submissions', back_populates='form', passive_deletes=True)
 
 
 class Logs(Base):
@@ -324,9 +328,9 @@ class Logs(Base):
 
     action: Mapped['Actions'] = relationship('Actions', back_populates='logs')
     event: Mapped[Optional['Events']] = relationship('Events', back_populates='logs')
-    departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='log')
-    members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='log')
-    modifications: Mapped[list['Modifications']] = relationship('Modifications', back_populates='log')
+    departments_logs: Mapped[list['DepartmentsLogs']] = relationship('DepartmentsLogs', back_populates='log', passive_deletes=True)
+    members_logs: Mapped[list['MembersLogs']] = relationship('MembersLogs', back_populates='log', passive_deletes=True)
+    modifications: Mapped[list['Modifications']] = relationship('Modifications', back_populates='log', passive_deletes=True)
 
 
 class Role(Base):
