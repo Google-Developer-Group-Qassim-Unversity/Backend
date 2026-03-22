@@ -35,6 +35,7 @@ class Events_model(BaseClassModel):
     status: Literal["draft", "open", "active", "closed"]
     image_url: str | None = None
     is_official: int | None = None
+    created_at: datetime
 
 
 class Form_model(BaseClassModel):
