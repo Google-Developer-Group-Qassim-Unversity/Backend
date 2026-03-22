@@ -40,17 +40,29 @@ router = APIRouter()
 
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
-def get_all_events():
+def get_all_events(
+    semester: int | str = Query("all"),
+):
     log_file = create_log_file("get all events")
     write_log_title(log_file, "Fetching all events")
     start = perf_counter()
     with SessionLocal() as session:
         write_log(log_file, "Querying events from database")
-        events = events_queries.get_events(session)
+        if semester == "all":
+            events = events_queries.get_events(session)
+        else:
+            try:
+                start_date, end_date = config.get_semester_dates(int(semester))
+            except (ValueError, KeyError):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Semester '{semester}' not found",
+                )
+            events = events_queries.get_events_by_semester(session, start_date, end_date)
         end = perf_counter()
         write_log(
             log_file,
-            f"fetched [{len(events)}] events DB took [{(end - start) * 1000:.2f}]ms to execute",
+            f"fetched [{len(events)}] events DB took [{(end - start) * 1000:.2f}]ms to execute (semester={semester})",
         )
     return events
 

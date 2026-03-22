@@ -15,6 +15,14 @@ def get_open_events(session: Session):
     results = session.execute(statement).all()
     return [dict(row._mapping) for row in results]
 
+def get_events_by_semester(session: Session, start_date: str, end_date: str):
+    statement = select(Events).where(
+        Events.end_datetime >= start_date,
+        Events.end_datetime < end_date
+    ).order_by(Events.start_datetime.desc())
+    events = session.scalars(statement).all()
+    return events
+
 def get_actions_by_event_id(session: Session, event_id: int):
     stmt = (
     select(
