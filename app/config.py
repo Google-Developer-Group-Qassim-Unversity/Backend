@@ -17,7 +17,7 @@ load_dotenv()
 # =============================================================================
 
 DB_PROD = "scores"
-DB_DEV = "scores"
+DB_DEV = "scores-current"
 
 CLERK_PROD = "https://clerk.gdg-q.com/.well-known/jwks.json"
 CLERK_DEV = "https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json"
@@ -33,6 +33,14 @@ CERTIFICATE_API_URL_PROD = "http://localhost:8000"
 # Pagination settings
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100
+
+# Semester settings
+CURRENT_SEMESTER = 472
+PUBLIC_SEMESTERS = [472]
+SEMESTERS = {
+    472: ("2026-01-18", "2026-08-23"),
+    471: ("2025-08-24", "2026-01-17"),
+}
 
 # Sorting settings
 DEFAULT_SORT_ORDER = "DESC"
@@ -136,6 +144,23 @@ class Config:
     @property
     def ATTENDANCE_EARLY_HOURS_THRESHOLD(self) -> int:
         return ATTENDANCE_EARLY_HOURS_THRESHOLD
+
+    @property
+    def CURRENT_SEMESTER(self) -> int:
+        return CURRENT_SEMESTER
+
+    @property
+    def PUBLIC_SEMESTERS(self) -> list[int]:
+        return PUBLIC_SEMESTERS
+
+    @property
+    def SEMESTERS(self) -> dict[int, tuple[str, str]]:
+        return SEMESTERS
+
+    def get_semester_dates(self, semester_id: int) -> tuple[str, str]:
+        if semester_id not in SEMESTERS:
+            raise ValueError(f"Semester {semester_id} not found")
+        return SEMESTERS[semester_id]
 
     @property
     def GOOGLE_CLIENT_ID(self) -> str:
