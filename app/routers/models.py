@@ -365,3 +365,14 @@ class ManualAttendanceRequest(BaseModel):
 class CopyAttendanceRequest(BaseModel):
     source_day: int
     target_days: list[int]
+
+
+class BackfillAttendanceRequest(BaseModel):
+    members: list[Member_model]
+    day: int
+
+
+class BackfillAttendanceResponse(BaseClassModel):
+    created_count: int
+    existing_count: int
+    attendance_date: datetime
