@@ -203,6 +203,7 @@ class Events(Base):
     description: Mapped[Optional[str]] = mapped_column(TEXT(charset='utf8mb4', collation='utf8mb4_0900_ai_ci'))
     image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(100, charset='utf8mb4', collation='utf8mb4_0900_ai_ci'))
     is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1), server_default=text("'0'"))
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
 
     forms: Mapped[list['Forms']] = relationship('Forms', back_populates='event', passive_deletes=True)
     logs: Mapped[list['Logs']] = relationship('Logs', back_populates='event', passive_deletes=True)

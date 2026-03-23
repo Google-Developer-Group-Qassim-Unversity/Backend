@@ -35,6 +35,7 @@ class Events_model(BaseClassModel):
     status: Literal["draft", "open", "active", "closed"]
     image_url: str | None = None
     is_official: int | None = None
+    created_at: datetime | None = None
 
 
 class Form_model(BaseClassModel):
@@ -364,3 +365,16 @@ class ManualAttendanceRequest(BaseModel):
 class CopyAttendanceRequest(BaseModel):
     source_day: int
     target_days: list[int]
+
+
+class BackfillAttendanceRequest(BaseModel):
+    members: list[Member_model]
+    day: int
+
+
+class BackfillAttendanceResponse(BaseClassModel):
+    created_count: int
+    existing_count: int
+    already_attended_count: int
+    marked_count: int
+    attendance_date: datetime

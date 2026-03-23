@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from .schema import Events, Forms, t_open_events, Logs, DepartmentsLogs, Actions, Departments
 from ..routers.models import Events_model
+from datetime import datetime
 
 def get_events(session: Session):
     statement = select(Events)
@@ -67,7 +68,8 @@ def create_event(session: Session, event_data: Events_model):
             description=event_data.description,
             status=event_data.status,
             is_official=event_data.is_official,
-            image_url=event_data.image_url
+            image_url=event_data.image_url,
+            created_at=datetime.now()
         )
         session.add(new_event)
         session.flush()

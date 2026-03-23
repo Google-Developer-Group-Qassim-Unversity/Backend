@@ -15,6 +15,8 @@ from app.routers.models import (
     InternalServerErrorResponse,
     EventAttendanceResponse,
     ManualAttendanceRequest,
+    BackfillAttendanceRequest,
+    BackfillAttendanceResponse,
 )
 from app.config import config
 from app.routers.logging import (
@@ -29,6 +31,7 @@ from app.helpers import (
     credentials_to_member_model,
     is_admin,
     get_effective_date,
+    admin_guard
 )
 from datetime import datetime, timedelta
 
@@ -193,6 +196,114 @@ def mark_attendance(
 
             session.commit()
             return
+
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(log_file, e)
+            write_log_traceback(log_file)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.post(
+    "/{event_id}/backfill",
+    status_code=status.HTTP_200_OK,
+    response_model=BackfillAttendanceResponse,
+    responses={
+        404: {"model": NotFoundResponse, "description": "Event not found"},
+        400: {"model": BadRequestResponse, "description": "Invalid request"},
+        403: {"model": BadRequestResponse, "description": "Admin privileges required"},
+        500: {"model": InternalServerErrorResponse, "description": "Internal server error"},
+    },
+)
+def backfill_attendance(
+    event_id: int,
+    request: BackfillAttendanceRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(admin_guard),
+):
+
+    log_file = create_log_file("backfill attendance")
+
+    with SessionLocal() as session:
+        try:
+            write_log_title(
+                log_file,
+                f"Backfill attendance for event [{event_id}], {len(request.members)} members, day [{request.day}]",
+            )
+
+            event = events_queries.get_event_by_id(session, event_id)
+            if not event:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+            event_log = log_queries.get_attendable_logs(session, event_id)
+            if not event_log:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Event has no attendable logs",
+                )
+
+            event_days = (event.end_datetime - event.start_datetime).days + 1
+            if request.day < 1 or request.day > event_days:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Day {request.day} is out of range. Event has {event_days} day(s).",
+                )
+
+            target_date = event.start_datetime + timedelta(days=request.day - 1)
+            target_effective = get_effective_date(target_date, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+
+            created_count = 0
+            existing_count = 0
+            already_attended_count = 0
+
+            for member_data in request.members:
+                existing_member = member_queries.get_member_by_uni_id(session, member_data.uni_id)
+                if existing_member:
+                    existing_count += 1
+                    member = existing_member
+                    write_log(log_file, f"Found existing member [{member.name}] with uni_id [{member.uni_id}]")
+                else:
+                    new_member = member_queries.create_member(session, member_data)
+                    if new_member is None:
+                        write_log_exception(log_file, f"Failed to create member with uni_id [{member_data.uni_id}]")
+                        continue
+                    created_count += 1
+                    member = new_member
+                    write_log(log_file, f"Created new member [{member.name}] with uni_id [{member.uni_id}]")
+
+                member_logs = log_queries.get_member_logs(session, member.id, event_log.id)
+                if member_logs:
+                    already_marked = False
+                    for member_log in member_logs:
+                        log_effective = get_effective_date(member_log.date, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+                        if log_effective == target_effective:
+                            already_marked = True
+                            break
+                    if already_marked:
+                        already_attended_count += 1
+                        write_log(
+                            log_file,
+                            f"Member [{member.name}] already has attendance for day [{request.day}], skipping",
+                        )
+                        continue
+
+                log_queries.create_member_log(session, member.id, event_log.id, target_date)
+                write_log(
+                    log_file,
+                    f"Backfilled attendance for member [{member.name}] on day [{request.day}]",
+                )
+
+            session.commit()
+            marked_count = (created_count + existing_count) - already_attended_count
+            return BackfillAttendanceResponse(
+                created_count=created_count,
+                existing_count=existing_count,
+                already_attended_count=already_attended_count,
+                marked_count=marked_count,
+                attendance_date=target_date,
+            )
 
         except HTTPException:
             session.rollback()
