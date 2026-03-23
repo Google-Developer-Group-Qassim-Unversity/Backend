@@ -237,12 +237,6 @@ def backfill_attendance(
             if not event:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
-            if event.status == "closed":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Cannot backfill attendance for a closed event",
-                )
-
             event_log = log_queries.get_attendable_logs(session, event_id)
             if not event_log:
                 raise HTTPException(
@@ -302,10 +296,12 @@ def backfill_attendance(
                 )
 
             session.commit()
+            marked_count = (created_count + existing_count) - already_attended_count
             return BackfillAttendanceResponse(
                 created_count=created_count,
                 existing_count=existing_count,
                 already_attended_count=already_attended_count,
+                marked_count=marked_count,
                 attendance_date=target_date,
             )
 

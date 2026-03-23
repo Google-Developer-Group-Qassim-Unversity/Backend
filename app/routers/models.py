@@ -376,4 +376,5 @@ class BackfillAttendanceResponse(BaseClassModel):
     created_count: int
     existing_count: int
     already_attended_count: int
+    marked_count: int
     attendance_date: datetime
