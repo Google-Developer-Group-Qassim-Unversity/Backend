@@ -31,6 +31,7 @@ from app.helpers import (
     credentials_to_member_model,
     is_admin,
     get_effective_date,
+    admin_guard
 )
 from datetime import datetime, timedelta
 
@@ -220,13 +221,8 @@ def mark_attendance(
 def backfill_attendance(
     event_id: int,
     request: BackfillAttendanceRequest,
-    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
+    credentials: HTTPAuthorizationCredentials = Depends(admin_guard),
 ):
-    if not is_admin(credentials):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
 
     log_file = create_log_file("backfill attendance")
 
@@ -266,6 +262,7 @@ def backfill_attendance(
 
             created_count = 0
             existing_count = 0
+            already_attended_count = 0
 
             for member_data in request.members:
                 existing_member = member_queries.get_member_by_uni_id(session, member_data.uni_id)
@@ -291,6 +288,7 @@ def backfill_attendance(
                             already_marked = True
                             break
                     if already_marked:
+                        already_attended_count += 1
                         write_log(
                             log_file,
                             f"Member [{member.name}] already has attendance for day [{request.day}], skipping",
@@ -307,6 +305,7 @@ def backfill_attendance(
             return BackfillAttendanceResponse(
                 created_count=created_count,
                 existing_count=existing_count,
+                already_attended_count=already_attended_count,
                 attendance_date=target_date,
             )
 
