@@ -215,7 +215,7 @@ def give_department_custom_points(
 
             session.commit()
             write_log(log_file, "Successfully given custom points to departments")
-            return {"message": "Successfully given custom points to departments"}
+            return {"event_id": event.id, "message": "Successfully given custom points to departments"}
 
         except Exception as e:
             session.rollback()
@@ -553,7 +553,7 @@ def give_member_custom_points(
 
             session.commit()
             write_log(log_file, "Successfully given custom points to members")
-            return {"message": "Successfully given custom points to members"}
+            return {"event_id": event.id, "message": "Successfully given custom points to members"}
 
         except Exception as e:
             session.rollback()
