@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from .schema import Departments, DepartmentsLogs
+from .schema import Departments
 
 def get_departments(session: Session):
 	statement = select(Departments)
