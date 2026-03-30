@@ -110,3 +110,23 @@ def update_is_accepted(session: Session, submission_id: int, is_accepted: bool):
     submission.is_accepted = is_accepted
     session.flush()
     return submission
+
+
+def get_accepted_not_invited_by_event(session: Session, event_id: int):
+    submissions = session.execute(
+        select(t_forms_submissions).where(
+            t_forms_submissions.c.event_id == event_id,
+            t_forms_submissions.c.is_accepted == 1,
+            t_forms_submissions.c.is_invited == 0,
+            t_forms_submissions.c.submission_type != 'partial'
+        )
+    ).all()
+    return submissions
+
+
+def mark_submissions_as_invited(session: Session, submission_ids: list[int]):
+    from sqlalchemy import update
+    session.execute(
+        update(Submissions).where(Submissions.id.in_(submission_ids)).values(is_invited=1)
+    )
+    session.flush()

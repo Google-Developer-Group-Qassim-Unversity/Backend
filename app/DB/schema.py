@@ -494,6 +494,9 @@ class Submissions(Base):
     is_accepted: Mapped[int] = mapped_column(
         TINYINT(1), nullable=False, server_default=text("'0'")
     )
+    is_invited: Mapped[int] = mapped_column(
+        TINYINT(1), nullable=False, server_default=text("'0'")
+    )
     submitted_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
@@ -549,6 +552,7 @@ t_forms_submissions = Table(
     Column("uni_level", Integer),
     Column("uni_college", String(100)),
     Column("is_accepted", TINYINT(1), server_default=text("'0'")),
+    Column("is_invited", TINYINT(1), server_default=text("'0'")),
     Column("google_submission_value", JSON),
     Column("event_id", INTEGER(unsigned=True)),
     Column("form_id", INTEGER(unsigned=True), server_default=text("'0'")),

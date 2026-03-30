@@ -135,6 +135,7 @@ class Get_Submission_model(BaseClassModel):
     form_type: Literal["google", "none", "registration"]
     submission_type: Literal["none", "partial", "google", "registration"]
     is_accepted: bool
+    is_invited: bool
     google_submission_value: JsonValue | None = None
     event_id: int
     form_id: int
@@ -378,3 +379,8 @@ class BackfillAttendanceResponse(BaseClassModel):
     already_attended_count: int
     marked_count: int
     attendance_date: datetime
+
+
+class AcceptanceBlastResponse(BaseClassModel):
+    sent_count: int
+    emails: list[str]
