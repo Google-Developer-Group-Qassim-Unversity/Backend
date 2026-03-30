@@ -6,7 +6,7 @@ from app.routers import (
     attendance, certificates, upload, members, events, departments,
      action, complex_events, custom, edit,
      auth, card, forms, submissions,
-     submissions_manual, points
+     submissions_manual, points, acceptance
 )
 from app.config import config
 
@@ -42,6 +42,7 @@ app.include_router(submissions.router, prefix="/submissions", tags=["Submissions
 app.include_router(submissions_manual.router, prefix="/submissions_manual", tags=["Submissions Manual"])
 app.include_router(complex_events.router, prefix="/events", tags=["complex_events"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
+app.include_router(acceptance.router, prefix="/acceptance", tags=["acceptance"])
 
 # TODO: replace this with nginx for production
 app.mount("/files", StaticFiles(directory=config.UPLOAD_DIR), name="files")

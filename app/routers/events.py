@@ -476,6 +476,7 @@ def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCreden
                     form_type=row.form_type,
                     submission_type=row.submission_type,
                     is_accepted=bool(row.is_accepted),
+                    is_invited=bool(row.is_invited),
                     google_submission_value=row.google_submission_value,
                     event_id=row.event_id,
                     form_id=row.form_id,

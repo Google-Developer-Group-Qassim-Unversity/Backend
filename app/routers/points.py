@@ -4,8 +4,6 @@ from app.DB import points as points_queries
 from app.DB.main import SessionLocal
 from app.routers.models import BaseClassModel
 from datetime import datetime
-from time import perf_counter
-from json import dumps
 from app.helpers import is_super_admin
 from app.config import config
 router = APIRouter()
@@ -54,24 +52,6 @@ def _validate_semester_access(semester: int, credentials: HTTPAuthorizationCrede
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Semester {semester} is not publicly accessible. Super admin credentials required."
             )
-
-def _compare_queries(session, old_fn, old_args, new_fn, new_args):
-    start_old = perf_counter()
-    old_result = old_fn(session, **old_args) if old_args else old_fn(session)
-    time_old = (perf_counter() - start_old) * 1000
-
-    start_new = perf_counter()
-    new_result = new_fn(session, **new_args) if new_args else new_fn(session)
-    time_new = (perf_counter() - start_new) * 1000
-
-    return {
-        "report": {
-            "old_query_ms": round(time_old, 2),
-            "new_query_ms": round(time_new, 2),
-            "equal": dumps(old_result, sort_keys=True, default=str) == dumps(new_result, sort_keys=True, default=str),
-        },
-        "data": old_result,
-    }
 
 # ============ routes ============
 
@@ -139,75 +119,3 @@ def get_department_points(
         department=department_points,
         events=department_points_history
     )
-
-
-# =====================================================================
-#  Compare endpoints - performance testing between old (view) and new (parameterized) queries
-#  Always uses CURRENT_SEMESTER, no auth required
-# =====================================================================
-
-@router.get("/members/total/compare", status_code=status.HTTP_200_OK)
-def compare_all_members_points():
-    start_date, end_date = config.SEMESTERS[config.CURRENT_SEMESTER]
-    with SessionLocal() as session:
-        return _compare_queries(
-            session,
-            points_queries.get_all_members_points, {},
-            points_queries.get_members_points_semester,
-            {"start_date": start_date, "end_date": end_date},
-        )
-
-@router.get("/members/{member_id:int}/compare", status_code=status.HTTP_200_OK)
-def compare_member_points(member_id: int):
-    start_date, end_date = config.SEMESTERS[config.CURRENT_SEMESTER]
-    with SessionLocal() as session:
-        member_points = points_queries.get_member_points(session, member_id)
-        if member_points is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} does not exist")
-        result = _compare_queries(
-            session,
-            points_queries.get_member_points_history, {"member_id": member_id},
-            points_queries.get_member_points_history_semester,
-            {"member_id": member_id, "start_date": start_date, "end_date": end_date},
-        )
-        result["data"] = {
-            "member": member_points,
-            "events": result["data"],
-        }
-        return result
-
-@router.get("/departments/total/compare", status_code=status.HTTP_200_OK)
-def compare_all_departments_points():
-    start_date, end_date = config.SEMESTERS[config.CURRENT_SEMESTER]
-    with SessionLocal() as session:
-        result = _compare_queries(
-            session,
-            points_queries.get_all_departments_points, {},
-            points_queries.get_departments_points_semester,
-            {"start_date": start_date, "end_date": end_date},
-        )
-        departments_points = result["data"]
-        result["data"] = {
-            "administrative": [d for d in departments_points if d['department_type'] == 'administrative'],
-            "practical": [d for d in departments_points if d['department_type'] == 'practical'],
-        }
-        return result
-
-@router.get("/departments/{department_id:int}/compare", status_code=status.HTTP_200_OK)
-def compare_department_points(department_id: int):
-    start_date, end_date = config.SEMESTERS[config.CURRENT_SEMESTER]
-    with SessionLocal() as session:
-        department_points = points_queries.get_department_points(session, department_id)
-        if department_points is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {department_id} does not exist")
-        result = _compare_queries(
-            session,
-            points_queries.get_department_points_history, {"department_id": department_id},
-            points_queries.get_department_points_history_semester,
-            {"department_id": department_id, "start_date": start_date, "end_date": end_date},
-        )
-        result["data"] = {
-            "department": department_points,
-            "events": result["data"],
-        }
-        return result
