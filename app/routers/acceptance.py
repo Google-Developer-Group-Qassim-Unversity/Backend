@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Body
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB.main import SessionLocal
 from app.DB import submissions as submissions_queries
@@ -120,3 +120,89 @@ async def send_acceptance_blasts(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An error occurred while sending acceptance emails",
             )
+
+
+@router.post(
+    "/test",
+    status_code=status.HTTP_200_OK,
+    response_model=AcceptanceBlastResponse,
+)
+async def send_acceptance_test(
+    request: Request,
+    subject: str = Query(..., description="Email subject line"),
+    emails: list[str] = Query(..., description="Email addresses to send to"),
+    credentials: HTTPAuthorizationCredentials = Depends(admin_guard),
+):
+    log_file = create_log_file("send acceptance test")
+    try:
+        write_log_title(log_file, "Sending acceptance test emails")
+
+        html_body = await request.body()
+        html_content = html_body.decode("utf-8")
+
+        if not html_content or not html_content.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Request body must contain HTML content",
+            )
+
+        write_log(log_file, f"Received HTML body with {len(html_content)} characters")
+
+        if not emails:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid email addresses provided",
+            )
+
+        write_log(log_file, f"Parsed [{len(emails)}] test emails")
+        write_log_json(log_file, {"emails": emails})
+
+        acceptance_api_url = config.CERTIFICATE_API_URL
+        write_log(log_file, f"Sending request to acceptance API: [{acceptance_api_url}/blasts]")
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                emails_param = ",".join(emails)
+                response = await client.post(
+                    f"{acceptance_api_url}/blasts",
+                    params={"emails": emails_param, "subject": subject},
+                    content=html_content,
+                    headers={"Content-Type": "text/html; charset=utf-8"},
+                )
+                response.raise_for_status()
+                response_data = response.json()
+                write_log(log_file, "Acceptance API responded successfully")
+                write_log_json(log_file, response_data)
+            except httpx.TimeoutException:
+                write_log_exception(log_file, Exception("Acceptance API request timed out"))
+                raise HTTPException(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    detail="Acceptance API request timed out",
+                )
+            except httpx.HTTPStatusError as e:
+                write_log_exception(log_file, Exception(f"Acceptance API error: {e.response.status_code}"))
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Acceptance API returned error: {e.response.status_code}",
+                )
+            except httpx.RequestError as e:
+                write_log_exception(log_file, Exception(f"Failed to connect to acceptance API: {str(e)}"))
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Failed to connect to acceptance API",
+                )
+
+        return AcceptanceBlastResponse(
+            sent_count=len(emails),
+            emails=emails,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        write_log_exception(log_file, e)
+        write_log_traceback(log_file)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while sending test acceptance emails",
+        )
