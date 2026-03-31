@@ -8,7 +8,8 @@ from typing import Optional
 from pathlib import Path
 from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
 
-load_dotenv(override=True)
+load_dotenv()
+load_dotenv(".env.local", override=True)
 
 
 UPLOAD_DIR_DEV = "uploads"
