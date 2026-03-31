@@ -8,7 +8,7 @@ from sqlalchemy import pool
 from alembic import context
 from app.DB.schema import Base
 
-load_dotenv()
+load_dotenv(override=True)
 
 config = context.config
 

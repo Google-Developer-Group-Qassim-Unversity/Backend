@@ -8,33 +8,14 @@ from typing import Optional
 from pathlib import Path
 from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
 
-# Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
-
-# =============================================================================
-# Configuration Constants (add more here and then expose them via Config class)
-# =============================================================================
-
-DB_PROD = "scores"
-DB_DEV = "scores_dev"
-
-CLERK_PROD = "https://clerk.gdg-q.com/.well-known/jwks.json"
-CLERK_DEV = "https://quality-ram-46.clerk.accounts.dev/.well-known/jwks.json"
 
 UPLOAD_DIR_DEV = "uploads"
 UPLOAD_DIR_PROD = str(Path.home() / "GDG-Files")
 LOG_DIR_DEV = "logs"
 LOG_DIR_PROD = str(Path.home() / "GDG-Logs")
 
-CERTIFICATE_API_URL_DEV = "http://localhost:8000"
-CERTIFICATE_API_URL_PROD = "http://localhost:8000"
-
-# Pagination settings
-DEFAULT_PAGE_SIZE = 50
-MAX_PAGE_SIZE = 100
-
-# Semester settings
 CURRENT_SEMESTER = 472
 PUBLIC_SEMESTERS = [472]
 SEMESTERS = {
@@ -42,21 +23,7 @@ SEMESTERS = {
     471: ("2025-08-24", "2026-01-17"),
 }
 
-# Sorting settings
-DEFAULT_SORT_ORDER = "DESC"
-DEFAULT_EVENTS_SORT_BY = "start_datetime"
-ALLOWED_EVENTS_SORT_BY = ["start_datetime"]
-
-# Attendance settings
-# Hours before this threshold are considered part of the previous day.
-# This handles midnight-crossing events where late-night attendance should count
-# as the "intended" day (e.g., 2AM attendance counts as the night before).
-# Example: with threshold=6, attendance at 2AM on Mar 3 is treated as Mar 2.
 ATTENDANCE_EARLY_HOURS_THRESHOLD = 6
-
-# =============================================================================
-#
-# =============================================================================
 
 
 class Config:
@@ -67,41 +34,20 @@ class Config:
 
     @property
     def DATABASE_URL(self) -> str:
-        url = env_or_except("DATABASE_URL")
-        parts = url.rsplit("/", 1)
-        if len(parts) == 2:
-            if self.is_dev:
-                url = f"{parts[0]}/{DB_DEV}"
-                print(
-                    f"Using database: {DB_DEV}"
-                    if self.is_dev
-                    else f"Using database: {DB_PROD}"
-                )
-            else:
-                url = f"{parts[0]}/{DB_PROD}"
-        else:
-            raise ValueError(
-                f"⚠️ Invalid DATABASE_URL format excpected to end with /<dbname>, got: {url}"
-            )
-        return url
+        print(env_or_except("DATABASE_URL"))
+        return env_or_except("DATABASE_URL")
 
     @property
     def CLERK_GUARD(self):
-        if self.is_dev:
-            clerk_config = ClerkConfig(jwks_url=CLERK_DEV)
-        else:
-            clerk_config = ClerkConfig(jwks_url=CLERK_PROD)
-        clerk_auth_guard = ClerkHTTPBearer(config=clerk_config)
-        return clerk_auth_guard
+        jwks_url = env_or_except("CLERK_JWKS_URL")
+        clerk_config = ClerkConfig(jwks_url=jwks_url)
+        return ClerkHTTPBearer(config=clerk_config)
 
     @property
     def CLERK_GUARD_optional(self):
-        if self.is_dev:
-            clerk_config = ClerkConfig(jwks_url=CLERK_DEV)
-        else:
-            clerk_config = ClerkConfig(jwks_url=CLERK_PROD)
-        clerk_auth_guard = ClerkHTTPBearer(config=clerk_config, auto_error=False)
-        return clerk_auth_guard
+        jwks_url = env_or_except("CLERK_JWKS_URL")
+        clerk_config = ClerkConfig(jwks_url=jwks_url)
+        return ClerkHTTPBearer(config=clerk_config, auto_error=False)
 
     @property
     def UPLOAD_DIR(self) -> str:
@@ -110,7 +56,7 @@ class Config:
             return UPLOAD_DIR_DEV
         else:
             os.makedirs(UPLOAD_DIR_PROD, exist_ok=True)
-        return UPLOAD_DIR_PROD
+            return UPLOAD_DIR_PROD
 
     @property
     def LOG_DIR(self) -> str:
@@ -120,26 +66,6 @@ class Config:
         else:
             os.makedirs(LOG_DIR_PROD, exist_ok=True)
             return LOG_DIR_PROD
-
-    @property
-    def DEFAULT_PAGE_SIZE(self) -> int:
-        return DEFAULT_PAGE_SIZE
-
-    @property
-    def MAX_PAGE_SIZE(self) -> int:
-        return MAX_PAGE_SIZE
-
-    @property
-    def DEFAULT_SORT_ORDER(self) -> str:
-        return DEFAULT_SORT_ORDER
-
-    @property
-    def DEFAULT_EVENTS_SORT_BY(self) -> str:
-        return DEFAULT_EVENTS_SORT_BY
-
-    @property
-    def ALLOWED_EVENTS_SORT_BY(self) -> list[str]:
-        return ALLOWED_EVENTS_SORT_BY
 
     @property
     def ATTENDANCE_EARLY_HOURS_THRESHOLD(self) -> int:
@@ -176,10 +102,7 @@ class Config:
 
     @property
     def CERTIFICATE_API_URL(self) -> str:
-        if self.is_dev:
-            return CERTIFICATE_API_URL_DEV
-        else:
-            return CERTIFICATE_API_URL_PROD
+        return env_or_except("CERTIFICATE_API_URL")
 
 
 def env_or_except(key: str, default: Optional[str] = None) -> str:
