@@ -35,7 +35,6 @@ class Config:
 
     @property
     def DATABASE_URL(self) -> str:
-        print(env_or_except("DATABASE_URL"))
         return env_or_except("DATABASE_URL")
 
     @property
