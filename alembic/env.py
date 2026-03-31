@@ -9,6 +9,7 @@ from alembic import context
 from app.DB.schema import Base
 
 load_dotenv()
+load_dotenv(".env.local", override=True)
 
 config = context.config
 
