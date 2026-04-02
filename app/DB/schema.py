@@ -557,6 +557,7 @@ t_forms_submissions = Table(
     Column("event_id", INTEGER(unsigned=True)),
     Column("form_id", INTEGER(unsigned=True), server_default=text("'0'")),
     Column("google_form_id", String(100)),
+    info={"is_view": True},
 )
 
 t_open_events = Table(
@@ -593,4 +594,5 @@ t_open_events = Table(
         ),
     ),
     Column("google_responders_url", String(150)),
+    info={"is_view": True},
 )
