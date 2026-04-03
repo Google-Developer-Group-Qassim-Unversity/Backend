@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from .schema import Forms
 from ..routers.models import Form_model
+from app.exceptions import FormConflict
 
 
 def create_form(session: Session, form: Form_model):
@@ -20,9 +21,7 @@ def create_form(session: Session, form: Form_model):
         session.flush()
         return new_form
     except IntegrityError as e:
-        session.rollback()
-        print(f"IntegrityError in create_form: {e}...")
-        return None
+        raise FormConflict(form.event_id)
 
 def update_form(session: Session, form_id: int, form: Form_model):
     """Update an existing form"""

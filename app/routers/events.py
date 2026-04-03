@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
+from pymysql import IntegrityError
 from app.DB import (
     events as events_queries,
     forms as form_queries,
@@ -139,14 +140,6 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             write_log_title(log_file, "Creating New Event and Associated Form")
             # 1. create event
             new_event = events_queries.create_event(session, event_data.event)
-
-            if new_event is None:
-                exception = HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to create event due to database error",
-                )
-                write_log_exception(log_file, exception)
-                raise exception
             write_log(log_file, f"Created Event [{new_event.id}]: {new_event.name}")
 
             # 2. create associated form
@@ -189,17 +182,22 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             session.commit()
             session.refresh(new_event)
             return new_event
-        except HTTPException:
-            session.rollback()
-            raise
+        # except HTTPException as e:
+        #     session.rollback()
+        #     write_log_exception(log_file, e)
+        #     write_log_traceback(log_file)
+        #     raise
         except Exception as e:
             session.rollback()
             write_log_exception(log_file, e)
             write_log_traceback(log_file)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while creating the event",
-            )
+            if isinstance(e, HTTPException):
+                raise
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="An error occurred while creating the event",
+                )
         finally:
             write_log_json(log_file, event_data.model_dump(mode="json"))
 

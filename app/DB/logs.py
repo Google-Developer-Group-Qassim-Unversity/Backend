@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from app.routers.models import Member_model, AttendanceRecord_model
 from app.config import config
 from app.helpers import get_effective_date
+from app.exceptions import ActionNotFound
 
 
 def create_department_log(
@@ -54,6 +55,9 @@ def get_member_logs(session: Session, member_id: int, log_id: int):
 
 
 def create_log(session: Session, event_id: int, action_id: int):
+    action = select(Actions).where(Actions.id == action_id)
+    if not session.scalar(action):
+        raise ActionNotFound(action_id)
     new_log = Logs(event_id=event_id, action_id=action_id)
     session.add(new_log)
     session.flush()

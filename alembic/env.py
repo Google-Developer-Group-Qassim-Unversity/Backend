@@ -1,15 +1,11 @@
 from logging.config import fileConfig
 import os
 
-from dotenv import load_dotenv
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
 from app.DB.schema import Base
-
-load_dotenv()
-load_dotenv(".env.local", override=True)
 
 config = context.config
 

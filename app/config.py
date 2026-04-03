@@ -8,8 +8,10 @@ from typing import Optional
 from pathlib import Path
 from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
 
-load_dotenv()
-load_dotenv(".env.local", override=True)
+# Only load .env files if not in testing mode
+# Tests set ENV=testing and manage env vars via conftest.py
+if os.getenv("ENV") != "testing":
+    load_dotenv(".env.local", override=True)
 
 
 UPLOAD_DIR_DEV = "uploads"

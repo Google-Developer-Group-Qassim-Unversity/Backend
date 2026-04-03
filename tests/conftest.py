@@ -1,20 +1,37 @@
 """
 Pytest configuration and fixtures for testing.
+Fixture chain (scope):
 
-This module sets up:
-- Environment variables for testing
-- Testcontainers MySQL (if DATABASE_URL not provided)
-- Database session fixtures with transaction rollback
-- FastAPI test client
+    database_url (session)
+        |
+    engine (session) ─── runs Alembic migrations
+        |
+    seed_core_data (session) ─── seeds the DB
+        |
+        ├── db_session (function) ─── per-test session with rollback
+        |
+        └── client (function) ─── FastAPI TestClient
+                |
+            admin_client (function) ─── bypasses admin_guard
 """
 
 import os
 import pytest
 from typing import Generator
 
+from testcontainers.mysql import MySqlContainer
+
+from sqlalchemy import create_engine
+from alembic.config import Config
+from alembic import command
+from sqlalchemy.orm import Session, sessionmaker
+
+from fastapi.testclient import TestClient
+from fastapi.security import HTTPAuthorizationCredentials
+
 # Set environment variables BEFORE importing app
 # These must be set before any app modules are imported
-_required_env_vars = {
+required_env_vars = {
     "ENV": "testing",
     "CLERK_JWKS_URL": "https://test.clerk.dev/.well-known/jwks.json",
     "GOOGLE_CLIENT_ID": "test_client_id",
@@ -23,12 +40,8 @@ _required_env_vars = {
     "CERTIFICATE_API_URL": "http://localhost:8000",
 }
 
-for key, value in _required_env_vars.items():
-    if not os.getenv(key):
-        os.environ[key] = value
-
-# Container reference - kept at module level to prevent garbage collection
-_test_container = None
+for key, value in required_env_vars.items():
+    os.environ[key] = value  # Always set, override any existing
 
 
 @pytest.fixture(scope="session")
@@ -41,52 +54,35 @@ def database_url():
     
     Yields the database URL string.
     """
-    global _test_container
-    
     existing_url = os.getenv("DATABASE_URL")
     
     if existing_url:
-        print(f"[conftest] Using provided DATABASE_URL: {existing_url}")
+        print(f"[conftest] Using provided DATABASE_URL")
         yield existing_url
         return
     
-    # Start testcontainers
     print("[conftest] Starting MySQL testcontainer...")
-    from testcontainers.mysql import MySqlContainer
-    import time
+    container = MySqlContainer("mysql:8.0", dbname="test")
+    container.start()
     
-    _test_container = MySqlContainer("mysql:8.0", dbname="test")
-    _test_container.start()
-    
-    # Wait for MySQL to be ready
-    time.sleep(3)
-    
-    # Get connection URL and convert to pymysql driver
-    url = _test_container.get_connection_url()
+    url = container.get_connection_url()
     url = url.replace("mysql://", "mysql+pymysql://")
     print(f"[conftest] MySQL testcontainer started: {url}")
     
-    # Set env var for app to use
     os.environ["DATABASE_URL"] = url
     
     yield url
     
-    # Cleanup
     print("[conftest] Stopping MySQL testcontainer...")
-    _test_container.stop()
+    container.stop()
 
 
 @pytest.fixture(scope="session")
 def engine(database_url):
     """
-    Create SQLAlchemy engine and database tables.
-    
-    Runs once per test session.
-    Yields the engine instance.
+    Create SQLAlchemy engine and run migrations.
+    This ensures tests run against the same database structure as production.
     """
-    # Import here after DATABASE_URL is set
-    from sqlalchemy import create_engine
-    from app.DB.schema import Base
     
     engine = create_engine(
         database_url,
@@ -94,58 +90,112 @@ def engine(database_url):
         pool_recycle=3600,
     )
     
-    # Create tables (excluding views which are marked with info={"is_view": True})
-    print("[conftest] Creating database tables...")
-    tables_to_create = [
-        table for name, table in Base.metadata.tables.items()
-        if not table.info.get("is_view")
-    ]
+    print("[conftest] Running Alembic migrations...")
+    alembic_cfg = Config("alembic.ini")
+    alembic_cfg.set_main_option("sqlalchemy.url", database_url)
     
-    # Create tables in dependency order
-    for table in Base.metadata.sorted_tables:
-        if not table.info.get("is_view"):
-            table.create(engine, checkfirst=True)
+    try:
+        command.upgrade(alembic_cfg, "head")
+    except Exception as e:
+        print(f"[conftest] ❌ Migration failed: {e}")
+        raise RuntimeError(
+            f"Database migrations failed. "
+            f"This is NOT a test failure - migrations are broken.\n"
+            f"Fix your migration files first.\n"
+            f"Original error: {e}"
+        ) from e
+    
+    print("[conftest] ✓ Migrations completed")
     
     yield engine
-    
-    # Cleanup: drop all tables
-    print("[conftest] Dropping database tables...")
-    for table in reversed(Base.metadata.sorted_tables):
-        if not table.info.get("is_view"):
-            table.drop(engine, checkfirst=True)
+
+
+@pytest.fixture(scope="session")
+def seed_core_data(engine):
+    from app.DB.schema import Actions, Departments, ActionsActionType, DepartmentsType
+
+    with Session(engine) as session:
+        session.add_all([
+            Actions(
+                action_name="organized an on-site course",
+                points=10,
+                action_type=ActionsActionType.DEPARTMENT,
+                ar_action_name="تنظيم دورة حضورية",
+            ),
+            Actions(
+                action_name="on-site course attendance",
+                points=5,
+                action_type=ActionsActionType.MEMBER,
+                ar_action_name="حضور دورة حضورية",
+            ),
+            Departments(
+                name="Business",
+                type=DepartmentsType.PRACTICAL,
+                ar_name="ريادة الأعمال",
+            ),
+            Departments(
+                name="Design",
+                type=DepartmentsType.ADMINISTRATIVE,
+                ar_name="التصميم",
+            ),
+        ])
+        session.commit()
+        print("[conftest] ✓ Core data seeded")
 
 
 @pytest.fixture(scope="function")
-def db_session(engine) -> Generator:
+def client(engine, seed_core_data) -> Generator:
     """
-    Provide a database session with transaction rollback.
-    
-    Each test gets a fresh transaction that is rolled back after the test.
-    This ensures tests are isolated from each other.
+    Provide a FastAPI test client with transaction rollback.
+
+    Reconfigures SessionLocal **in-place** so every module that imported it
+    (via ``from app.DB.main import SessionLocal``) will create sessions bound
+    to a single test-scoped connection.  After the test the transaction is
+    rolled back, undoing every INSERT/UPDATE/DELETE the routes committed.
     """
-    from sqlalchemy.orm import Session
-    
+    import app.DB.main as db_main
+    from app.main import app
+
     connection = engine.connect()
     transaction = connection.begin()
-    session = Session(bind=connection)
-    
-    yield session
-    
-    session.close()
+
+    original_bind = db_main.SessionLocal.kw["bind"]
+    db_main.SessionLocal.configure(bind=connection)
+
+    yield TestClient(app)
+
+    db_main.SessionLocal.configure(bind=original_bind)
     transaction.rollback()
     connection.close()
 
 
 @pytest.fixture(scope="function")
-def client(database_url) -> Generator:
-    """
-    Provide a FastAPI test client.
-    
-    Note: This fixture requires database_url to ensure the database
-    is set up before importing the app.
-    """
-    # Import app here after DATABASE_URL is set
-    from fastapi.testclient import TestClient
+def admin_client(client) -> Generator:
     from app.main import app
-    
-    yield TestClient(app)
+    from app.helpers import admin_guard
+
+    def override_admin_guard():
+        return HTTPAuthorizationCredentials(
+            scheme="Bearer",
+            credentials="fake-token",
+        )
+
+    app.dependency_overrides[admin_guard] = override_admin_guard
+    yield client
+    app.dependency_overrides.clear()
+
+
+def pytest_assertrepr_compare(config, op, left, right):
+    """Customize assertion comparison output for clearer failure messages."""
+    if op == "==":
+        return [
+            "Assertion failed:",
+            f"  Expected: {right!r}",
+            f"  Actual:   {left!r}",
+        ]
+    if op == "!=":
+        return [
+            "Assertion failed:",
+            f"  Expected NOT: {right!r}",
+            f"  Actual:        {left!r}",
+        ]

@@ -58,6 +58,7 @@ def write_log_traceback(file: Path):
 
 def print_summarized_traceback() -> str:
     tb = exc_info()[2]
+    print("\n\033[33msummrized traceback\033[0m 🗂️:\n")
     for frame in extract_tb(tb):
         print(f"...{path.sep.join(frame.filename.split(path.sep)[-3:])}, line {frame.lineno}:{frame.colno}\n")
 

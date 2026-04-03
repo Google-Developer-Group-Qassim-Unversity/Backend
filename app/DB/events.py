@@ -4,6 +4,7 @@ from sqlalchemy import select
 from .schema import Events, Forms, t_open_events, Logs, DepartmentsLogs, Actions, Departments
 from ..routers.models import Events_model
 from datetime import datetime
+from fastapi import HTTPException, status   
 
 def get_events(session: Session):
     statement = select(Events)
@@ -58,25 +59,21 @@ def get_event_by_id(session: Session, event_id: int):
     return event
 
 def create_event(session: Session, event_data: Events_model):
-    try:
-        new_event = Events(
-            name=event_data.name,
-            location_type=event_data.location_type,
-            location=event_data.location,
-            start_datetime=event_data.start_datetime,
-            end_datetime=event_data.end_datetime,
-            description=event_data.description,
-            status=event_data.status,
-            is_official=event_data.is_official,
-            image_url=event_data.image_url,
-            created_at=datetime.now()
-        )
-        session.add(new_event)
-        session.flush()
-        return new_event
-    except IntegrityError as e:
-        session.rollback()
-        return None
+    new_event = Events(
+        name=event_data.name,
+        location_type=event_data.location_type,
+        location=event_data.location,
+        start_datetime=event_data.start_datetime,
+        end_datetime=event_data.end_datetime,
+        description=event_data.description,
+        status=event_data.status,
+        is_official=event_data.is_official,
+        image_url=event_data.image_url,
+        created_at=datetime.now()
+    )
+    session.add(new_event)
+    session.flush()
+    return new_event
 
 def delete_event(session: Session, event_id: int):
     event = session.scalar(select(Events).where(Events.id == event_id))

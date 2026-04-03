@@ -19,8 +19,9 @@ def test_root_redirects_to_docs(client: TestClient):
     assert response.headers["location"] == "/docs"
 
 
-def test_database_connection(db_session):
+def test_database_connection(engine):
     """Test that database connection works."""
     from sqlalchemy import text
-    result = db_session.execute(text("SELECT 1"))
-    assert result.scalar() == 1
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT 1"))
+        assert result.scalar() == 1
