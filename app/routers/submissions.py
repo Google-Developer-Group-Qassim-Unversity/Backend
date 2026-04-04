@@ -7,7 +7,7 @@ from app.DB import submissions as submission_queries, members as member_queries,
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import admin_guard, get_uni_id_from_credentials
 from app.config import config
-from app.routers.logging import create_log_file, write_log, write_log_exception, write_log_json, write_log_title, write_log_traceback
+from app.routers.logging import LogFile, write_log, write_log_exception, write_log_json, write_log_title, write_log_traceback
 from app.routers.models import submission_exists_model, submission_accept_model
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -34,18 +34,17 @@ def create_submission(form_id: int, submission_type: Literal['none', 'partial'],
         
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
 def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
-    log_file = create_log_file("check submission exists")
-    with SessionLocal() as session:
+    with LogFile("check submission exists"), SessionLocal() as session:
         try:
 
             uni_id = get_uni_id_from_credentials(credentials)
 
-            write_log(log_file, f"Querying DB for form_id [{form_id}] and uni_id [{uni_id}]")
+            write_log(f"Querying DB for form_id [{form_id}] and uni_id [{uni_id}]")
             start = perf_counter()
             member_id = member_queries.get_member_by_uni_id(session, uni_id).id
             submission = submission_queries.get_submission_by_form_and_member(session, form_id, member_id)
             end = perf_counter()
-            write_log(log_file, f"got member [{member_id}], found submission [{submission}]  DB took [{(end - start) * 1000 :.2f}]ms to execute")
+            write_log(f"got member [{member_id}], found submission [{submission}]  DB took [{(end - start) * 1000 :.2f}]ms to execute")
             if submission is None:
                 return {'submission_status': False}
             submission_type = submission.submission_type 
@@ -314,79 +313,79 @@ def sync_form_submissions(google_form_id: str, log_file):
 
 @router.get("/test-google-forms/{google_form_id}", status_code=status.HTTP_200_OK)
 def test_fetch_form_responses(google_form_id: str):
-    log_file = create_log_file("test google forms fetch")
-    responses = fetch_form_responses(google_form_id, log_file)
-    schema = fetch_schema(google_form_id)
-    print("\n\n=== Responses ===\n")
-    print(json.dumps(responses, indent=4, ensure_ascii=False))
-    print("\n\n=== Schema ===\n")
-    print(json.dumps(schema, indent=4, ensure_ascii=False))
-    
-    return schema
+    with LogFile("test google forms fetch") as log:
+        responses = fetch_form_responses(google_form_id, log.file)
+        schema = fetch_schema(google_form_id)
+        print("\n\n=== Responses ===\n")
+        print(json.dumps(responses, indent=4, ensure_ascii=False))
+        print("\n\n=== Schema ===\n")
+        print(json.dumps(schema, indent=4, ensure_ascii=False))
+        
+        return schema
 
 @router.post("/google/webhook", status_code=status.HTTP_200_OK)
 async def google_forms_webhook(request: Request, background_tasks: BackgroundTasks):
-    log_file = create_log_file("google forms webhook")
-    try:
-        write_log_title(log_file, "⚓ Google Forms Webhook Notification ⚓")
-        
-        body = await request.json()
-        
-        # Validate it's a Pub/Sub message
-        if "message" not in body:
-            write_log_json(log_file, {"status": "ignored", "reason": "not_pubsub_message", "body": body})
-            return {"status": "ignored", "reason": "not_pubsub_message"}
-        if "attributes" not in body["message"]:
-            write_log_json(log_file, {"status": "ignored", "reason": "missing_attributes"})
-            return {"status": "ignored", "reason": "missing_attributes"}
-        
-        write_log(log_file, f"Received Pub/Sub message: {body}")
-        message = body["message"]
-        attributes = message["attributes"]
-        
-        # Extract form information from attributes
-        form_id = attributes.get("formId")
-        watch_id = attributes.get("watchId")
-        event_type = attributes.get("eventType")
-        message_id = message.get("messageId") or message.get("message_id")
-        publish_time = message.get("publishTime") or message.get("publish_time")
-        subscription = body.get("subscription")
-        
-        if not form_id:
-            write_log_json(log_file, {"status": "ignored", "reason": "missing_form_id"})
-            return {"status": "ignored", "reason": "missing_form_id"}
-        
-        # Log the notification
-        write_log_json(log_file, {
-            "status": "received",
-            "form_id": form_id,
-            "watch_id": watch_id,
-            "event_type": event_type,
-            "message_id": message_id,
-            "publish_time": publish_time,
-            "subscription": subscription
-        })
-        
-        # Sync form submissions in the background
-        background_tasks.add_task(sync_form_submissions, form_id, log_file)
-        write_log(log_file, f"Background task scheduled to sync submissions for form: {form_id}")
-        
-        return {
-            "status": "received",
-            "form_id": form_id,
-            "event_type": event_type,
-            "message_id": message_id
-        }
-        
-    except json.JSONDecodeError as e:
-        write_log_exception(log_file, e)
-        write_log_traceback(log_file)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid JSON: {str(e)}")
-    except KeyError as e:
-        write_log_exception(log_file, e)
-        write_log_traceback(log_file)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Missing required field: {str(e)}")
-    except Exception as e:
-        write_log_exception(log_file, e)
-        write_log_traceback(log_file)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while processing the webhook")
+    with LogFile("google forms webhook") as log:
+        try:
+            write_log_title("⚓ Google Forms Webhook Notification ⚓")
+            
+            body = await request.json()
+            
+            # Validate it's a Pub/Sub message
+            if "message" not in body:
+                write_log_json({"status": "ignored", "reason": "not_pubsub_message", "body": body})
+                return {"status": "ignored", "reason": "not_pubsub_message"}
+            if "attributes" not in body["message"]:
+                write_log_json({"status": "ignored", "reason": "missing_attributes"})
+                return {"status": "ignored", "reason": "missing_attributes"}
+            
+            write_log(f"Received Pub/Sub message: {body}")
+            message = body["message"]
+            attributes = message["attributes"]
+            
+            # Extract form information from attributes
+            form_id = attributes.get("formId")
+            watch_id = attributes.get("watchId")
+            event_type = attributes.get("eventType")
+            message_id = message.get("messageId") or message.get("message_id")
+            publish_time = message.get("publishTime") or message.get("publish_time")
+            subscription = body.get("subscription")
+            
+            if not form_id:
+                write_log_json({"status": "ignored", "reason": "missing_form_id"})
+                return {"status": "ignored", "reason": "missing_form_id"}
+            
+            # Log the notification
+            write_log_json({
+                "status": "received",
+                "form_id": form_id,
+                "watch_id": watch_id,
+                "event_type": event_type,
+                "message_id": message_id,
+                "publish_time": publish_time,
+                "subscription": subscription
+            })
+            
+            # Sync form submissions in the background
+            background_tasks.add_task(sync_form_submissions, form_id, log.file)
+            write_log(f"Background task scheduled to sync submissions for form: {form_id}")
+            
+            return {
+                "status": "received",
+                "form_id": form_id,
+                "event_type": event_type,
+                "message_id": message_id
+            }
+            
+        except json.JSONDecodeError as e:
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid JSON: {str(e)}")
+        except KeyError as e:
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Missing required field: {str(e)}")
+        except Exception as e:
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while processing the webhook")

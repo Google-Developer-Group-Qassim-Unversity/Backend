@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from app.DB.main import SessionLocal
 from app.DB import submissions as submission_queries, members as member_queries
 from app.routers.logging import (
-    create_log_file,
+    LogFile,
     write_log,
     write_log_exception,
     write_log_title,
@@ -140,22 +140,22 @@ def manual_create_google_submissions(
     Public (no-auth) endpoint to manually sync Google Form responses into DB submissions.
     Processes only the first `limit` responses as returned by the Google API.
     """
-    log_file = create_log_file("manual google submissions sync")
-    try:
-        return sync_manual_form_submissions(google_form_id, limit, log_file)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while syncing submissions",
-        )
+    with LogFile("manual google submissions sync") as log:
+        try:
+            return sync_manual_form_submissions(google_form_id, limit, log.file)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while syncing submissions",
+            )
 
 @router.post("/google/run/{google_form_id}", status_code=status.HTTP_200_OK)
 def manual_run_google_form_submissions(google_form_id: str):
-    log_file = create_log_file("manual google submissions sync")
-    try:
-        return sync_form_submissions(google_form_id, log_file)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while syncing submissions",
-        )
+    with LogFile("manual google submissions sync") as log:
+        try:
+            return sync_form_submissions(google_form_id, log.file)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while syncing submissions",
+            )
