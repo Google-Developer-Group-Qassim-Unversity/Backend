@@ -320,13 +320,3 @@ def get_member_history(
         member_history = member_queries.get_member_history(session, member_uni_id)
         print(member_history)
     return member_history
-
-
-@router.get("/votes", status_code=status.HTTP_200_OK)
-def did_member_vote(
-    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
-):
-    member_uni_id = get_uni_id_from_credentials(credentials)
-    with open("votes_members.json", "r") as f:
-        voted_members = json.load(f)
-    return {"has_voted": member_uni_id in voted_members}
