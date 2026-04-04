@@ -89,19 +89,7 @@ def wait_for_mysql(max_retries: int = 30, delay: float = 1.0):
             ]
         )
         if r.returncode == 0:
-            r2 = run(
-                [
-                    "docker",
-                    "exec",
-                    CONTAINER_NAME,
-                    "mysql",
-                    "-u",
-                    DB_USER,
-                    f"-p{DB_PASSWORD}",
-                    "-e",
-                    "SELECT 1",
-                ]
-            )
+            r2 = run(["docker", "exec", CONTAINER_NAME, "mysql", "-u", DB_USER, f"-p{DB_PASSWORD}", "-e", "SELECT 1"])
             if r2.returncode == 0:
                 print(f"[setup] MySQL is ready (attempt {attempt}/{max_retries}).")
                 return
@@ -113,8 +101,7 @@ def wait_for_mysql(max_retries: int = 30, delay: float = 1.0):
 def run_migrations():
     print("[setup] Running Alembic migrations...")
     r = subprocess.run(
-        ["uv", "run", "alembic", "upgrade", "head"],
-        env={**os.environ, "DATABASE_URL": LOCAL_DATABASE_URL},
+        ["uv", "run", "alembic", "upgrade", "head"], env={**os.environ, "DATABASE_URL": LOCAL_DATABASE_URL}
     )
     if r.returncode != 0:
         print("[error] Migrations failed.")
@@ -125,8 +112,7 @@ def run_migrations():
 def stamp_alembic():
     print("[setup] Stamping Alembic to head...")
     r = subprocess.run(
-        ["uv", "run", "alembic", "stamp", "head"],
-        env={**os.environ, "DATABASE_URL": LOCAL_DATABASE_URL},
+        ["uv", "run", "alembic", "stamp", "head"], env={**os.environ, "DATABASE_URL": LOCAL_DATABASE_URL}
     )
     if r.returncode != 0:
         print("[error] Alembic stamp failed.")
@@ -243,18 +229,7 @@ def dump_prod_to_local(prod_url: str):
     )
 
     restore_proc = subprocess.Popen(
-        [
-            "docker",
-            "exec",
-            "-e",
-            f"MYSQL_PWD={DB_PASSWORD}",
-            "-i",
-            CONTAINER_NAME,
-            "mysql",
-            "-u",
-            DB_USER,
-            DB_NAME,
-        ],
+        ["docker", "exec", "-e", f"MYSQL_PWD={DB_PASSWORD}", "-i", CONTAINER_NAME, "mysql", "-u", DB_USER, DB_NAME],
         stdin=dump_proc.stdout,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -297,18 +272,12 @@ def remove_container():
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Set up a local MySQL dev database with optional prod data sync.",
+    parser = argparse.ArgumentParser(description="Set up a local MySQL dev database with optional prod data sync.")
+    parser.add_argument(
+        "--schema-only", action="store_true", help="Only run schema migrations via Alembic (no prod data copy)."
     )
     parser.add_argument(
-        "--schema-only",
-        action="store_true",
-        help="Only run schema migrations via Alembic (no prod data copy).",
-    )
-    parser.add_argument(
-        "--reset",
-        action="store_true",
-        help="Stop and remove the container and its volume before starting fresh.",
+        "--reset", action="store_true", help="Stop and remove the container and its volume before starting fresh."
     )
     args = parser.parse_args()
 

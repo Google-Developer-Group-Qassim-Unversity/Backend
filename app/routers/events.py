@@ -29,18 +29,14 @@ from app.routers.logging import (
     write_log_title,
     write_log_traceback,
 )
-from app.helpers import (
-    admin_guard,
-)
+from app.helpers import admin_guard
 from time import perf_counter
 
 router = APIRouter()
 
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
-def get_all_events(
-    semester: int | str = Query("all"),
-):
+def get_all_events(semester: int | str = Query("all")):
     with LogFile("get all events"), SessionLocal() as session:
         write_log_title("Fetching all events")
         start = perf_counter()
@@ -51,14 +47,11 @@ def get_all_events(
             try:
                 start_date, end_date = config.get_semester_dates(int(semester))
             except (ValueError, KeyError):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Semester '{semester}' not found",
-                )
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Semester '{semester}' not found")
             events = events_queries.get_events_by_semester(session, start_date, end_date)
         end = perf_counter()
         write_log(
-            f"fetched [{len(events)}] events DB took [{(end - start) * 1000:.2f}]ms to execute (semester={semester})",
+            f"fetched [{len(events)}] events DB took [{(end - start) * 1000:.2f}]ms to execute (semester={semester})"
         )
     return events
 
@@ -100,17 +93,11 @@ def get_registrable_events():
         write_log("Querying open events from database")
         open_events = events_queries.get_open_events(session)
         end = perf_counter()
-        write_log(
-            f"fetched [{len(open_events)}] open events DB took [{(end - start) * 1000:.2f}]ms to execute",
-        )
+        write_log(f"fetched [{len(open_events)}] open events DB took [{(end - start) * 1000:.2f}]ms to execute")
     return open_events
 
 
-@router.get(
-    "/{event_id:int}/details",
-    status_code=status.HTTP_200_OK,
-    response_model=UpdateEvent_model,
-)
+@router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEvent_model)
 def get_event_details(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     """return an event + its associated actions, this is needed by the frontend to populate the update event form with the current event data and associated actions"""
     with SessionLocal() as session:
@@ -137,11 +124,7 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
 
             # 2. create associated form
             new_form = form_queries.create_form(
-                session,
-                Form_model(
-                    event_id=new_event.id,
-                    form_type=event_data.form_type,
-                ),
+                session, Form_model(event_id=new_event.id, form_type=event_data.form_type)
             )
             write_log(f"Created Form [{new_form.id}] for Event [{new_event.id}]")
 
@@ -152,13 +135,11 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             # 4. give department points for each day
             days = (event_data.event.end_datetime - event_data.event.start_datetime).days + 1
             for day in range(days):
-                write_log(
-                    f"Giving department {event_data.department_id} points for day [{day + 1}]/[{days}]",
-                )
+                write_log(f"Giving department {event_data.department_id} points for day [{day + 1}]/[{days}]")
                 log_queries.create_department_log(session, event_data.department_id, department_log.id)
 
             write_log(
-                f"Created logs for event department: [{event_data.department_action_id}] and member: [{event_data.member_action_id}]",
+                f"Created logs for event department: [{event_data.department_action_id}] and member: [{event_data.member_action_id}]"
             )
             session.commit()
             session.refresh(new_event)
@@ -185,10 +166,7 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
     responses={
         404: {"model": NotFoundResponse, "description": "Event not found"},
         409: {"model": ConflictResponse, "description": "Event already exists"},
-        500: {
-            "model": InternalServerErrorResponse,
-            "description": "Internal server error",
-        },
+        500: {"model": InternalServerErrorResponse, "description": "Internal server error"},
     },
 )
 def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depends(admin_guard)):
@@ -215,12 +193,9 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
                 # 2. Get all logs for this event
                 logs = log_queries.get_logs_by_event_id(session, event_id)
                 if not logs or len(logs) < 2:
-                    write_log_exception(
-                        f"HTTP 500: Event [{event_id}] does not have expected logs",
-                    )
+                    write_log_exception(f"HTTP 500: Event [{event_id}] does not have expected logs")
                     raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Event logs not found",
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Event logs not found"
                     )
                 write_log(f"Found [{len(logs)}] logs for event [{event_id}]")
 
@@ -238,31 +213,26 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
 
                 if not department_log or not member_log:
                     write_log_exception(
-                        f"HTTP 500: Could not identify department and member logs for event [{event_id}]",
+                        f"HTTP 500: Could not identify department and member logs for event [{event_id}]"
                     )
                     raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Could not identify logs",
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not identify logs"
                     )
 
                 # 4. Actions list: first = department action, second = member action
                 department_action = event_data.actions[0]
                 member_action = event_data.actions[1]
                 write_log(
-                    f"Department action: [{department_action.action_id}], Member action: [{member_action.action_id}]",
+                    f"Department action: [{department_action.action_id}], Member action: [{member_action.action_id}]"
                 )
 
                 # 5. Update department log action_id
                 log_queries.update_log_action_id(session, department_log.id, department_action.action_id)
-                write_log(
-                    f"Updated department log [{department_log.id}] action_id to [{department_action.action_id}]",
-                )
+                write_log(f"Updated department log [{department_log.id}] action_id to [{department_action.action_id}]")
 
                 # 6. Update member log action_id
                 log_queries.update_log_action_id(session, member_log.id, member_action.action_id)
-                write_log(
-                    f"Updated member log [{member_log.id}] action_id to [{member_action.action_id}]",
-                )
+                write_log(f"Updated member log [{member_log.id}] action_id to [{member_action.action_id}]")
 
                 # 7. Handle department_id and/or days change
                 current_dept_id = log_queries.get_department_id_from_log(session, department_log.id)
@@ -275,25 +245,19 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
                 new_days = (updated_event.end_datetime - updated_event.start_datetime).days + 1
 
                 write_log(
-                    f"Current: dept_id=[{current_dept_id}], days=[{current_dept_logs_count}]. New: dept_id=[{new_dept_id}], days=[{new_days}]",
+                    f"Current: dept_id=[{current_dept_id}], days=[{current_dept_logs_count}]. New: dept_id=[{new_dept_id}], days=[{new_days}]"
                 )
 
                 # if Department changed - delete all and recreate
                 if new_dept_id is not None and current_dept_id != new_dept_id:
-                    write_log(
-                        f"Department changed from [{current_dept_id}] to [{new_dept_id}]",
-                    )
+                    write_log(f"Department changed from [{current_dept_id}] to [{new_dept_id}]")
 
                     deleted_count = log_queries.delete_department_logs_by_log_id(session, department_log.id)
-                    write_log(
-                        f"Deleted [{deleted_count}] old department logs for log [{department_log.id}]",
-                    )
+                    write_log(f"Deleted [{deleted_count}] old department logs for log [{department_log.id}]")
 
                     for day in range(new_days):
                         log_queries.create_department_log(session, new_dept_id, department_log.id)
-                    write_log(
-                        f"Created [{new_days}] department logs for new department [{new_dept_id}]",
-                    )
+                    write_log(f"Created [{new_days}] department logs for new department [{new_dept_id}]")
 
                 # if Same department but days changed
                 elif current_dept_logs_count != new_days:
@@ -303,7 +267,7 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
                     if new_days > current_dept_logs_count:
                         days_to_add = new_days - current_dept_logs_count
                         write_log(
-                            f"Days increased from [{current_dept_logs_count}] to [{new_days}], adding [{days_to_add}] department logs",
+                            f"Days increased from [{current_dept_logs_count}] to [{new_days}], adding [{days_to_add}] department logs"
                         )
                         for _ in range(days_to_add):
                             log_queries.create_department_log(session, dept_id_to_use, department_log.id)
@@ -311,7 +275,7 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
                     else:
                         days_to_remove = current_dept_logs_count - new_days
                         write_log(
-                            f"Days decreased from [{current_dept_logs_count}] to [{new_days}], removing [{days_to_remove}] department logs",
+                            f"Days decreased from [{current_dept_logs_count}] to [{new_days}], removing [{days_to_remove}] department logs"
                         )
                         log_queries.delete_n_department_logs(session, department_log.id, days_to_remove)
 
@@ -328,8 +292,7 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
             write_log_exception(e)
             write_log_traceback()
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while updating the event",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while updating the event"
             )
         finally:
             write_log_json_to(log.file, event_data.model_dump(mode="json"))
@@ -351,19 +314,11 @@ def delete_event(event_id: int, credentials=Depends(admin_guard)):
             event = events_queries.get_event_by_id(session, event_id)
             if not event:
                 write_log_exception(f"HTTP 404: Event [{event_id}] not found")
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Event not found",
-                )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
             if event.status != "draft":
-                write_log_exception(
-                    f"HTTP 400: Cannot delete event [{event_id}] with status [{event.status}]",
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Only draft events can be deleted",
-                )
+                write_log_exception(f"HTTP 400: Cannot delete event [{event_id}] with status [{event.status}]")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only draft events can be deleted")
 
             event_name = event.name
             events_queries.delete_event(session, event_id)
@@ -379,8 +334,7 @@ def delete_event(event_id: int, credentials=Depends(admin_guard)):
             write_log_exception(e)
             write_log_traceback()
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while deleting the event",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while deleting the event"
             )
 
 
@@ -390,11 +344,7 @@ def delete_event(event_id: int, credentials=Depends(admin_guard)):
     response_model=Events_model,
     responses={404: {"model": NotFoundResponse, "description": "Event not found"}},
 )
-def update_event_status(
-    event_id: int,
-    status_data: UpdateEventStatus_model,
-    credentials=Depends(admin_guard),
-):
+def update_event_status(event_id: int, status_data: UpdateEventStatus_model, credentials=Depends(admin_guard)):
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
         if not event:
@@ -405,11 +355,7 @@ def update_event_status(
     return event
 
 
-@router.get(
-    "/submissions/{event_id:int}",
-    status_code=status.HTTP_200_OK,
-    response_model=list[Get_Submission_model],
-)
+@router.get("/submissions/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Get_Submission_model])
 def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     with SessionLocal() as session:
         try:

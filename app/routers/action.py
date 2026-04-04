@@ -30,12 +30,7 @@ def get_categorized_actions():
     with SessionLocal() as session:
         actions = actions_queries.get_actions(session)
 
-    categorized_action = {
-        "composite_actions": [],
-        "department_actions": [],
-        "member_actions": [],
-        "custom_actions": [],
-    }
+    categorized_action = {"composite_actions": [], "department_actions": [], "member_actions": [], "custom_actions": []}
 
     # 1. Add composite actions (only include pairs where both actions exist)
     for deptId, memberId in zip(department_ids, member_ids):
@@ -86,10 +81,7 @@ def get_all_actions():
 def create_action(payload: CreateAction_model):
     with SessionLocal() as session:
         new_action = actions_queries.create_action(
-            session,
-            name=payload.action_name,
-            points=payload.points,
-            type=payload.action_type,
+            session, name=payload.action_name, points=payload.points, type=payload.action_type
         )
         new_action.ar_action_name = payload.ar_action_name
         session.commit()

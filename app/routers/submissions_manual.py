@@ -132,10 +132,7 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
 
 
 @router.post("/google/{google_form_id}", status_code=status.HTTP_200_OK)
-def manual_create_google_submissions(
-    google_form_id: str,
-    limit: int = Query(default=50, ge=1, le=2000),
-):
+def manual_create_google_submissions(google_form_id: str, limit: int = Query(default=50, ge=1, le=2000)):
     """
     Public (no-auth) endpoint to manually sync Google Form responses into DB submissions.
     Processes only the first `limit` responses as returned by the Google API.
@@ -145,8 +142,7 @@ def manual_create_google_submissions(
             return sync_manual_form_submissions(google_form_id, limit, log.file)
         except Exception:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while syncing submissions",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while syncing submissions"
             )
 
 
@@ -157,6 +153,5 @@ def manual_run_google_form_submissions(google_form_id: str):
             return sync_form_submissions(google_form_id, log.file)
         except Exception:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while syncing submissions",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while syncing submissions"
             )

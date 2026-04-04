@@ -32,9 +32,7 @@ from sqlalchemy.orm import Session
 
 from fastapi.testclient import TestClient
 from fastapi.security import HTTPAuthorizationCredentials
-from fastapi_clerk_auth import (
-    HTTPAuthorizationCredentials as ClerkHTTPAuthorizationCredentials,
-)
+from fastapi_clerk_auth import HTTPAuthorizationCredentials as ClerkHTTPAuthorizationCredentials
 # A bunch more import are done insdie fixtures to avoid the problimatic pattern in the code which evaluates sessions and envirnoment varibles at import time,
 # so we have to delay importing those modules until after the environment variables are set and the database is ready, otherwise we will get errors about missing env vars
 
@@ -93,11 +91,7 @@ def engine(database_url):
     This ensures tests run against the same database structure as production.
     """
 
-    engine = create_engine(
-        database_url,
-        pool_pre_ping=True,
-        pool_recycle=3600,
-    )
+    engine = create_engine(database_url, pool_pre_ping=True, pool_recycle=3600)
 
     print("[conftest] Running Alembic migrations...")
     alembic_cfg = Config("alembic.ini")
@@ -140,16 +134,8 @@ def seed_core_data(engine):
                     action_type=ActionsActionType.MEMBER,
                     ar_action_name="حضور دورة حضورية",
                 ),
-                Departments(
-                    name="Business",
-                    type=DepartmentsType.PRACTICAL,
-                    ar_name="ريادة الأعمال",
-                ),
-                Departments(
-                    name="Design",
-                    type=DepartmentsType.ADMINISTRATIVE,
-                    ar_name="التصميم",
-                ),
+                Departments(name="Business", type=DepartmentsType.PRACTICAL, ar_name="ريادة الأعمال"),
+                Departments(name="Design", type=DepartmentsType.ADMINISTRATIVE, ar_name="التصميم"),
             ]
         )
         session.commit()
@@ -216,10 +202,7 @@ def super_admin_client(clerk_client) -> Generator:
     from app.helpers import super_admin_guard
 
     def override_super_admin_guard():
-        return HTTPAuthorizationCredentials(
-            scheme="Bearer",
-            credentials="fake-token",
-        )
+        return HTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-token")
 
     app.dependency_overrides[super_admin_guard] = override_super_admin_guard
     yield clerk_client
@@ -232,10 +215,7 @@ def admin_client(clerk_client) -> Generator:
     from app.helpers import admin_guard
 
     def override_admin_guard():
-        return HTTPAuthorizationCredentials(
-            scheme="Bearer",
-            credentials="fake-token",
-        )
+        return HTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-token")
 
     app.dependency_overrides[admin_guard] = override_admin_guard
     yield clerk_client
@@ -255,14 +235,6 @@ def pytest_collection_modifyitems(items):
 def pytest_assertrepr_compare(config, op, left, right):
     """Customize assertion comparison output for clearer failure messages."""
     if op == "==":
-        return [
-            "Assertion failed:",
-            f"  Expected: {right!r}",
-            f"  Actual:   {left!r}",
-        ]
+        return ["Assertion failed:", f"  Expected: {right!r}", f"  Actual:   {left!r}"]
     if op == "!=":
-        return [
-            "Assertion failed:",
-            f"  Expected NOT: {right!r}",
-            f"  Actual:        {left!r}",
-        ]
+        return ["Assertion failed:", f"  Expected NOT: {right!r}", f"  Actual:        {left!r}"]
