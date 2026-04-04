@@ -45,22 +45,14 @@ def get_categorized_actions():
             categorized_action["composite_actions"].append((dept_action, member_action))
 
     # 2. filter out department and member actions used in composites
-    actions = [
-        action for action in actions if action.id not in department_ids + member_ids
-    ]
+    actions = [action for action in actions if action.id not in department_ids + member_ids]
 
     # 3. add department and member actions
-    categorized_action["department_actions"] = [
-        action for action in actions if action.action_type == "department"
-    ]
-    categorized_action["member_actions"] = [
-        action for action in actions if action.action_type == "member"
-    ]
+    categorized_action["department_actions"] = [action for action in actions if action.action_type == "department"]
+    categorized_action["member_actions"] = [action for action in actions if action.action_type == "member"]
 
     # 4. add custom actions (all bonus-type actions)
-    categorized_action["custom_actions"] = [
-        action for action in actions if action.action_type == "bonus"
-    ]
+    categorized_action["custom_actions"] = [action for action in actions if action.action_type == "bonus"]
 
     return Categorized_action(
         composite_actions=categorized_action["composite_actions"],
@@ -70,9 +62,7 @@ def get_categorized_actions():
     )
 
 
-@router.get(
-    "/all", status_code=status.HTTP_200_OK, response_model=list[ActionWithUsage_model]
-)
+@router.get("/all", status_code=status.HTTP_200_OK, response_model=list[ActionWithUsage_model])
 def get_all_actions():
     with SessionLocal() as session:
         actions = actions_queries.get_all_actions(session)
@@ -140,23 +130,20 @@ def delete_action(action_id: int, replacement_id: Optional[int] = Query(None)):
         action = actions_queries.get_action_by_id(session, action_id)
         if not action:
             raise HTTPException(status_code=404, detail="Action not found")
-        
+
         usage_count = actions_queries.get_action_usage_count(session, action_id)
-        
+
         if usage_count > 0 and replacement_id is None:
-            raise HTTPException(
-                status_code=400, 
-                detail="Must provide replacement_id when action has been used"
-            )
-        
+            raise HTTPException(status_code=400, detail="Must provide replacement_id when action has been used")
+
         if replacement_id:
             replacement = actions_queries.get_action_by_id(session, replacement_id)
             if not replacement:
                 raise HTTPException(status_code=404, detail="Replacement action not found")
-            
+
             actions_queries.update_logs_action(session, action_id, replacement_id)
-        
+
         actions_queries.delete_action_by_id(session, action_id)
         session.commit()
-    
+
     return {"message": "Action deleted successfully"}

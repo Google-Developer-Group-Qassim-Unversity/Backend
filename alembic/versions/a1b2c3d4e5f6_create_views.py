@@ -5,13 +5,14 @@ Revises: 4f7ac1426f31
 Create Date: 2026-03-28 17:00:00.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
 
 
-revision: str = 'a1b2c3d4e5f6'
-down_revision: Union[str, Sequence[str], None] = '4f7ac1426f31'
+revision: str = "a1b2c3d4e5f6"
+down_revision: Union[str, Sequence[str], None] = "4f7ac1426f31"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -21,6 +22,7 @@ depends_on: Union[str, Sequence[str], None] = None
 # they are kept for 2 reasons:
 #   1. reference given they are a core part of the logic.
 #   2. they are used for performance measurement against the new parameterized queries
+
 
 def upgrade() -> None:
     op.execute("""

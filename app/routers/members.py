@@ -23,13 +23,14 @@ from app.helpers import (
 )
 from app.routers.upload import validate_sheet
 from app.routers.logging import (
-    write_log_exception,
-    write_log_traceback,
-    create_log_file,
+    LogFile,
     write_log,
+    write_log_exception,
+    write_log_json_to,
     write_log_title,
-    write_log_json,
+    write_log_traceback,
 )
+
 
 router = APIRouter()
 
@@ -65,10 +66,9 @@ def update_current_member(
     credentials: HTTPAuthorizationCredentials = Depends(authenticated_guard),
 ):
     uni_id = get_uni_id_from_credentials(credentials)
-    with SessionLocal() as session:
-        log_file = create_log_file("update current member")
+    with LogFile("update current member"), SessionLocal() as session:
         try:
-            write_log_title(log_file, f"Updating member with uni_id {uni_id}")
+            write_log_title(f"Updating member with uni_id {uni_id}")
             updated_member = member_queries.update_member_by_uni_id(
                 session, uni_id, updates.model_dump(exclude_none=True)
             )
@@ -77,15 +77,15 @@ def update_current_member(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Member with uni_id {uni_id} not found",
                 )
-            write_log(log_file, f"Member with uni_id {uni_id} updated successfully")
+            write_log(f"Member with uni_id {uni_id} updated successfully")
             session.commit()
             return updated_member
         except HTTPException:
             raise
         except Exception as e:
             session.rollback()
-            write_log_exception(log_file, e)
-            write_log_traceback(log_file)
+            write_log_exception(e)
+            write_log_traceback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An error occurred while updating member",
@@ -147,49 +147,43 @@ def get_member_by_id(
 def create_member(
     credentials: HTTPAuthorizationCredentials = Depends(authenticated_guard),
 ):
-    with SessionLocal() as session:
-        log_file = create_log_file("create member")
+    with LogFile("create member") as log, SessionLocal() as session:
         member: Member_model | None = None
         try:
             member = credentials_to_member_model(credentials)
-            write_log_title(log_file, f"Creating Member {member.uni_id}")
+            write_log_title(f"Creating Member {member.uni_id}")
             new_member, already_exist = member_queries.create_member_if_not_exists(
                 session, member, is_authenticated=True
             )
             if not already_exist:
                 write_log(
-                    log_file,
                     f"Member with uni_id {member.uni_id} created successfully with ID {new_member.id}",
                 )
             else:
                 write_log(
-                    log_file,
                     f"Member with uni_id {member.uni_id} already exists with ID {new_member.id}, updated data successfully",
                 )
             session.commit()
             return {"member": new_member, "already_exists": already_exist}
         except Exception as e:
             session.rollback()
-            write_log_exception(log_file, e)
-            write_log_traceback(log_file)
+            write_log_exception(e)
+            write_log_traceback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An error occurred while creating the member",
             )
         finally:
             if new_member is not None and member is not None:
-                write_log_json(log_file, member.model_dump())
+                write_log_json_to(log.file, member.model_dump())
                 write_log(
-                    log_file,
                     f"member {new_member.uni_id} {'Created' if not already_exist else 'Updated'} successfully",
                 )
             else:
-                write_log_json(log_file, credentials.model_dump())
+                write_log_json_to(log.file, credentials.model_dump())
 
 
-@router.get(
-    "/roles", status_code=status.HTTP_200_OK, response_model=list[MemberWithRole_model]
-)
+@router.get("/roles", status_code=status.HTTP_200_OK, response_model=list[MemberWithRole_model])
 def get_member_roles(
     credentials: HTTPAuthorizationCredentials = Depends(super_admin_guard),
 ):
@@ -198,23 +192,16 @@ def get_member_roles(
     return roles
 
 
-@router.post(
-    "/roles", status_code=status.HTTP_200_OK, response_model=MemberWithRole_model
-)
+@router.post("/roles", status_code=status.HTTP_200_OK, response_model=MemberWithRole_model)
 def update_member_roles(
     member_id: int,
     new_role: RoleType,
     credentials: HTTPAuthorizationCredentials = Depends(super_admin_guard),
 ):
-    with SessionLocal() as session:
-        log_file = create_log_file("update member role")
+    with LogFile("update member role"), SessionLocal() as session:
         try:
-            write_log_title(
-                log_file, f"Updating role for member_id {member_id} to {new_role.value}"
-            )
-            updated_member = member_queries.update_member_role(
-                session, member_id, new_role=new_role
-            )
+            write_log_title(f"Updating role for member_id {member_id} to {new_role.value}")
+            updated_member = member_queries.update_member_role(session, member_id, new_role=new_role)
             if not updated_member:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -226,8 +213,8 @@ def update_member_roles(
             raise
         except Exception as e:
             session.rollback()
-            write_log_exception(log_file, e)
-            write_log_traceback(log_file)
+            write_log_exception(e)
+            write_log_traceback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An error occurred while updating the member's role",
@@ -243,16 +230,13 @@ def create_member_manual(members_sheet: manual_members):
             detail="This endpoint is only available in development mode",
         )
     try:
-        log_file = create_log_file("manual member creation")
-        with SessionLocal() as session:
-            write_log_title(log_file, "Manual Member Creation")
+        with LogFile("manual member creation"), SessionLocal() as session:
+            write_log_title("Manual Member Creation")
             write_log(
-                log_file,
                 f"Validating request to create members from sheet: {members_sheet.members_sheet}",
             )
             validate_sheet(str(members_sheet.members_sheet), date.today(), date.today())
             write_log(
-                log_file,
                 f"Sheet validation successful for {members_sheet.members_sheet}",
             )
             members = get_pydantic_members(members_sheet.members_sheet)
@@ -262,31 +246,22 @@ def create_member_manual(members_sheet: manual_members):
             members_len = len(members)
             for i, member in enumerate(members, start=1):
                 write_log(
-                    log_file,
                     f"Processing member {i}/{members_len} with uni_id {member.uni_id}",
                 )
-                existing_member = member_queries.get_member_by_uni_id(
-                    session, member.uni_id
-                )
+                existing_member = member_queries.get_member_by_uni_id(session, member.uni_id)
                 if not existing_member:
                     write_log(
-                        log_file,
                         f"No existing member found with ID {member.id}, creating new member",
                     )
-                    created_member = member_queries.create_member(
-                        session, member, is_authenticated=False
-                    )
+                    created_member = member_queries.create_member(session, member, is_authenticated=False)
                     if created_member is None:
-                        exception = ValueError(
-                            f"Failed to create member with uni_id {member.uni_id}"
-                        )
-                        write_log_exception(log_file, exception)
+                        exception = ValueError(f"Failed to create member with uni_id {member.uni_id}")
+                        write_log_exception(exception)
                         raise exception
                     new_count += 1
                     created_members.append(created_member)
                 else:
                     write_log(
-                        log_file,
                         f"Existing member found with ID {existing_member.id}, skipping ⏩",
                     )
                     created_members.append(existing_member)
@@ -298,15 +273,12 @@ def create_member_manual(members_sheet: manual_members):
             "created_members": created_members,
         }
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.args[0]
-        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.args[0])
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while creating members",
         )
-
 
 
 @router.get("/history", status_code=status.HTTP_200_OK)

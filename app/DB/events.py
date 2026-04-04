@@ -5,57 +5,64 @@ from .schema import Events, t_open_events, Logs, DepartmentsLogs, Actions, Depar
 from ..routers.models import Events_model
 from datetime import datetime
 
+
 def get_events(session: Session):
     statement = select(Events)
     statement = statement.order_by(Events.start_datetime.desc())
     events = session.scalars(statement).all()
     return events
 
+
 def get_open_events(session: Session):
     statement = select(t_open_events)
     results = session.execute(statement).all()
     return [dict(row._mapping) for row in results]
 
+
 def get_events_by_semester(session: Session, start_date: str, end_date: str):
-    statement = select(Events).where(
-        Events.end_datetime >= start_date,
-        Events.end_datetime < end_date
-    ).order_by(Events.start_datetime.desc())
+    statement = (
+        select(Events)
+        .where(Events.end_datetime >= start_date, Events.end_datetime < end_date)
+        .order_by(Events.start_datetime.desc())
+    )
     events = session.scalars(statement).all()
     return events
 
+
 def get_actions_by_event_id(session: Session, event_id: int):
     stmt = (
-    select(
-        Actions.id.label("action_id"),
-        Actions.ar_action_name,
-        Departments.ar_name.label("department_ar_name"),
-        Departments.id.label("department_id"),
+        select(
+            Actions.id.label("action_id"),
+            Actions.ar_action_name,
+            Departments.ar_name.label("department_ar_name"),
+            Departments.id.label("department_id"),
+        )
+        .select_from(Events)
+        .join(Logs, Events.id == Logs.event_id)
+        .join(Actions, Logs.action_id == Actions.id)
+        .outerjoin(DepartmentsLogs, Logs.id == DepartmentsLogs.log_id)
+        .outerjoin(Departments, DepartmentsLogs.department_id == Departments.id)
+        .where(Events.id == event_id)
+        .group_by(
+            Actions.id,
+            Actions.ar_action_name,
+            Departments.ar_name,
+            Departments.id,
+            Events.id,
+        )
+        .order_by(Actions.id.asc())
     )
-    .select_from(Events)
-    .join(Logs, Events.id == Logs.event_id)
-    .join(Actions, Logs.action_id == Actions.id)
-    .outerjoin(DepartmentsLogs, Logs.id == DepartmentsLogs.log_id)
-    .outerjoin(Departments, DepartmentsLogs.department_id == Departments.id)
-    .where(Events.id == event_id)
-    .group_by(
-        Actions.id,
-        Actions.ar_action_name,
-        Departments.ar_name,
-        Departments.id,
-        Events.id,
-    )
-    .order_by(Actions.id.asc())
-)
     row = session.execute(stmt).all()
     if not row:
         return None
     return [dict(row._mapping) for row in row]
 
+
 def get_event_by_id(session: Session, event_id: int):
     statement = select(Events).where(Events.id == event_id)
     event = session.scalars(statement).first()
     return event
+
 
 def create_event(session: Session, event_data: Events_model):
     new_event = Events(
@@ -68,11 +75,12 @@ def create_event(session: Session, event_data: Events_model):
         status=event_data.status,
         is_official=event_data.is_official,
         image_url=event_data.image_url,
-        created_at=datetime.now()
+        created_at=datetime.now(),
     )
     session.add(new_event)
     session.flush()
     return new_event
+
 
 def delete_event(session: Session, event_id: int):
     event = session.scalar(select(Events).where(Events.id == event_id))
@@ -81,6 +89,7 @@ def delete_event(session: Session, event_id: int):
     session.delete(event)
     session.flush()
     return event
+
 
 def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event = session.scalar(select(Events).where(Events.id == event_id))

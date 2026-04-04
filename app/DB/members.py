@@ -7,9 +7,7 @@ from app.routers.models import Member_model
 from datetime import datetime
 
 
-def create_member(
-    session: Session, member: Member_model, is_authenticated: bool = False
-):
+def create_member(session: Session, member: Member_model, is_authenticated: bool = False):
     try:
         new_member = Members(
             name=member.name,
@@ -35,9 +33,7 @@ def create_member(
 def create_member_if_not_exists(
     session: Session, member: Member_model, is_authenticated: bool = False
 ) -> tuple[Members | None, bool]:
-    existing_member = session.scalar(
-        select(Members).where(Members.uni_id == member.uni_id)
-    )
+    existing_member = session.scalar(select(Members).where(Members.uni_id == member.uni_id))
     if existing_member:
         member.id = existing_member.id
         already_exist = True
@@ -57,18 +53,18 @@ def get_member_by_id(session: Session, member_id: int):
     statement = select(Members).where(Members.id == member_id)
     return session.scalars(statement).first()
 
+
 def get_members_by_id(session: Session, member_ids: list[int]):
     statement = select(Members).where(Members.id.in_(member_ids))
     return session.scalars(statement).all()
+
 
 def get_member_by_uni_id(session: Session, uni_id: str):
     statement = select(Members).where(Members.uni_id == uni_id)
     return session.scalars(statement).first()
 
 
-def update_member(
-    session: Session, member: Member_model, is_authenticated: bool
-):
+def update_member(session: Session, member: Member_model, is_authenticated: bool):
     existing_member = session.scalar(select(Members).where(Members.id == member.id))
     if not existing_member:
         raise MemberNotFound(member.id)
@@ -171,9 +167,7 @@ def update_member_role(session: Session, member_id: int, new_role: RoleType):
     return result._asdict() if result else None
 
 
-def update_member_by_uni_id(
-    session: Session, uni_id: str, updates: dict
-) -> Members | None:
+def update_member_by_uni_id(session: Session, uni_id: str, updates: dict) -> Members | None:
     member = session.scalar(select(Members).where(Members.uni_id == uni_id))
     if not member:
         raise MemberNotFound(uni_id)

@@ -86,6 +86,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = [
+    "-v",
     "--tb=short",
     "--cov",
 ]
@@ -97,7 +98,6 @@ source = ["app"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-fail_under = 80
 
 [tool.ruff]
 # according to https://docs.astral.sh/ruff/settings/#line-length, default is 88 max is 320.

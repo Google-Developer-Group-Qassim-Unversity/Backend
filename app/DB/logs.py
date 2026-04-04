@@ -32,9 +32,7 @@ def create_department_log(
     return new_department_log
 
 
-def create_member_log(
-    session: Session, member_id: int, log_id: int, date: datetime | None = None
-):
+def create_member_log(session: Session, member_id: int, log_id: int, date: datetime | None = None):
     if date is None:
         date = datetime.now()
     new_member_log = MembersLogs(member_id=member_id, log_id=log_id, date=date)
@@ -44,9 +42,7 @@ def create_member_log(
 
 
 def get_member_logs(session: Session, member_id: int, log_id: int):
-    stmt = select(MembersLogs).where(
-        MembersLogs.member_id == member_id, MembersLogs.log_id == log_id
-    )
+    stmt = select(MembersLogs).where(MembersLogs.member_id == member_id, MembersLogs.log_id == log_id)
     member_logs = session.scalars(stmt).all()
     if not member_logs:
         return None
@@ -63,21 +59,16 @@ def create_log(session: Session, event_id: int, action_id: int):
     return new_log
 
 
-def create_modification(
-    session: Session, log_id: int, type: Literal["bonus", "discount"], value: int
-):
+def create_modification(session: Session, log_id: int, type: Literal["bonus", "discount"], value: int):
     new_modification = Modifications(log_id=log_id, type=type, value=value)
     session.add(new_modification)
     session.flush()
     return new_modification
 
 
-
 def get_attendable_logs(session: Session, event_id: int):
     ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89]
-    stmt = select(Logs).where(
-        Logs.event_id == event_id, Logs.action_id.in_(ATTENDABLE_ACTION_IDS)
-    )
+    stmt = select(Logs).where(Logs.event_id == event_id, Logs.action_id.in_(ATTENDABLE_ACTION_IDS))
     log = session.scalar(stmt)
     if not log:
         return None
@@ -152,9 +143,7 @@ def get_event_attendance(
                 effective_date = case(
                     (
                         func.HOUR(MembersLogs.date) < threshold,
-                        func.DATE(
-                            func.DATE_SUB(MembersLogs.date, text("INTERVAL 1 DAY"))
-                        ),
+                        func.DATE(func.DATE_SUB(MembersLogs.date, text("INTERVAL 1 DAY"))),
                     ),
                     else_=func.DATE(MembersLogs.date),
                 )
@@ -236,12 +225,8 @@ def get_custom_department_points_by_event(session: Session, event_id: int):
             "action_id": row.action_id,
             "action_name": row.action_name,
             # If no modification, use action's points; otherwise use modification
-            "mod_type": row.mod_type
-            if row.mod_type
-            else ("bonus" if row.action_points >= 0 else "discount"),
-            "mod_value": row.mod_value
-            if row.mod_value is not None
-            else abs(row.action_points),
+            "mod_type": row.mod_type if row.mod_type else ("bonus" if row.action_points >= 0 else "discount"),
+            "mod_value": row.mod_value if row.mod_value is not None else abs(row.action_points),
             "department_ids": loads(row.department_ids) if row.department_ids else [],
         }
         for row in results
@@ -290,7 +275,6 @@ def delete_modification(session: Session, modification_id: int):
     return True
 
 
-
 def get_custom_member_points_by_event(session: Session, event_id: int):
     query = (
         session.query(
@@ -335,12 +319,8 @@ def get_custom_member_points_by_event(session: Session, event_id: int):
             "end_datetime": row.end_datetime,
             "action_id": row.action_id,
             "action_name": row.action_name,
-            "mod_type": row.mod_type
-            if row.mod_type
-            else ("bonus" if row.action_points >= 0 else "discount"),
-            "mod_value": row.mod_value
-            if row.mod_value is not None
-            else abs(row.action_points),
+            "mod_type": row.mod_type if row.mod_type else ("bonus" if row.action_points >= 0 else "discount"),
+            "mod_value": row.mod_value if row.mod_value is not None else abs(row.action_points),
             "member_ids": loads(row.member_ids) if row.member_ids else [],
         }
         for row in results

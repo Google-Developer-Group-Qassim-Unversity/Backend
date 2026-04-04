@@ -163,16 +163,10 @@ class Actions(Base):
     ar_action_name: Mapped[str] = mapped_column(
         VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
     )
-    order: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("'99'")
-    )
-    is_hidden: Mapped[int] = mapped_column(
-        TINYINT(1), nullable=False, server_default=text("'0'")
-    )
+    order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("'99'"))
+    is_hidden: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
 
-    logs: Mapped[list["Logs"]] = relationship(
-        "Logs", back_populates="action", passive_deletes=True
-    )
+    logs: Mapped[list["Logs"]] = relationship("Logs", back_populates="action", passive_deletes=True)
 
 
 class Departments(Base):
@@ -201,9 +195,7 @@ class Events(Base):
     __table_args__ = (Index("event_name", "name"), Index("events_id_IDX", "id", "name"))
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
-    name: Mapped[str] = mapped_column(
-        VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
-    )
+    name: Mapped[str] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
     location_type: Mapped[EventsLocationType] = mapped_column(
         Enum(
             EventsLocationType,
@@ -221,30 +213,18 @@ class Events(Base):
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
     status: Mapped[EventsStatus] = mapped_column(
-        Enum(
-            EventsStatus, values_callable=lambda cls: [member.value for member in cls]
-        ),
+        Enum(EventsStatus, values_callable=lambda cls: [member.value for member in cls]),
         nullable=False,
     )
-    description: Mapped[Optional[str]] = mapped_column(
-        TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
-    )
-    image_url: Mapped[Optional[str]] = mapped_column(
-        VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
-    )
-    is_official: Mapped[Optional[int]] = mapped_column(
-        TINYINT(1), server_default=text("'0'")
-    )
+    description: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1), server_default=text("'0'"))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
 
-    forms: Mapped[list["Forms"]] = relationship(
-        "Forms", back_populates="event", passive_deletes=True
-    )
-    logs: Mapped[list["Logs"]] = relationship(
-        "Logs", back_populates="event", passive_deletes=True
-    )
+    forms: Mapped[list["Forms"]] = relationship("Forms", back_populates="event", passive_deletes=True)
+    logs: Mapped[list["Logs"]] = relationship("Logs", back_populates="event", passive_deletes=True)
 
 
 class Members(Base):
@@ -255,9 +235,7 @@ class Members(Base):
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     uni_id: Mapped[str] = mapped_column(String(50), nullable=False)
     gender: Mapped[MembersGender] = mapped_column(
-        Enum(
-            MembersGender, values_callable=lambda cls: [member.value for member in cls]
-        ),
+        Enum(MembersGender, values_callable=lambda cls: [member.value for member in cls]),
         nullable=False,
     )
     uni_level: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -270,18 +248,12 @@ class Members(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
-    is_authenticated: Mapped[int] = mapped_column(
-        TINYINT(1), nullable=False, server_default=text("'0'")
-    )
+    is_authenticated: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
     email: Mapped[Optional[str]] = mapped_column(String(100))
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
 
-    role: Mapped[list["Role"]] = relationship(
-        "Role", back_populates="member", passive_deletes=True
-    )
-    members_logs: Mapped[list["MembersLogs"]] = relationship(
-        "MembersLogs", back_populates="member"
-    )
+    role: Mapped[list["Role"]] = relationship("Role", back_populates="member", passive_deletes=True)
+    members_logs: Mapped[list["MembersLogs"]] = relationship("MembersLogs", back_populates="member")
     submissions: Mapped[list["Submissions"]] = relationship(
         "Submissions", back_populates="member", passive_deletes=True
     )
@@ -303,9 +275,7 @@ class Forms(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     event_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     form_type: Mapped[FormsFormType] = mapped_column(
-        Enum(
-            FormsFormType, values_callable=lambda cls: [member.value for member in cls]
-        ),
+        Enum(FormsFormType, values_callable=lambda cls: [member.value for member in cls]),
         nullable=False,
     )
     google_form_id: Mapped[Optional[str]] = mapped_column(
@@ -320,9 +290,7 @@ class Forms(Base):
     )
 
     event: Mapped["Events"] = relationship("Events", back_populates="forms")
-    submissions: Mapped[list["Submissions"]] = relationship(
-        "Submissions", back_populates="form", passive_deletes=True
-    )
+    submissions: Mapped[list["Submissions"]] = relationship("Submissions", back_populates="form", passive_deletes=True)
 
 
 class Logs(Base):
@@ -335,9 +303,7 @@ class Logs(Base):
             onupdate="CASCADE",
             name="logs_ibfk_1",
         ),
-        ForeignKeyConstraint(
-            ["event_id"], ["events.id"], ondelete="CASCADE", name="fk_events"
-        ),
+        ForeignKeyConstraint(["event_id"], ["events.id"], ondelete="CASCADE", name="fk_events"),
         Index("action_id", "action_id"),
         Index("fk_events", "event_id"),
     )
@@ -351,9 +317,7 @@ class Logs(Base):
     departments_logs: Mapped[list["DepartmentsLogs"]] = relationship(
         "DepartmentsLogs", back_populates="log", passive_deletes=True
     )
-    members_logs: Mapped[list["MembersLogs"]] = relationship(
-        "MembersLogs", back_populates="log", passive_deletes=True
-    )
+    members_logs: Mapped[list["MembersLogs"]] = relationship("MembersLogs", back_populates="log", passive_deletes=True)
     modifications: Mapped[list["Modifications"]] = relationship(
         "Modifications", back_populates="log", passive_deletes=True
     )
@@ -407,9 +371,7 @@ class DepartmentsLogs(Base):
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     log_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
 
-    department: Mapped["Departments"] = relationship(
-        "Departments", back_populates="departments_logs"
-    )
+    department: Mapped["Departments"] = relationship("Departments", back_populates="departments_logs")
     log: Mapped["Logs"] = relationship("Logs", back_populates="departments_logs")
 
 
@@ -432,9 +394,7 @@ class MembersLogs(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     log_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    date: Mapped[datetime.datetime] = mapped_column(
-        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
-    )
+    date: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
 
     log: Mapped["Logs"] = relationship("Logs", back_populates="members_logs")
     member: Mapped["Members"] = relationship("Members", back_populates="members_logs")
@@ -491,12 +451,8 @@ class Submissions(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     form_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    is_accepted: Mapped[int] = mapped_column(
-        TINYINT(1), nullable=False, server_default=text("'0'")
-    )
-    is_invited: Mapped[int] = mapped_column(
-        TINYINT(1), nullable=False, server_default=text("'0'")
-    )
+    is_accepted: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    is_invited: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
     submitted_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
