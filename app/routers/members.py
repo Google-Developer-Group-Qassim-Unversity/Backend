@@ -2,7 +2,7 @@ from datetime import date
 from fastapi import APIRouter, HTTPException, status, Depends
 from app.DB import members as member_queries
 from app.DB.schema import RoleType
-from ..DB.main import SessionLocal
+from app.DB.main import SessionLocal
 from app.routers.models import (
     Member_model,
     NotFoundResponse,
@@ -30,6 +30,7 @@ from app.routers.logging import (
     write_log_title,
     write_log_traceback,
 )
+from typing import Annotated
 
 
 router = APIRouter()
@@ -41,7 +42,7 @@ router = APIRouter()
     response_model=Member_model,
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
-def get_current_member(credentials: HTTPAuthorizationCredentials = Depends(authenticated_guard)):
+def get_current_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]):
     uni_id = get_uni_id_from_credentials(credentials)
     with SessionLocal() as session:
         member = member_queries.get_member_by_uni_id(session, uni_id)
@@ -57,7 +58,7 @@ def get_current_member(credentials: HTTPAuthorizationCredentials = Depends(authe
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
 def update_current_member(
-    updates: MemberUpdateModel, credentials: HTTPAuthorizationCredentials = Depends(authenticated_guard)
+    updates: MemberUpdateModel, credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]
 ):
     uni_id = get_uni_id_from_credentials(credentials)
     with LogFile("update current member"), SessionLocal() as session:
@@ -85,7 +86,7 @@ def update_current_member(
 
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Member_model])
-def get_all_members(credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def get_all_members(credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     with SessionLocal() as session:
         members = member_queries.get_members(session)
     return members
@@ -97,7 +98,7 @@ def get_all_members(credentials: HTTPAuthorizationCredentials = Depends(admin_gu
     response_model=Member_model,
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
-def get_member_by_uni_id(uni_id: str, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def get_member_by_uni_id(uni_id: str, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     with SessionLocal() as session:
         member = member_queries.get_member_by_uni_id(session, uni_id)
         if not member:
@@ -113,7 +114,7 @@ def get_member_by_uni_id(uni_id: str, credentials: HTTPAuthorizationCredentials 
     response_model=Member_model,
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
-def get_member_by_id(member_id: int, credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
+def get_member_by_id(member_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(config.CLERK_GUARD)]):
     with SessionLocal() as session:
         member = member_queries.get_member_by_id(session, member_id)
         if not member:
@@ -122,7 +123,7 @@ def get_member_by_id(member_id: int, credentials: HTTPAuthorizationCredentials =
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=CreatedMemberModel)
-def create_member(credentials: HTTPAuthorizationCredentials = Depends(authenticated_guard)):
+def create_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]):
     with LogFile("create member") as log, SessionLocal() as session:
         member: Member_model | None = None
         try:
@@ -155,7 +156,7 @@ def create_member(credentials: HTTPAuthorizationCredentials = Depends(authentica
 
 
 @router.get("/roles", status_code=status.HTTP_200_OK, response_model=list[MemberWithRole_model])
-def get_member_roles(credentials: HTTPAuthorizationCredentials = Depends(super_admin_guard)):
+def get_member_roles(credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)]):
     with SessionLocal() as session:
         roles = member_queries.get_member_roles(session)
     return roles
@@ -163,7 +164,7 @@ def get_member_roles(credentials: HTTPAuthorizationCredentials = Depends(super_a
 
 @router.post("/roles", status_code=status.HTTP_200_OK, response_model=MemberWithRole_model)
 def update_member_roles(
-    member_id: int, new_role: RoleType, credentials: HTTPAuthorizationCredentials = Depends(super_admin_guard)
+    member_id: int, new_role: RoleType, credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)]
 ):
     with LogFile("update member role"), SessionLocal() as session:
         try:
@@ -232,7 +233,7 @@ def create_member_manual(members_sheet: manual_members):
 
 
 @router.get("/history", status_code=status.HTTP_200_OK)
-def get_member_history(credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
+def get_member_history(credentials: Annotated[HTTPAuthorizationCredentials, Depends(config.CLERK_GUARD)]):
     with SessionLocal() as session:
         member_uni_id = credentials.model_dump()["decoded"]["metadata"]["uiId"]
         member_history = member_queries.get_member_history(session, member_uni_id)

@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Annotated
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import HTTPAuthorizationCredentials
 from app.DB import (
@@ -91,7 +91,7 @@ class CustomMemberPointsResponse(BaseClassModel):
 
 @router.post("/departments", status_code=status.HTTP_201_CREATED)
 def give_department_custom_points(
-    body: CustomDepartmentPointsRequest, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
+    body: CustomDepartmentPointsRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
 ):
     with LogFile("custom_department_points") as log, SessionLocal() as session:
         try:
@@ -198,7 +198,7 @@ def give_department_custom_points(
 
 
 @router.get("/departments/{event_id}", response_model=CustomDepartmentPointsResponse)
-def get_department_custom_points(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def get_department_custom_points(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     """Retrieve all custom department points for a specific event."""
     with LogFile("get_custom_department_points"), SessionLocal() as session:
         try:
@@ -252,7 +252,7 @@ def get_department_custom_points(event_id: int, credentials: HTTPAuthorizationCr
 
 @router.put("/departments/{log_id}")
 def update_department_custom_points(
-    log_id: int, body: DepartmentPointDetails, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
+    log_id: int, body: DepartmentPointDetails, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
 ):
     """Update a single custom department point entry by log_id."""
     with LogFile("update_custom_department_points"), SessionLocal() as session:
@@ -349,7 +349,7 @@ def update_department_custom_points(
 
 @router.post("/members", status_code=status.HTTP_201_CREATED)
 def give_member_custom_points(
-    body: CustomMemberPointsRequest, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
+    body: CustomMemberPointsRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
 ):
     with LogFile("custom_member_points") as log, SessionLocal() as session:
         try:
@@ -445,7 +445,7 @@ def give_member_custom_points(
 
 
 @router.get("/members/{event_id}", response_model=CustomMemberPointsResponse)
-def get_member_custom_points(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def get_member_custom_points(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     with LogFile("get_custom_member_points"), SessionLocal() as session:
         try:
             write_log_title(f"Get Custom Member Points for Event {event_id}")
@@ -494,7 +494,7 @@ def get_member_custom_points(event_id: int, credentials: HTTPAuthorizationCreden
 
 
 @router.delete("/departments/{log_id}")
-def delete_department_custom_points(log_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def delete_department_custom_points(log_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     with LogFile("delete_custom_department_points"), SessionLocal() as session:
         try:
             write_log_title(f"Delete Custom Department Points for Log {log_id}")
@@ -537,7 +537,7 @@ def delete_department_custom_points(log_id: int, credentials: HTTPAuthorizationC
 
 
 @router.delete("/members/{log_id}")
-def delete_member_custom_points(log_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def delete_member_custom_points(log_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     with LogFile("delete_custom_member_points"), SessionLocal() as session:
         try:
             write_log_title(f"Delete Custom Member Points for Log {log_id}")
@@ -579,7 +579,7 @@ def delete_member_custom_points(log_id: int, credentials: HTTPAuthorizationCrede
 
 @router.put("/members/{log_id}")
 def update_member_custom_points(
-    log_id: int, body: MemberPointDetails, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
+    log_id: int, body: MemberPointDetails, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
 ):
     with LogFile("update_custom_member_points"), SessionLocal() as session:
         try:

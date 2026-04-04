@@ -1,7 +1,7 @@
-from typing import Optional
+from typing import Optional, Annotated
 from fastapi import APIRouter, status, HTTPException, Query
 from app.DB import actions as actions_queries
-from ..DB.main import SessionLocal
+from app.DB.main import SessionLocal
 from app.routers.models import (
     Categorized_action,
     CreateAction_model,
@@ -117,7 +117,7 @@ def reorder_actions(payload: ReorderActions_model):
 
 
 @router.delete("/{action_id:int}", status_code=status.HTTP_200_OK)
-def delete_action(action_id: int, replacement_id: Optional[int] = Query(None)):
+def delete_action(action_id: int, replacement_id: Annotated[Optional[int], Query()] = None):
     with SessionLocal() as session:
         action = actions_queries.get_action_by_id(session, action_id)
         if not action:

@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from .schema import Events, t_open_events, Logs, DepartmentsLogs, Actions, Departments
-from ..routers.models import Events_model
+from app.routers.models import Events_model
 from datetime import datetime
 
 

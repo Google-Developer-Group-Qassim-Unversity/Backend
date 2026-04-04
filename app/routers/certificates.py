@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import events as events_queries, logs as log_queries
-from ..DB.main import SessionLocal
+from app.DB.main import SessionLocal
 from app.routers.models import CertificateRequest, SimplifiedMember, CertificateJobResponse, ManualCertificateRequest
 from app.config import config
 from app.routers.logging import (
@@ -15,12 +15,13 @@ from app.routers.logging import (
 from app.helpers import admin_guard, get_effective_date
 import httpx
 import json
+from typing import Annotated
 
 router = APIRouter()
 
 
 @router.post("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=CertificateJobResponse)
-async def send_certificates(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+async def send_certificates(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     with LogFile("send certificates"), SessionLocal() as session:
         try:
             write_log_title(f"Sending certificates for event [{event_id}]")
@@ -130,7 +131,7 @@ async def send_certificates(event_id: int, credentials: HTTPAuthorizationCredent
 
 @router.post("/manual/{event_id:int}", status_code=status.HTTP_200_OK, response_model=CertificateJobResponse)
 async def send_manual_certificates(
-    event_id: int, request: ManualCertificateRequest, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
+    event_id: int, request: ManualCertificateRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
 ):
     with LogFile("send manual certificates"), SessionLocal() as session:
         try:

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from typing import Literal
+from typing import Literal, Annotated
 from app.DB import (
     events as events_queries,
     forms as form_queries,
@@ -44,7 +44,7 @@ router = APIRouter()
 )
 def mark_attendance(
     event_id: int,
-    token: str = Query(None, description="Optional attendance token for QR code links"),
+    token: Annotated[str, Query(description="Optional attendance token for QR code links")] = None,
     credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
 ):
     with LogFile("mark attendance"), SessionLocal() as session:
@@ -169,7 +169,7 @@ def mark_attendance(
     },
 )
 def backfill_attendance(
-    event_id: int, request: BackfillAttendanceRequest, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
+    event_id: int, request: BackfillAttendanceRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
 ):
 
     with LogFile("backfill attendance"), SessionLocal() as session:
@@ -256,13 +256,8 @@ def backfill_attendance(
 @router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=EventAttendanceResponse)
 def get_event_attendance(
     event_id: int,
-    type: Literal["count", "detailed", "me"] = Query(
-        "count", description="Type of attendance data: 'count' (public), 'detailed' (admin), 'me' (authenticated user)"
-    ),
-    day: int | Literal["all", "exclusive_all"] = Query(
-        "all",
-        description="Filter by event day: 'all' (all days), 'exclusive_all' (only those atteded all days), int (specific day number 1-based index)",
-    ),
+    type: Annotated[Literal["count", "detailed", "me"], Query(description="Type of attendance data: 'count' (public), 'detailed' (admin), 'me' (authenticated user)")] = "count",
+    day: Annotated[int | Literal["all", "exclusive_all"], Query(description="Filter by event day: 'all' (all days), 'exclusive_all' (only those atteded all days), int (specific day number 1-based index)")] = "all",
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     with SessionLocal() as session:
@@ -319,7 +314,7 @@ def get_event_attendance(
 def mark_attendance_manual(
     event_id: int,
     request: ManualAttendanceRequest,
-    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(config.CLERK_GUARD)],
 ):
     if not is_admin(credentials):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
@@ -411,7 +406,7 @@ def mark_attendance_manual(
 def remove_attendance_manual(
     event_id: int,
     request: ManualAttendanceRequest,
-    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(config.CLERK_GUARD)],
 ):
     if not is_admin(credentials):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")

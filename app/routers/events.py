@@ -6,7 +6,7 @@ from app.DB import (
     submissions as submission_queries,
     logs as log_queries,
 )
-from ..DB.main import SessionLocal
+from app.DB.main import SessionLocal
 from app.routers.models import (
     Events_model,
     ConflictResponse,
@@ -31,12 +31,13 @@ from app.routers.logging import (
 )
 from app.helpers import admin_guard
 from time import perf_counter
+from typing import Annotated
 
 router = APIRouter()
 
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
-def get_all_events(semester: int | str = Query("all")):
+def get_all_events(semester: Annotated[int | str, Query()] = "all"):
     with LogFile("get all events"), SessionLocal() as session:
         write_log_title("Fetching all events")
         start = perf_counter()
@@ -98,7 +99,7 @@ def get_registrable_events():
 
 
 @router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEvent_model)
-def get_event_details(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def get_event_details(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     """return an event + its associated actions, this is needed by the frontend to populate the update event form with the current event data and associated actions"""
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
@@ -356,7 +357,7 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, cre
 
 
 @router.get("/submissions/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Get_Submission_model])
-def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
+def get_submissions_by_event(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     with SessionLocal() as session:
         try:
             submissions_data = submission_queries.get_submissions_by_event_id(session, event_id)

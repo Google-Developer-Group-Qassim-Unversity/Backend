@@ -14,6 +14,7 @@ from app.routers.logging import (
 )
 from app.helpers import admin_guard
 import httpx
+from typing import Annotated
 
 
 router = APIRouter()
@@ -23,8 +24,8 @@ router = APIRouter()
 async def send_acceptance_blasts(
     event_id: int,
     request: Request,
-    subject: str = Query(..., description="Email subject line"),
-    credentials: HTTPAuthorizationCredentials = Depends(admin_guard),
+    subject: Annotated[str, Query(description="Email subject line")],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
 ):
     with LogFile("send acceptance blasts"), SessionLocal() as session:
         try:
@@ -113,9 +114,9 @@ async def send_acceptance_blasts(
 @router.post("/test", status_code=status.HTTP_200_OK, response_model=AcceptanceBlastResponse)
 async def send_acceptance_test(
     request: Request,
-    subject: str = Query(..., description="Email subject line"),
-    emails: list[str] = Query(..., description="Email addresses to send to"),
-    credentials: HTTPAuthorizationCredentials = Depends(admin_guard),
+    subject: Annotated[str, Query(description="Email subject line")],
+    emails: Annotated[list[str], Query(description="Email addresses to send to")],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
 ):
     with LogFile("send acceptance test"):
         try:

@@ -6,6 +6,7 @@ from app.routers.models import BaseClassModel
 from datetime import datetime
 from app.helpers import is_super_admin
 from app.config import config
+from typing import Annotated
 
 router = APIRouter()
 
@@ -68,7 +69,7 @@ def _validate_semester_access(semester: int, credentials: HTTPAuthorizationCrede
 
 @router.get("/members/total", status_code=status.HTTP_200_OK, response_model=list[Member_points_model])
 def get_all_members_points(
-    semester: int = Query(config.CURRENT_SEMESTER),
+    semester: Annotated[int, Query()] = config.CURRENT_SEMESTER,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     _validate_semester_access(semester, credentials)
@@ -80,7 +81,7 @@ def get_all_members_points(
 @router.get("/members/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_event_history_model)
 def get_member_points(
     member_id: int,
-    semester: int = Query(config.CURRENT_SEMESTER),
+    semester: Annotated[int, Query()] = config.CURRENT_SEMESTER,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     _validate_semester_access(semester, credentials)
@@ -101,7 +102,7 @@ def get_member_points(
 
 @router.get("/departments/total", status_code=status.HTTP_200_OK, response_model=Response_department_points_model)
 def get_all_departments_points(
-    semester: int = Query(config.CURRENT_SEMESTER),
+    semester: Annotated[int, Query()] = config.CURRENT_SEMESTER,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     _validate_semester_access(semester, credentials)
@@ -122,7 +123,7 @@ def get_all_departments_points(
 )
 def get_department_points(
     department_id: int,
-    semester: int = Query(config.CURRENT_SEMESTER),
+    semester: Annotated[int, Query()] = config.CURRENT_SEMESTER,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     _validate_semester_access(semester, credentials)
