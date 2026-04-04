@@ -22,14 +22,8 @@ from app.helpers import (
     super_admin_guard,
 )
 from app.routers.upload import validate_sheet
-from app.routers.logging import (
-    LogFile,
-    write_log_exception,
-    write_log_traceback,
-    write_log,
-    write_log_title,
-    write_log_json,
-)
+from app.routers.logging import LogFile, write_log, write_log_exception, write_log_json_to, write_log_title, write_log_traceback
+
 
 router = APIRouter()
 
@@ -174,12 +168,12 @@ def create_member(
             )
         finally:
             if new_member is not None and member is not None:
-                write_log_json(log.file, member.model_dump())
+                write_log_json_to(log.file, member.model_dump())
                 write_log(
                     f"member {new_member.uni_id} {'Created' if not already_exist else 'Updated'} successfully",
                 )
             else:
-                write_log_json(log.file, credentials.model_dump())
+                write_log_json_to(log.file, credentials.model_dump())
 
 
 @router.get(

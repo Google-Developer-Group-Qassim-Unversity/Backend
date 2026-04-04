@@ -25,7 +25,7 @@ from app.routers.logging import (
     LogFile,
     write_log_exception,
     write_log,
-    write_log_json,
+    write_log_json_to,
     write_log_title,
     write_log_traceback,
 )
@@ -175,7 +175,7 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
                     detail="An error occurred while creating the event",
                 )
         finally:
-            write_log_json(log.file, event_data.model_dump(mode="json"))
+            write_log_json_to(log.file, event_data.model_dump(mode="json"))
 
 
 @router.put(
@@ -332,7 +332,7 @@ def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depen
                 detail="An error occurred while updating the event",
             )
         finally:
-            write_log_json(log.file, event_data.model_dump(mode="json"))
+            write_log_json_to(log.file, event_data.model_dump(mode="json"))
 
 
 @router.delete(

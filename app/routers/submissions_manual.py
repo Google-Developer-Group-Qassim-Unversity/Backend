@@ -4,10 +4,10 @@ from app.DB.main import SessionLocal
 from app.DB import submissions as submission_queries, members as member_queries
 from app.routers.logging import (
     LogFile,
-    write_log,
-    write_log_exception,
-    write_log_title,
-    write_log_traceback,
+    write_log_to,
+    write_log_traceback_to,
+    write_log_exception_to,
+    write_log_title_to,
 )
 
 # Reuse Google Forms helpers from the existing submissions router
@@ -21,11 +21,11 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
     differs from the scheduled job in that it creates new submissions instead of updating partial ones
     """
     try:
-        write_log_title(log_file, f"Manual sync submissions for google_form_id: {google_form_id} (limit={limit})")
+        write_log_title_to(log_file, f"Manual sync submissions for google_form_id: {google_form_id} (limit={limit})")
 
         fetch_result = fetch_form_responses(google_form_id, log_file)
         if fetch_result is None:
-            write_log(log_file, "ERROR: Failed to fetch form responses")
+            write_log_to(log_file, "ERROR: Failed to fetch form responses")
             return {
                 "created": 0,
                 "skipped_existing": 0,
@@ -40,10 +40,10 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
 
         try:
             uni_id_question_id = get_uni_id_question_id(form_id)
-            write_log(log_file, f"Found uni_id question ID: {uni_id_question_id}")
+            write_log_to(log_file, f"Found uni_id question ID: {uni_id_question_id}")
         except Exception as e:
-            write_log(log_file, f"ERROR: Failed to get uni_id question ID: {str(e)}")
-            write_log_exception(log_file, e)
+            write_log_to(log_file, f"ERROR: Failed to get uni_id question ID: {str(e)}")
+            write_log_exception_to(log_file, e)
             return {
                 "created": 0,
                 "skipped_existing": 0,
@@ -105,15 +105,15 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
 
             session.commit()
 
-        write_log(log_file, "=== Manual Sync Summary ===")
-        write_log(log_file, f"google_form_id: {google_form_id}")
-        write_log(log_file, f"form_id: {form_id}")
-        write_log(log_file, f"total_fetched: {len(google_responses)}")
-        write_log(log_file, f"processed: {processed}")
-        write_log(log_file, f"created: {created}")
-        write_log(log_file, f"skipped_existing: {skipped_existing}")
-        write_log(log_file, f"skipped_no_member: {skipped_no_member}")
-        write_log(log_file, f"skipped_missing_uni_id: {skipped_missing_uni_id}")
+        write_log_to(log_file, "=== Manual Sync Summary ===")
+        write_log_to(log_file, f"google_form_id: {google_form_id}")
+        write_log_to(log_file, f"form_id: {form_id}")
+        write_log_to(log_file, f"total_fetched: {len(google_responses)}")
+        write_log_to(log_file, f"processed: {processed}")
+        write_log_to(log_file, f"created: {created}")
+        write_log_to(log_file, f"skipped_existing: {skipped_existing}")
+        write_log_to(log_file, f"skipped_no_member: {skipped_no_member}")
+        write_log_to(log_file, f"skipped_missing_uni_id: {skipped_missing_uni_id}")
 
         return {
             "created": created,
@@ -126,8 +126,8 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
         }
 
     except Exception as e:
-        write_log_exception(log_file, e)
-        write_log_traceback(log_file)
+        write_log_exception_to(log_file, e)
+        write_log_traceback_to(log_file)
         raise
 
 

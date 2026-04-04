@@ -7,7 +7,7 @@ from app.DB import submissions as submission_queries, members as member_queries,
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import admin_guard, get_uni_id_from_credentials
 from app.config import config
-from app.routers.logging import LogFile, write_log, write_log_exception, write_log_json, write_log_title, write_log_traceback
+from app.routers.logging import LogFile, write_log, write_log_to, write_log_exception, write_log_exception_to, write_log_json, write_log_json_to, write_log_title, write_log_title_to, write_log_traceback, write_log_traceback_to
 from app.routers.models import submission_exists_model, submission_accept_model
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -142,26 +142,26 @@ def get_uni_id_question_id(form_id: int) -> str:
 def fetch_form_responses(google_form_id: str, log_file=None):
     """Fetch all responses from a Google Form and return them"""
     try:
-        write_log_title(log_file, f"Fetching responses for form: {google_form_id}")
+        write_log_title_to(log_file, f"Fetching responses for form: {google_form_id}")
         
         # Get form details from database to retrieve refresh token
         with SessionLocal() as session:
             form = form_queries.get_form_by_google_form_id(session, google_form_id)
             
             if not form:
-                write_log(log_file, f"ERROR: Form not found in database for google_form_id: {google_form_id}")
+                write_log_to(log_file, f"ERROR: Form not found in database for google_form_id: {google_form_id}")
                 return None
             
             if not form.google_refresh_token:
-                write_log(log_file, f"ERROR: No refresh token available for form: {google_form_id}")
+                write_log_to(log_file, f"ERROR: No refresh token available for form: {google_form_id}")
                 return None
             
-            write_log(log_file, f"Found form in database with ID: {form.id}")
+            write_log_to(log_file, f"Found form in database with ID: {form.id}")
             form_id = form.id
             
             # Get Google credentials
             credentials = get_google_credentials(form.google_refresh_token)
-            write_log(log_file, "Successfully authenticated with Google")
+            write_log_to(log_file, "Successfully authenticated with Google")
             
             # Build the Forms API service
             service = build('forms', 'v1', credentials=credentials)
@@ -170,14 +170,14 @@ def fetch_form_responses(google_form_id: str, log_file=None):
             result = service.forms().responses().list(formId=google_form_id).execute()
             
             responses = result.get('responses', [])
-            write_log(log_file, f"\nTotal responses found: {len(responses)}")
+            write_log_to(log_file, f"\nTotal responses found: {len(responses)}")
             
             # Log all responses
             for idx, response in enumerate(responses, 1):
-                write_log(log_file, f"\n--- Response #{idx} ---")
-                write_log_json(log_file, response)
+                write_log_to(log_file, f"\n--- Response #{idx} ---")
+                write_log_json_to(log_file, response)
             
-            write_log(log_file, "\n=== Finished fetching responses ===")
+            write_log_to(log_file, "\n=== Finished fetching responses ===")
             
             return {
                 'form_id': form_id,
@@ -186,44 +186,44 @@ def fetch_form_responses(google_form_id: str, log_file=None):
             }
             
     except Exception as e:
-        write_log_exception(log_file, e)
-        write_log_traceback(log_file)
+        write_log_exception_to(log_file, e)
+        write_log_traceback_to(log_file)
         return None
 
 
 def sync_form_submissions(google_form_id: str, log_file):
     try:
-        write_log_title(log_file, f"Running scheduled job: sync for google_form_id: {google_form_id}")
+        write_log_title_to(log_file, f"Running scheduled job: sync for google_form_id: {google_form_id}")
         
         # Fetch Google Form responses
         fetch_result = fetch_form_responses(google_form_id, log_file)
         
         if fetch_result is None:
-            write_log(log_file, "Error: Failed to fetch form responses")
+            write_log_to(log_file, "Error: Failed to fetch form responses")
             return
         
         form_id = fetch_result['form_id']
         google_responses = fetch_result['responses']
         
-        write_log(log_file, f"Form ID: {form_id}")
-        write_log(log_file, f"Google responses count: {len(google_responses)}")
+        write_log_to(log_file, f"Form ID: {form_id}")
+        write_log_to(log_file, f"Google responses count: {len(google_responses)}")
         
         # Get partial submissions from database
         with SessionLocal() as session:
             partial_submissions = submission_queries.get_partial_submissions_by_form_id(session, form_id)
-            write_log(log_file, f"Partial submissions count: {len(partial_submissions)}")
+            write_log_to(log_file, f"Partial submissions count: {len(partial_submissions)}")
             
             if not partial_submissions:
-                write_log(log_file, "No partial submissions to sync")
+                write_log_to(log_file, "No partial submissions to sync")
                 return
             
             # Get the question ID for uni_id field
             try:
                 uni_id_question_id = get_uni_id_question_id(form_id)
-                write_log(log_file, f"Found uni_id question ID: {uni_id_question_id}")
+                write_log_to(log_file, f"Found uni_id question ID: {uni_id_question_id}")
             except Exception as e:
-                write_log(log_file, f"ERROR: Failed to get uni_id question ID: {str(e)}")
-                write_log_exception(log_file, e)
+                write_log_to(log_file, f"ERROR: Failed to get uni_id question ID: {str(e)}")
+                write_log_exception_to(log_file, e)
                 return
             
             # Create a mapping of uni_id to partial submissions
@@ -231,7 +231,7 @@ def sync_form_submissions(google_form_id: str, log_file):
             for submission in partial_submissions:
                 uni_id = submission.uni_id
                 partial_by_uni_id[uni_id] = submission
-                write_log(log_file, f"Partial submission: ID={submission.submission_id}, uni_id={uni_id}")
+                write_log_to(log_file, f"Partial submission: ID={submission.submission_id}, uni_id={uni_id}")
             
             # Match Google responses to partial submissions
             matched_count = 0
@@ -246,7 +246,7 @@ def sync_form_submissions(google_form_id: str, log_file):
                 uni_id_answer = answers.get(uni_id_question_id)
                 
                 if not uni_id_answer:
-                    write_log(log_file, f"Response {response_id}: No uni_id answer found")
+                    write_log_to(log_file, f"Response {response_id}: No uni_id answer found")
                     unmatched_responses.append(response_id)
                     continue
                 
@@ -256,18 +256,18 @@ def sync_form_submissions(google_form_id: str, log_file):
                 answers_list = text_answers.get('answers', [])
                 
                 if not answers_list:
-                    write_log(log_file, f"Response {response_id}: No text answers found")
+                    write_log_to(log_file, f"Response {response_id}: No text answers found")
                     unmatched_responses.append(response_id)
                     continue
                 
                 uni_id = answers_list[0].get('value', '').strip()
                 
                 if not uni_id:
-                    write_log(log_file, f"Response {response_id}: Empty uni_id value")
+                    write_log_to(log_file, f"Response {response_id}: Empty uni_id value")
                     unmatched_responses.append(response_id)
                     continue
                 
-                write_log(log_file, f"Response {response_id}: uni_id={uni_id}")
+                write_log_to(log_file, f"Response {response_id}: uni_id={uni_id}")
                 
                 # Check if this uni_id has a partial submission
                 if uni_id in partial_by_uni_id:
@@ -284,32 +284,32 @@ def sync_form_submissions(google_form_id: str, log_file):
                     
                     if updated:
                         matched_count += 1
-                        write_log(log_file, f"✓ Matched and updated submission ID {partial_submission.id} for uni_id {uni_id}")
-                        write_log(log_file, f"  - Google response ID: {response_id}")
+                        write_log_to(log_file, f"✓ Matched and updated submission ID {partial_submission.id} for uni_id {uni_id}")
+                        write_log_to(log_file, f"  - Google response ID: {response_id}")
                     else:
-                        write_log(log_file, f"✗ Failed to update submission ID {partial_submission.id}")
+                        write_log_to(log_file, f"✗ Failed to update submission ID {partial_submission.id}")
                 else:
-                    write_log(log_file, f"Response {response_id}: No matching partial submission for uni_id {uni_id}")
+                    write_log_to(log_file, f"Response {response_id}: No matching partial submission for uni_id {uni_id}")
                     unmatched_responses.append(response_id)
             
             # Commit all updates
             session.commit()
             
             # Summary
-            write_log(log_file, "\n=== Sync Summary ===")
-            write_log(log_file, f"Total Google responses: {len(google_responses)}")
-            write_log(log_file, f"Total partial submissions: {len(partial_submissions)}")
-            write_log(log_file, f"Successfully matched: {matched_count}")
-            write_log(log_file, f"Unmatched responses: {len(unmatched_responses)}")
+            write_log_to(log_file, "\n=== Sync Summary ===")
+            write_log_to(log_file, f"Total Google responses: {len(google_responses)}")
+            write_log_to(log_file, f"Total partial submissions: {len(partial_submissions)}")
+            write_log_to(log_file, f"Successfully matched: {matched_count}")
+            write_log_to(log_file, f"Unmatched responses: {len(unmatched_responses)}")
             
             if unmatched_responses:
-                write_log(log_file, f"Unmatched response IDs: {unmatched_responses}")
+                write_log_to(log_file, f"Unmatched response IDs: {unmatched_responses}")
             
-            write_log(log_file, "\n=== Sync Complete ===")
+            write_log_to(log_file, "\n=== Sync Complete ===")
             
     except Exception as e:
-        write_log_exception(log_file, e)
-        write_log_traceback(log_file)
+        write_log_exception_to(log_file, e)
+        write_log_traceback_to(log_file)
 
 @router.get("/test-google-forms/{google_form_id}", status_code=status.HTTP_200_OK)
 def test_fetch_form_responses(google_form_id: str):

@@ -19,10 +19,6 @@ def create_log_file(end_point: str):
     return file_path
 
 
-def resolve_file(file: Path | None = None) -> Path:
-    return file or _current_log_file.get()
-
-
 class LogFile:
     def __init__(self, end_point: str):
         self._end_point = end_point
@@ -38,67 +34,72 @@ class LogFile:
         self.file = None
 
 
-def write_log(file_or_message=None, message=None):
-    if isinstance(file_or_message, Path):
-        resolved = file_or_message
-        actual_message = message or ""
-    else:
-        resolved = resolve_file()
-        actual_message = file_or_message if file_or_message is not None else ""
-    print(actual_message)
-    with open(resolved, "a") as f:
-        f.write(actual_message + "\n")
+def _write_to(file: Path, message: str):
+    print(message)
+    with open(file, "a") as f:
+        f.write(message + "\n")
+
+
+def write_log(message: str):
+    _write_to(_current_log_file.get(), message)
+
+def write_log_to(file: Path, message: str):
+    _write_to(file, message)
 
 def write_file(file: Path, message: str):
     with open(file, "a") as f:
         f.write(message + "\n")
 
-def write_log_title(file_or_title=None, title=None):
-    if isinstance(file_or_title, Path):
-        resolved = file_or_title
-        actual_title = title or ""
-    else:
-        resolved = resolve_file()
-        actual_title = file_or_title if file_or_title is not None else ""
-    write_log(resolved, f"\033[34m{'-'*20}\033[0m[{actual_title}]\033[34m{'-'*20}\033[0m")
-    write_log(resolved, "\n\033[33mLog\033[0m 🧾:")
+def write_log_title(title: str):
+    file = _current_log_file.get()
+    _write_to(file, f"\033[34m{'-'*20}\033[0m[{title}]\033[34m{'-'*20}\033[0m")
+    _write_to(file, "\n\033[33mLog\033[0m 🧾:")
 
-def write_log_json(file_or_json=None, json=None):
-    if isinstance(file_or_json, Path):
-        resolved = file_or_json
-        actual_json = json
-    else:
-        resolved = resolve_file()
-        actual_json = file_or_json
-    write_log(resolved, "\n\033[33mJSON Body\033[0m 📦:")
-    json_file = resolved.with_name("body.json")
-    
+def write_log_title_to(file: Path, title: str):
+    _write_to(file, f"\033[34m{'-'*20}\033[0m[{title}]\033[34m{'-'*20}\033[0m")
+    _write_to(file, "\n\033[33mLog\033[0m 🧾:")
+
+def write_log_json(json: str | dict):
+    file = _current_log_file.get()
+    _write_to(file, "\n\033[33mJSON Body\033[0m 📦:")
+    json_file = file.with_name("body.json")
     with open(json_file, 'w', encoding='utf-8') as f:
-        dump(actual_json, f, indent=4, ensure_ascii=False)
-    print(dumps(actual_json, indent=4, ensure_ascii=False))
+        dump(json, f, indent=4, ensure_ascii=False)
+    print(dumps(json, indent=4, ensure_ascii=False))
 
-def Assert(file_or_condition=None, condition_or_message=None, message=None):
-    if isinstance(file_or_condition, Path):
-        resolved = file_or_condition
-        actual_condition = condition_or_message
-        actual_message = message
-    else:
-        resolved = resolve_file()
-        actual_condition = file_or_condition if isinstance(file_or_condition, bool) else False
-        actual_message = condition_or_message
-    assert actual_message is not None, "Assert message must be provided"
-    if not actual_condition:
-        write_log(resolved, f"\n\033[31mAssertion Failed\033[0m ❌:\n{actual_message}")
-        assert actual_condition, actual_message
+def write_log_json_to(file: Path, json: str | dict):
+    _write_to(file, "\n\033[33mJSON Body\033[0m 📦:")
+    json_file = file.with_name("body.json")
+    with open(json_file, 'w', encoding='utf-8') as f:
+        dump(json, f, indent=4, ensure_ascii=False)
+    print(dumps(json, indent=4, ensure_ascii=False))
 
-def write_log_traceback(file=None):
-    resolved = resolve_file(file)
-    write_log(resolved, "\n\033[33msummrized traceback\033[0m 🗂️:")
-    tb_file = resolved.with_name("traceback.log")
+def Assert(condition: bool, message: str):
+    assert message is not None, "Assert message must be provided"
+    if not condition:
+        _write_to(_current_log_file.get(), f"\n\033[31mAssertion Failed\033[0m ❌:\n{message}")
+        assert condition, message
+
+def write_log_traceback():
+    file = _current_log_file.get()
+    _write_to(file, "\n\033[33msummrized traceback\033[0m 🗂️:")
+    tb_file = file.with_name("traceback.log")
     tb = exc_info()[2]
     for frame in extract_tb(tb):
         f = f"...{path.sep.join(frame.filename.split(path.sep)[-3:])}, line {frame.lineno}:{frame.colno}"
-        write_log(tb_file, f)
+        _write_to(tb_file, f)
+
+    exc_type, exc, _ = exc_info()
+    full = "".join(format_exception(exc_type, exc, tb))
+    write_file(tb_file, 3*'\n' + full)
+
+def write_log_traceback_to(file: Path):
+    _write_to(file, "\n\033[33msummrized traceback\033[0m 🗂️:")
+    tb_file = file.with_name("traceback.log")
+    tb = exc_info()[2]
+    for frame in extract_tb(tb):
+        f = f"...{path.sep.join(frame.filename.split(path.sep)[-3:])}, line {frame.lineno}:{frame.colno}"
+        _write_to(tb_file, f)
 
     exc_type, exc, _ = exc_info()
     full = "".join(format_exception(exc_type, exc, tb))
@@ -110,15 +111,17 @@ def print_summarized_traceback() -> str:
     for frame in extract_tb(tb):
         print(f"...{path.sep.join(frame.filename.split(path.sep)[-3:])}, line {frame.lineno}:{frame.colno}\n")
 
-def write_log_exception(file_or_err=None, err=None):
-    if isinstance(file_or_err, Path):
-        resolved = file_or_err
-        actual_err = err
-    else:
-        resolved = resolve_file()
-        actual_err = file_or_err
-    if isinstance(actual_err, str):
-        actual_err = Exception(actual_err)
-    write_log(resolved, "\n\033[33mError\033[0m ❌:")
-    err_file = resolved.with_name("error.log")
-    write_log(err_file, str(actual_err))
+def write_log_exception(err: Exception | str):
+    if isinstance(err, str):
+        err = Exception(err)
+    file = _current_log_file.get()
+    _write_to(file, "\n\033[33mError\033[0m ❌:")
+    err_file = file.with_name("error.log")
+    _write_to(err_file, str(err))
+
+def write_log_exception_to(file: Path, err: Exception | str):
+    if isinstance(err, str):
+        err = Exception(err)
+    _write_to(file, "\n\033[33mError\033[0m ❌:")
+    err_file = file.with_name("error.log")
+    _write_to(err_file, str(err))

@@ -15,10 +15,10 @@ from datetime import datetime
 from app.routers.logging import (
     LogFile,
     write_log,
-    write_log_traceback,
     write_log_exception,
-    write_log_json,
+    write_log_json_to,
     write_log_title,
+    write_log_traceback,
 )
 from app.DB.schema import EventsLocationType
 
@@ -213,7 +213,7 @@ def give_department_custom_points(
                 detail="An error occurred while giving custom points to the department",
             )
         finally:
-            write_log_json(log.file, body.model_dump(mode="json"))
+            write_log_json_to(log.file, body.model_dump(mode="json"))
             write_log("Finished processing custom department points request")
 
 
@@ -518,7 +518,7 @@ def give_member_custom_points(
                 detail="An error occurred while giving custom points to the members",
             )
         finally:
-            write_log_json(log.file, body.model_dump(mode="json"))
+            write_log_json_to(log.file, body.model_dump(mode="json"))
             write_log("Finished processing custom member points request")
 
 
