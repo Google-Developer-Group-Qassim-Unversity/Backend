@@ -14,7 +14,6 @@ def test_existing_form(admin_client: TestClient):
 
     # 2. create a form for the event
     form_response = admin_client.post(
-        "/forms",
-        json=Form_model(form_type="none", event_id=event_response.json()["id"]).model_dump(mode="json"),
+        "/forms", json=Form_model(form_type="none", event_id=event_response.json()["id"]).model_dump(mode="json")
     )
     assert_existing(form_response)

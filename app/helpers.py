@@ -114,10 +114,7 @@ def admin_guard(credentials=Depends(config.CLERK_GUARD)):
     if not is_admin(credentials):
         metadata = credentials.model_dump().get("decoded", {}).get("metadata", {})
         print(f"🚫 Access Denied! User Metadata: {metadata}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
     return credentials
 
 
@@ -126,20 +123,14 @@ def admin_points_guard(credentials=Depends(config.CLERK_GUARD)):
     if not is_admin_points(credentials):
         metadata = credentials.model_dump().get("decoded", {}).get("metadata", {})
         print(f"🚫 Access Denied! User Metadata: {metadata}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin Points privileges required",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin Points privileges required")
     return credentials
 
 
 def super_admin_guard(credentials=Depends(config.CLERK_GUARD)):
     print("🔒 User authenticated, checking super 🦸‍♂ admin privileges...")
     if not is_super_admin(credentials):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Super admin privileges required",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin privileges required")
     return credentials
 
 
@@ -188,20 +179,14 @@ def credentials_to_member_model(credentials) -> Member_model:
 def validate_attendance_token(token: str, expected_event_id: int) -> dict:
     try:
         # 1. Decode & Verify
-        payload = jwt.decode(
-            token,
-            config.JWT_SECRET,
-            algorithms=["HS256"],
-            options={"require": ["exp", "eventId"]},
-        )
+        payload = jwt.decode(token, config.JWT_SECRET, algorithms=["HS256"], options={"require": ["exp", "eventId"]})
 
         # 2. Extract Data
         token_event_id = payload.get("eventId")
 
         if int(token_event_id) != int(expected_event_id):
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Token event ID does not match the requested event",
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Token event ID does not match the requested event"
             )
 
         return {"valid": True, "event_id": token_event_id, "payload": payload}
@@ -212,41 +197,25 @@ def validate_attendance_token(token: str, expected_event_id: int) -> dict:
             detail="رابط الحضور هذا منتهي الصلاحية. الرجاء التواصل مع المنظم للحصول على رابط جديد.",
         )
     except jwt.MissingRequiredClaimError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Token missing required claim: {e.claim}",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Token missing required claim: {e.claim}")
 
     # More specific "invalid token" causes:
     except jwt.InvalidSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid attendance token signature",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid attendance token signature")
 
     except jwt.InvalidAlgorithmError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid attendance token algorithm",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attendance token algorithm")
 
     except jwt.DecodeError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Malformed attendance token",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed attendance token")
 
     except jwt.ImmatureSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Attendance token not yet valid",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Attendance token not yet valid")
 
     except jwt.InvalidTokenError as e:
         # Catch-all for anything else JWT-related
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid attendance token ({type(e).__name__})",
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid attendance token ({type(e).__name__})"
         )
 
 

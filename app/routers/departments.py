@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, status
 from app.DB import departments as departments_queries
-from ..DB.main import SessionLocal
+from app.DB.main import SessionLocal
 from app.routers.models import Department_model, NotFoundResponse
 
 router = APIRouter()

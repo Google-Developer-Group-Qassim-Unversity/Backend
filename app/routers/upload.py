@@ -5,6 +5,7 @@ from datetime import datetime
 import pandas as pd
 from pydantic import EmailStr, ValidationError, BaseModel
 from app.config import config
+from typing import Annotated
 
 router = APIRouter()
 
@@ -27,14 +28,14 @@ async def _uploaded_file(file: UploadFile) -> tuple[str, str]:
 
 # End points
 @router.post("/", status_code=201)
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: Annotated[UploadFile, File()]):
     file_name, _ = await _uploaded_file(file)
     return {"file": file_name}
 
 
 @router.post("/members", status_code=201)
 async def upload_members(
-    file: UploadFile = File(...), start_date: datetime = Form(...), end_date: datetime = Form(...)
+    file: Annotated[UploadFile, File()], start_date: Annotated[datetime, Form()], end_date: Annotated[datetime, Form()]
 ):
     file_name, file_location = await _uploaded_file(file)
 
@@ -47,7 +48,7 @@ async def upload_members(
 
 
 @router.post("/members/bulk", status_code=201)
-async def upload_bulk_members(file: UploadFile = File(...)):
+async def upload_bulk_members(file: Annotated[UploadFile, File()]):
     file_name, file_location = await _uploaded_file(file)
     try:
         bulk_sheet_validation(file_location)

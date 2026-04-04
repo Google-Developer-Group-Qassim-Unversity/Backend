@@ -14,21 +14,18 @@ from app.routers.logging import (
 )
 from app.helpers import admin_guard
 import httpx
+from typing import Annotated
 
 
 router = APIRouter()
 
 
-@router.post(
-    "/blasts/{event_id:int}",
-    status_code=status.HTTP_200_OK,
-    response_model=AcceptanceBlastResponse,
-)
+@router.post("/blasts/{event_id:int}", status_code=status.HTTP_200_OK, response_model=AcceptanceBlastResponse)
 async def send_acceptance_blasts(
     event_id: int,
     request: Request,
-    subject: str = Query(..., description="Email subject line"),
-    credentials: HTTPAuthorizationCredentials = Depends(admin_guard),
+    subject: Annotated[str, Query(description="Email subject line")],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
 ):
     with LogFile("send acceptance blasts"), SessionLocal() as session:
         try:
@@ -39,8 +36,7 @@ async def send_acceptance_blasts(
 
             if not html_content or not html_content.strip():
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Request body must contain HTML content",
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must contain HTML content"
                 )
 
             write_log(f"Received HTML body with {len(html_content)} characters")
@@ -58,8 +54,7 @@ async def send_acceptance_blasts(
             emails = [sub.email for sub in submissions if sub.email]
             if not emails:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No valid emails found for accepted submissions",
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="No valid emails found for accepted submissions"
                 )
 
             write_log(f"Extracted [{len(emails)}] emails from submissions")
@@ -84,8 +79,7 @@ async def send_acceptance_blasts(
                 except httpx.TimeoutException:
                     write_log_exception(Exception("Acceptance API request timed out"))
                     raise HTTPException(
-                        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                        detail="Acceptance API request timed out",
+                        status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Acceptance API request timed out"
                     )
                 except httpx.HTTPStatusError as e:
                     write_log_exception(Exception(f"Acceptance API error: {e.response.status_code}"))
@@ -96,8 +90,7 @@ async def send_acceptance_blasts(
                 except httpx.RequestError as e:
                     write_log_exception(Exception(f"Failed to connect to acceptance API: {str(e)}"))
                     raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail="Failed to connect to acceptance API",
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to connect to acceptance API"
                     )
 
             submission_ids = [sub.submission_id for sub in submissions]
@@ -105,10 +98,7 @@ async def send_acceptance_blasts(
             session.commit()
             write_log(f"Marked [{len(submission_ids)}] submissions as invited")
 
-            return AcceptanceBlastResponse(
-                sent_count=len(emails),
-                emails=emails,
-            )
+            return AcceptanceBlastResponse(sent_count=len(emails), emails=emails)
 
         except HTTPException:
             raise
@@ -121,16 +111,12 @@ async def send_acceptance_blasts(
             )
 
 
-@router.post(
-    "/test",
-    status_code=status.HTTP_200_OK,
-    response_model=AcceptanceBlastResponse,
-)
+@router.post("/test", status_code=status.HTTP_200_OK, response_model=AcceptanceBlastResponse)
 async def send_acceptance_test(
     request: Request,
-    subject: str = Query(..., description="Email subject line"),
-    emails: list[str] = Query(..., description="Email addresses to send to"),
-    credentials: HTTPAuthorizationCredentials = Depends(admin_guard),
+    subject: Annotated[str, Query(description="Email subject line")],
+    emails: Annotated[list[str], Query(description="Email addresses to send to")],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
 ):
     with LogFile("send acceptance test"):
         try:
@@ -141,17 +127,13 @@ async def send_acceptance_test(
 
             if not html_content or not html_content.strip():
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Request body must contain HTML content",
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must contain HTML content"
                 )
 
             write_log(f"Received HTML body with {len(html_content)} characters")
 
             if not emails:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No valid email addresses provided",
-                )
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid email addresses provided")
 
             write_log(f"Parsed [{len(emails)}] test emails")
             write_log_json({"emails": emails})
@@ -175,8 +157,7 @@ async def send_acceptance_test(
                 except httpx.TimeoutException:
                     write_log_exception(Exception("Acceptance API request timed out"))
                     raise HTTPException(
-                        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                        detail="Acceptance API request timed out",
+                        status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Acceptance API request timed out"
                     )
                 except httpx.HTTPStatusError as e:
                     write_log_exception(Exception(f"Acceptance API error: {e.response.status_code}"))
@@ -187,14 +168,10 @@ async def send_acceptance_test(
                 except httpx.RequestError as e:
                     write_log_exception(Exception(f"Failed to connect to acceptance API: {str(e)}"))
                     raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail="Failed to connect to acceptance API",
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to connect to acceptance API"
                     )
 
-            return AcceptanceBlastResponse(
-                sent_count=len(emails),
-                emails=emails,
-            )
+            return AcceptanceBlastResponse(sent_count=len(emails), emails=emails)
 
         except HTTPException:
             raise

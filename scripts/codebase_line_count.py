@@ -6,12 +6,7 @@ COLUMNS = 120
 SORT_BY = "lines"
 OUTPUT_FORMAT = "commas"
 
-EXCLUDED_PATHS = [
-    "tests",
-    "alembic",
-    "*.ini",
-    "scripts",
-]
+EXCLUDED_PATHS = ["tests", "alembic", "*.ini", "scripts"]
 
 INSTALL_INSTRUCTIONS = """
 tokei is not installed. Install it with one of:

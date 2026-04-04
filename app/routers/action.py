@@ -1,7 +1,7 @@
-from typing import Optional
+from typing import Optional, Annotated
 from fastapi import APIRouter, status, HTTPException, Query
 from app.DB import actions as actions_queries
-from ..DB.main import SessionLocal
+from app.DB.main import SessionLocal
 from app.routers.models import (
     Categorized_action,
     CreateAction_model,
@@ -30,12 +30,7 @@ def get_categorized_actions():
     with SessionLocal() as session:
         actions = actions_queries.get_actions(session)
 
-    categorized_action = {
-        "composite_actions": [],
-        "department_actions": [],
-        "member_actions": [],
-        "custom_actions": [],
-    }
+    categorized_action = {"composite_actions": [], "department_actions": [], "member_actions": [], "custom_actions": []}
 
     # 1. Add composite actions (only include pairs where both actions exist)
     for deptId, memberId in zip(department_ids, member_ids):
@@ -86,10 +81,7 @@ def get_all_actions():
 def create_action(payload: CreateAction_model):
     with SessionLocal() as session:
         new_action = actions_queries.create_action(
-            session,
-            name=payload.action_name,
-            points=payload.points,
-            type=payload.action_type,
+            session, name=payload.action_name, points=payload.points, type=payload.action_type
         )
         new_action.ar_action_name = payload.ar_action_name
         session.commit()
@@ -125,7 +117,7 @@ def reorder_actions(payload: ReorderActions_model):
 
 
 @router.delete("/{action_id:int}", status_code=status.HTTP_200_OK)
-def delete_action(action_id: int, replacement_id: Optional[int] = Query(None)):
+def delete_action(action_id: int, replacement_id: Annotated[Optional[int], Query()] = None):
     with SessionLocal() as session:
         action = actions_queries.get_action_by_id(session, action_id)
         if not action:

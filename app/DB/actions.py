@@ -25,12 +25,7 @@ def create_action(session: Session, name: str, points: int, type: str):
     is_hidden = type == "bonus"
 
     new_action = Actions(
-        action_name=name,
-        points=points,
-        action_type=type,
-        ar_action_name=name,
-        order=max_order + 1,
-        is_hidden=is_hidden,
+        action_name=name, points=points, action_type=type, ar_action_name=name, order=max_order + 1, is_hidden=is_hidden
     )
     session.add(new_action)
     session.flush()

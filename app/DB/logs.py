@@ -1,13 +1,5 @@
 from sqlalchemy.orm import Session
-from app.DB.schema import (
-    Events,
-    Actions,
-    DepartmentsLogs,
-    Logs,
-    Members,
-    MembersLogs,
-    Modifications,
-)
+from app.DB.schema import Events, Actions, DepartmentsLogs, Logs, Members, MembersLogs, Modifications
 from typing import Literal
 from sqlalchemy import select, func, case, text
 from json import loads
@@ -18,15 +10,8 @@ from app.helpers import get_effective_date
 from app.exceptions import ActionNotFound
 
 
-def create_department_log(
-    session: Session,
-    department_id: int,
-    log_id: int,
-):
-    new_department_log = DepartmentsLogs(
-        department_id=department_id,
-        log_id=log_id,
-    )
+def create_department_log(session: Session, department_id: int, log_id: int):
+    new_department_log = DepartmentsLogs(department_id=department_id, log_id=log_id)
     session.add(new_department_log)
     session.flush()
     return new_department_log
@@ -115,9 +100,7 @@ def get_department_logs_count(session: Session, log_id: int):
 
 
 def get_event_attendance(
-    session: Session,
-    event_id: int,
-    day: Literal["all", "exclusive_all"] | int | None = None,
+    session: Session, event_id: int, day: Literal["all", "exclusive_all"] | int | None = None
 ) -> list[AttendanceRecord_model]:
     event = session.query(Events).filter(Events.id == event_id).first()
     if not event:
@@ -247,12 +230,7 @@ def get_modification_by_log_id(session: Session, log_id: int):
     return modification
 
 
-def update_modification(
-    session: Session,
-    modification_id: int,
-    mod_type: Literal["bonus", "discount"],
-    value: int,
-):
+def update_modification(session: Session, modification_id: int, mod_type: Literal["bonus", "discount"], value: int):
     """Update an existing modification."""
     stmt = select(Modifications).where(Modifications.id == modification_id)
     modification = session.scalar(stmt)
@@ -337,10 +315,7 @@ def delete_member_logs_by_log_id(session: Session, log_id: int):
 
 
 def delete_member_log(session: Session, member_id: int, log_id: int, target_date: datetime) -> bool:
-    stmt = select(MembersLogs).where(
-        MembersLogs.member_id == member_id,
-        MembersLogs.log_id == log_id,
-    )
+    stmt = select(MembersLogs).where(MembersLogs.member_id == member_id, MembersLogs.log_id == log_id)
     member_logs = session.scalars(stmt).all()
     threshold = config.ATTENDANCE_EARLY_HOURS_THRESHOLD
     for ml in member_logs:

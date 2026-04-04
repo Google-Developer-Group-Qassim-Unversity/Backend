@@ -1,10 +1,5 @@
 from fastapi.testclient import TestClient
-from tests.utils import (
-    assert_2xx,
-    assert_forbidden,
-    assert_not_found,
-    assert_unprocessable,
-)
+from tests.utils import assert_2xx, assert_forbidden, assert_not_found, assert_unprocessable
 
 
 def test_create_member(clerk_client: TestClient):
@@ -101,10 +96,7 @@ def test_update_member_partial_update(clerk_client: TestClient):
 
 def test_update_member_multiple_fields(clerk_client: TestClient):
     clerk_client.post("/members/")
-    response = clerk_client.patch(
-        "/members/me",
-        json={"name": "New Name", "email": "new@example.com", "uni_level": 6},
-    )
+    response = clerk_client.patch("/members/me", json={"name": "New Name", "email": "new@example.com", "uni_level": 6})
     assert_2xx(response)
     body = response.json()
     assert body["name"] == "New Name"

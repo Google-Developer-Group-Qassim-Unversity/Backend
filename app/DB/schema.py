@@ -2,19 +2,7 @@ from typing import Optional
 import datetime
 import enum
 
-from sqlalchemy import (
-    Column,
-    DateTime,
-    Enum,
-    ForeignKeyConstraint,
-    Index,
-    Integer,
-    JSON,
-    String,
-    Table,
-    Text,
-    text,
-)
+from sqlalchemy import Column, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, String, Table, Text, text
 from sqlalchemy.dialects.mysql import INTEGER, TEXT, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -154,11 +142,7 @@ class Actions(Base):
     )
     points: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     action_type: Mapped[ActionsActionType] = mapped_column(
-        Enum(
-            ActionsActionType,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
-        nullable=False,
+        Enum(ActionsActionType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
     ar_action_name: Mapped[str] = mapped_column(
         VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
@@ -175,11 +159,7 @@ class Departments(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     type: Mapped[DepartmentsType] = mapped_column(
-        Enum(
-            DepartmentsType,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
-        nullable=False,
+        Enum(DepartmentsType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
     ar_name: Mapped[str] = mapped_column(
         VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
@@ -197,11 +177,7 @@ class Events(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     name: Mapped[str] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
     location_type: Mapped[EventsLocationType] = mapped_column(
-        Enum(
-            EventsLocationType,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
-        nullable=False,
+        Enum(EventsLocationType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
     location: Mapped[str] = mapped_column(
         VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
@@ -213,8 +189,7 @@ class Events(Base):
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
     status: Mapped[EventsStatus] = mapped_column(
-        Enum(EventsStatus, values_callable=lambda cls: [member.value for member in cls]),
-        nullable=False,
+        Enum(EventsStatus, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
     description: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
@@ -235,8 +210,7 @@ class Members(Base):
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     uni_id: Mapped[str] = mapped_column(String(50), nullable=False)
     gender: Mapped[MembersGender] = mapped_column(
-        Enum(MembersGender, values_callable=lambda cls: [member.value for member in cls]),
-        nullable=False,
+        Enum(MembersGender, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
     uni_level: Mapped[int] = mapped_column(Integer, nullable=False)
     uni_college: Mapped[str] = mapped_column(
@@ -262,21 +236,14 @@ class Members(Base):
 class Forms(Base):
     __tablename__ = "forms"
     __table_args__ = (
-        ForeignKeyConstraint(
-            ["event_id"],
-            ["events.id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name="forms_ibfk_1",
-        ),
+        ForeignKeyConstraint(["event_id"], ["events.id"], ondelete="CASCADE", onupdate="CASCADE", name="forms_ibfk_1"),
         Index("forms_unique_event_id", "event_id", unique=True),
     )
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     event_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     form_type: Mapped[FormsFormType] = mapped_column(
-        Enum(FormsFormType, values_callable=lambda cls: [member.value for member in cls]),
-        nullable=False,
+        Enum(FormsFormType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
     google_form_id: Mapped[Optional[str]] = mapped_column(
         VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
@@ -296,13 +263,7 @@ class Forms(Base):
 class Logs(Base):
     __tablename__ = "logs"
     __table_args__ = (
-        ForeignKeyConstraint(
-            ["action_id"],
-            ["actions.id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name="logs_ibfk_1",
-        ),
+        ForeignKeyConstraint(["action_id"], ["actions.id"], ondelete="CASCADE", onupdate="CASCADE", name="logs_ibfk_1"),
         ForeignKeyConstraint(["event_id"], ["events.id"], ondelete="CASCADE", name="fk_events"),
         Index("action_id", "action_id"),
         Index("fk_events", "event_id"),
@@ -327,11 +288,7 @@ class Role(Base):
     __tablename__ = "role"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["member_id"],
-            ["members.id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name="fk_role_member",
+            ["member_id"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_role_member"
         ),
         Index("fk_role_member", "member_id"),
     )
@@ -339,8 +296,7 @@ class Role(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     role: Mapped[RoleType] = mapped_column(
-        Enum(RoleType, values_callable=lambda cls: [member.value for member in cls]),
-        nullable=False,
+        Enum(RoleType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
 
     member: Mapped["Members"] = relationship("Members", back_populates="role")
@@ -357,11 +313,7 @@ class DepartmentsLogs(Base):
             name="departments_logs_departments_FK",
         ),
         ForeignKeyConstraint(
-            ["log_id"],
-            ["logs.id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name="departments_logs_logs_FK",
+            ["log_id"], ["logs.id"], ondelete="CASCADE", onupdate="CASCADE", name="departments_logs_logs_FK"
         ),
         Index("departments_logs_departments_FK", "department_id"),
         Index("departments_logs_idx", "log_id", "department_id"),
@@ -379,11 +331,7 @@ class MembersLogs(Base):
     __tablename__ = "members_logs"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["log_id"],
-            ["logs.id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name="members_logs_logs_FK",
+            ["log_id"], ["logs.id"], ondelete="CASCADE", onupdate="CASCADE", name="members_logs_logs_FK"
         ),
         ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_members_id"),
         Index("fk_members_id", "member_id"),
@@ -404,11 +352,7 @@ class Modifications(Base):
     __tablename__ = "modifications"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["log_id"],
-            ["logs.id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name="modifications_ibfk_1",
+            ["log_id"], ["logs.id"], ondelete="CASCADE", onupdate="CASCADE", name="modifications_ibfk_1"
         ),
         Index("log_id", "log_id"),
     )
@@ -416,11 +360,7 @@ class Modifications(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     log_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     type: Mapped[ModificationsType] = mapped_column(
-        Enum(
-            ModificationsType,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
-        nullable=False,
+        Enum(ModificationsType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
     value: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
 
@@ -431,18 +371,10 @@ class Submissions(Base):
     __tablename__ = "submissions"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["form_id"],
-            ["forms.id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name="submissions_ibfk_1",
+            ["form_id"], ["forms.id"], ondelete="CASCADE", onupdate="CASCADE", name="submissions_ibfk_1"
         ),
         ForeignKeyConstraint(
-            ["member_id"],
-            ["members.id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name="submissions_ibfk_2",
+            ["member_id"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="submissions_ibfk_2"
         ),
         Index("from_id_member_id_idx", "form_id", "member_id"),
         Index("submissions_unique", "member_id", "form_id", unique=True),
@@ -457,11 +389,7 @@ class Submissions(Base):
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
     submission_type: Mapped[SubmissionsSubmissionType] = mapped_column(
-        Enum(
-            SubmissionsSubmissionType,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
-        nullable=False,
+        Enum(SubmissionsSubmissionType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
     google_submission_id: Mapped[Optional[str]] = mapped_column(String(100))
     google_submission_value: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -479,32 +407,17 @@ t_forms_submissions = Table(
     Base.metadata,
     Column("submission_id", INTEGER(unsigned=True), server_default=text("'0'")),
     Column("submitted_at", DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
-    Column(
-        "form_type",
-        Enum(
-            FormsSubmissionsFormType,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
-    ),
+    Column("form_type", Enum(FormsSubmissionsFormType, values_callable=lambda cls: [member.value for member in cls])),
     Column(
         "submission_type",
-        Enum(
-            FormsSubmissionsSubmissionType,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
+        Enum(FormsSubmissionsSubmissionType, values_callable=lambda cls: [member.value for member in cls]),
     ),
     Column("id", INTEGER(unsigned=True), server_default=text("'0'")),
     Column("name", String(50)),
     Column("email", String(100)),
     Column("phone_number", String(20)),
     Column("uni_id", String(50)),
-    Column(
-        "gender",
-        Enum(
-            FormsSubmissionsGender,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
-    ),
+    Column("gender", Enum(FormsSubmissionsGender, values_callable=lambda cls: [member.value for member in cls])),
     Column("uni_level", Integer),
     Column("uni_college", String(100)),
     Column("is_accepted", TINYINT(1), server_default=text("'0'")),
@@ -522,33 +435,15 @@ t_open_events = Table(
     Column("id", INTEGER(unsigned=True), server_default=text("'0'")),
     Column("name", String(150)),
     Column("description", Text),
-    Column(
-        "location_type",
-        Enum(
-            OpenEventsLocationType,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
-    ),
+    Column("location_type", Enum(OpenEventsLocationType, values_callable=lambda cls: [member.value for member in cls])),
     Column("location", String(100)),
     Column("start_datetime", DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column("end_datetime", DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
-    Column(
-        "status",
-        Enum(
-            OpenEventsStatus,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
-    ),
+    Column("status", Enum(OpenEventsStatus, values_callable=lambda cls: [member.value for member in cls])),
     Column("image_url", String(100)),
     Column("is_official", TINYINT(1), server_default=text("'0'")),
     Column("form_id", INTEGER(unsigned=True), server_default=text("'0'")),
-    Column(
-        "form_type",
-        Enum(
-            OpenEventsFormType,
-            values_callable=lambda cls: [member.value for member in cls],
-        ),
-    ),
+    Column("form_type", Enum(OpenEventsFormType, values_callable=lambda cls: [member.value for member in cls])),
     Column("google_responders_url", String(150)),
     info={"is_view": True},
 )

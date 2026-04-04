@@ -1,6 +1,6 @@
 import json
 from time import perf_counter
-from typing import Literal
+from typing import Literal, Annotated
 from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks
 from app.DB.main import SessionLocal
 from app.DB import submissions as submission_queries, members as member_queries, forms as form_queries
@@ -32,7 +32,7 @@ router = APIRouter()
 def create_submission(
     form_id: int,
     submission_type: Literal["none", "partial"],
-    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(config.CLERK_GUARD)],
 ):
     with SessionLocal() as session:
         try:
@@ -49,7 +49,9 @@ def create_submission(
 
 
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
-def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD)):
+def check_submission_exists(
+    form_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(config.CLERK_GUARD)]
+):
     with LogFile("check submission exists"), SessionLocal() as session:
         try:
             uni_id = get_uni_id_from_credentials(credentials)
@@ -74,7 +76,8 @@ def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredenti
 
 @router.put("/accept", status_code=status.HTTP_200_OK)
 def accept_submission(
-    submissions: list[submission_accept_model], credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
+    submissions: list[submission_accept_model],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
 ):
     with SessionLocal() as session:
         try:

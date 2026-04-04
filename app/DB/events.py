@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from .schema import Events, t_open_events, Logs, DepartmentsLogs, Actions, Departments
-from ..routers.models import Events_model
+from app.routers.models import Events_model
 from datetime import datetime
 
 
@@ -43,13 +43,7 @@ def get_actions_by_event_id(session: Session, event_id: int):
         .outerjoin(DepartmentsLogs, Logs.id == DepartmentsLogs.log_id)
         .outerjoin(Departments, DepartmentsLogs.department_id == Departments.id)
         .where(Events.id == event_id)
-        .group_by(
-            Actions.id,
-            Actions.ar_action_name,
-            Departments.ar_name,
-            Departments.id,
-            Events.id,
-        )
+        .group_by(Actions.id, Actions.ar_action_name, Departments.ar_name, Departments.id, Events.id)
         .order_by(Actions.id.asc())
     )
     row = session.execute(stmt).all()
