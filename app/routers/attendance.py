@@ -169,7 +169,9 @@ def mark_attendance(
     },
 )
 def backfill_attendance(
-    event_id: int, request: BackfillAttendanceRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+    event_id: int,
+    request: BackfillAttendanceRequest,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
 ):
 
     with LogFile("backfill attendance"), SessionLocal() as session:
@@ -256,8 +258,16 @@ def backfill_attendance(
 @router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=EventAttendanceResponse)
 def get_event_attendance(
     event_id: int,
-    type: Annotated[Literal["count", "detailed", "me"], Query(description="Type of attendance data: 'count' (public), 'detailed' (admin), 'me' (authenticated user)")] = "count",
-    day: Annotated[int | Literal["all", "exclusive_all"], Query(description="Filter by event day: 'all' (all days), 'exclusive_all' (only those atteded all days), int (specific day number 1-based index)")] = "all",
+    type: Annotated[
+        Literal["count", "detailed", "me"],
+        Query(description="Type of attendance data: 'count' (public), 'detailed' (admin), 'me' (authenticated user)"),
+    ] = "count",
+    day: Annotated[
+        int | Literal["all", "exclusive_all"],
+        Query(
+            description="Filter by event day: 'all' (all days), 'exclusive_all' (only those atteded all days), int (specific day number 1-based index)"
+        ),
+    ] = "all",
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     with SessionLocal() as session:

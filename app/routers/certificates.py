@@ -131,7 +131,9 @@ async def send_certificates(event_id: int, credentials: Annotated[HTTPAuthorizat
 
 @router.post("/manual/{event_id:int}", status_code=status.HTTP_200_OK, response_model=CertificateJobResponse)
 async def send_manual_certificates(
-    event_id: int, request: ManualCertificateRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+    event_id: int,
+    request: ManualCertificateRequest,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
 ):
     with LogFile("send manual certificates"), SessionLocal() as session:
         try:

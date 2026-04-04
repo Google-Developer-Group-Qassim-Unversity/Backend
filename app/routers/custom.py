@@ -198,7 +198,9 @@ def give_department_custom_points(
 
 
 @router.get("/departments/{event_id}", response_model=CustomDepartmentPointsResponse)
-def get_department_custom_points(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
+def get_department_custom_points(
+    event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+):
     """Retrieve all custom department points for a specific event."""
     with LogFile("get_custom_department_points"), SessionLocal() as session:
         try:
@@ -252,7 +254,9 @@ def get_department_custom_points(event_id: int, credentials: Annotated[HTTPAutho
 
 @router.put("/departments/{log_id}")
 def update_department_custom_points(
-    log_id: int, body: DepartmentPointDetails, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+    log_id: int,
+    body: DepartmentPointDetails,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
 ):
     """Update a single custom department point entry by log_id."""
     with LogFile("update_custom_department_points"), SessionLocal() as session:
@@ -494,7 +498,9 @@ def get_member_custom_points(event_id: int, credentials: Annotated[HTTPAuthoriza
 
 
 @router.delete("/departments/{log_id}")
-def delete_department_custom_points(log_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
+def delete_department_custom_points(
+    log_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+):
     with LogFile("delete_custom_department_points"), SessionLocal() as session:
         try:
             write_log_title(f"Delete Custom Department Points for Log {log_id}")
@@ -537,7 +543,9 @@ def delete_department_custom_points(log_id: int, credentials: Annotated[HTTPAuth
 
 
 @router.delete("/members/{log_id}")
-def delete_member_custom_points(log_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
+def delete_member_custom_points(
+    log_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+):
     with LogFile("delete_custom_member_points"), SessionLocal() as session:
         try:
             write_log_title(f"Delete Custom Member Points for Log {log_id}")
