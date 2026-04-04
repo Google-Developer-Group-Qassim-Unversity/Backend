@@ -21,6 +21,7 @@ def test_root_redirects_to_docs(client: TestClient):
 def test_database_connection(engine):
     """Test that database connection works."""
     from sqlalchemy import text
+
     with engine.connect() as conn:
         result = conn.execute(text("SELECT 1"))
         assert result.scalar() == 1

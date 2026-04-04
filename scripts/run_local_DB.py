@@ -36,16 +36,26 @@ def container_is_running() -> bool:
 
 def create_container():
     print(f"[setup] Creating container '{CONTAINER_NAME}'...")
-    r = run([
-        "docker", "run", "-d",
-        "--name", CONTAINER_NAME,
-        "-p", f"{HOST_PORT}:3306",
-        "-e", f"MYSQL_ROOT_PASSWORD={DB_PASSWORD}",
-        "-e", f"MYSQL_DATABASE={DB_NAME}",
-        "-v", f"{VOLUME_NAME}:/var/lib/mysql",
-        "--network", "host",
-        IMAGE,
-    ])
+    r = run(
+        [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            CONTAINER_NAME,
+            "-p",
+            f"{HOST_PORT}:3306",
+            "-e",
+            f"MYSQL_ROOT_PASSWORD={DB_PASSWORD}",
+            "-e",
+            f"MYSQL_DATABASE={DB_NAME}",
+            "-v",
+            f"{VOLUME_NAME}:/var/lib/mysql",
+            "--network",
+            "host",
+            IMAGE,
+        ]
+    )
     if r.returncode != 0:
         print(f"[error] Failed to create container:\n{r.stderr}")
         sys.exit(1)
@@ -64,16 +74,34 @@ def start_container():
 def wait_for_mysql(max_retries: int = 30, delay: float = 1.0):
     print("[setup] Waiting for MySQL to be ready...")
     for attempt in range(1, max_retries + 1):
-        r = run([
-            "docker", "exec", CONTAINER_NAME,
-            "mysqladmin", "ping", "-h", "localhost",
-            "-u", DB_USER, f"-p{DB_PASSWORD}",
-        ])
+        r = run(
+            [
+                "docker",
+                "exec",
+                CONTAINER_NAME,
+                "mysqladmin",
+                "ping",
+                "-h",
+                "localhost",
+                "-u",
+                DB_USER,
+                f"-p{DB_PASSWORD}",
+            ]
+        )
         if r.returncode == 0:
-            r2 = run([
-                "docker", "exec", CONTAINER_NAME,
-                "mysql", "-u", DB_USER, f"-p{DB_PASSWORD}", "-e", "SELECT 1",
-            ])
+            r2 = run(
+                [
+                    "docker",
+                    "exec",
+                    CONTAINER_NAME,
+                    "mysql",
+                    "-u",
+                    DB_USER,
+                    f"-p{DB_PASSWORD}",
+                    "-e",
+                    "SELECT 1",
+                ]
+            )
             if r2.returncode == 0:
                 print(f"[setup] MySQL is ready (attempt {attempt}/{max_retries}).")
                 return
@@ -108,21 +136,28 @@ def stamp_alembic():
 
 def get_prod_db_url() -> str:
     print("[infisical] Fetching DATABASE_URL...")
-    r = run([
-        "infisical", "secrets", "get", "DATABASE_URL",
-        "--path", INFISICAL_PATH,
-        "--env", INFISICAL_ENV,
-        "--silent",
-        "--plain",
-    ])
+    r = run(
+        [
+            "infisical",
+            "secrets",
+            "get",
+            "DATABASE_URL",
+            "--path",
+            INFISICAL_PATH,
+            "--env",
+            INFISICAL_ENV,
+            "--silent",
+            "--plain",
+        ]
+    )
     if r.returncode != 0 or not r.stdout.strip():
         print("[error] Failed to fetch DATABASE_URL from infisical.")
         print("        Make sure you are logged in: infisical login")
         sys.exit(1)
 
-    url = r.stdout.strip().split('\n')[0].strip()
+    url = r.stdout.strip().split("\n")[0].strip()
 
-    if not url.startswith('mysql'):
+    if not url.startswith("mysql"):
         print("[error] Unexpected value received for DATABASE_URL.")
         sys.exit(1)
 
@@ -132,11 +167,11 @@ def get_prod_db_url() -> str:
 def parse_db_url(url: str) -> dict:
     parsed = urlparse(url)
     return {
-        'host': parsed.hostname or '',
-        'port': str(parsed.port or 3306),
-        'user': parsed.username or '',
-        'password': unquote(parsed.password or ''),
-        'database': parsed.path.lstrip('/'),
+        "host": parsed.hostname or "",
+        "port": str(parsed.port or 3306),
+        "user": parsed.username or "",
+        "password": unquote(parsed.password or ""),
+        "database": parsed.path.lstrip("/"),
     }
 
 
@@ -144,23 +179,38 @@ def dump_prod_to_local(prod_url: str):
     prod = parse_db_url(prod_url)
 
     print(f"[dump] Recreating local database '{DB_NAME}'...")
-    r = run([
-        "docker", "exec",
-        "-e", f"MYSQL_PWD={DB_PASSWORD}",
-        CONTAINER_NAME,
-        "mysql", "-u", DB_USER,
-        "-e", f"DROP DATABASE IF EXISTS `{DB_NAME}`; CREATE DATABASE `{DB_NAME}`;",
-    ])
+    r = run(
+        [
+            "docker",
+            "exec",
+            "-e",
+            f"MYSQL_PWD={DB_PASSWORD}",
+            CONTAINER_NAME,
+            "mysql",
+            "-u",
+            DB_USER,
+            "-e",
+            f"DROP DATABASE IF EXISTS `{DB_NAME}`; CREATE DATABASE `{DB_NAME}`;",
+        ]
+    )
     if r.returncode != 0:
         print("[error] Failed to recreate local database.")
         sys.exit(1)
 
-    r = run([
-        "docker", "exec",
-        "-e", f"MYSQL_PWD={DB_PASSWORD}",
-        CONTAINER_NAME,
-        "mysql", "-u", DB_USER, "-e", f"USE `{DB_NAME}`;",
-    ])
+    r = run(
+        [
+            "docker",
+            "exec",
+            "-e",
+            f"MYSQL_PWD={DB_PASSWORD}",
+            CONTAINER_NAME,
+            "mysql",
+            "-u",
+            DB_USER,
+            "-e",
+            f"USE `{DB_NAME}`;",
+        ]
+    )
     if r.returncode != 0:
         print("[error] Recreated database is not usable.")
         sys.exit(1)
@@ -169,19 +219,24 @@ def dump_prod_to_local(prod_url: str):
 
     dump_proc = subprocess.Popen(
         [
-            "docker", "exec",
-            "-e", f"MYSQL_PWD={prod['password']}",
+            "docker",
+            "exec",
+            "-e",
+            f"MYSQL_PWD={prod['password']}",
             CONTAINER_NAME,
             "mysqldump",
-            "-h", prod['host'],
-            "-P", prod['port'],
-            "-u", prod['user'],
+            "-h",
+            prod["host"],
+            "-P",
+            prod["port"],
+            "-u",
+            prod["user"],
             "--no-tablespaces",
             "--skip-lock-tables",
             "--set-gtid-purged=OFF",
             "--routines",
             "--triggers",
-            prod['database'],
+            prod["database"],
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -189,10 +244,16 @@ def dump_prod_to_local(prod_url: str):
 
     restore_proc = subprocess.Popen(
         [
-            "docker", "exec",
-            "-e", f"MYSQL_PWD={DB_PASSWORD}",
-            "-i", CONTAINER_NAME,
-            "mysql", "-u", DB_USER, DB_NAME,
+            "docker",
+            "exec",
+            "-e",
+            f"MYSQL_PWD={DB_PASSWORD}",
+            "-i",
+            CONTAINER_NAME,
+            "mysql",
+            "-u",
+            DB_USER,
+            DB_NAME,
         ],
         stdin=dump_proc.stdout,
         stdout=subprocess.DEVNULL,
@@ -272,11 +333,8 @@ def main():
         run_migrations()
     else:
         print()
-        response = input(
-            "  This will REPLACE all local data with a copy of production.\n"
-            "  Continue? [y/N] "
-        )
-        if response.strip().lower() != 'y':
+        response = input("  This will REPLACE all local data with a copy of production.\n  Continue? [y/N] ")
+        if response.strip().lower() != "y":
             print("Aborted.")
             return
 

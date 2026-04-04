@@ -57,31 +57,31 @@ for key, value in required_env_vars.items():
 def database_url():
     """
     Provide the test database URL.
-    
+
     - If DATABASE_URL env var is set (CI mode), use it
     - Otherwise, start a MySQL testcontainer
-    
+
     Yields the database URL string.
     """
     existing_url = os.getenv("DATABASE_URL")
-    
+
     if existing_url:
         print("[conftest] Using provided DATABASE_URL")
         yield existing_url
         return
-    
+
     print("[conftest] Starting MySQL testcontainer...")
     container = MySqlContainer("mysql:8.0", dbname="test")
     container.start()
-    
+
     url = container.get_connection_url()
     url = url.replace("mysql://", "mysql+pymysql://")
     print(f"[conftest] MySQL testcontainer started: {url}")
-    
+
     os.environ["DATABASE_URL"] = url
-    
+
     yield url
-    
+
     print("[conftest] Stopping MySQL testcontainer...")
     container.stop()
 
@@ -92,17 +92,17 @@ def engine(database_url):
     Create SQLAlchemy engine and run migrations.
     This ensures tests run against the same database structure as production.
     """
-    
+
     engine = create_engine(
         database_url,
         pool_pre_ping=True,
         pool_recycle=3600,
     )
-    
+
     print("[conftest] Running Alembic migrations...")
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("sqlalchemy.url", database_url)
-    
+
     try:
         command.upgrade(alembic_cfg, "head")
     except Exception as e:
@@ -113,9 +113,9 @@ def engine(database_url):
             f"Fix your migration files first.\n"
             f"Original error: {e}"
         ) from e
-    
+
     print("[conftest] ✓ Migrations completed")
-    
+
     yield engine
 
 
@@ -126,30 +126,32 @@ def seed_core_data(engine):
     # CAUTION: Don't update default unless you know what you're doing
     # a lot of tests assume these default values and changing them might break the tests
     with Session(engine) as session:
-        session.add_all([
-            Actions(
-                action_name="organized an on-site course",
-                points=10,
-                action_type=ActionsActionType.DEPARTMENT,
-                ar_action_name="تنظيم دورة حضورية",
-            ),
-            Actions(
-                action_name="on-site course attendance",
-                points=5,
-                action_type=ActionsActionType.MEMBER,
-                ar_action_name="حضور دورة حضورية",
-            ),
-            Departments(
-                name="Business",
-                type=DepartmentsType.PRACTICAL,
-                ar_name="ريادة الأعمال",
-            ),
-            Departments(
-                name="Design",
-                type=DepartmentsType.ADMINISTRATIVE,
-                ar_name="التصميم",
-            ),
-        ])
+        session.add_all(
+            [
+                Actions(
+                    action_name="organized an on-site course",
+                    points=10,
+                    action_type=ActionsActionType.DEPARTMENT,
+                    ar_action_name="تنظيم دورة حضورية",
+                ),
+                Actions(
+                    action_name="on-site course attendance",
+                    points=5,
+                    action_type=ActionsActionType.MEMBER,
+                    ar_action_name="حضور دورة حضورية",
+                ),
+                Departments(
+                    name="Business",
+                    type=DepartmentsType.PRACTICAL,
+                    ar_name="ريادة الأعمال",
+                ),
+                Departments(
+                    name="Design",
+                    type=DepartmentsType.ADMINISTRATIVE,
+                    ar_name="التصميم",
+                ),
+            ]
+        )
         session.commit()
         print("[conftest] ✓ Core data seeded")
 

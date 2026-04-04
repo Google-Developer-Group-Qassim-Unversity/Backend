@@ -1,5 +1,10 @@
 from fastapi.testclient import TestClient
-from tests.utils import assert_2xx, assert_forbidden, assert_not_found, assert_unprocessable
+from tests.utils import (
+    assert_2xx,
+    assert_forbidden,
+    assert_not_found,
+    assert_unprocessable,
+)
 
 
 def test_create_member(clerk_client: TestClient):
@@ -13,6 +18,7 @@ def test_create_member(clerk_client: TestClient):
 
 # === Member Role Tests ===
 
+
 def test_update_member_role_success(super_admin_client: TestClient):
     # 1. create member (self)
     create_response = super_admin_client.post("/members/")
@@ -20,9 +26,7 @@ def test_update_member_role_success(super_admin_client: TestClient):
     member_id = create_response.json()["member"]["id"]
 
     # 2. update member role to "admin"
-    response = super_admin_client.post(
-        "/members/roles", params={"member_id": member_id, "new_role": "admin"}
-    )
+    response = super_admin_client.post("/members/roles", params={"member_id": member_id, "new_role": "admin"})
     assert_2xx(response)
     body = response.json()
     assert body["role"] == "admin"
@@ -30,9 +34,7 @@ def test_update_member_role_success(super_admin_client: TestClient):
 
 
 def test_update_role_member_not_found(super_admin_client: TestClient):
-    response = super_admin_client.post(
-        "/members/roles", params={"member_id": 9999, "new_role": "admin"}
-    )
+    response = super_admin_client.post("/members/roles", params={"member_id": 9999, "new_role": "admin"})
     assert_not_found(response)
 
 
@@ -43,10 +45,9 @@ def test_update_member_role_member_unauthorized(clerk_client: TestClient):
     member_id = create_response.json()["member"]["id"]
 
     # 2. attempt to update member role to "admin"
-    response = clerk_client.post(
-        "/members/roles", params={"member_id": member_id, "new_role": "admin"}
-    )
+    response = clerk_client.post("/members/roles", params={"member_id": member_id, "new_role": "admin"})
     assert_forbidden(response)
+
 
 def test_update_member_role_admin_unauthorized(admin_client: TestClient):
     # 1. create member (self)
@@ -55,9 +56,7 @@ def test_update_member_role_admin_unauthorized(admin_client: TestClient):
     member_id = create_response.json()["member"]["id"]
 
     # 2. update admin role to "super_admin"
-    response = admin_client.post(
-        "/members/roles", params={"member_id": member_id, "new_role": "super_admin"}
-    )
+    response = admin_client.post("/members/roles", params={"member_id": member_id, "new_role": "super_admin"})
     assert_forbidden(response)
 
 
@@ -68,12 +67,12 @@ def test_update_member_role_invalid_role(super_admin_client: TestClient):
     member_id = create_response.json()["member"]["id"]
 
     # 2. attempt to update member role to invalid role "invalid_role"
-    response = super_admin_client.post(
-        "/members/roles", params={"member_id": member_id, "new_role": "invalid_role"}
-    )
+    response = super_admin_client.post("/members/roles", params={"member_id": member_id, "new_role": "invalid_role"})
     assert_unprocessable(response)
 
+
 # === Member Update Tests ===
+
 
 def test_update_member_success(clerk_client: TestClient):
     clerk_client.post("/members/")

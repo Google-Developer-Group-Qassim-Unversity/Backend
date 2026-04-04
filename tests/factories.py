@@ -2,6 +2,7 @@ from app.DB.schema import EventsLocationType
 from app.routers.models import Events_model
 from datetime import datetime
 
+
 # CAUTION: Don't update default unless you know what you're doing
 # a lot of tests assume these default values and changing them might break the tests
 def make_event(**overrides):

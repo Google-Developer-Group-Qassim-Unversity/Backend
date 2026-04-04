@@ -73,22 +73,39 @@ dependencies = [
     "websockets==15.0.1",
 ]
 
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.9",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = [
+    "--tb=short",
+    "--cov",
+]
+
 
 [tool.coverage.run]
 source = ["app"]
 
 [tool.coverage.report]
 show_missing = true
-skip_covered = true
+skip_covered = false
+fail_under = 80
 
-[dependency-groups]
-dev = [
-    "pytest-cov>=7.1.0",
-    "ruff>=0.15.9",
+[tool.ruff]
+# according to https://docs.astral.sh/ruff/settings/#line-length, default is 88 max is 320.
+line-length = 120
+fix = true # automatically fix lint issues when possible
+show-fixes = true
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = [
+    "F401",    # Allow unused imports in __init__.py
 ]

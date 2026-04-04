@@ -30,14 +30,19 @@ def main():
         print(INSTALL_INSTRUCTIONS, file=sys.stderr)
         sys.exit(1)
 
-    subprocess.run([
-        "tokei",
-        "-c", str(COLUMNS),
-        "--files",
-        "-s", SORT_BY,
-        "-n", OUTPUT_FORMAT,
-        *[f"-e{p}" for p in EXCLUDED_PATHS],
-    ])
+    subprocess.run(
+        [
+            "tokei",
+            "-c",
+            str(COLUMNS),
+            "--files",
+            "-s",
+            SORT_BY,
+            "-n",
+            OUTPUT_FORMAT,
+            *[f"-e{p}" for p in EXCLUDED_PATHS],
+        ]
+    )
 
 
 if __name__ == "__main__":
