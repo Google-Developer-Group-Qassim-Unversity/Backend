@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist
+from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist, ConfigDict
 from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
@@ -13,8 +13,7 @@ class RoleEnum(str, Enum):
 
 
 class BaseClassModel(BaseModel):
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LocationTypeEnum(str, Enum):

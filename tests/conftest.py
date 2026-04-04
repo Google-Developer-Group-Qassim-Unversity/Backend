@@ -176,7 +176,8 @@ def client(engine, seed_core_data) -> Generator:
     yield TestClient(app)
 
     db_main.SessionLocal.configure(bind=original_bind)
-    transaction.rollback()
+    if transaction.is_active:
+        transaction.rollback()
     connection.close()
 
 
@@ -237,6 +238,16 @@ def admin_client(clerk_client) -> Generator:
     app.dependency_overrides[admin_guard] = override_admin_guard
     yield clerk_client
     app.dependency_overrides.clear()
+
+
+def pytest_collection_modifyitems(items):
+    """Force test_database_connection to always run first."""
+
+    # Find the test by name, remove it from its current position, and re-insert at index 0
+    db_test = next((i for i in items if i.name == "test_database_connection"), None)
+    if db_test:
+        items.remove(db_test)
+        items.insert(0, db_test)
 
 
 def pytest_assertrepr_compare(config, op, left, right):
