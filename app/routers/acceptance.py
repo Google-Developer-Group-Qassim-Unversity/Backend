@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB.main import SessionLocal
 from app.DB import submissions as submissions_queries
@@ -80,7 +80,7 @@ async def send_acceptance_blasts(
                     )
                     response.raise_for_status()
                     response_data = response.json()
-                    write_log(log_file, f"Acceptance API responded successfully")
+                    write_log(log_file, "Acceptance API responded successfully")
                     write_log_json(log_file, response_data)
                 except httpx.TimeoutException:
                     write_log_exception(log_file, Exception("Acceptance API request timed out"))

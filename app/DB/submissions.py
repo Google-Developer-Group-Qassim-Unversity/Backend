@@ -1,5 +1,4 @@
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from .schema import Submissions, t_forms_submissions
 

@@ -15,7 +15,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.mysql import ENUM, INTEGER, TEXT, TINYINT, VARCHAR
+from sqlalchemy.dialects.mysql import INTEGER, TEXT, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -93,7 +93,7 @@ class ModificationsType(str, enum.Enum):
     DISCOUNT = "discount"
 
 
-class RoleRole(str, enum.Enum):
+class RoleType(str, enum.Enum):
     ADMIN = "admin"
     SUPER_ADMIN = "super_admin"
     ADMIN_POINTS = "admin_points"
@@ -374,8 +374,8 @@ class Role(Base):
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    role: Mapped[RoleRole] = mapped_column(
-        Enum(RoleRole, values_callable=lambda cls: [member.value for member in cls]),
+    role: Mapped[RoleType] = mapped_column(
+        Enum(RoleType, values_callable=lambda cls: [member.value for member in cls]),
         nullable=False,
     )
 
@@ -557,6 +557,7 @@ t_forms_submissions = Table(
     Column("event_id", INTEGER(unsigned=True)),
     Column("form_id", INTEGER(unsigned=True), server_default=text("'0'")),
     Column("google_form_id", String(100)),
+    info={"is_view": True},
 )
 
 t_open_events = Table(
@@ -593,4 +594,5 @@ t_open_events = Table(
         ),
     ),
     Column("google_responders_url", String(150)),
+    info={"is_view": True},
 )

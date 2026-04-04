@@ -12,3 +12,4 @@ logs
 uploads
 .ruff_cache
 .pytest_cache
+.coverage 

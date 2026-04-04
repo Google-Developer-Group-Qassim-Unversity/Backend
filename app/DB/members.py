@@ -1,8 +1,9 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from .schema import Actions, Members, MembersLogs, Logs, Events, Role
-from ..routers.models import Member_model
+from app.DB.schema import Actions, Members, MembersLogs, Logs, Events, Role, RoleType
+from app.exceptions import MemberNotFound
+from app.routers.models import Member_model
 from datetime import datetime
 
 
@@ -66,11 +67,11 @@ def get_member_by_uni_id(session: Session, uni_id: str):
 
 
 def update_member(
-    session: Session, member: Member_model, is_authenticated: bool = False
+    session: Session, member: Member_model, is_authenticated: bool
 ):
     existing_member = session.scalar(select(Members).where(Members.id == member.id))
     if not existing_member:
-        return None
+        raise MemberNotFound(member.id)
     print(f"Updating member: {existing_member.name}")
     existing_member.name = member.name
     existing_member.email = member.email
@@ -127,7 +128,7 @@ def get_member_roles(session: Session):
     return [row._asdict() for row in query.all()]
 
 
-def update_member_role(session: Session, member_id: int, new_role: str):
+def update_member_role(session: Session, member_id: int, new_role: RoleType):
     # Check if member exists
     existing_member = session.scalar(select(Members).where(Members.id == member_id))
     if not existing_member:
@@ -175,7 +176,7 @@ def update_member_by_uni_id(
 ) -> Members | None:
     member = session.scalar(select(Members).where(Members.uni_id == uni_id))
     if not member:
-        return None
+        raise MemberNotFound(uni_id)
 
     for key, value in updates.items():
         if value is not None and hasattr(member, key):

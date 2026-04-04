@@ -5,7 +5,6 @@ from app.DB import (
     forms as form_queries,
     submissions as submission_queries,
     logs as log_queries,
-    members as member_queries,
 )
 from ..DB.main import SessionLocal
 from app.routers.models import (
@@ -139,14 +138,6 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             write_log_title(log_file, "Creating New Event and Associated Form")
             # 1. create event
             new_event = events_queries.create_event(session, event_data.event)
-
-            if new_event is None:
-                exception = HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to create event due to database error",
-                )
-                write_log_exception(log_file, exception)
-                raise exception
             write_log(log_file, f"Created Event [{new_event.id}]: {new_event.name}")
 
             # 2. create associated form
@@ -157,16 +148,6 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
                     form_type=event_data.form_type,
                 ),
             )
-
-            if new_form is None:
-                write_log_exception(
-                    log_file,
-                    f"HTTP 409: Form with event_id {new_event.id} already exists",
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Form with event_id {new_event.id} already exists",
-                )
             write_log(log_file, f"Created Form [{new_form.id}] for Event [{new_event.id}]")
 
             # 3. create logs for event
@@ -189,17 +170,22 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             session.commit()
             session.refresh(new_event)
             return new_event
-        except HTTPException:
-            session.rollback()
-            raise
+        # except HTTPException as e:
+        #     session.rollback()
+        #     write_log_exception(log_file, e)
+        #     write_log_traceback(log_file)
+        #     raise
         except Exception as e:
             session.rollback()
             write_log_exception(log_file, e)
             write_log_traceback(log_file)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while creating the event",
-            )
+            if isinstance(e, HTTPException):
+                raise
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="An error occurred while creating the event",
+                )
         finally:
             write_log_json(log_file, event_data.model_dump(mode="json"))
 
@@ -485,7 +471,7 @@ def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCreden
                 submissions.append(submission)
 
             return submissions
-        except Exception as e:
+        except Exception:
             raise
 
 

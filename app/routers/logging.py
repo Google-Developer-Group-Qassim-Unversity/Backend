@@ -4,7 +4,6 @@ from traceback import extract_tb, format_exception
 from datetime import datetime
 from pathlib import Path
 from json import dump, dumps
-from pprint import pprint
 from app.config import config
 
 
@@ -29,7 +28,7 @@ def write_log_title(file: Path, title: str):
     write_log(file, f"\033[34m{'-'*20}\033[0m[{title}]\033[34m{'-'*20}\033[0m")
     write_log(file, "\n\033[33mLog\033[0m 🧾:")
 
-def write_log_json(file: Path, json: str):
+def write_log_json(file: Path, json: str | dict):
     write_log(file, "\n\033[33mJSON Body\033[0m 📦:")
     file = file.with_name("body.json")
     
@@ -58,6 +57,7 @@ def write_log_traceback(file: Path):
 
 def print_summarized_traceback() -> str:
     tb = exc_info()[2]
+    print("\n\033[33msummrized traceback\033[0m 🗂️:\n")
     for frame in extract_tb(tb):
         print(f"...{path.sep.join(frame.filename.split(path.sep)[-3:])}, line {frame.lineno}:{frame.colno}\n")
 

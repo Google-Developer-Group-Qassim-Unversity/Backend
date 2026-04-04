@@ -1,7 +1,7 @@
-from fastapi import Depends, HTTPException, HTTPException, status
+from fastapi import Depends, HTTPException, status
 from app.config import config
 from app.routers.models import Member_model
-from typing import List, Union, Optional
+from typing import List, Union
 import pandas as pd
 from pydantic import HttpUrl
 from json import dumps
@@ -99,6 +99,10 @@ def is_super_admin(credentials) -> bool:
     decoded = credentials.model_dump()["decoded"]
     metadata = decoded.get("metadata", {})
     return metadata.get("is_super_admin", False)
+
+
+def authenticated_guard(credentials=Depends(config.CLERK_GUARD)):
+    return credentials
 
 
 def admin_guard(credentials=Depends(config.CLERK_GUARD)):
@@ -210,25 +214,25 @@ def validate_attendance_token(token: str, expected_event_id: int) -> dict:
         )
 
     # More specific "invalid token" causes:
-    except jwt.InvalidSignatureError as e:
+    except jwt.InvalidSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid attendance token signature",
         )
 
-    except jwt.InvalidAlgorithmError as e:
+    except jwt.InvalidAlgorithmError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid attendance token algorithm",
         )
 
-    except jwt.DecodeError as e:
+    except jwt.DecodeError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Malformed attendance token",
         )
 
-    except jwt.ImmatureSignatureError as e:
+    except jwt.ImmatureSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Attendance token not yet valid",
