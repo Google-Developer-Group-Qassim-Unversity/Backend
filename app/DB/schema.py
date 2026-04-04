@@ -93,7 +93,7 @@ class ModificationsType(str, enum.Enum):
     DISCOUNT = "discount"
 
 
-class RoleRole(str, enum.Enum):
+class RoleType(str, enum.Enum):
     ADMIN = "admin"
     SUPER_ADMIN = "super_admin"
     ADMIN_POINTS = "admin_points"
@@ -374,8 +374,8 @@ class Role(Base):
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    role: Mapped[RoleRole] = mapped_column(
-        Enum(RoleRole, values_callable=lambda cls: [member.value for member in cls]),
+    role: Mapped[RoleType] = mapped_column(
+        Enum(RoleType, values_callable=lambda cls: [member.value for member in cls]),
         nullable=False,
     )
 

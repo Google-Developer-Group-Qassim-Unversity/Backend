@@ -1,4 +1,5 @@
-from app.routers.models import Events_model, LocationTypeEnum
+from app.DB.schema import EventsLocationType
+from app.routers.models import Events_model
 from datetime import datetime
 
 # CAUTION: Don't update default unless you know what you're doing
@@ -7,7 +8,7 @@ def make_event(**overrides):
     defaults = {
         "name": "my event",
         "description": "my description",
-        "location_type": LocationTypeEnum.online,
+        "location_type": EventsLocationType.ONLINE,
         "location": "space",
         "start_datetime": datetime.fromisoformat("2026-03-01T00:00:00"),
         "end_datetime": datetime.fromisoformat("2026-03-01T00:00:00"),

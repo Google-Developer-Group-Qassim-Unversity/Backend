@@ -20,7 +20,7 @@ from app.routers.logging import (
     write_log_json,
     write_log_title,
 )
-from app.routers.models import LocationTypeEnum
+from app.DB.schema import EventsLocationType
 import json
 
 router = APIRouter()
@@ -45,7 +45,7 @@ class CustomDepartmentPointsRequest(BaseClassModel):
     start_datetime: datetime
     end_datetime: datetime
     event_name: str
-    location_type: LocationTypeEnum
+    location_type: EventsLocationType
     point_deatils: List[DepartmentPointDetails]
 
 
@@ -54,7 +54,7 @@ class CustomMemberPointsRequest(BaseClassModel):
     start_datetime: datetime
     end_datetime: datetime
     event_name: str
-    location_type: LocationTypeEnum
+    location_type: EventsLocationType
     point_deatils: List[MemberPointDetails]
 
 

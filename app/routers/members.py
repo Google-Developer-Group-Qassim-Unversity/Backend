@@ -1,6 +1,7 @@
 from datetime import date
 from fastapi import APIRouter, HTTPException, status, Depends
 from app.DB import members as member_queries, logs as logs_queries
+from app.DB.schema import RoleType
 from ..DB.main import SessionLocal
 from app.routers.models import (
     Member_model,
@@ -9,8 +10,7 @@ from app.routers.models import (
     CreatedMemberModel,
     manual_members,
     MemberWithRole_model,
-    RoleEnum,
-    MemberUpdate_model,
+    MemberUpdateModel,
 )
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.config import config
@@ -43,7 +43,7 @@ router = APIRouter()
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
 def get_current_member(
-    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
+    credentials: HTTPAuthorizationCredentials = Depends(authenticated_guard),
 ):
     uni_id = get_uni_id_from_credentials(credentials)
     with SessionLocal() as session:
@@ -63,8 +63,8 @@ def get_current_member(
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
 def update_current_member(
-    updates: MemberUpdate_model,
-    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
+    updates: MemberUpdateModel,
+    credentials: HTTPAuthorizationCredentials = Depends(authenticated_guard),
 ):
     uni_id = get_uni_id_from_credentials(credentials)
     with SessionLocal() as session:
@@ -145,12 +145,6 @@ def get_member_by_id(
     "/",
     status_code=status.HTTP_201_CREATED,
     response_model=CreatedMemberModel,
-    responses={
-        403: {
-            "model": NotFoundResponse,
-            "description": "You can only create your own member profile",
-        }
-    },
 )
 def create_member(
     credentials: HTTPAuthorizationCredentials = Depends(authenticated_guard),
@@ -211,7 +205,7 @@ def get_member_roles(
 )
 def update_member_roles(
     member_id: int,
-    new_role: RoleEnum,
+    new_role: RoleType,
     credentials: HTTPAuthorizationCredentials = Depends(super_admin_guard),
 ):
     with SessionLocal() as session:
@@ -221,7 +215,7 @@ def update_member_roles(
                 log_file, f"Updating role for member_id {member_id} to {new_role.value}"
             )
             updated_member = member_queries.update_member_role(
-                session, member_id, new_role.value
+                session, member_id, new_role=new_role
             )
             if not updated_member:
                 raise HTTPException(

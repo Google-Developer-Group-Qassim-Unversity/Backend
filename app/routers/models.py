@@ -3,31 +3,17 @@ from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
 from enum import Enum
-
-
-class RoleEnum(str, Enum):
-    admin = "admin"
-    admin_points = "admin_points"
-    super_admin = "super_admin"
-    none = "none"
-
+from app.DB.schema import EventsLocationType, MembersGender, RoleType
 
 class BaseClassModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
-
-class LocationTypeEnum(str, Enum):
-    online = "online"
-    on_site = "on-site"
-    none = "none"
-    hidden = "hidden"
 
 
 class Events_model(BaseClassModel):
     id: int | None = None
     name: str
     description: str | None = None
-    location_type: LocationTypeEnum
+    location_type: EventsLocationType
     location: str
     start_datetime: datetime
     end_datetime: datetime
@@ -93,7 +79,7 @@ class Member_model(BaseClassModel):
     email: EmailStr
     phone_number: str | None
     uni_id: str
-    gender: Literal["Male", "Female"]
+    gender: MembersGender 
     uni_level: int
     uni_college: str
     created_at: datetime | None = None
@@ -124,7 +110,7 @@ class CreatedMemberModel(BaseClassModel):
 
 
 class MemberWithRole_model(Member_model):
-    role: RoleEnum
+    role: RoleType
 
 
 class Get_Submission_model(BaseClassModel):
@@ -337,7 +323,7 @@ class ManualCertificateRequest(BaseModel):
         return v
 
 
-class MemberUpdate_model(BaseModel):
+class MemberUpdateModel(BaseModel):
     name: str | None = None
     email: EmailStr | None = None
     phone_number: str | None = None

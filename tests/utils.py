@@ -24,6 +24,14 @@ def assert_not_found(response: Response):
             f"\tResponse body: {response.text}",
         ])
 
+def assert_unprocessable(response: Response):
+    assert response.status_code == 422, "\n".join([
+            "\nAssertion failed:",
+            f"\tExpected: 422 Unprocessable Content",
+            f"\tActual:   {response.status_code} {HTTPStatus(response.status_code).name}",
+            f"\tResponse body: {response.text}",
+        ])
+
 def assert_existing(response: Response):
     assert response.status_code == 409, "\n".join([
             "\nAssertion failed:",
