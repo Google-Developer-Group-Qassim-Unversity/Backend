@@ -76,6 +76,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=1.16.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.9",
 ]
@@ -99,11 +100,26 @@ source = ["app"]
 show_missing = true
 skip_covered = false
 
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+show_error_codes = true
+
 [tool.ruff]
 # according to https://docs.astral.sh/ruff/settings/#line-length, default is 88 max is 320.
 line-length = 120
 fix = true # automatically fix lint issues when possible
 show-fixes = true
+
+[tool.ruff.format]
+skip-magic-trailing-comma = true
+
+
+
+[tool.ruff.lint]
+select = ["FAST", "TID252"]
+
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = [
