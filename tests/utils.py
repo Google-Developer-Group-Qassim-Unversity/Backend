@@ -15,3 +15,19 @@ def assert_forbidden(response: Response):
             f"\tActual:   {response.status_code} {HTTPStatus(response.status_code).name}",
             f"\tResponse body: {response.text}",
         ])
+
+def assert_not_found(response: Response):
+    assert response.status_code == 404, "\n".join([
+            "\nAssertion failed:",
+            f"\tExpected: 404 Not Found",
+            f"\tActual:   {response.status_code} {HTTPStatus(response.status_code).name}",
+            f"\tResponse body: {response.text}",
+        ])
+
+def assert_existing(response: Response):
+    assert response.status_code == 409, "\n".join([
+            "\nAssertion failed:",
+            f"\tExpected: 409 Conflict",
+            f"\tActual:   {response.status_code} {HTTPStatus(response.status_code).name}",
+            f"\tResponse body: {response.text}",
+        ])

@@ -29,7 +29,7 @@ def write_log_title(file: Path, title: str):
     write_log(file, f"\033[34m{'-'*20}\033[0m[{title}]\033[34m{'-'*20}\033[0m")
     write_log(file, "\n\033[33mLog\033[0m 🧾:")
 
-def write_log_json(file: Path, json: str):
+def write_log_json(file: Path, json: str | dict):
     write_log(file, "\n\033[33mJSON Body\033[0m 📦:")
     file = file.with_name("body.json")
     

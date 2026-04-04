@@ -73,82 +73,6 @@ def create_modification(
     return new_modification
 
 
-# absence was remove @jan 23 2026
-# def create_absence(session: Session, member_log_id: int, date):
-# 	new_absence = Absence(
-# 		member_log_id=member_log_id,
-# 		date=date
-# 	)
-# 	session.add(new_absence)
-# 	session.flush()
-# 	return new_absence
-
-
-def get_expanded_members_logs(session: Session):
-    # absence was remove @jan 23 2026
-    # Abs = aliased(Absence)
-    stmt = (
-        session.query(
-            Logs.id.label("log_id"),
-            Events.id.label("event_id"),
-            Events.name.label("event_name"),
-            Events.start_datetime,
-            Events.end_datetime,
-            Events.location_type,
-            Events.location,
-            Events.description,
-            Actions.action_name,
-            Actions.action_type,
-            func.sum(
-                case((Modifications.type == "bonus", Modifications.value), else_=0)
-            ).label("bonus"),
-            func.sum(
-                case((Modifications.type == "discount", Modifications.value), else_=0)
-            ).label("discount"),
-            func.JSON_ARRAYAGG(
-                func.JSON_OBJECT(
-                    "id",
-                    Members.id,
-                    "name",
-                    Members.name,
-                    "uni_id",
-                    Members.uni_id,
-                    # 'absence_date', Abs.date
-                )
-            ).label("members"),
-        )
-        .join(Events, Logs.event_id == Events.id)
-        .join(Actions, Logs.action_id == Actions.id)
-        .join(MembersLogs, Logs.id == MembersLogs.log_id)
-        .join(Members, MembersLogs.member_id == Members.id)
-        # .outerjoin(Abs, MembersLogs.id == Abs.member_log_id)
-        .outerjoin(Modifications, Logs.id == Modifications.log_id)
-        .filter(Actions.action_type.in_(["member", "composite"]))
-        .group_by(Logs.id)
-    )
-
-    return [
-        {
-            **row._asdict(),
-            "members": loads(row.members),
-            "bonus": row.bonus / len(loads(row.members)) if row.bonus else 0,
-            "discount": row.discount / len(loads(row.members)) if row.discount else 0,
-        }
-        for row in stmt.all()
-    ]
-
-
-def get_expanded_department_logs(session: Session):
-    query = (
-        session.query(Logs.id, Departments.name)
-        .join(Actions, Actions.id == Logs.action_id)
-        .join(DepartmentsLogs, DepartmentsLogs.log_id == Logs.id)
-        .join(Departments, Departments.id == DepartmentsLogs.department_id)
-        .filter(Actions.action_type == "composite")
-    )
-
-    return query.all()
-
 
 def get_attendable_logs(session: Session, event_id: int):
     ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89]
@@ -366,12 +290,6 @@ def delete_modification(session: Session, modification_id: int):
     session.flush()
     return True
 
-
-def get_department_ids_by_log_id(session: Session, log_id: int):
-    """Get all department IDs associated with a log."""
-    stmt = select(DepartmentsLogs.department_id).where(DepartmentsLogs.log_id == log_id)
-    department_ids = session.scalars(stmt).all()
-    return list(department_ids)
 
 
 def get_custom_member_points_by_event(session: Session, event_id: int):

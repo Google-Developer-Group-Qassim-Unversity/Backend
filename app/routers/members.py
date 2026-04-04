@@ -6,7 +6,7 @@ from app.routers.models import (
     Member_model,
     NotFoundResponse,
     MemberHistory_model,
-    MeberCreate_model,
+    CreatedMemberModel,
     manual_members,
     MemberWithRole_model,
     RoleEnum,
@@ -17,6 +17,7 @@ from app.config import config
 import json
 from app.helpers import (
     admin_guard,
+    authenticated_guard,
     get_uni_id_from_credentials,
     credentials_to_member_model,
     get_pydantic_members,
@@ -143,7 +144,7 @@ def get_member_by_id(
 @router.post(
     "/",
     status_code=status.HTTP_201_CREATED,
-    response_model=MeberCreate_model,
+    response_model=CreatedMemberModel,
     responses={
         403: {
             "model": NotFoundResponse,
@@ -152,11 +153,11 @@ def get_member_by_id(
     },
 )
 def create_member(
-    credentials: HTTPAuthorizationCredentials = Depends(config.CLERK_GUARD),
+    credentials: HTTPAuthorizationCredentials = Depends(authenticated_guard),
 ):
     with SessionLocal() as session:
         log_file = create_log_file("create member")
-        member = None
+        member: Member_model | None = None
         try:
             member = credentials_to_member_model(credentials)
             write_log_title(log_file, f"Creating Member {member.uni_id}")
@@ -173,16 +174,6 @@ def create_member(
                     log_file,
                     f"Member with uni_id {member.uni_id} already exists with ID {new_member.id}, updated data successfully",
                 )
-            # === Special case starting from 2026-02-08. giving members 10 points for creating an account ===
-            SIGNUP_LOG_ID = 208
-            write_log(
-                log_file,
-                f"Giving points for creating account, on log_id: {SIGNUP_LOG_ID}",
-            )
-            new_log = logs_queries.create_member_log(
-                session, new_member.id, SIGNUP_LOG_ID
-            )
-            write_log(log_file, f"Points given successfully for creating account")
             session.commit()
             return {"member": new_member, "already_exists": already_exist}
         except Exception as e:
@@ -194,7 +185,7 @@ def create_member(
                 detail="An error occurred while creating the member",
             )
         finally:
-            if new_member is not None:
+            if new_member is not None and member is not None:
                 write_log_json(log_file, member.model_dump())
                 write_log(
                     log_file,
@@ -239,6 +230,8 @@ def update_member_roles(
                 )
             session.commit()
             return updated_member
+        except HTTPException:
+            raise
         except Exception as e:
             session.rollback()
             write_log_exception(log_file, e)
@@ -322,18 +315,6 @@ def create_member_manual(members_sheet: manual_members):
             detail="An error occurred while creating members",
         )
 
-
-# OLD, needs auth and correct update_member parameters (member model not id, and is_authenticated)
-# @router.put("/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_model, responses={404: {"model": NotFoundResponse, "description": "Member not found"}, 409: {"model": NotFoundResponse, "description": "Member already exists"}})
-# def update_member(member_id: int, member: Member_model):
-#     with SessionLocal() as session:
-#         updated_member = member_queries.update_member(session, member_id, member)
-#         if updated_member is None:
-#             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} not found")
-#         if updated_member == -1:
-#             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"member with the uni_id '{member.uni_id}' already exists")
-#         session.commit()
-#     return updated_member
 
 
 @router.get("/history", status_code=status.HTTP_200_OK)

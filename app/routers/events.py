@@ -150,16 +150,6 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
                     form_type=event_data.form_type,
                 ),
             )
-
-            if new_form is None:
-                write_log_exception(
-                    log_file,
-                    f"HTTP 409: Form with event_id {new_event.id} already exists",
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Form with event_id {new_event.id} already exists",
-                )
             write_log(log_file, f"Created Form [{new_form.id}] for Event [{new_event.id}]")
 
             # 3. create logs for event

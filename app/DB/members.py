@@ -70,6 +70,7 @@ def update_member(
 ):
     existing_member = session.scalar(select(Members).where(Members.id == member.id))
     if not existing_member:
+        # TODO: raise exception instead of returning None, and update all places that call this function to handle the exception
         return None
     print(f"Updating member: {existing_member.name}")
     existing_member.name = member.name

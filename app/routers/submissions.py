@@ -12,7 +12,6 @@ from app.routers.models import Get_Submission_model, submission_exists_model, Me
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request as GoogleRequest
-import os
 
 router = APIRouter()
 
@@ -69,15 +68,7 @@ def accept_submission(submissions: list[submission_accept_model], credentials: H
         except Exception as e:
             raise
 
-# @router.post("/commit", status_code=status.HTTP_201_OK)
-# def commit_submission(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
-#     with SessionLocal() as session:
-#         try:
 
-#             session.commit()
-#             return {"status": "success"}
-#         except Exception as e:
-#             raise
 # ====================== Google Forms API ======================
 
 # ==============================================================

@@ -101,6 +101,10 @@ def is_super_admin(credentials) -> bool:
     return metadata.get("is_super_admin", False)
 
 
+def authenticated_guard(credentials=Depends(config.CLERK_GUARD)):
+    return credentials
+
+
 def admin_guard(credentials=Depends(config.CLERK_GUARD)):
     print("🔒 User authenticated, checking admin privileges...")
     if not is_admin(credentials):

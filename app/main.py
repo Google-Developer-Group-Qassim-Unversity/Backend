@@ -4,8 +4,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from app.routers import (
     attendance, certificates, upload, members, events, departments,
-     action, complex_events, custom, edit,
-     auth, card, forms, submissions,
+     action, custom, 
+     forms, submissions,
      submissions_manual, points, acceptance
 )
 from app.config import config
@@ -34,13 +34,9 @@ app.include_router(certificates.router, prefix="/certificates", tags=["certifica
 app.include_router(departments.router, prefix="/departments", tags=["departments"])
 app.include_router(action.router, prefix="/actions", tags=["actions"])
 app.include_router(custom.router, prefix="/custom", tags=["custom"])
-app.include_router(edit.router, prefix="/edit", tags=["edit"])
-app.include_router(auth.router, tags=["auth"])
-app.include_router(card.router, prefix="/card", tags=["Card"])
 app.include_router(forms.router, prefix="/forms", tags=["Forms"])
 app.include_router(submissions.router, prefix="/submissions", tags=["Submissions"])
 app.include_router(submissions_manual.router, prefix="/submissions_manual", tags=["Submissions Manual"])
-app.include_router(complex_events.router, prefix="/events", tags=["complex_events"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(acceptance.router, prefix="/acceptance", tags=["acceptance"])
 

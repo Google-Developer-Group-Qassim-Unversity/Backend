@@ -119,7 +119,7 @@ class Member_model(BaseClassModel):
     #     return value
 
 
-class MeberCreate_model(BaseClassModel):
+class CreatedMemberModel(BaseClassModel):
     member: Member_model
     already_exists: bool
 

@@ -10,9 +10,13 @@ Fixture chain (scope):
         |
         ├── db_session (function) ─── per-test session with rollback
         |
-        └── client (function) ─── FastAPI TestClient
+        └── client (function) ─── FastAPI TestClient (no auth overrides → 403 on guarded endpoints)
                 |
-            admin_client (function) ─── bypasses admin_guard
+                └── clerk_client (function) ─── bypasses authenticated_guard (Clerk credentials with member metadata)
+                        |
+                        ├── admin_client (function) ─── also bypasses admin_guard
+                        |
+                        └── super_admin_client (function) ─── also bypasses super_admin_guard
 """
 
 import os
@@ -28,6 +32,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from fastapi.testclient import TestClient
 from fastapi.security import HTTPAuthorizationCredentials
+from fastapi_clerk_auth import (
+    HTTPAuthorizationCredentials as ClerkHTTPAuthorizationCredentials,
+)
+# A bunch more import are done insdie fixtures to avoid the problimatic pattern in the code which evaluates sessions and envirnoment varibles at import time,
+# so we have to delay importing those modules until after the environment variables are set and the database is ready, otherwise we will get errors about missing env vars
 
 # Set environment variables BEFORE importing app
 # These must be set before any app modules are imported
@@ -114,6 +123,8 @@ def engine(database_url):
 def seed_core_data(engine):
     from app.DB.schema import Actions, Departments, ActionsActionType, DepartmentsType
 
+    # CAUTION: Don't update default unless you know what you're doing
+    # a lot of tests assume these default values and changing them might break the tests
     with Session(engine) as session:
         session.add_all([
             Actions(
@@ -169,8 +180,51 @@ def client(engine, seed_core_data) -> Generator:
     connection.close()
 
 
+FAKE_CLERK_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
+    scheme="Bearer",
+    credentials="fake-token",
+    decoded={
+        "metadata": {
+            "uni_id": "123456789",
+            "fullArabicName": "Test Member",
+            "saudiPhone": "0501234567",
+            "gender": "Male",
+            "uniLevel": 4,
+            "uniCollege": "Engineering",
+            "personalEmail": "test@example.com",
+        }
+    },
+)
+
+
 @pytest.fixture(scope="function")
-def admin_client(client) -> Generator:
+def clerk_client(client) -> Generator:
+    from app.main import app
+    from app.helpers import authenticated_guard
+
+    app.dependency_overrides[authenticated_guard] = lambda: FAKE_CLERK_CREDENTIALS
+    yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture(scope="function")
+def super_admin_client(clerk_client) -> Generator:
+    from app.main import app
+    from app.helpers import super_admin_guard
+
+    def override_super_admin_guard():
+        return HTTPAuthorizationCredentials(
+            scheme="Bearer",
+            credentials="fake-token",
+        )
+
+    app.dependency_overrides[super_admin_guard] = override_super_admin_guard
+    yield clerk_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture(scope="function")
+def admin_client(clerk_client) -> Generator:
     from app.main import app
     from app.helpers import admin_guard
 
@@ -181,7 +235,7 @@ def admin_client(client) -> Generator:
         )
 
     app.dependency_overrides[admin_guard] = override_admin_guard
-    yield client
+    yield clerk_client
     app.dependency_overrides.clear()
 
 
