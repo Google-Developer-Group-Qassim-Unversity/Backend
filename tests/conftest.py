@@ -28,7 +28,7 @@ from testcontainers.mysql import MySqlContainer
 from sqlalchemy import create_engine
 from alembic.config import Config
 from alembic import command
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from fastapi.testclient import TestClient
 from fastapi.security import HTTPAuthorizationCredentials
@@ -66,7 +66,7 @@ def database_url():
     existing_url = os.getenv("DATABASE_URL")
     
     if existing_url:
-        print(f"[conftest] Using provided DATABASE_URL")
+        print("[conftest] Using provided DATABASE_URL")
         yield existing_url
         return
     

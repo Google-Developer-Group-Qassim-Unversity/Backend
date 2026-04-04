@@ -10,8 +10,8 @@ from app.DB import (
 )
 from app.DB.main import SessionLocal
 from app.routers.models import Events_model, BaseClassModel
-from app.helpers import get_pydantic_members, admin_guard
-from datetime import timedelta, datetime
+from app.helpers import admin_guard
+from datetime import datetime
 from app.routers.logging import (
     write_log,
     write_log_traceback,
@@ -21,7 +21,6 @@ from app.routers.logging import (
     write_log_title,
 )
 from app.DB.schema import EventsLocationType
-import json
 
 router = APIRouter()
 
@@ -147,7 +146,7 @@ def give_department_custom_points(
                             detail=f"Action with id {point_detail.action_id} not found",
                         )
                 else:
-                    write_log(log_file, f"No action id provided, checking name")
+                    write_log(log_file, "No action id provided, checking name")
                     if point_detail.action_name:
                         write_log(
                             log_file,
@@ -162,7 +161,7 @@ def give_department_custom_points(
                     else:
                         write_log(
                             log_file,
-                            f"No action name provided, inferring from points value",
+                            "No action name provided, inferring from points value",
                         )
                         if point_detail.points > 0:
                             action = actions_queries.get_bonus_action(session)
@@ -340,7 +339,7 @@ def update_department_custom_points(
                     )
             else:
                 write_log(
-                    log_file, f"No action id provided, inferring from points value"
+                    log_file, "No action id provided, inferring from points value"
                 )
                 if body.points > 0:
                     action = actions_queries.get_bonus_action(session)
@@ -390,7 +389,7 @@ def update_department_custom_points(
                         session, modification.id, mod_type, mod_value
                     )
                 else:
-                    write_log(log_file, f"No modification found, creating new one")
+                    write_log(log_file, "No modification found, creating new one")
                     log_queries.create_modification(
                         session, log_id, mod_type, mod_value
                     )
@@ -495,7 +494,7 @@ def give_member_custom_points(
                             detail=f"Action with id {point_detail.action_id} not found",
                         )
                 else:
-                    write_log(log_file, f"No action id provided, checking name")
+                    write_log(log_file, "No action id provided, checking name")
                     if point_detail.action_name:
                         write_log(
                             log_file,
@@ -510,7 +509,7 @@ def give_member_custom_points(
                     else:
                         write_log(
                             log_file,
-                            f"No action name provided, inferring from points value",
+                            "No action name provided, inferring from points value",
                         )
                         if point_detail.points > 0:
                             action = actions_queries.get_bonus_action(session)
@@ -782,7 +781,7 @@ def update_member_custom_points(
                     )
             else:
                 write_log(
-                    log_file, f"No action id provided, inferring from points value"
+                    log_file, "No action id provided, inferring from points value"
                 )
                 if body.points > 0:
                     action = actions_queries.get_bonus_action(session)
@@ -826,7 +825,7 @@ def update_member_custom_points(
                         session, modification.id, mod_type, mod_value
                     )
                 else:
-                    write_log(log_file, f"No modification found, creating new one")
+                    write_log(log_file, "No modification found, creating new one")
                     log_queries.create_modification(
                         session, log_id, mod_type, mod_value
                     )

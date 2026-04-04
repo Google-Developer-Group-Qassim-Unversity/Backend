@@ -2,7 +2,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from app.DB.schema import Actions, Members, MembersLogs, Logs, Events, Role, RoleType
-from ..routers.models import Member_model
+from app.exceptions import MemberNotFound
+from app.routers.models import Member_model
 from datetime import datetime
 
 
@@ -70,8 +71,7 @@ def update_member(
 ):
     existing_member = session.scalar(select(Members).where(Members.id == member.id))
     if not existing_member:
-        # TODO: raise exception instead of returning None, and update all places that call this function to handle the exception
-        return None
+        raise MemberNotFound(member.id)
     print(f"Updating member: {existing_member.name}")
     existing_member.name = member.name
     existing_member.email = member.email
@@ -176,7 +176,7 @@ def update_member_by_uni_id(
 ) -> Members | None:
     member = session.scalar(select(Members).where(Members.uni_id == uni_id))
     if not member:
-        return None
+        raise MemberNotFound(uni_id)
 
     for key, value in updates.items():
         if value is not None and hasattr(member, key):

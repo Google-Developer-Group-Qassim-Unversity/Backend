@@ -8,7 +8,7 @@ from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import admin_guard, get_uni_id_from_credentials
 from app.config import config
 from app.routers.logging import create_log_file, write_log, write_log_exception, write_log_json, write_log_title, write_log_traceback
-from app.routers.models import Get_Submission_model, submission_exists_model, Member_model, submission_accept_model
+from app.routers.models import submission_exists_model, submission_accept_model
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request as GoogleRequest
@@ -27,7 +27,7 @@ def create_submission(form_id: int, submission_type: Literal['none', 'partial'],
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission already exists")
             session.commit()
             return new_submission
-        except Exception as e:
+        except Exception:
             session.rollback()
             raise
 
@@ -52,7 +52,7 @@ def check_submission_exists(form_id: int, credentials: HTTPAuthorizationCredenti
             if submission_type == 'partial':
                 return {'submission_status': 'partial', "submission_timestamp": submission.submitted_at}
             return {'submission_status': True, "submission_timestamp": submission.submitted_at}
-        except Exception as e:
+        except Exception:
             raise
 
 @router.put("/accept", status_code=status.HTTP_200_OK)
@@ -65,7 +65,7 @@ def accept_submission(submissions: list[submission_accept_model], credentials: H
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission not found")
             session.commit()
             return {"status": "success"}
-        except Exception as e:
+        except Exception:
             raise
 
 
@@ -97,7 +97,7 @@ def fetch_schema(google_form_id: str):
             raise ValueError(f"Form not found in database for google_form_id: {google_form_id}")
         
         if not form.google_refresh_token:
-            raise ValueError(f"Form does not have a refresh token")
+            raise ValueError("Form does not have a refresh token")
         
         # Get Google credentials
         credentials = get_google_credentials(form.google_refresh_token)

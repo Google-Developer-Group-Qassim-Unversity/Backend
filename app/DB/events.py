@@ -1,10 +1,9 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from .schema import Events, Forms, t_open_events, Logs, DepartmentsLogs, Actions, Departments
+from .schema import Events, t_open_events, Logs, DepartmentsLogs, Actions, Departments
 from ..routers.models import Events_model
 from datetime import datetime
-from fastapi import HTTPException, status   
 
 def get_events(session: Session):
     statement = select(Events)

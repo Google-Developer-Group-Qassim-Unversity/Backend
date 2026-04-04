@@ -1,12 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi_clerk_auth import HTTPAuthorizationCredentials
+from fastapi import APIRouter, HTTPException, status
 from app.DB import departments as departments_queries
 from ..DB.main import SessionLocal
 from app.routers.models import Department_model, NotFoundResponse
-from app.config import config
-from app.helpers import admin_guard
-from app.helpers import get_uni_id_from_credentials
-import json
 router = APIRouter()
 
 @router.get("", status_code=status.HTTP_200_OK, response_model=list[Department_model])

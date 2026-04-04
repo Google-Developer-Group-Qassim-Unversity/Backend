@@ -20,7 +20,7 @@ def create_form(session: Session, form: Form_model):
         session.add(new_form)
         session.flush()
         return new_form
-    except IntegrityError as e:
+    except IntegrityError:
         raise FormConflict(form.event_id)
 
 def update_form(session: Session, form_id: int, form: Form_model):

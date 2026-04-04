@@ -2,7 +2,6 @@
 Basic health check tests to verify testing infrastructure works.
 """
 
-import pytest
 from fastapi.testclient import TestClient
 
 

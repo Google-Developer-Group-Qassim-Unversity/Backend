@@ -1,4 +1,5 @@
-import sys, argparse
+import sys
+import argparse
 from pathlib import Path
 
 script_dir = Path(__file__).resolve().parent

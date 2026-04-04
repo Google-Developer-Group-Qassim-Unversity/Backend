@@ -1,12 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from pymysql import IntegrityError
 from app.DB import (
     events as events_queries,
     forms as form_queries,
     submissions as submission_queries,
     logs as log_queries,
-    members as member_queries,
 )
 from ..DB.main import SessionLocal
 from app.routers.models import (
@@ -473,7 +471,7 @@ def get_submissions_by_event(event_id: int, credentials: HTTPAuthorizationCreden
                 submissions.append(submission)
 
             return submissions
-        except Exception as e:
+        except Exception:
             raise
 
 

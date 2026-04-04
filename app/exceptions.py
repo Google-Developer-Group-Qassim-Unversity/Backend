@@ -1,6 +1,4 @@
 from fastapi import HTTPException
-from fastapi import exceptions
-from app.routers.logging import print_summarized_traceback
 
 class KnownHttpException(HTTPException):
     pass
@@ -20,3 +18,7 @@ class FormConflict(Conflict):
 class ActionNotFound(NotFound):
     def __init__(self, id: str | int):
         super().__init__("Action", id)
+
+class MemberNotFound(NotFound):
+    def __init__(self, id: str | int):
+        super().__init__("Member", id)

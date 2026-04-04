@@ -3,7 +3,6 @@ from app.DB.schema import (
     Events,
     Actions,
     DepartmentsLogs,
-    Departments,
     Logs,
     Members,
     MembersLogs,

@@ -1,12 +1,11 @@
 from datetime import date
 from fastapi import APIRouter, HTTPException, status, Depends
-from app.DB import members as member_queries, logs as logs_queries
+from app.DB import members as member_queries
 from app.DB.schema import RoleType
 from ..DB.main import SessionLocal
 from app.routers.models import (
     Member_model,
     NotFoundResponse,
-    MemberHistory_model,
     CreatedMemberModel,
     manual_members,
     MemberWithRole_model,
@@ -14,7 +13,6 @@ from app.routers.models import (
 )
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.config import config
-import json
 from app.helpers import (
     admin_guard,
     authenticated_guard,
@@ -303,7 +301,7 @@ def create_member_manual(members_sheet: manual_members):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.args[0]
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while creating members",

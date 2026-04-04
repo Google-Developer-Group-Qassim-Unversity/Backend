@@ -4,7 +4,6 @@ from traceback import extract_tb, format_exception
 from datetime import datetime
 from pathlib import Path
 from json import dump, dumps
-from pprint import pprint
 from app.config import config
 
 

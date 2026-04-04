@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Optional
 from fastapi import APIRouter, status, HTTPException, Query
 from app.DB import actions as actions_queries
 from ..DB.main import SessionLocal
