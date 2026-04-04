@@ -15,7 +15,7 @@ def create_form(session: Session, form: Form_model):
             google_refresh_token=form.google_refresh_token,
             google_watch_id=form.google_watch_id,
             google_responders_url=form.google_responders_url,
-            event_id=form.event_id
+            event_id=form.event_id,
         )
         session.add(new_form)
         session.flush()
@@ -23,23 +23,21 @@ def create_form(session: Session, form: Form_model):
     except IntegrityError:
         raise FormConflict(form.event_id)
 
+
 def update_form(session: Session, form_id: int, form: Form_model):
     """Update an existing form"""
     existing_form = session.scalar(select(Forms).where(Forms.id == form_id))
     if not existing_form:
         return None
-    
+
     # Check if updating event_id would violate unique constraint
     if form.event_id != existing_form.event_id:
         existing_form_with_event = session.scalar(
-            select(Forms).where(
-                Forms.event_id == form.event_id,
-                Forms.id != form_id
-            )
+            select(Forms).where(Forms.event_id == form.event_id, Forms.id != form_id)
         )
         if existing_form_with_event:
             return -1  # Conflict: event_id already exists
-    
+
     print(f"Updating form: {existing_form.id}")
     existing_form.google_form_id = form.google_form_id
     existing_form.google_refresh_token = form.google_refresh_token
@@ -47,10 +45,11 @@ def update_form(session: Session, form_id: int, form: Form_model):
     existing_form.google_responders_url = form.google_responders_url
     existing_form.form_type = form.form_type
     existing_form.event_id = form.event_id
-    
+
     session.flush()
     print(f"Updated form: {existing_form.id}")
     return existing_form
+
 
 def get_forms(session: Session):
     """Get all forms from the database"""
@@ -72,11 +71,11 @@ def get_form_by_event_id(session: Session, event_id: int):
     form = session.scalars(statement).first()
     return form
 
+
 def get_form_by_google_form_id(session: Session, google_form_id: str):
     statement = select(Forms).where(Forms.google_form_id == google_form_id)
     form = session.scalars(statement).first()
     return form
-
 
 
 def delete_form(session: Session, form_id: int):
@@ -84,8 +83,7 @@ def delete_form(session: Session, form_id: int):
     form = session.scalar(select(Forms).where(Forms.id == form_id))
     if not form:
         return None
-    
+
     session.delete(form)
     session.flush()
     return form
-

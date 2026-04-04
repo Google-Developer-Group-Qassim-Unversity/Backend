@@ -5,6 +5,7 @@ from pydantic.types import JsonValue
 from enum import Enum
 from app.DB.schema import EventsLocationType, MembersGender, RoleType
 
+
 class BaseClassModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -79,7 +80,7 @@ class Member_model(BaseClassModel):
     email: EmailStr
     phone_number: str | None
     uni_id: str
-    gender: MembersGender 
+    gender: MembersGender
     uni_level: int
     uni_college: str
     created_at: datetime | None = None
@@ -196,7 +197,7 @@ class ReorderActions_model(BaseClassModel):
 
 
 class Categorized_action(BaseClassModel):
-    composite_actions: List[conlist(Action_model, min_length=2, max_length=2)] # pyright: ignore[reportInvalidTypeForm]
+    composite_actions: List[conlist(Action_model, min_length=2, max_length=2)]  # pyright: ignore[reportInvalidTypeForm]
     department_actions: List[Action_model]
     member_actions: List[Action_model]
     custom_actions: List[Action_model]
@@ -240,9 +241,7 @@ class CompositeEventData(Complex_EventData):
     def file_or_url(cls, v: str):
         if v.startswith("https://"):
             if "docs.google.com/spreadsheets" not in v and not v.endswith("output=csv"):
-                raise ValueError(
-                    "The Url must be a Google Sheets link with 'output=csv' parameter"
-                )
+                raise ValueError("The Url must be a Google Sheets link with 'output=csv' parameter")
             else:
                 return HttpUrl(v)
         elif v.endswith(".xlsx") or v.endswith(".csv"):

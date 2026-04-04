@@ -7,7 +7,8 @@ def get_members_points_semester(session: Session, start_date: str, end_date: str
     if member_id:
         params["member_id"] = member_id
 
-    query = """
+    query = (
+        """
         SELECT
             m.id AS member_id,
             m.name AS member_name,
@@ -25,9 +26,12 @@ def get_members_points_semester(session: Session, start_date: str, end_date: str
             FROM modifications mo
             GROUP BY mo.log_id
         ) mods ON mods.log_id = l.id
-    """ + ("WHERE m.id = :member_id\n    " if member_id else "") + """GROUP BY m.id, m.name
+    """
+        + ("WHERE m.id = :member_id\n    " if member_id else "")
+        + """GROUP BY m.id, m.name
         ORDER BY total_points DESC
     """
+    )
     result = session.execute(text(query), params)
 
     if member_id:
@@ -80,7 +84,8 @@ def get_departments_points_semester(session: Session, start_date: str, end_date:
     if department_id:
         params["department_id"] = department_id
 
-    query = """
+    query = (
+        """
         SELECT
             d.id AS department_id,
             d.name AS department_name,
@@ -99,9 +104,12 @@ def get_departments_points_semester(session: Session, start_date: str, end_date:
             FROM modifications
             GROUP BY modifications.log_id
         ) m ON m.log_id = l.id
-    """ + ("WHERE d.id = :department_id\n    " if department_id else "") + """GROUP BY d.id, d.name, d.type, d.ar_name
+    """
+        + ("WHERE d.id = :department_id\n    " if department_id else "")
+        + """GROUP BY d.id, d.name, d.type, d.ar_name
         ORDER BY total_points DESC
     """
+    )
     result = session.execute(text(query), params)
 
     if department_id:
@@ -146,5 +154,7 @@ def get_department_points_history_semester(session: Session, department_id: int,
         GROUP BY dl.department_id, d.name, d.ar_name, l.event_id, e.name, e.start_datetime, e.end_datetime, l.action_id, a.action_name, a.ar_action_name
         ORDER BY e.start_datetime DESC
     """)
-    result = session.execute(statement, {"department_id": department_id, "start_date": start_date, "end_date": end_date})
+    result = session.execute(
+        statement, {"department_id": department_id, "start_date": start_date, "end_date": end_date}
+    )
     return [dict(row._mapping) for row in result]

@@ -21,9 +21,9 @@ def get_action_by_id(session: Session, action_id: int):
 def create_action(session: Session, name: str, points: int, type: str):
     max_order_stmt = select(func.max(Actions.order))
     max_order = session.scalar(max_order_stmt) or -1
-    
-    is_hidden = (type == "bonus")
-    
+
+    is_hidden = type == "bonus"
+
     new_action = Actions(
         action_name=name,
         points=points,

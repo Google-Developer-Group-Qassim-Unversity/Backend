@@ -15,7 +15,12 @@ def get_all_forms():
     return forms
 
 
-@router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=Form_model, responses={404: {"model": NotFoundResponse, "description": "Form not found"}})
+@router.get(
+    "/{form_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=Form_model,
+    responses={404: {"model": NotFoundResponse, "description": "Form not found"}},
+)
 def get_form_by_id(form_id: int):
     with SessionLocal() as session:
         form = form_queries.get_form_by_id(session, form_id)
@@ -25,7 +30,7 @@ def get_form_by_id(form_id: int):
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=Form_model)
-def create_form(form: Form_model, credentials = Depends(admin_guard)):
+def create_form(form: Form_model, credentials=Depends(admin_guard)):
     with LogFile("create form") as log, SessionLocal() as session:
         try:
             write_log_title("Creating New Form")
@@ -39,13 +44,23 @@ def create_form(form: Form_model, credentials = Depends(admin_guard)):
             session.rollback()
             write_log_exception(e)
             write_log_traceback()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while creating the form")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while creating the form"
+            )
         finally:
             write_log_json_to(log.file, form.model_dump())
 
 
-@router.put("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=Form_model, responses={404: {"model": NotFoundResponse, "description": "Form not found"}, 409: {"model": NotFoundResponse, "description": "Form with event_id already exists"}})
-def update_form(form_id: int, form: Form_model, credentials = Depends(admin_guard)):
+@router.put(
+    "/{form_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=Form_model,
+    responses={
+        404: {"model": NotFoundResponse, "description": "Form not found"},
+        409: {"model": NotFoundResponse, "description": "Form with event_id already exists"},
+    },
+)
+def update_form(form_id: int, form: Form_model, credentials=Depends(admin_guard)):
     with LogFile("update form") as log, SessionLocal() as session:
         try:
             write_log_title(f"Updating Form {form_id}")
@@ -53,7 +68,9 @@ def update_form(form_id: int, form: Form_model, credentials = Depends(admin_guar
             if updated_form is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Form with id {form_id} not found")
             if updated_form == -1:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Form with event_id {form.event_id} already exists")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=f"Form with event_id {form.event_id} already exists"
+                )
             session.commit()
             return updated_form
         except HTTPException:
@@ -63,13 +80,20 @@ def update_form(form_id: int, form: Form_model, credentials = Depends(admin_guar
             session.rollback()
             write_log_exception(e)
             write_log_traceback()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while updating the form")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while updating the form"
+            )
         finally:
             write_log_json_to(log.file, form.model_dump())
 
 
-@router.delete("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=Form_model, responses={404: {"model": NotFoundResponse, "description": "Form not found"}})
-def delete_form(form_id: int, credentials = Depends(admin_guard)):
+@router.delete(
+    "/{form_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=Form_model,
+    responses={404: {"model": NotFoundResponse, "description": "Form not found"}},
+)
+def delete_form(form_id: int, credentials=Depends(admin_guard)):
     with LogFile("delete form"), SessionLocal() as session:
         try:
             write_log_title(f"Deleting Form {form_id}")
@@ -85,4 +109,6 @@ def delete_form(form_id: int, credentials = Depends(admin_guard)):
             session.rollback()
             write_log_exception(e)
             write_log_traceback()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while deleting the form")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while deleting the form"
+            )

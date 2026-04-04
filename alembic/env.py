@@ -18,19 +18,20 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 VIEWS = {
-    'departments_points',
-    'departments_points_history',
-    'forms_submissions',
-    'member_event_history',
-    'members_points',
-    'open_events',
+    "departments_points",
+    "departments_points_history",
+    "forms_submissions",
+    "member_event_history",
+    "members_points",
+    "open_events",
 }
 
 
 def include_object(object, name, type_, reflected, compare_to):
-    if type_ == 'table' and name in VIEWS:
+    if type_ == "table" and name in VIEWS:
         return False
     return True
+
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

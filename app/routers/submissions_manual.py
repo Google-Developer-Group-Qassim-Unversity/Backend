@@ -149,6 +149,7 @@ def manual_create_google_submissions(
                 detail="An error occurred while syncing submissions",
             )
 
+
 @router.post("/google/run/{google_form_id}", status_code=status.HTTP_200_OK)
 def manual_run_google_form_submissions(google_form_id: str):
     with LogFile("manual google submissions sync") as log:

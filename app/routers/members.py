@@ -22,7 +22,14 @@ from app.helpers import (
     super_admin_guard,
 )
 from app.routers.upload import validate_sheet
-from app.routers.logging import LogFile, write_log, write_log_exception, write_log_json_to, write_log_title, write_log_traceback
+from app.routers.logging import (
+    LogFile,
+    write_log,
+    write_log_exception,
+    write_log_json_to,
+    write_log_title,
+    write_log_traceback,
+)
 
 
 router = APIRouter()
@@ -176,9 +183,7 @@ def create_member(
                 write_log_json_to(log.file, credentials.model_dump())
 
 
-@router.get(
-    "/roles", status_code=status.HTTP_200_OK, response_model=list[MemberWithRole_model]
-)
+@router.get("/roles", status_code=status.HTTP_200_OK, response_model=list[MemberWithRole_model])
 def get_member_roles(
     credentials: HTTPAuthorizationCredentials = Depends(super_admin_guard),
 ):
@@ -187,9 +192,7 @@ def get_member_roles(
     return roles
 
 
-@router.post(
-    "/roles", status_code=status.HTTP_200_OK, response_model=MemberWithRole_model
-)
+@router.post("/roles", status_code=status.HTTP_200_OK, response_model=MemberWithRole_model)
 def update_member_roles(
     member_id: int,
     new_role: RoleType,
@@ -197,12 +200,8 @@ def update_member_roles(
 ):
     with LogFile("update member role"), SessionLocal() as session:
         try:
-            write_log_title(
-                f"Updating role for member_id {member_id} to {new_role.value}"
-            )
-            updated_member = member_queries.update_member_role(
-                session, member_id, new_role=new_role
-            )
+            write_log_title(f"Updating role for member_id {member_id} to {new_role.value}")
+            updated_member = member_queries.update_member_role(session, member_id, new_role=new_role)
             if not updated_member:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -249,20 +248,14 @@ def create_member_manual(members_sheet: manual_members):
                 write_log(
                     f"Processing member {i}/{members_len} with uni_id {member.uni_id}",
                 )
-                existing_member = member_queries.get_member_by_uni_id(
-                    session, member.uni_id
-                )
+                existing_member = member_queries.get_member_by_uni_id(session, member.uni_id)
                 if not existing_member:
                     write_log(
                         f"No existing member found with ID {member.id}, creating new member",
                     )
-                    created_member = member_queries.create_member(
-                        session, member, is_authenticated=False
-                    )
+                    created_member = member_queries.create_member(session, member, is_authenticated=False)
                     if created_member is None:
-                        exception = ValueError(
-                            f"Failed to create member with uni_id {member.uni_id}"
-                        )
+                        exception = ValueError(f"Failed to create member with uni_id {member.uni_id}")
                         write_log_exception(exception)
                         raise exception
                     new_count += 1
@@ -280,15 +273,12 @@ def create_member_manual(members_sheet: manual_members):
             "created_members": created_members,
         }
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.args[0]
-        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.args[0])
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while creating members",
         )
-
 
 
 @router.get("/history", status_code=status.HTTP_200_OK)

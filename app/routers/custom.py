@@ -134,9 +134,7 @@ def give_department_custom_points(
                 write_log(f"Processing point detail [{i + 1}/{details_len}]")
                 if point_detail.action_id:
                     write_log(f"Validating action with id {point_detail.action_id}")
-                    action = actions_queries.get_action_by_id(
-                        session, point_detail.action_id
-                    )
+                    action = actions_queries.get_action_by_id(session, point_detail.action_id)
                     if not action:
                         raise HTTPException(
                             status_code=status.HTTP_404_NOT_FOUND,
@@ -182,9 +180,7 @@ def give_department_custom_points(
                 if point_detail.action_id is None and point_detail.action_name is None:
                     mod_type = "bonus" if point_detail.points > 0 else "discount"
                     mod_value = abs(point_detail.points)
-                    log_queries.create_modification(
-                        session, new_log.id, mod_type, mod_value
-                    )
+                    log_queries.create_modification(session, new_log.id, mod_type, mod_value)
                     write_log(
                         f"Created modification for log id {new_log.id} with type {mod_type} and value {mod_value}",
                     )
@@ -196,9 +192,7 @@ def give_department_custom_points(
                 # [5] give points to departments
                 for department_id in point_detail.departments_id:
                     write_log(f"Giving points to department with id {department_id}")
-                    department_log = log_queries.create_department_log(
-                        session, department_id, new_log.id
-                    )
+                    department_log = log_queries.create_department_log(session, department_id, new_log.id)
 
             session.commit()
             write_log("Successfully given custom points to departments")
@@ -218,9 +212,7 @@ def give_department_custom_points(
 
 
 @router.get("/departments/{event_id}", response_model=CustomDepartmentPointsResponse)
-def get_department_custom_points(
-    event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
-):
+def get_department_custom_points(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     """Retrieve all custom department points for a specific event."""
     with LogFile("get_custom_department_points"), SessionLocal() as session:
         try:
@@ -237,18 +229,12 @@ def get_department_custom_points(
 
             # [2] Get all custom department points for this event
             write_log(f"Fetching custom department points for event {event_id}")
-            raw_points = log_queries.get_custom_department_points_by_event(
-                session, event_id
-            )
+            raw_points = log_queries.get_custom_department_points_by_event(session, event_id)
 
             # [3] Transform the data to match the response model
             point_details = []
             for point_data in raw_points:
-                points = (
-                    point_data["mod_value"]
-                    if point_data["mod_type"] == "bonus"
-                    else -point_data["mod_value"]
-                )
+                points = point_data["mod_value"] if point_data["mod_type"] == "bonus" else -point_data["mod_value"]
                 point_details.append(
                     {
                         "log_id": point_data["log_id"],
@@ -357,14 +343,10 @@ def update_department_custom_points(
                     write_log(
                         f"Updating modification for log {log_id}: type={mod_type}, value={mod_value}",
                     )
-                    log_queries.update_modification(
-                        session, modification.id, mod_type, mod_value
-                    )
+                    log_queries.update_modification(session, modification.id, mod_type, mod_value)
                 else:
                     write_log("No modification found, creating new one")
-                    log_queries.create_modification(
-                        session, log_id, mod_type, mod_value
-                    )
+                    log_queries.create_modification(session, log_id, mod_type, mod_value)
             else:
                 # Custom/predefined action: remove any existing modification (action has its own points)
                 if modification:
@@ -378,9 +360,7 @@ def update_department_custom_points(
                     )
 
             # [6] Update department associations
-            deleted_count = log_queries.delete_department_logs_by_log_id(
-                session, log_id
-            )
+            deleted_count = log_queries.delete_department_logs_by_log_id(session, log_id)
             write_log(f"Deleted {deleted_count} existing department associations")
 
             write_log(
@@ -447,9 +427,7 @@ def give_member_custom_points(
                 write_log(f"Processing point detail [{i + 1}/{details_len}]")
                 if point_detail.action_id:
                     write_log(f"Validating action with id {point_detail.action_id}")
-                    action = actions_queries.get_action_by_id(
-                        session, point_detail.action_id
-                    )
+                    action = actions_queries.get_action_by_id(session, point_detail.action_id)
                     if not action:
                         raise HTTPException(
                             status_code=status.HTTP_404_NOT_FOUND,
@@ -490,9 +468,7 @@ def give_member_custom_points(
                 if point_detail.action_id is None and point_detail.action_name is None:
                     mod_type = "bonus" if point_detail.points > 0 else "discount"
                     mod_value = abs(point_detail.points)
-                    log_queries.create_modification(
-                        session, new_log.id, mod_type, mod_value
-                    )
+                    log_queries.create_modification(session, new_log.id, mod_type, mod_value)
                     write_log(
                         f"Created modification for log id {new_log.id} with type {mod_type} and value {mod_value}",
                     )
@@ -540,17 +516,11 @@ def get_member_custom_points(
                 )
 
             write_log(f"Fetching custom member points for event {event_id}")
-            raw_points = log_queries.get_custom_member_points_by_event(
-                session, event_id
-            )
+            raw_points = log_queries.get_custom_member_points_by_event(session, event_id)
 
             point_details = []
             for point_data in raw_points:
-                points = (
-                    point_data["mod_value"]
-                    if point_data["mod_type"] == "bonus"
-                    else -point_data["mod_value"]
-                )
+                points = point_data["mod_value"] if point_data["mod_type"] == "bonus" else -point_data["mod_value"]
                 point_details.append(
                     {
                         "log_id": point_data["log_id"],
@@ -615,9 +585,7 @@ def delete_department_custom_points(
                 log_queries.delete_modification(session, modification.id)
                 deleted_mod_count = 1
 
-            deleted_dept_count = log_queries.delete_department_logs_by_log_id(
-                session, log_id
-            )
+            deleted_dept_count = log_queries.delete_department_logs_by_log_id(session, log_id)
             write_log(f"Deleted {deleted_dept_count} department associations")
 
             log_queries.delete_log(session, log_id)
@@ -668,9 +636,7 @@ def delete_member_custom_points(
                 )
                 log_queries.delete_modification(session, modification.id)
 
-            deleted_member_count = log_queries.delete_member_logs_by_log_id(
-                session, log_id
-            )
+            deleted_member_count = log_queries.delete_member_logs_by_log_id(session, log_id)
             write_log(f"Deleted {deleted_member_count} member associations")
 
             log_queries.delete_log(session, log_id)
@@ -758,14 +724,10 @@ def update_member_custom_points(
                     write_log(
                         f"Updating modification for log {log_id}: type={mod_type}, value={mod_value}",
                     )
-                    log_queries.update_modification(
-                        session, modification.id, mod_type, mod_value
-                    )
+                    log_queries.update_modification(session, modification.id, mod_type, mod_value)
                 else:
                     write_log("No modification found, creating new one")
-                    log_queries.create_modification(
-                        session, log_id, mod_type, mod_value
-                    )
+                    log_queries.create_modification(session, log_id, mod_type, mod_value)
             else:
                 if modification:
                     write_log(

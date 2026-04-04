@@ -5,6 +5,7 @@ Revises: a1b2c3d4e5f6
 Create Date: 2026-03-29 10:00:00.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -12,21 +13,15 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
 
-revision: str = 'b2c3d4e5f6g7'
-down_revision: Union[str, Sequence[str], None] = 'a1b2c3d4e5f6'
+revision: str = "b2c3d4e5f6g7"
+down_revision: Union[str, Sequence[str], None] = "a1b2c3d4e5f6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
     op.add_column(
-        'submissions',
-        sa.Column(
-            'is_invited',
-            mysql.TINYINT(1),
-            nullable=False,
-            server_default=sa.text("'0'")
-        )
+        "submissions", sa.Column("is_invited", mysql.TINYINT(1), nullable=False, server_default=sa.text("'0'"))
     )
 
     op.execute("DROP VIEW IF EXISTS forms_submissions")
@@ -86,4 +81,4 @@ def downgrade() -> None:
         JOIN members m ON s.member_id = m.id
     """)
 
-    op.drop_column('submissions', 'is_invited')
+    op.drop_column("submissions", "is_invited")

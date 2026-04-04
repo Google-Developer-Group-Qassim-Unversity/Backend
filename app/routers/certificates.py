@@ -29,25 +29,19 @@ router = APIRouter()
     status_code=status.HTTP_200_OK,
     response_model=CertificateJobResponse,
 )
-async def send_certificates(
-    event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)
-):
+async def send_certificates(event_id: int, credentials: HTTPAuthorizationCredentials = Depends(admin_guard)):
     with LogFile("send certificates"), SessionLocal() as session:
         try:
             write_log_title(f"Sending certificates for event [{event_id}]")
 
             event = events_queries.get_event_by_id(session, event_id)
             if not event:
-                excep = HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-                )
-                write_log_exception( excep)
+                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+                write_log_exception(excep)
                 raise excep
-            write_log( f"Found event: [{event.name}]")
+            write_log(f"Found event: [{event.name}]")
 
-            attendance = log_queries.get_event_attendance(
-                session, event_id, "exclusive_all"
-            )
+            attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
             attendance_count = len(attendance)
             write_log(
                 f"Found [{attendance_count}] attendees who attended all days for event [{event.name}]",
@@ -72,7 +66,7 @@ async def send_certificates(
                 date_str = start_effective.strftime("%Y-%m-%d")
             else:
                 date_str = f"{start_effective.strftime('%Y-%m-%d')} - {end_effective.strftime('%Y-%m-%d')}"
-            write_log( f"Event date formatted as: [{date_str}]")
+            write_log(f"Event date formatted as: [{date_str}]")
 
             simplified_members = [
                 SimplifiedMember(
@@ -123,7 +117,7 @@ async def send_certificates(
                     write_log(
                         f"Certificate API responded with job_id: [{response_data.get('job_id')}]",
                     )
-                    write_log_json( response_data)
+                    write_log_json(response_data)
                     return CertificateJobResponse(**response_data)
                 except httpx.TimeoutException:
                     write_log_exception(
@@ -135,9 +129,7 @@ async def send_certificates(
                     )
                 except httpx.HTTPStatusError as e:
                     write_log_exception(
-                        Exception(
-                            f"Certificate API returned error status {e.response.status_code}: {e.response.text}"
-                        ),
+                        Exception(f"Certificate API returned error status {e.response.status_code}: {e.response.text}"),
                     )
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
@@ -154,7 +146,7 @@ async def send_certificates(
         except HTTPException:
             raise
         except Exception as e:
-            write_log_exception( e)
+            write_log_exception(e)
             write_log_traceback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -178,12 +170,10 @@ async def send_manual_certificates(
 
             event = events_queries.get_event_by_id(session, event_id)
             if not event:
-                excep = HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-                )
-                write_log_exception( excep)
+                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+                write_log_exception(excep)
                 raise excep
-            write_log( f"Found event: [{event.name}]")
+            write_log(f"Found event: [{event.name}]")
 
             members_count = len(request.members)
             write_log(
@@ -197,7 +187,7 @@ async def send_manual_certificates(
                 date_str = start_effective.strftime("%Y-%m-%d")
             else:
                 date_str = f"{start_effective.strftime('%Y-%m-%d')} - {end_effective.strftime('%Y-%m-%d')}"
-            write_log( f"Event date formatted as: [{date_str}]")
+            write_log(f"Event date formatted as: [{date_str}]")
 
             cert_request = CertificateRequest(
                 event_name=event.name,
@@ -236,7 +226,7 @@ async def send_manual_certificates(
                     write_log(
                         f"Certificate API responded with job_id: [{response_data.get('job_id')}]",
                     )
-                    write_log_json( response_data)
+                    write_log_json(response_data)
                     return CertificateJobResponse(**response_data)
                 except httpx.TimeoutException:
                     write_log_exception(
@@ -248,9 +238,7 @@ async def send_manual_certificates(
                     )
                 except httpx.HTTPStatusError as e:
                     write_log_exception(
-                        Exception(
-                            f"Certificate API returned error status {e.response.status_code}: {e.response.text}"
-                        ),
+                        Exception(f"Certificate API returned error status {e.response.status_code}: {e.response.text}"),
                     )
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
@@ -267,7 +255,7 @@ async def send_manual_certificates(
         except HTTPException:
             raise
         except Exception as e:
-            write_log_exception( e)
+            write_log_exception(e)
             write_log_traceback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

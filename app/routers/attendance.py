@@ -31,7 +31,7 @@ from app.helpers import (
     credentials_to_member_model,
     is_admin,
     get_effective_date,
-    admin_guard
+    admin_guard,
 )
 from datetime import datetime, timedelta
 

@@ -4,7 +4,7 @@ from app.DB.main import SessionLocal
 from app.DB import submissions as submissions_queries
 from app.routers.models import AcceptanceBlastResponse
 from app.config import config
-from app.routers.logging import(
+from app.routers.logging import (
     LogFile,
     write_log,
     write_log_json,

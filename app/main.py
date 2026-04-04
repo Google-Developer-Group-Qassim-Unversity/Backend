@@ -3,10 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from app.routers import (
-    attendance, certificates, upload, members, events, departments,
-     action, custom, 
-     forms, submissions,
-     submissions_manual, points, acceptance
+    attendance,
+    certificates,
+    upload,
+    members,
+    events,
+    departments,
+    action,
+    custom,
+    forms,
+    submissions,
+    submissions_manual,
+    points,
+    acceptance,
 )
 from app.config import config
 
@@ -14,16 +23,16 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse(url="/docs")
-
 
 
 app.include_router(members.router, prefix="/members", tags=["members"])

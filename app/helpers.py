@@ -55,11 +55,15 @@ def get_pydantic_members(source: Union[str, HttpUrl]):
         member = Member_model(
             name=row.get("name"),
             email=str(row.get("email")),
-            phone_number=None if pd.isna(row.get("phone number")) or row.get("phone number") == "" else str(row.get("phone number")),
+            phone_number=None
+            if pd.isna(row.get("phone number")) or row.get("phone number") == ""
+            else str(row.get("phone number")),
             uni_id=str(row.get("uni id")),
             gender=row.get("gender"),
             uni_level=0 if pd.isna(row.get("uni level")) or row.get("uni level") == "" else int(row.get("uni level")),
-            uni_college="unknown" if pd.isna(row.get("uni college")) or row.get("uni college") == "" else str(row.get("uni college")),
+            uni_college="unknown"
+            if pd.isna(row.get("uni college")) or row.get("uni college") == ""
+            else str(row.get("uni college")),
         )
 
         members.append(member)
@@ -83,8 +87,8 @@ def is_admin(credentials) -> bool:
     decoded = credentials.model_dump()["decoded"]
     metadata = decoded.get("metadata", {})
     return (
-        metadata.get("is_admin", False) 
-        or metadata.get("is_super_admin", False) 
+        metadata.get("is_admin", False)
+        or metadata.get("is_super_admin", False)
         or metadata.get("is_admin_points", False)
     )
 
