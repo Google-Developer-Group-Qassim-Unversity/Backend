@@ -1,9 +1,9 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from .schema import Forms
+from app.DB.schema import Events, Forms
 from app.routers.models import Form_model
-from app.exceptions import FormConflict
+from app.exceptions import EventNotFound, FormConflict, FormNotFound
 
 
 def create_form(session: Session, form: Form_model):
@@ -67,8 +67,14 @@ def get_form_by_id(session: Session, form_id: int):
 
 def get_form_by_event_id(session: Session, event_id: int):
     """Get a form by event ID"""
+    event = session.scalar(select(Events).where(Events.id == event_id))
+    if not event:
+        raise EventNotFound(event_id)
+
     statement = select(Forms).where(Forms.event_id == event_id)
     form = session.scalars(statement).first()
+    if not form:
+        raise FormNotFound(event_id)
     return form
 
 

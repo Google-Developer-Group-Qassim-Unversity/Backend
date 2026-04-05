@@ -32,6 +32,7 @@ from app.routers.logging import (
 from app.helpers import admin_guard
 from time import perf_counter
 from typing import Annotated
+from app.exceptions import NotFound
 
 router = APIRouter()
 
@@ -57,32 +58,18 @@ def get_all_events(semester: Annotated[int | str, Query()] = "all"):
     return events
 
 
-@router.get(
-    "/{event_id:int}",
-    status_code=status.HTTP_200_OK,
-    response_model=Events_model,
-    responses={404: {"model": NotFoundResponse, "description": "Event not found"}},
-)
+@router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model)
 def get_event_by_id(event_id: int):
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
-        if not event:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         session.flush()
     return event
 
 
-@router.get(
-    "/{event_id:int}/form",
-    status_code=status.HTTP_200_OK,
-    response_model=Form_model,
-    responses={404: {"model": NotFoundResponse, "description": "Form not found"}},
-)
+@router.get("/{event_id:int}/form", status_code=status.HTTP_200_OK, response_model=Form_model)
 def get_event_form(event_id: int):
     with SessionLocal() as session:
         form = form_queries.get_form_by_event_id(session, event_id)
-        if not form:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
     return form
 
 

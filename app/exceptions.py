@@ -19,6 +19,13 @@ class FormConflict(Conflict):
     def __init__(self, event_id: int):
         super().__init__("Form for event", event_id)
 
+class FormNotFound(NotFound):
+    def __init__(self, event_id: int):
+        super().__init__("Form for event", event_id)
+
+class EventNotFound(NotFound):
+    def __init__(self, id: str | int):
+        super().__init__("Event", id)
 
 class ActionNotFound(NotFound):
     def __init__(self, id: str | int):

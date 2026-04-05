@@ -46,7 +46,7 @@ def assert_unprocessable(response: Response):
     )
 
 
-def assert_existing(response: Response):
+def assert_conflict(response: Response):
     assert response.status_code == 409, "\n".join(
         [
             "\nAssertion failed:",

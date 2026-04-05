@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from tests.factories import make_create_event_payload
-from tests.utils import assert_2xx, assert_existing
+from tests.utils import assert_2xx, assert_conflict
 from app.routers.models import Form_model
 
 # Note: Did not create factory for forms becauase as of now there are not a lot of tests
@@ -16,4 +16,4 @@ def test_existing_form(admin_client: TestClient):
     form_response = admin_client.post(
         "/forms", json=Form_model(form_type="none", event_id=event_response.json()["id"]).model_dump(mode="json")
     )
-    assert_existing(form_response)
+    assert_conflict(form_response)

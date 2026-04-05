@@ -1,6 +1,8 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
+
+from app.exceptions import EventNotFound
 from .schema import Events, t_open_events, Logs, DepartmentsLogs, Actions, Departments
 from app.routers.models import Events_model
 from datetime import datetime
@@ -55,6 +57,8 @@ def get_actions_by_event_id(session: Session, event_id: int):
 def get_event_by_id(session: Session, event_id: int):
     statement = select(Events).where(Events.id == event_id)
     event = session.scalars(statement).first()
+    if not event:
+        raise EventNotFound(event_id)
     return event
 
 
