@@ -17,7 +17,7 @@ from app.routers.models import (
     createEvent_model,
     Member_model,
     InternalServerErrorResponse,
-    UpdateEvent_model,
+    UpdateEventModel,
     UpdateEventStatus_model,
 )
 from app.config import config
@@ -85,7 +85,7 @@ def get_registrable_events():
     return open_events
 
 
-@router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEvent_model)
+@router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEventModel)
 def get_event_details(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     """return an event + its associated actions, this is needed by the frontend to populate the update event form with the current event data and associated actions"""
     with SessionLocal() as session:
@@ -157,7 +157,7 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
         500: {"model": InternalServerErrorResponse, "description": "Internal server error"},
     },
 )
-def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depends(admin_guard)):
+def update_event(event_id: int, event_data: UpdateEventModel, credentials=Depends(admin_guard)):
     with LogFile("update event") as log, SessionLocal() as session:
         try:
             write_log_title(f"Updating Event [{event_id}]")

@@ -49,9 +49,9 @@ class event_actions_model(BaseClassModel):
     department_ar_name: str | None = None
 
 
-class UpdateEvent_model(BaseClassModel):
+class UpdateEventModel(BaseClassModel):
     event: Events_model
-    actions: List[event_actions_model]
+    actions: conlist(event_actions_model, min_length=2) # pyright: ignore[reportInvalidTypeForm]
 
 
 class UpdateEventStatus_model(BaseClassModel):
