@@ -51,7 +51,10 @@ def get_members(session: Session):
 
 def get_member_by_id(session: Session, member_id: int):
     statement = select(Members).where(Members.id == member_id)
-    return session.scalars(statement).first()
+    member = session.scalars(statement).first()
+    if not member:
+        raise MemberNotFound(member_id)
+    return member
 
 
 def get_members_by_id(session: Session, member_ids: list[int]):
@@ -61,7 +64,10 @@ def get_members_by_id(session: Session, member_ids: list[int]):
 
 def get_member_by_uni_id(session: Session, uni_id: str):
     statement = select(Members).where(Members.uni_id == uni_id)
-    return session.scalars(statement).first()
+    member = session.scalars(statement).first()
+    if not member:
+        raise MemberNotFound(uni_id)
+    return member
 
 
 def update_member(session: Session, member: Member_model, is_authenticated: bool):
@@ -80,29 +86,6 @@ def update_member(session: Session, member: Member_model, is_authenticated: bool
     session.flush()
     print(f"Updated member: {existing_member.name}")
     return existing_member
-
-
-def get_member_history(session: Session, uni_id: str):
-    query = (
-        session.query(
-            Events.name,
-            Events.description,
-            Events.location,
-            Events.location_type,
-            Events.start_datetime,
-            Events.end_datetime,
-            Actions.action_name,
-            Actions.points,
-        )
-        .select_from(Members)
-        .join(MembersLogs, Members.id == MembersLogs.member_id)
-        .join(Logs, MembersLogs.log_id == Logs.id)
-        .outerjoin(Events, Logs.event_id == Events.id)
-        .join(Actions, Logs.action_id == Actions.id)
-        .filter(Members.uni_id == uni_id)
-    )
-
-    return [row._asdict() for row in query.all()]
 
 
 def get_member_roles(session: Session):
@@ -125,10 +108,9 @@ def get_member_roles(session: Session):
 
 
 def update_member_role(session: Session, member_id: int, new_role: RoleType):
-    # Check if member exists
     existing_member = session.scalar(select(Members).where(Members.id == member_id))
     if not existing_member:
-        return None
+        raise MemberNotFound(member_id)
 
     # Check if member already has a role
     existing_role = session.scalar(select(Role).where(Role.member_id == member_id))
@@ -164,7 +146,7 @@ def update_member_role(session: Session, member_id: int, new_role: RoleType):
         .first()
     )
 
-    return result._asdict() if result else None
+    return result._asdict()
 
 
 def update_member_by_uni_id(session: Session, uni_id: str, updates: dict) -> Members | None:

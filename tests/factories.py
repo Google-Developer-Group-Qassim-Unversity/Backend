@@ -1,3 +1,17 @@
+def make_member(**overrides):
+    defaults = {
+        "name": "Test Member",
+        "email": "test@example.com",
+        "phone_number": "0501112233",
+        "uni_id": "999999999",
+        "gender": "Male",
+        "uni_level": 4,
+        "uni_college": "Engineering",
+    }
+    defaults.update(overrides)
+    return defaults
+
+
 def make_event(**overrides):
     defaults = {
         "name": "my event",

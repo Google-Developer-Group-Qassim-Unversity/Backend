@@ -83,8 +83,9 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
                     skipped_missing_uni_id += 1
                     continue
 
-                member = member_queries.get_member_by_uni_id(session, uni_id)
-                if not member:
+                try:
+                    member = member_queries.get_member_by_uni_id(session, uni_id)
+                except Exception:
                     skipped_no_member += 1
                     continue
 
