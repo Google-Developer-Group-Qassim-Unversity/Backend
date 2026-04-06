@@ -193,6 +193,30 @@ def test_update_event(admin_client: TestClient):
     )
 
 
+def test_unauthorized_update_event(clerk_client: TestClient, db_session):
+        # 1. insert an event in the DB
+    event = Events(
+        name="test event",
+        description="test description",
+        start_datetime=datetime(2026, 3, 1, 0, 0, 0),
+        end_datetime=datetime(2026, 3, 2, 0, 0),
+        status="draft",
+        location_type = "on-site",
+        location = "the moon"
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    # 2. attempt to update the event with a clerk client (non-admin)
+    update_payload = { 
+        "event": make_event(
+            name="updated event", start_datetime="2026-03-01T00:00:00", end_datetime="2026-03-02T00:00:00", status="draft"
+        ),
+        "actions": []
+    }
+    update_response = clerk_client.put(f"/events/{event.id}", json=update_payload)
+    assert_forbidden(update_response)
+
 def test_delete_event(admin_client: TestClient):
     # 1. create event
     create_response = admin_client.post("/events", json=make_create_event_payload())
@@ -229,6 +253,25 @@ def test_delete_event(admin_client: TestClient):
     assert points_after_response.json()["department"]["total_points"] == 0, (
         f"Expected dept 1 to have 0 points after delete, got {points_after_response.json()['department']['total_points']}"
     )
+
+
+def test_unauthorized_delete_event(clerk_client: TestClient, db_session):
+    # 1. insert an event in the DB
+    event = Events(
+        name="test event",
+        description="test description",
+        start_datetime=datetime(2026, 3, 1, 0, 0, 0),
+        end_datetime=datetime(2026, 3, 2, 0, 0),
+        status="draft",
+        location_type = "on-site",
+        location = "the moon"
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    # 2. attempt to delete the event with a clerk client (non-admin)
+    delete_response = clerk_client.delete(f"/events/{event.id}")
+    assert_forbidden(delete_response)
 
 
 def test_get_submissions_by_event(admin_client: TestClient, db_session):
