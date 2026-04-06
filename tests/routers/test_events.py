@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi.testclient import TestClient
 from tests.factories import make_create_event_payload, make_event
-from tests.utils import assert_2xx, assert_forbidden, assert_not_found
+from tests.utils import assert_2xx, assert_forbidden, assert_not_found, assert_bad_request
 from app.DB.schema import Events, Submissions
 
 
@@ -279,7 +279,6 @@ def test_unauthorized_delete_event(clerk_client: TestClient, db_session):
 
 
 def test_get_submissions_by_event(admin_client: TestClient, db_session):
-
     # 1. create event with registration form
     create_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
     assert_2xx(create_response)
@@ -327,3 +326,138 @@ def test_get_submissions_empty(admin_client: TestClient):
     submissions_response = admin_client.get(f"/events/submissions/{event_id}")
     assert_2xx(submissions_response)
     assert submissions_response.json() == [], f"Expected empty list but got {submissions_response.json()}"
+
+
+def test_get_events_invalid_semester(admin_client: TestClient):
+    response = admin_client.get("/events?semester=999")
+    assert_bad_request(response)
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_get_events_valid_semester(admin_client: TestClient):
+    response = admin_client.get("/events?semester=472")
+    assert_2xx(response)
+    assert response.json() == []
+
+
+def test_get_registrable_events(admin_client: TestClient):
+    response = admin_client.get("/events/open")
+    assert_2xx(response)
+    assert response.json() == [], f"Expected empty list, got {response.json()}"
+
+
+def test_delete_non_draft_event(admin_client: TestClient):
+    create_response = admin_client.post("/events", json=make_create_event_payload())
+    assert_2xx(create_response)
+    event_id = create_response.json()["id"]
+
+    status_response = admin_client.put(f"/events/{event_id}/status", json={"status": "open"})
+    assert_2xx(status_response)
+
+    delete_response = admin_client.delete(f"/events/{event_id}")
+    assert_bad_request(delete_response)
+    assert "only draft events" in delete_response.json()["detail"].lower()
+
+
+def test_update_event_invalid_dates(admin_client: TestClient):
+    create_response = admin_client.post("/events", json=make_create_event_payload())
+    assert_2xx(create_response)
+    event_id = create_response.json()["id"]
+
+    details_response = admin_client.get(f"/events/{event_id}/details")
+    details = details_response.json()
+
+    update_payload = {
+        "event": make_event(status="draft", start_datetime="2026-03-05T00:00:00", end_datetime="2026-03-01T00:00:00"),
+        "actions": details["actions"],
+    }
+    update_response = admin_client.put(f"/events/{event_id}", json=update_payload)
+    assert_bad_request(update_response)
+    assert "end datetime" in update_response.json()["detail"].lower()
+
+
+def test_update_nonexistent_event(admin_client: TestClient):
+    details_payload = {
+        "event": make_event(),
+        "actions": [
+            {"action_id": 1, "ar_action_name": "test", "department_id": 1},
+            {"action_id": 2, "ar_action_name": "test", "department_id": None},
+        ],
+    }
+    response = admin_client.put("/events/9999", json=details_payload)
+    assert_not_found(response)
+
+
+def test_delete_nonexistent_event(admin_client: TestClient):
+    response = admin_client.delete("/events/9999")
+    assert_not_found(response)
+
+
+def test_update_status_nonexistent_event(admin_client: TestClient):
+    response = admin_client.put("/events/9999/status", json={"status": "open"})
+    assert_not_found(response)
+
+
+def test_get_event_details_nonexistent_event(admin_client: TestClient):
+    response = admin_client.get("/events/9999/details")
+    assert_not_found(response)
+
+
+def test_update_event_days_increase(admin_client: TestClient):
+    create_response = admin_client.post("/events", json=make_create_event_payload(overrides={"department_id": 1}))
+    assert_2xx(create_response)
+    event_id = create_response.json()["id"]
+
+    status_response = admin_client.put(f"/events/{event_id}/status", json={"status": "open"})
+    assert_2xx(status_response)
+
+    points_response = admin_client.get("/points/departments/1")
+    assert points_response.json()["department"]["total_points"] == 10
+
+    details_response = admin_client.get(f"/events/{event_id}/details")
+    details = details_response.json()
+
+    update_payload = {
+        "event": make_event(
+            name="my event", start_datetime="2026-03-01T00:00:00", end_datetime="2026-03-03T00:00:00", status="open"
+        ),
+        "actions": details["actions"],
+    }
+    update_response = admin_client.put(f"/events/{event_id}", json=update_payload)
+    assert_2xx(update_response)
+
+    points_response = admin_client.get("/points/departments/1")
+    assert points_response.json()["department"]["total_points"] == 30
+
+
+def test_update_event_days_decrease(admin_client: TestClient):
+    create_response = admin_client.post(
+        "/events",
+        json=make_create_event_payload(
+            overrides={"department_id": 1},
+            event=make_event(start_datetime="2026-03-01T00:00:00", end_datetime="2026-03-03T00:00:00"),
+        ),
+    )
+    assert_2xx(create_response)
+    event_id = create_response.json()["id"]
+
+    status_response = admin_client.put(f"/events/{event_id}/status", json={"status": "open"})
+    assert_2xx(status_response)
+
+    points_response = admin_client.get("/points/departments/1")
+    assert points_response.json()["department"]["total_points"] == 30
+
+    details_response = admin_client.get(f"/events/{event_id}/details")
+    details = details_response.json()
+
+    update_payload = {
+        "event": make_event(
+            name="my event", start_datetime="2026-03-01T00:00:00", end_datetime="2026-03-01T00:00:00", status="open"
+        ),
+        "actions": details["actions"],
+    }
+    update_response = admin_client.put(f"/events/{event_id}", json=update_payload)
+    assert_2xx(update_response)
+
+    points_response = admin_client.get("/points/departments/1")
+    assert points_response.json()["department"]["total_points"] == 10
