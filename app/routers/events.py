@@ -343,6 +343,7 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, cre
     return event
 
 
+# TODO: move to submissions router.
 @router.get("/submissions/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Get_Submission_model])
 def get_submissions_by_event(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     with SessionLocal() as session:

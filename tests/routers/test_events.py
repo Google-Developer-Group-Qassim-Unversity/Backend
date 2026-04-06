@@ -194,28 +194,32 @@ def test_update_event(admin_client: TestClient):
 
 
 def test_unauthorized_update_event(clerk_client: TestClient, db_session):
-        # 1. insert an event in the DB
+    # 1. insert an event in the DB
     event = Events(
         name="test event",
         description="test description",
         start_datetime=datetime(2026, 3, 1, 0, 0, 0),
         end_datetime=datetime(2026, 3, 2, 0, 0),
         status="draft",
-        location_type = "on-site",
-        location = "the moon"
+        location_type="on-site",
+        location="the moon",
     )
     db_session.add(event)
     db_session.commit()
 
     # 2. attempt to update the event with a clerk client (non-admin)
-    update_payload = { 
+    update_payload = {
         "event": make_event(
-            name="updated event", start_datetime="2026-03-01T00:00:00", end_datetime="2026-03-02T00:00:00", status="draft"
+            name="updated event",
+            start_datetime="2026-03-01T00:00:00",
+            end_datetime="2026-03-02T00:00:00",
+            status="draft",
         ),
-        "actions": []
+        "actions": [],
     }
     update_response = clerk_client.put(f"/events/{event.id}", json=update_payload)
     assert_forbidden(update_response)
+
 
 def test_delete_event(admin_client: TestClient):
     # 1. create event
@@ -263,8 +267,8 @@ def test_unauthorized_delete_event(clerk_client: TestClient, db_session):
         start_datetime=datetime(2026, 3, 1, 0, 0, 0),
         end_datetime=datetime(2026, 3, 2, 0, 0),
         status="draft",
-        location_type = "on-site",
-        location = "the moon"
+        location_type="on-site",
+        location="the moon",
     )
     db_session.add(event)
     db_session.commit()
