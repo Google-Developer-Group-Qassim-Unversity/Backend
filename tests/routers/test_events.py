@@ -1,6 +1,9 @@
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 from tests.factories import make_create_event_payload, make_event
 from tests.utils import assert_2xx, assert_forbidden, assert_not_found
+from app.DB.schema import Events, Submissions
 
 
 def test_authorized_create_event(admin_client: TestClient):
@@ -228,4 +231,52 @@ def test_delete_event(admin_client: TestClient):
     )
 
 
-# TODO: would love to test unauthorized delete events, but the current testing setup doesn't allow this (we'll need direct DB access to create an event that we can then attempt to delete with an unauthorized client, which we don't have in the current test setup)
+def test_get_submissions_by_event(admin_client: TestClient, db_session):
+
+    # 1. create event with registration form
+    create_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
+    assert_2xx(create_response)
+    event_id = create_response.json()["id"]
+
+    # 2. get the form id for this event
+    form_response = admin_client.get(f"/events/{event_id}/form")
+    assert_2xx(form_response)
+    form_id = form_response.json()["id"]
+
+    # 3. insert submissions directly (member 1 and member 2 are seeded in conftest)
+    db_session.add(
+        Submissions(form_id=form_id, member_id=1, submission_type="registration", is_accepted=0, is_invited=0)
+    )
+    db_session.add(
+        Submissions(form_id=form_id, member_id=2, submission_type="registration", is_accepted=1, is_invited=0)
+    )
+    db_session.commit()
+
+    # 4. get submissions for this event
+    submissions_response = admin_client.get(f"/events/submissions/{event_id}")
+    assert_2xx(submissions_response)
+    submissions = submissions_response.json()
+    assert len(submissions) == 2, f"Expected 2 submissions but got {len(submissions)}"
+
+    # 5. assert first submission (member 1, not accepted)
+    s1 = next(s for s in submissions if s["member"]["id"] == 1)
+    assert s1["submission_type"] == "registration"
+    assert s1["is_accepted"] is False
+    assert s1["member"]["name"] == "Ahmed Ali"
+
+    # 6. assert second submission (member 2, accepted)
+    s2 = next(s for s in submissions if s["member"]["id"] == 2)
+    assert s2["submission_type"] == "registration"
+    assert s2["is_accepted"] is True
+    assert s2["member"]["name"] == "Sara Khalid"
+
+
+def test_get_submissions_empty(admin_client: TestClient):
+    # create event, no submissions
+    create_response = admin_client.post("/events", json=make_create_event_payload(form_type="google"))
+    assert_2xx(create_response)
+    event_id = create_response.json()["id"]
+
+    submissions_response = admin_client.get(f"/events/submissions/{event_id}")
+    assert_2xx(submissions_response)
+    assert submissions_response.json() == [], f"Expected empty list but got {submissions_response.json()}"
