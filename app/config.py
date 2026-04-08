@@ -8,14 +8,9 @@ from typing import Optional
 from pathlib import Path
 from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
 
-# Only load .env files if not in testing mode
-# Tests set ENV=testing and manage env vars via conftest.py
 if os.getenv("ENV") != "testing":
     load_dotenv(".env.local", override=True)
 
-
-UPLOAD_DIR_DEV = "uploads"
-UPLOAD_DIR_PROD = str(Path.home() / "GDG-Files")
 LOG_DIR_DEV = "logs"
 LOG_DIR_PROD = str(Path.home() / "GDG-Logs")
 
@@ -47,15 +42,6 @@ class Config:
         jwks_url = env_or_except("CLERK_JWKS_URL")
         clerk_config = ClerkConfig(jwks_url=jwks_url)
         return ClerkHTTPBearer(config=clerk_config, auto_error=False)
-
-    @property
-    def UPLOAD_DIR(self) -> str:
-        if self.is_dev:
-            os.makedirs(UPLOAD_DIR_DEV, exist_ok=True)
-            return UPLOAD_DIR_DEV
-        else:
-            os.makedirs(UPLOAD_DIR_PROD, exist_ok=True)
-            return UPLOAD_DIR_PROD
 
     @property
     def LOG_DIR(self) -> str:
@@ -102,6 +88,26 @@ class Config:
     @property
     def CERTIFICATE_API_URL(self) -> str:
         return env_or_except("CERTIFICATE_API_URL")
+
+    @property
+    def R2_ACCOUNT_ID(self) -> str:
+        return env_or_except("R2_ACCOUNT_ID")
+
+    @property
+    def R2_ACCESS_KEY_ID(self) -> str:
+        return env_or_except("R2_ACCESS_KEY_ID")
+
+    @property
+    def R2_SECRET_ACCESS_KEY(self) -> str:
+        return env_or_except("R2_SECRET_ACCESS_KEY")
+
+    @property
+    def R2_BUCKET_NAME(self) -> str:
+        return env_or_except("R2_BUCKET_NAME")
+
+    @property
+    def R2_PUBLIC_URL(self) -> str:
+        return env_or_except("R2_PUBLIC_URL")
 
 
 def env_or_except(key: str, default: Optional[str] = None) -> str:

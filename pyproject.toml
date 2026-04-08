@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.18.4",
     "annotated-types==0.7.0",
     "anyio==4.11.0",
+    "boto3>=1.42.85",
     "certifi==2025.8.3",
     "cffi==2.0.0",
     "charset-normalizer==3.4.4",
@@ -34,8 +35,6 @@ dependencies = [
     "markdown-it-py==4.0.0",
     "markupsafe==3.0.2",
     "mdurl==0.1.2",
-    "openpyxl==3.1.5",
-    "pandas==2.3.2",
     "proto-plus==1.27.0",
     "protobuf==6.33.4",
     "pyasn1==0.6.2",
@@ -76,6 +75,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "moto>=5.1.22",
     "mypy>=1.16.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.9",

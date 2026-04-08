@@ -1,6 +1,7 @@
 from logging.config import fileConfig
 import os
 
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
@@ -8,6 +9,9 @@ from alembic import context
 from app.DB.schema import Base
 
 config = context.config
+
+if os.getenv("ENV") != "testing":
+    load_dotenv(".env.local", override=True)
 
 if database_url := os.getenv("DATABASE_URL"):
     config.set_main_option("sqlalchemy.url", database_url)
@@ -31,12 +35,6 @@ def include_object(object, name, type_, reflected, compare_to):
     if type_ == "table" and name in VIEWS:
         return False
     return True
-
-
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
 
 
 def run_migrations_offline() -> None:
