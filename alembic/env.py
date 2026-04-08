@@ -1,5 +1,7 @@
 from logging.config import fileConfig
 import os
+from dotenv import load_dotenv
+load_dotenv(".env.local", override=True)
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -11,6 +13,8 @@ config = context.config
 
 if database_url := os.getenv("DATABASE_URL"):
     config.set_main_option("sqlalchemy.url", database_url)
+else: 
+    raise RuntimeError("DATABASE_URL environment variable is not set")
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
