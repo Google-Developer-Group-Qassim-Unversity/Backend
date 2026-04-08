@@ -19,6 +19,7 @@ from app.routers.models import (
     BackfillAttendanceResponse,
 )
 from app.config import config
+from app.exceptions import MemberNotFound
 from app.routers.logging import LogFile, write_log_exception, write_log, write_log_title, write_log_traceback
 from app.helpers import (
     validate_attendance_token,
@@ -63,10 +64,6 @@ def mark_attendance(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance token provided!")
 
             member = member_queries.get_member_by_uni_id(session, credentials_to_member_model(credentials).uni_id)
-            if not member:
-                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
-                write_log_exception(excep)
-                raise excep
             write_log_title(f"Marking attendance for member [{member.name}] with uni_id [{member.uni_id}]")
 
             # 1. check if event exists
@@ -205,12 +202,11 @@ def backfill_attendance(
             already_attended_count = 0
 
             for member_data in request.members:
-                existing_member = member_queries.get_member_by_uni_id(session, member_data.uni_id)
-                if existing_member:
+                try:
+                    member = member_queries.get_member_by_uni_id(session, member_data.uni_id)
                     existing_count += 1
-                    member = existing_member
                     write_log(f"Found existing member [{member.name}] with uni_id [{member.uni_id}]")
-                else:
+                except MemberNotFound:
                     new_member = member_queries.create_member(session, member_data)
                     if new_member is None:
                         write_log_exception(f"Failed to create member with uni_id [{member_data.uni_id}]")
@@ -299,8 +295,6 @@ def get_event_attendance(
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
             uni_id = credentials_to_member_model(credentials).uni_id
             member = member_queries.get_member_by_uni_id(session, uni_id)
-            if not member:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
             attendance = log_queries.get_event_attendance(session, event_id, day)
             member_attendance = [a for a in attendance if a.Members.uni_id == uni_id]
             return EventAttendanceResponse(attendance_count=len(member_attendance), attendance=member_attendance)

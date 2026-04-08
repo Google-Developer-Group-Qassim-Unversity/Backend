@@ -17,7 +17,7 @@ from app.routers.models import (
     createEvent_model,
     Member_model,
     InternalServerErrorResponse,
-    UpdateEvent_model,
+    UpdateEventModel,
     UpdateEventStatus_model,
 )
 from app.config import config
@@ -32,6 +32,7 @@ from app.routers.logging import (
 from app.helpers import admin_guard
 from time import perf_counter
 from typing import Annotated
+from app.exceptions import NotFound
 
 router = APIRouter()
 
@@ -57,32 +58,18 @@ def get_all_events(semester: Annotated[int | str, Query()] = "all"):
     return events
 
 
-@router.get(
-    "/{event_id:int}",
-    status_code=status.HTTP_200_OK,
-    response_model=Events_model,
-    responses={404: {"model": NotFoundResponse, "description": "Event not found"}},
-)
+@router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model)
 def get_event_by_id(event_id: int):
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
-        if not event:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         session.flush()
     return event
 
 
-@router.get(
-    "/{event_id:int}/form",
-    status_code=status.HTTP_200_OK,
-    response_model=Form_model,
-    responses={404: {"model": NotFoundResponse, "description": "Form not found"}},
-)
+@router.get("/{event_id:int}/form", status_code=status.HTTP_200_OK, response_model=Form_model)
 def get_event_form(event_id: int):
     with SessionLocal() as session:
         form = form_queries.get_form_by_event_id(session, event_id)
-        if not form:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
     return form
 
 
@@ -98,7 +85,7 @@ def get_registrable_events():
     return open_events
 
 
-@router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEvent_model)
+@router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEventModel)
 def get_event_details(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     """return an event + its associated actions, this is needed by the frontend to populate the update event form with the current event data and associated actions"""
     with SessionLocal() as session:
@@ -170,7 +157,7 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
         500: {"model": InternalServerErrorResponse, "description": "Internal server error"},
     },
 )
-def update_event(event_id: int, event_data: UpdateEvent_model, credentials=Depends(admin_guard)):
+def update_event(event_id: int, event_data: UpdateEventModel, credentials=Depends(admin_guard)):
     with LogFile("update event") as log, SessionLocal() as session:
         try:
             write_log_title(f"Updating Event [{event_id}]")
@@ -356,6 +343,7 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, cre
     return event
 
 
+# TODO: move to submissions router.
 @router.get("/submissions/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Get_Submission_model])
 def get_submissions_by_event(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     with SessionLocal() as session:

@@ -65,7 +65,7 @@ class EventsStatus(str, enum.Enum):
     CLOSED = "closed"
 
 
-class FormsFormType(str, enum.Enum):
+class FormType(str, enum.Enum):
     NONE = "none"
     REGISTRATION = "registration"
     GOOGLE = "google"
@@ -242,8 +242,8 @@ class Forms(Base):
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     event_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    form_type: Mapped[FormsFormType] = mapped_column(
-        Enum(FormsFormType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    form_type: Mapped[FormType] = mapped_column(
+        Enum(FormType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
     google_form_id: Mapped[Optional[str]] = mapped_column(
         VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")

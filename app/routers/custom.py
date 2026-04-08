@@ -619,11 +619,7 @@ def update_member_custom_points(
 
             write_log(f"Validating {len(body.member_ids)} members")
             for mem_id in body.member_ids:
-                member = members_queries.get_member_by_id(session, mem_id)
-                if not member:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {mem_id} not found"
-                    )
+                members_queries.get_member_by_id(session, mem_id)
 
             if existing_log.action_id != action.id:
                 write_log(f"Updating log action from {existing_log.action_id} to {action.id}")

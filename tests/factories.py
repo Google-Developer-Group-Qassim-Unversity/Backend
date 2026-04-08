@@ -1,25 +1,32 @@
-from app.DB.schema import EventsLocationType
-from app.routers.models import Events_model
-from datetime import datetime
+def make_member(**overrides):
+    defaults = {
+        "name": "Test Member",
+        "email": "test@example.com",
+        "phone_number": "0501112233",
+        "uni_id": "999999999",
+        "gender": "Male",
+        "uni_level": 4,
+        "uni_college": "Engineering",
+    }
+    defaults.update(overrides)
+    return defaults
 
 
-# CAUTION: Don't update default unless you know what you're doing
-# a lot of tests assume these default values and changing them might break the tests
 def make_event(**overrides):
     defaults = {
         "name": "my event",
         "description": "my description",
-        "location_type": EventsLocationType.ONLINE,
+        "location_type": "online",
         "location": "space",
-        "start_datetime": datetime.fromisoformat("2026-03-01T00:00:00"),
-        "end_datetime": datetime.fromisoformat("2026-03-01T00:00:00"),
+        "start_datetime": "2026-03-01T00:00:00",
+        "end_datetime": "2026-03-01T00:00:00",
         "status": "draft",
         "image_url": None,
         "is_official": 0,
         "created_at": None,
     }
     defaults.update(overrides)
-    return Events_model(**defaults).model_dump(mode="json")
+    return defaults
 
 
 def make_create_event_payload(**overrides):

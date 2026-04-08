@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Request, status, HTTPException, Backgrou
 from app.DB.main import SessionLocal
 from app.DB import submissions as submission_queries, members as member_queries, forms as form_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.helpers import admin_guard, get_uni_id_from_credentials
+from app.helpers import admin_guard, get_uni_id_from_credentials, authenticated_guard
 from app.config import config
 from app.routers.logging import (
     LogFile,
@@ -50,7 +50,7 @@ def create_submission(
 
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
 def check_submission_exists(
-    form_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(config.CLERK_GUARD)]
+    form_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]
 ):
     with LogFile("check submission exists"), SessionLocal() as session:
         try:

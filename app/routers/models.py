@@ -3,7 +3,7 @@ from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
 from enum import Enum
-from app.DB.schema import EventsLocationType, MembersGender, RoleType
+from app.DB.schema import EventsLocationType, MembersGender, RoleType, FormType
 
 
 class BaseClassModel(BaseModel):
@@ -27,7 +27,7 @@ class Events_model(BaseClassModel):
 class Form_model(BaseClassModel):
     id: int | None = None
     event_id: int
-    form_type: Literal["google", "none", "registration"]
+    form_type: FormType
     google_form_id: str | None = None
     google_refresh_token: str | None = None
     google_watch_id: str | None = None
@@ -49,9 +49,9 @@ class event_actions_model(BaseClassModel):
     department_ar_name: str | None = None
 
 
-class UpdateEvent_model(BaseClassModel):
+class UpdateEventModel(BaseClassModel):
     event: Events_model
-    actions: List[event_actions_model]
+    actions: conlist(event_actions_model, min_length=2)  # pyright: ignore[reportInvalidTypeForm]
 
 
 class UpdateEventStatus_model(BaseClassModel):

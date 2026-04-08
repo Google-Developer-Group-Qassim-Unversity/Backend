@@ -46,11 +46,22 @@ def assert_unprocessable(response: Response):
     )
 
 
-def assert_existing(response: Response):
+def assert_conflict(response: Response):
     assert response.status_code == 409, "\n".join(
         [
             "\nAssertion failed:",
             "\tExpected: 409 Conflict",
+            f"\tActual:   {response.status_code} {HTTPStatus(response.status_code).name}",
+            f"\tResponse body: {response.text}",
+        ]
+    )
+
+
+def assert_bad_request(response: Response):
+    assert response.status_code == 400, "\n".join(
+        [
+            "\nAssertion failed:",
+            "\tExpected: 400 Bad Request",
             f"\tActual:   {response.status_code} {HTTPStatus(response.status_code).name}",
             f"\tResponse body: {response.text}",
         ]

@@ -8,7 +8,7 @@ Fixture chain (scope):
         |
     seed_core_data (session) ─── seeds the DB
         |
-        ├── db_session (function) ─── per-test session with rollback
+        ├── db_session (function) ─── per-test session with rollback (depends on client)
         |
         └── client (function) ─── FastAPI TestClient (no auth overrides → 403 on guarded endpoints)
                 |
@@ -115,7 +115,7 @@ def engine(database_url):
 
 @pytest.fixture(scope="session")
 def seed_core_data(engine):
-    from app.DB.schema import Actions, Departments, ActionsActionType, DepartmentsType
+    from app.DB.schema import Actions, Departments, Members, ActionsActionType, DepartmentsType, MembersGender
 
     # CAUTION: Don't update default unless you know what you're doing
     # a lot of tests assume these default values and changing them might break the tests
@@ -136,6 +136,24 @@ def seed_core_data(engine):
                 ),
                 Departments(name="Business", type=DepartmentsType.PRACTICAL, ar_name="ريادة الأعمال"),
                 Departments(name="Design", type=DepartmentsType.ADMINISTRATIVE, ar_name="التصميم"),
+                Members(
+                    name="Ahmed Ali",
+                    email="ahmed@example.com",
+                    phone_number="0501234567",
+                    uni_id="111111111",
+                    gender=MembersGender.MALE,
+                    uni_level=4,
+                    uni_college="Engineering",
+                ),
+                Members(
+                    name="Sara Khalid",
+                    email="sara@example.com",
+                    phone_number="0509876543",
+                    uni_id="222222222",
+                    gender=MembersGender.FEMALE,
+                    uni_level=3,
+                    uni_college="Science",
+                ),
             ]
         )
         session.commit()
@@ -220,6 +238,23 @@ def admin_client(clerk_client) -> Generator:
     app.dependency_overrides[admin_guard] = override_admin_guard
     yield clerk_client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(scope="function")
+def db_session(client):
+    """
+    Provide a SQLAlchemy session bound to the test transaction.
+
+    Use this fixture when tests need direct DB access (e.g., inserting test data).
+    All changes will be rolled back after the test via the client fixture's transaction.
+    """
+    from app.DB.main import SessionLocal
+
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def pytest_collection_modifyitems(items):
