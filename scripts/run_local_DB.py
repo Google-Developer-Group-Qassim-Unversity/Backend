@@ -109,17 +109,6 @@ def run_migrations():
     print("[setup] Migrations complete.")
 
 
-def stamp_alembic():
-    print("[setup] Stamping Alembic to head...")
-    r = subprocess.run(
-        ["uv", "run", "alembic", "stamp", "head"], env={**os.environ, "DATABASE_URL": LOCAL_DATABASE_URL}
-    )
-    if r.returncode != 0:
-        print("[error] Alembic stamp failed.")
-        sys.exit(1)
-    print("[setup] Alembic stamped.")
-
-
 def get_prod_db_url() -> str:
     print("[infisical] Fetching DATABASE_URL...")
     r = run(
@@ -159,6 +148,13 @@ def parse_db_url(url: str) -> dict:
         "password": unquote(parsed.password or ""),
         "database": parsed.path.lstrip("/"),
     }
+
+
+def strip_definer(data: bytes) -> bytes:
+    import re
+
+    pattern = rb"""DEFINER\s*=\s*`[^`]*`\s*@\s*`[^`]*`\s*"""
+    return re.sub(pattern, b"", data)
 
 
 def dump_prod_to_local(prod_url: str):
@@ -228,35 +224,39 @@ def dump_prod_to_local(prod_url: str):
         stderr=subprocess.PIPE,
     )
 
-    restore_proc = subprocess.Popen(
-        ["docker", "exec", "-e", f"MYSQL_PWD={DB_PASSWORD}", "-i", CONTAINER_NAME, "mysql", "-u", DB_USER, DB_NAME],
-        stdin=dump_proc.stdout,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-
     assert dump_proc.stdout is not None
     assert dump_proc.stderr is not None
 
-    dump_proc.stdout.close()
-
-    _, restore_stderr_raw = restore_proc.communicate()
+    dump_output = dump_proc.stdout.read()
     dump_stderr = dump_proc.stderr.read().decode()
-    restore_stderr = restore_stderr_raw.decode()
     dump_proc.wait()
 
-    if restore_proc.returncode != 0:
-        print(f"[error] mysql restore failed (exit code {restore_proc.returncode}).")
-        if restore_stderr.strip():
-            for line in restore_stderr.strip().split("\n"):
-                print(f"        {line}")
-        sys.exit(1)
     if dump_proc.returncode not in (0, -13):
         print(f"[error] mysqldump failed (exit code {dump_proc.returncode}).")
         if "Access denied" in dump_stderr:
             print("        The prod database rejected the credentials.")
         else:
             for line in dump_stderr.strip().split("\n"):
+                print(f"        {line}")
+        sys.exit(1)
+
+    print("[dump] Stripping DEFINER clauses...")
+    dump_output = strip_definer(dump_output)
+
+    restore_proc = subprocess.Popen(
+        ["docker", "exec", "-e", f"MYSQL_PWD={DB_PASSWORD}", "-i", CONTAINER_NAME, "mysql", "-u", DB_USER, DB_NAME],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+
+    _, restore_stderr_raw = restore_proc.communicate(dump_output)
+    restore_stderr = restore_stderr_raw.decode()
+
+    if restore_proc.returncode != 0:
+        print(f"[error] mysql restore failed (exit code {restore_proc.returncode}).")
+        if restore_stderr.strip():
+            for line in restore_stderr.strip().split("\n"):
                 print(f"        {line}")
         sys.exit(1)
 
@@ -309,7 +309,6 @@ def main():
 
         prod_url = get_prod_db_url()
         dump_prod_to_local(prod_url)
-        stamp_alembic()
 
     print(f"\n[done] Database URL: {LOCAL_DATABASE_URL}")
 
