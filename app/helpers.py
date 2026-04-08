@@ -1,9 +1,6 @@
 from fastapi import Depends, HTTPException, status
 from app.config import config
 from app.routers.models import Member_model
-from typing import List, Union
-import pandas as pd
-from pydantic import HttpUrl
 from json import dumps
 import jwt
 from datetime import datetime, date, timedelta
@@ -27,50 +24,10 @@ def get_effective_date(dt: datetime, threshold: int) -> date:
     Example:
         With threshold=6:
         - Mar 3, 2:00 AM → effective date is Mar 2
-        - Mar 3, 8:00 AM → effective date is Mar 3
-    """
+        - Mar 3, 8:00 AM → effective date is Mar 3"""
     if dt.hour < threshold:
         return (dt - timedelta(days=1)).date()
     return dt.date()
-
-
-def get_pydantic_members(source: Union[str, HttpUrl]):
-    if isinstance(source, HttpUrl):
-        print(f"[2] Got link: \x1b[33m{source}\x1b[0m")
-        df = pd.read_csv(source.__str__())
-    else:
-        print(f"[2] Got file: \x1b[33m{source}\x1b[0m")
-        df = pd.read_excel(f"uploads/{source}")
-
-    members: List[Member_model] = []
-
-    # Get column names
-    df.columns = df.columns.str.strip()
-    columns = df.columns.tolist()
-    print(f"[2] Columns found: \x1b[36m{columns}\x1b[0m")
-    print(f"[2] Date columns found: \x1b[36m{columns[5:]}\x1b[0m")
-
-    # Iterate through DataFrame rows
-    for _, row in df.iterrows():
-        member = Member_model(
-            name=row.get("name"),
-            email=str(row.get("email")),
-            phone_number=None
-            if pd.isna(row.get("phone number")) or row.get("phone number") == ""
-            else str(row.get("phone number")),
-            uni_id=str(row.get("uni id")),
-            gender=row.get("gender"),
-            uni_level=0 if pd.isna(row.get("uni level")) or row.get("uni level") == "" else int(row.get("uni level")),
-            uni_college="unknown"
-            if pd.isna(row.get("uni college")) or row.get("uni college") == ""
-            else str(row.get("uni college")),
-        )
-
-        members.append(member)
-
-    source_type = "URL" if isinstance(source, HttpUrl) else "file"
-    print(f"[2] Extracted \x1b[32m{len(members)}\x1b[0m members from {source_type}")
-    return members
 
 
 def get_uni_id_from_credentials(credentials):
@@ -213,13 +170,6 @@ def validate_attendance_token(token: str, expected_event_id: int) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Attendance token not yet valid")
 
     except jwt.InvalidTokenError as e:
-        # Catch-all for anything else JWT-related
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid attendance token ({type(e).__name__})"
         )
-
-
-if __name__ == "__main__":
-    url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTI-xnfTaaEhNO4G4Vx1dJejKq2kDtHSi5yWtcrFGNfKJJxqRvIpBXk2_M9dxDc49NrDY-dD5SiJ6pR/pub?gid=1781104695&single=true&output=csv"
-    members = get_pydantic_members(url)
-    print(f"done ✅ got {len(members)} members")

@@ -16,10 +16,8 @@ from app.helpers import (
     authenticated_guard,
     get_uni_id_from_credentials,
     credentials_to_member_model,
-    get_pydantic_members,
     super_admin_guard,
 )
-from app.routers.upload import validate_sheet
 from app.routers.logging import (
     LogFile,
     write_log,

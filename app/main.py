@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from app.routers import (
     attendance,
     certificates,
@@ -17,7 +16,6 @@ from app.routers import (
     points,
     acceptance,
 )
-from app.config import config
 
 app = FastAPI()
 
@@ -44,6 +42,3 @@ app.include_router(submissions.router, prefix="/submissions", tags=["Submissions
 app.include_router(submissions_manual.router, prefix="/submissions_manual", tags=["Submissions Manual"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(acceptance.router, prefix="/acceptance", tags=["acceptance"])
-
-# TODO: replace this with nginx for production
-app.mount("/files", StaticFiles(directory=config.UPLOAD_DIR), name="files")
