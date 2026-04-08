@@ -5,9 +5,11 @@ from typing import Annotated
 
 import boto3
 from botocore.config import Config
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi_clerk_auth import HTTPAuthorizationCredentials
 
 from app.config import config
+from app.helpers import admin_guard
 from app.routers.logging import LogFile, write_log, write_log_exception, write_log_traceback
 
 router = APIRouter()
@@ -36,7 +38,9 @@ def get_extension(filename: str | None, content_type: str | None) -> str:
 
 
 @router.post("/", status_code=201)
-async def upload_file(file: Annotated[UploadFile, File()]):
+async def upload_file(
+    file: Annotated[UploadFile, File()], credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+):
     with LogFile("upload"):
         file_id = str(uuid.uuid4())
         extension = get_extension(file.filename, file.content_type)
