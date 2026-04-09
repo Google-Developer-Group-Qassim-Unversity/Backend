@@ -95,6 +95,14 @@ def mark_attendance(
             write_log(f"Attendace for event [{event.name}] for member [{member.name}]")
             write_log(f"Attendable log found for event [{event_log.id}]")
 
+            effective_now = get_effective_date(datetime.now(), config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+            event_start = event.start_datetime.date()
+            event_end = event.end_datetime.date()
+            if effective_now < event_start or effective_now > event_end:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="لا يمكنك تسجيل الحضور خارج فترة الحدث"
+                )
+
             if is_member_marked_for_day(session, member.id, event_log.id, datetime.now()):
                 write_log(f"Member [{member.id}] has already marked attendance for today")
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="!انت سجلت حضورك لهذا الحدث اليوم")

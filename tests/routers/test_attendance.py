@@ -9,6 +9,7 @@ refactored to use configurable action IDs (e.g., from config or database).
 
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import jwt
 import pytest
@@ -16,7 +17,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.DB.schema import MembersLogs, Members, MembersGender, Logs
+from app.DB.schema import MembersLogs, Members, MembersGender, Logs, Submissions
 from app.DB import logs as log_queries
 from tests.factories import make_create_event_payload
 from tests.utils import assert_2xx, assert_forbidden, assert_not_found, assert_bad_request
@@ -47,13 +48,44 @@ def make_attendance_token(event_id: int, secret: str = JWT_SECRET, expires_in_ho
     return jwt.encode(payload, secret, algorithm="HS256")
 
 
-def create_attendance_ready_event(client: TestClient, form_type: str = "none") -> int:
-    response = client.post("/events", json=make_create_event_payload(form_type=form_type))
+def create_attendance_ready_event(client: TestClient, form_type: str = "none", **event_overrides) -> int:
+    payload = make_create_event_payload(form_type=form_type)
+    if event_overrides:
+        payload["event"].update(event_overrides)
+    response = client.post("/events", json=payload)
     assert_2xx(response)
     event_id = response.json()["id"]
     status_response = client.put(f"/events/{event_id}/status", json={"status": "open"})
     assert_2xx(status_response)
     return event_id
+
+
+def create_ongoing_event(client: TestClient, form_type: str = "none", days: int = 3) -> int:
+    """Create an event that spans from yesterday to days from now, ensuring it includes today."""
+    now = datetime.now()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    end = now.replace(hour=23, minute=59, second=59, microsecond=0) + timedelta(days=days)
+    return create_attendance_ready_event(
+        client, form_type=form_type, start_datetime=start.isoformat(), end_datetime=end.isoformat()
+    )
+
+
+def create_submission(
+    db_session: Session, form_id: int, member_id: int, is_accepted: int = 0, submission_type: str = "registration"
+):
+    submission = Submissions(
+        form_id=form_id, member_id=member_id, is_accepted=is_accepted, is_invited=0, submission_type=submission_type
+    )
+    db_session.add(submission)
+    db_session.commit()
+    db_session.refresh(submission)
+    return submission
+
+
+def get_form_id(client: TestClient, event_id: int) -> int:
+    form_response = client.get(f"/events/{event_id}/form")
+    assert_2xx(form_response)
+    return form_response.json()["id"]
 
 
 def create_test_member(db_session: Session) -> Members:
@@ -283,7 +315,7 @@ def test_backfill_event_not_found(admin_client: TestClient):
 
 
 def test_mark_attendance_success(admin_client: TestClient, clerk_client: TestClient, db_session: Session):
-    event_id = create_attendance_ready_event(admin_client, form_type="none")
+    event_id = create_ongoing_event(admin_client, form_type="none")
     create_test_member(db_session)
     token = make_attendance_token(event_id)
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
@@ -324,7 +356,7 @@ def test_mark_attendance_expired_token(clerk_client: TestClient, admin_client: T
 
 
 def test_mark_attendance_already_marked_today(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
-    event_id = create_attendance_ready_event(admin_client, form_type="none")
+    event_id = create_ongoing_event(admin_client, form_type="none")
     member = create_test_member(db_session)
     log_id = get_member_log_id(db_session, event_id)
     existing_log = MembersLogs(member_id=member.id, log_id=log_id, date=datetime.now())
@@ -339,3 +371,150 @@ def test_mark_attendance_event_not_found(clerk_client: TestClient):
     token = make_attendance_token(9999)
     response = clerk_client.post(f"/attendance/9999?token={token}")
     assert_not_found(response)
+
+
+# === mark_attendance form type tests ===
+
+
+def test_mark_form_registration_not_submitted(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+    event_id = create_ongoing_event(admin_client, form_type="registration")
+    create_test_member(db_session)
+    token = make_attendance_token(event_id)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_bad_request(response)
+    assert "ما عبيت فورم الحدث" in response.json()["detail"]
+
+
+def test_mark_form_registration_not_accepted(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+    event_id = create_ongoing_event(admin_client, form_type="registration")
+    member = create_test_member(db_session)
+    form_id = get_form_id(admin_client, event_id)
+    create_submission(db_session, form_id=form_id, member_id=member.id, is_accepted=0)
+    token = make_attendance_token(event_id)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_bad_request(response)
+    assert "ما انقبلت في الحدث" in response.json()["detail"]
+
+
+def test_mark_form_registration_accepted(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+    event_id = create_ongoing_event(admin_client, form_type="registration")
+    member = create_test_member(db_session)
+    form_id = get_form_id(admin_client, event_id)
+    create_submission(db_session, form_id=form_id, member_id=member.id, is_accepted=1)
+    token = make_attendance_token(event_id)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_2xx(response)
+    attendance_response = clerk_client.get(f"/attendance/{event_id}?type=me")
+    assert_2xx(attendance_response)
+    assert attendance_response.json()["attendance_count"] == 1
+
+
+def test_mark_form_google_not_submitted(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+    event_id = create_ongoing_event(admin_client, form_type="google")
+    create_test_member(db_session)
+    token = make_attendance_token(event_id)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_bad_request(response)
+    assert "ما عبيت فورم الحدث" in response.json()["detail"]
+
+
+def test_mark_form_google_not_accepted(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+    event_id = create_ongoing_event(admin_client, form_type="google")
+    member = create_test_member(db_session)
+    form_id = get_form_id(admin_client, event_id)
+    create_submission(db_session, form_id=form_id, member_id=member.id, is_accepted=0, submission_type="google")
+    token = make_attendance_token(event_id)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_bad_request(response)
+    assert "ما انقبلت في الحدث" in response.json()["detail"]
+
+
+def test_mark_form_google_accepted(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+    event_id = create_ongoing_event(admin_client, form_type="google")
+    member = create_test_member(db_session)
+    form_id = get_form_id(admin_client, event_id)
+    create_submission(db_session, form_id=form_id, member_id=member.id, is_accepted=1, submission_type="google")
+    token = make_attendance_token(event_id)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_2xx(response)
+    attendance_response = clerk_client.get(f"/attendance/{event_id}?type=me")
+    assert_2xx(attendance_response)
+    assert attendance_response.json()["attendance_count"] == 1
+
+
+# === mark_attendance event date validation tests ===
+
+
+def test_mark_attendance_event_in_progress(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+    now = datetime.now()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    end = now.replace(hour=23, minute=59, second=59, microsecond=0) + timedelta(days=1)
+    event_id = create_attendance_ready_event(
+        admin_client, form_type="none", start_datetime=start.isoformat(), end_datetime=end.isoformat()
+    )
+    create_test_member(db_session)
+    token = make_attendance_token(event_id)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_2xx(response)
+
+
+def test_mark_attendance_event_ended_yesterday(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+    start = "2025-01-01T00:00:00"
+    end = "2025-01-02T23:59:59"
+    event_id = create_attendance_ready_event(admin_client, form_type="none", start_datetime=start, end_datetime=end)
+    create_test_member(db_session)
+    token = make_attendance_token(event_id)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_bad_request(response)
+    assert "خارج فترة الحدث" in response.json()["detail"]
+
+
+def test_mark_attendance_event_starts_tomorrow(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+    now = datetime.now()
+    start = (now + timedelta(days=2)).isoformat()
+    end = (now + timedelta(days=3)).isoformat()
+    event_id = create_attendance_ready_event(admin_client, form_type="none", start_datetime=start, end_datetime=end)
+    create_test_member(db_session)
+    token = make_attendance_token(event_id)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_bad_request(response)
+    assert "خارج فترة الحدث" in response.json()["detail"]
+
+
+def test_mark_attendance_early_hours_last_day(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+    now = datetime.now()
+    event_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
+    event_end = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    event_id = create_attendance_ready_event(
+        admin_client, form_type="none", start_datetime=event_start.isoformat(), end_datetime=event_end.isoformat()
+    )
+    create_test_member(db_session)
+    # Simulate marking at 2 AM - the effective date should still be yesterday (last day of event)
+    early_am = datetime(now.year, now.month, now.day, 2, 0, 0)
+    with patch("app.routers.attendance.datetime") as mock_dt:
+        mock_dt.now.return_value = early_am
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        token = make_attendance_token(event_id)
+        response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+        assert_2xx(response)
+
+
+def test_mark_attendance_early_hours_past_event(
+    clerk_client: TestClient, admin_client: TestClient, db_session: Session
+):
+    now = datetime.now()
+    event_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=3)
+    event_end = now.replace(hour=23, minute=59, second=59, microsecond=0) - timedelta(days=1)
+    event_id = create_attendance_ready_event(
+        admin_client, form_type="none", start_datetime=event_start.isoformat(), end_datetime=event_end.isoformat()
+    )
+    create_test_member(db_session)
+    # Simulate marking at 2 AM today when event ended yesterday
+    # Effective date via threshold (2 AM → yesterday) = last day of event → should succeed
+    early_am_today = datetime(now.year, now.month, now.day, 2, 0, 0)
+    with patch("app.routers.attendance.datetime") as mock_dt:
+        mock_dt.now.return_value = early_am_today
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        token = make_attendance_token(event_id)
+        response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+        assert_2xx(response)
