@@ -66,6 +66,10 @@ def authenticated_guard(credentials=Depends(config.CLERK_GUARD)):
     return credentials
 
 
+def optional_clerk_guard(credentials=Depends(config.CLERK_GUARD_optional)):
+    return credentials
+
+
 def admin_guard(credentials=Depends(config.CLERK_GUARD)):
     print("🔒 User authenticated, checking admin privileges...")
     if not is_admin(credentials):
