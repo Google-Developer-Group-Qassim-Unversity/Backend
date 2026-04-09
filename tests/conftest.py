@@ -203,13 +203,31 @@ FAKE_CLERK_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
     },
 )
 
+FAKE_ADMIN_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
+    scheme="Bearer",
+    credentials="fake-admin-token",
+    decoded={
+        "metadata": {
+            "uni_id": "123456789",
+            "fullArabicName": "Test Admin",
+            "saudiPhone": "0501234567",
+            "gender": "Male",
+            "uniLevel": 4,
+            "uniCollege": "Engineering",
+            "personalEmail": "admin@example.com",
+            "is_admin": True,
+        }
+    },
+)
+
 
 @pytest.fixture(scope="function")
 def clerk_client(client) -> Generator:
     from app.main import app
-    from app.helpers import authenticated_guard
+    from app.helpers import authenticated_guard, optional_clerk_guard
 
     app.dependency_overrides[authenticated_guard] = lambda: FAKE_CLERK_CREDENTIALS
+    app.dependency_overrides[optional_clerk_guard] = lambda: FAKE_CLERK_CREDENTIALS
     yield client
     app.dependency_overrides.clear()
 
@@ -230,12 +248,13 @@ def super_admin_client(clerk_client) -> Generator:
 @pytest.fixture(scope="function")
 def admin_client(clerk_client) -> Generator:
     from app.main import app
-    from app.helpers import admin_guard
+    from app.helpers import admin_guard, optional_clerk_guard
 
     def override_admin_guard():
         return HTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-token")
 
     app.dependency_overrides[admin_guard] = override_admin_guard
+    app.dependency_overrides[optional_clerk_guard] = lambda: FAKE_ADMIN_CREDENTIALS
     yield clerk_client
     app.dependency_overrides.clear()
 
