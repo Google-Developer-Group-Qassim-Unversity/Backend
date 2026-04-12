@@ -13,11 +13,38 @@ from app.routers.logging import (
     write_log_title,
 )
 from app.helpers import admin_guard
+from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
 import httpx
 from typing import Annotated
 
 
 router = APIRouter()
+
+
+async def read_html_body(request: Request) -> str:
+    html_content = (await request.body()).decode("utf-8")
+    if not html_content or not html_content.strip():
+        raise EmptyBody()
+    return html_content
+
+
+async def call_acceptance_api(emails: list[str], subject: str, html_content: str) -> dict:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            response = await client.post(
+                f"{config.CERTIFICATE_API_URL}/blasts",
+                params={"emails": ",".join(emails), "subject": subject},
+                content=html_content,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.TimeoutException:
+            raise GatewayTimeout(detail="Acceptance API request timed out")
+        except httpx.HTTPStatusError as e:
+            raise BadGateway(detail=f"Acceptance API returned error: {e.response.status_code}")
+        except httpx.RequestError:
+            raise ServiceUnavailable(detail="Failed to connect to acceptance API")
 
 
 @router.post("/blasts/{event_id:int}", status_code=status.HTTP_200_OK, response_model=AcceptanceBlastResponse)
@@ -31,67 +58,19 @@ async def send_acceptance_blasts(
         try:
             write_log_title(f"Sending acceptance blasts for event [{event_id}]")
 
-            html_body = await request.body()
-            html_content = html_body.decode("utf-8")
-
-            if not html_content or not html_content.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must contain HTML content"
-                )
-
+            html_content = await read_html_body(request)
             write_log(f"Received HTML body with {len(html_content)} characters")
 
             submissions = submissions_queries.get_accepted_not_invited_by_event(session, event_id)
-            submissions_count = len(submissions)
-            write_log(f"Found [{submissions_count}] accepted-not-invited submissions")
-
-            if submissions_count == 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No accepted submissions that haven't been invited found for this event",
-                )
-
             emails = [sub.email for sub in submissions if sub.email]
-            if not emails:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail="No valid emails found for accepted submissions"
-                )
+            write_log(f"Found [{len(submissions)}] submissions, [{len(emails)}] emails")
 
-            write_log(f"Extracted [{len(emails)}] emails from submissions")
-
-            acceptance_api_url = config.CERTIFICATE_API_URL
-            write_log(f"Sending request to acceptance API: [{acceptance_api_url}/blasts]")
+            write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
             write_log_json({"subject": subject, "email_count": len(emails), "emails": emails})
 
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                try:
-                    emails_param = ",".join(emails)
-                    response = await client.post(
-                        f"{acceptance_api_url}/blasts",
-                        params={"emails": emails_param, "subject": subject},
-                        content=html_content,
-                        headers={"Content-Type": "text/html; charset=utf-8"},
-                    )
-                    response.raise_for_status()
-                    response_data = response.json()
-                    write_log("Acceptance API responded successfully")
-                    write_log_json(response_data)
-                except httpx.TimeoutException:
-                    write_log_exception(Exception("Acceptance API request timed out"))
-                    raise HTTPException(
-                        status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Acceptance API request timed out"
-                    )
-                except httpx.HTTPStatusError as e:
-                    write_log_exception(Exception(f"Acceptance API error: {e.response.status_code}"))
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"Acceptance API returned error: {e.response.status_code}",
-                    )
-                except httpx.RequestError as e:
-                    write_log_exception(Exception(f"Failed to connect to acceptance API: {str(e)}"))
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to connect to acceptance API"
-                    )
+            response_data = await call_acceptance_api(emails, subject, html_content)
+            write_log("Acceptance API responded successfully")
+            write_log_json(response_data)
 
             submission_ids = [sub.submission_id for sub in submissions]
             submissions_queries.mark_submissions_as_invited(session, submission_ids)
@@ -122,54 +101,16 @@ async def send_acceptance_test(
         try:
             write_log_title("Sending acceptance test emails")
 
-            html_body = await request.body()
-            html_content = html_body.decode("utf-8")
-
-            if not html_content or not html_content.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must contain HTML content"
-                )
-
+            html_content = await read_html_body(request)
             write_log(f"Received HTML body with {len(html_content)} characters")
-
-            if not emails:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid email addresses provided")
 
             write_log(f"Parsed [{len(emails)}] test emails")
             write_log_json({"emails": emails})
+            write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
 
-            acceptance_api_url = config.CERTIFICATE_API_URL
-            write_log(f"Sending request to acceptance API: [{acceptance_api_url}/blasts]")
-
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                try:
-                    emails_param = ",".join(emails)
-                    response = await client.post(
-                        f"{acceptance_api_url}/blasts",
-                        params={"emails": emails_param, "subject": subject},
-                        content=html_content,
-                        headers={"Content-Type": "text/html; charset=utf-8"},
-                    )
-                    response.raise_for_status()
-                    response_data = response.json()
-                    write_log("Acceptance API responded successfully")
-                    write_log_json(response_data)
-                except httpx.TimeoutException:
-                    write_log_exception(Exception("Acceptance API request timed out"))
-                    raise HTTPException(
-                        status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Acceptance API request timed out"
-                    )
-                except httpx.HTTPStatusError as e:
-                    write_log_exception(Exception(f"Acceptance API error: {e.response.status_code}"))
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"Acceptance API returned error: {e.response.status_code}",
-                    )
-                except httpx.RequestError as e:
-                    write_log_exception(Exception(f"Failed to connect to acceptance API: {str(e)}"))
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to connect to acceptance API"
-                    )
+            response_data = await call_acceptance_api(emails, subject, html_content)
+            write_log("Acceptance API responded successfully")
+            write_log_json(response_data)
 
             return AcceptanceBlastResponse(sent_count=len(emails), emails=emails)
 

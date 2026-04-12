@@ -24,6 +24,26 @@ class DataIntegrityError(HTTPException):
         super().__init__(status_code=500, detail=message)
 
 
+class EmptyBody(KnownHttpException):
+    def __init__(self):
+        super().__init__(status_code=400, detail="Request body must contain HTML content")
+
+
+class GatewayTimeout(KnownHttpException):
+    def __init__(self, detail: str = "Upstream request timed out"):
+        super().__init__(status_code=504, detail=detail)
+
+
+class BadGateway(KnownHttpException):
+    def __init__(self, detail: str = "Upstream returned an error"):
+        super().__init__(status_code=502, detail=detail)
+
+
+class ServiceUnavailable(KnownHttpException):
+    def __init__(self, detail: str = "Failed to connect to upstream service"):
+        super().__init__(status_code=503, detail=detail)
+
+
 class FormNotFoundById(NotFound):
     def __init__(self, form_id: int):
         super().__init__("Form", form_id)
