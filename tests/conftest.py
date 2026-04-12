@@ -276,6 +276,30 @@ def db_session(client):
         session.close()
 
 
+class SeedRefs:
+    """Dynamic references to seed data IDs.
+
+    Queries the test DB for seeded entities so tests don't hardcode IDs.
+    If seed data changes, these update automatically.
+    """
+
+    def __init__(self, session):
+        from sqlalchemy import select
+        from app.DB.schema import Actions, ActionsActionType, Departments, Members
+
+        self.dept_action = session.scalar(select(Actions).where(Actions.action_type == ActionsActionType.DEPARTMENT))
+        self.member_action = session.scalar(select(Actions).where(Actions.action_type == ActionsActionType.MEMBER))
+        self.dept_business = session.scalar(select(Departments).where(Departments.name == "Business"))
+        self.dept_design = session.scalar(select(Departments).where(Departments.name == "Design"))
+        self.ahmed = session.scalar(select(Members).where(Members.uni_id == "111111111"))
+        self.sara = session.scalar(select(Members).where(Members.uni_id == "222222222"))
+
+
+@pytest.fixture(scope="function")
+def seed_refs(db_session):
+    return SeedRefs(db_session)
+
+
 def pytest_collection_modifyitems(items):
     """Force test_database_connection to always run first."""
 

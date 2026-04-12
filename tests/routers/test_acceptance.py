@@ -14,7 +14,7 @@ def helper_create_event_with_form(admin_client: TestClient) -> tuple[dict, int]:
     return event, form["id"]
 
 
-def helper_insert_accepted_submission(db_session, form_id: int, member_id: int = 1, is_accepted: bool = True) -> int:
+def helper_insert_accepted_submission(db_session, form_id: int, member_id: int, is_accepted: bool = True) -> int:
     sub = Submissions(
         form_id=form_id,
         member_id=member_id,
@@ -27,9 +27,9 @@ def helper_insert_accepted_submission(db_session, form_id: int, member_id: int =
     return sub.id
 
 
-def test_send_acceptance_blasts_success(admin_client: TestClient, db_session):
+def test_send_acceptance_blasts_success(admin_client: TestClient, db_session, seed_refs):
     event, form_id = helper_create_event_with_form(admin_client)
-    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=1)
+    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
     mock_response = {"message": "sent", "count": 1}
     with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value=mock_response):
@@ -42,12 +42,12 @@ def test_send_acceptance_blasts_success(admin_client: TestClient, db_session):
     assert_2xx(response)
     body = response.json()
     assert body["sent_count"] == 1
-    assert "ahmed@example.com" in body["emails"]
+    assert seed_refs.ahmed.email in body["emails"]
 
 
-def test_send_acceptance_blasts_marks_invited(admin_client: TestClient, db_session):
+def test_send_acceptance_blasts_marks_invited(admin_client: TestClient, db_session, seed_refs):
     event, form_id = helper_create_event_with_form(admin_client)
-    sub_id = helper_insert_accepted_submission(db_session, form_id=form_id, member_id=1)
+    sub_id = helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
     with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value={}):
         response = admin_client.post(
@@ -62,9 +62,9 @@ def test_send_acceptance_blasts_marks_invited(admin_client: TestClient, db_sessi
     assert sub.is_invited == 1, f"Expected is_invited=1 after blast, got {sub.is_invited}"
 
 
-def test_send_acceptance_blasts_empty_body(admin_client: TestClient, db_session):
+def test_send_acceptance_blasts_empty_body(admin_client: TestClient, db_session, seed_refs):
     event, form_id = helper_create_event_with_form(admin_client)
-    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=1)
+    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
     with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value={}):
         response = admin_client.post(
@@ -76,9 +76,9 @@ def test_send_acceptance_blasts_empty_body(admin_client: TestClient, db_session)
     assert "HTML content" in response.json()["detail"]
 
 
-def test_send_acceptance_blasts_no_accepted_submissions(admin_client: TestClient, db_session):
+def test_send_acceptance_blasts_no_accepted_submissions(admin_client: TestClient, db_session, seed_refs):
     event, form_id = helper_create_event_with_form(admin_client)
-    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=1, is_accepted=False)
+    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id, is_accepted=False)
 
     with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value={}):
         response = admin_client.post(
@@ -148,18 +148,18 @@ def test_send_acceptance_test_unauthorized(client: TestClient):
     assert_forbidden(response)
 
 
-def test_send_acceptance_blasts_skips_already_invited(admin_client: TestClient, db_session):
+def test_send_acceptance_blasts_skips_already_invited(admin_client: TestClient, db_session, seed_refs):
     event, form_id = helper_create_event_with_form(admin_client)
     sub1 = Submissions(
         form_id=form_id,
-        member_id=1,
+        member_id=seed_refs.ahmed.id,
         is_accepted=1,
         is_invited=0,
         submission_type=SubmissionsSubmissionType.REGISTRATION,
     )
     sub2 = Submissions(
         form_id=form_id,
-        member_id=2,
+        member_id=seed_refs.sara.id,
         is_accepted=1,
         is_invited=1,
         submission_type=SubmissionsSubmissionType.REGISTRATION,
@@ -177,14 +177,15 @@ def test_send_acceptance_blasts_skips_already_invited(admin_client: TestClient, 
     assert_2xx(response)
     body = response.json()
     assert body["sent_count"] == 1, f"Expected only 1 email (skipping already-invited), got {body['sent_count']}"
-    assert "sara@example.com" not in body["emails"]
+    assert seed_refs.sara.email not in body["emails"]
     mock_api.assert_called_once()
 
 
-def test_send_acceptance_blasts_gateway_timeout(admin_client: TestClient, db_session):
+def test_send_acceptance_blasts_gateway_timeout(admin_client: TestClient, db_session, seed_refs):
+    from app.exceptions import GatewayTimeout
 
     event, form_id = helper_create_event_with_form(admin_client)
-    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=1)
+    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
     with patch(
         "app.routers.acceptance.call_acceptance_api",
@@ -201,10 +202,11 @@ def test_send_acceptance_blasts_gateway_timeout(admin_client: TestClient, db_ses
     assert "timed out" in response.json()["detail"].lower()
 
 
-def test_send_acceptance_blasts_bad_gateway(admin_client: TestClient, db_session):
+def test_send_acceptance_blasts_bad_gateway(admin_client: TestClient, db_session, seed_refs):
+    from app.exceptions import BadGateway
 
     event, form_id = helper_create_event_with_form(admin_client)
-    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=1)
+    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
     with patch(
         "app.routers.acceptance.call_acceptance_api",
@@ -221,10 +223,11 @@ def test_send_acceptance_blasts_bad_gateway(admin_client: TestClient, db_session
     assert "500" in response.json()["detail"]
 
 
-def test_send_acceptance_blasts_service_unavailable(admin_client: TestClient, db_session):
+def test_send_acceptance_blasts_service_unavailable(admin_client: TestClient, db_session, seed_refs):
+    from app.exceptions import ServiceUnavailable
 
     event, form_id = helper_create_event_with_form(admin_client)
-    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=1)
+    helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
     with patch(
         "app.routers.acceptance.call_acceptance_api",

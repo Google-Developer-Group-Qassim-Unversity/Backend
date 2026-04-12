@@ -28,7 +28,10 @@ _original_get_attendable_logs = log_queries.get_attendable_logs
 
 
 def _patched_get_attendable_logs(session, event_id):
-    stmt = select(Logs).where(Logs.event_id == event_id, Logs.action_id == 2)
+    from app.DB.schema import Actions, ActionsActionType
+
+    member_action_id = session.scalar(select(Actions.id).where(Actions.action_type == ActionsActionType.MEMBER))
+    stmt = select(Logs).where(Logs.event_id == event_id, Logs.action_id == member_action_id)
     result = session.scalar(stmt)
     if result:
         return result
@@ -104,10 +107,10 @@ def create_test_member(db_session: Session) -> Members:
     return member
 
 
-def get_member_log_id(db_session: Session, event_id: int) -> int | None:
+def get_member_log_id(db_session: Session, event_id: int, member_action_id: int) -> int | None:
     logs = db_session.query(Logs).filter(Logs.event_id == event_id).all()
     for log in logs:
-        if log.action_id == 2:
+        if log.action_id == member_action_id:
             return log.id
     return logs[0].id if logs else None
 
@@ -143,10 +146,10 @@ def test_attendance_me_authenticated(admin_client: TestClient, db_session: Sessi
     assert_2xx(response)
 
 
-def test_attendance_me_returns_own_attendance(admin_client: TestClient, db_session: Session):
+def test_attendance_me_returns_own_attendance(admin_client: TestClient, db_session: Session, seed_refs):
     event_id = create_attendance_ready_event(admin_client)
     member = create_test_member(db_session)
-    log_id = get_member_log_id(db_session, event_id)
+    log_id = get_member_log_id(db_session, event_id, seed_refs.member_action.id)
     member_log = MembersLogs(member_id=member.id, log_id=log_id, date=datetime.now())
     db_session.add(member_log)
     db_session.commit()
@@ -173,14 +176,16 @@ def test_attendance_day_out_of_range(admin_client: TestClient):
 # === remove_attendance_manual tests ===
 
 
-def test_remove_attendance_success(admin_client: TestClient, db_session: Session):
+def test_remove_attendance_success(admin_client: TestClient, db_session: Session, seed_refs):
     event_id = create_attendance_ready_event(admin_client)
-    log_id = get_member_log_id(db_session, event_id)
-    member_log = MembersLogs(member_id=1, log_id=log_id, date=datetime.now())
+    log_id = get_member_log_id(db_session, event_id, seed_refs.member_action.id)
+    member_log = MembersLogs(member_id=seed_refs.ahmed.id, log_id=log_id, date=datetime.now())
     db_session.add(member_log)
     db_session.commit()
     response = admin_client.request(
-        "DELETE", f"/attendance/{event_id}/manual", content=json.dumps({"member_ids": [1], "day": None})
+        "DELETE",
+        f"/attendance/{event_id}/manual",
+        content=json.dumps({"member_ids": [seed_refs.ahmed.id], "day": None}),
     )
     assert_2xx(response)
     data = response.json()
@@ -209,22 +214,24 @@ def test_remove_attendance_event_not_found(admin_client: TestClient):
 # === mark_attendance_manual tests ===
 
 
-def test_manual_mark_success(admin_client: TestClient, db_session: Session):
+def test_manual_mark_success(admin_client: TestClient, db_session: Session, seed_refs):
     event_id = create_attendance_ready_event(admin_client)
-    log_id = get_member_log_id(db_session, event_id)
+    log_id = get_member_log_id(db_session, event_id, seed_refs.member_action.id)
     assert log_id is not None, "Event should have a member log"
-    response = admin_client.post(f"/attendance/{event_id}/manual", json={"member_ids": [1, 2], "day": 1})
+    response = admin_client.post(
+        f"/attendance/{event_id}/manual", json={"member_ids": [seed_refs.ahmed.id, seed_refs.sara.id], "day": 1}
+    )
     assert_2xx(response)
     data = response.json()
     assert data["success"] == 2
     assert data["failed"] == 0
 
 
-def test_manual_mark_event_closed(admin_client: TestClient):
+def test_manual_mark_event_closed(admin_client: TestClient, seed_refs):
     event_id = create_attendance_ready_event(admin_client)
     close_response = admin_client.put(f"/events/{event_id}/status", json={"status": "closed"})
     assert_2xx(close_response)
-    response = admin_client.post(f"/attendance/{event_id}/manual", json={"member_ids": [1]})
+    response = admin_client.post(f"/attendance/{event_id}/manual", json={"member_ids": [seed_refs.ahmed.id]})
     assert_bad_request(response)
 
 
@@ -237,9 +244,11 @@ def test_manual_mark_member_not_found(admin_client: TestClient):
     assert data["failed"] == 1
 
 
-def test_manual_mark_day_out_of_range(admin_client: TestClient):
+def test_manual_mark_day_out_of_range(admin_client: TestClient, seed_refs):
     event_id = create_attendance_ready_event(admin_client)
-    response = admin_client.post(f"/attendance/{event_id}/manual", json={"member_ids": [1], "day": 999})
+    response = admin_client.post(
+        f"/attendance/{event_id}/manual", json={"member_ids": [seed_refs.ahmed.id], "day": 999}
+    )
     assert_2xx(response)
     data = response.json()
     assert data["success"] == 0
@@ -249,14 +258,14 @@ def test_manual_mark_day_out_of_range(admin_client: TestClient):
 # === backfill_attendance tests ===
 
 
-def test_backfill_existing_members(admin_client: TestClient):
+def test_backfill_existing_members(admin_client: TestClient, seed_refs):
     event_id = create_attendance_ready_event(admin_client)
     members_payload = [
         {
             "name": "Test",
             "email": "test@test.com",
             "phone_number": "0501111111",
-            "uni_id": "111111111",
+            "uni_id": seed_refs.ahmed.uni_id,
             "gender": "Male",
             "uni_level": 3,
             "uni_college": "Engineering",
@@ -265,7 +274,7 @@ def test_backfill_existing_members(admin_client: TestClient):
             "name": "Test2",
             "email": "test2@test.com",
             "phone_number": "0502222222",
-            "uni_id": "222222222",
+            "uni_id": seed_refs.sara.uni_id,
             "gender": "Female",
             "uni_level": 4,
             "uni_college": "Science",
@@ -355,10 +364,12 @@ def test_mark_attendance_expired_token(clerk_client: TestClient, admin_client: T
     assert response.status_code == 401
 
 
-def test_mark_attendance_already_marked_today(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
+def test_mark_attendance_already_marked_today(
+    clerk_client: TestClient, admin_client: TestClient, db_session: Session, seed_refs
+):
     event_id = create_ongoing_event(admin_client, form_type="none")
     member = create_test_member(db_session)
-    log_id = get_member_log_id(db_session, event_id)
+    log_id = get_member_log_id(db_session, event_id, seed_refs.member_action.id)
     existing_log = MembersLogs(member_id=member.id, log_id=log_id, date=datetime.now())
     db_session.add(existing_log)
     db_session.commit()
