@@ -29,14 +29,22 @@ def make_event(**overrides):
     return defaults
 
 
-def make_create_event_payload(**overrides):
+def make_create_event_payload(seed_refs=None, **overrides):
     event = overrides.pop("event", None) or make_event()
+    if seed_refs is not None:
+        dept_action_id = seed_refs.dept_action.id
+        member_action_id = seed_refs.member_action.id
+        department_id = seed_refs.dept_business.id
+    else:
+        dept_action_id = 1
+        member_action_id = 2
+        department_id = 1
     defaults = {
         "event": event,
         "form_type": "none",
-        "department_action_id": 1,
-        "member_action_id": 2,
-        "department_id": 1,
+        "department_action_id": dept_action_id,
+        "member_action_id": member_action_id,
+        "department_id": department_id,
     }
     defaults.update(overrides)
     return defaults

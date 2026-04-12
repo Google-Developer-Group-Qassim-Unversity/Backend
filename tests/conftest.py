@@ -203,13 +203,31 @@ FAKE_CLERK_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
     },
 )
 
+FAKE_ADMIN_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
+    scheme="Bearer",
+    credentials="fake-admin-token",
+    decoded={
+        "metadata": {
+            "uni_id": "123456789",
+            "fullArabicName": "Test Admin",
+            "saudiPhone": "0501234567",
+            "gender": "Male",
+            "uniLevel": 4,
+            "uniCollege": "Engineering",
+            "personalEmail": "admin@example.com",
+            "is_admin": True,
+        }
+    },
+)
+
 
 @pytest.fixture(scope="function")
 def clerk_client(client) -> Generator:
     from app.main import app
-    from app.helpers import authenticated_guard
+    from app.helpers import authenticated_guard, optional_clerk_guard
 
     app.dependency_overrides[authenticated_guard] = lambda: FAKE_CLERK_CREDENTIALS
+    app.dependency_overrides[optional_clerk_guard] = lambda: FAKE_CLERK_CREDENTIALS
     yield client
     app.dependency_overrides.clear()
 
@@ -230,12 +248,13 @@ def super_admin_client(clerk_client) -> Generator:
 @pytest.fixture(scope="function")
 def admin_client(clerk_client) -> Generator:
     from app.main import app
-    from app.helpers import admin_guard
+    from app.helpers import admin_guard, optional_clerk_guard
 
     def override_admin_guard():
         return HTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-token")
 
     app.dependency_overrides[admin_guard] = override_admin_guard
+    app.dependency_overrides[optional_clerk_guard] = lambda: FAKE_ADMIN_CREDENTIALS
     yield clerk_client
     app.dependency_overrides.clear()
 
@@ -255,6 +274,30 @@ def db_session(client):
         yield session
     finally:
         session.close()
+
+
+class SeedRefs:
+    """Dynamic references to seed data IDs.
+
+    Queries the test DB for seeded entities so tests don't hardcode IDs.
+    If seed data changes, these update automatically.
+    """
+
+    def __init__(self, session):
+        from sqlalchemy import select
+        from app.DB.schema import Actions, ActionsActionType, Departments, Members
+
+        self.dept_action = session.scalar(select(Actions).where(Actions.action_type == ActionsActionType.DEPARTMENT))
+        self.member_action = session.scalar(select(Actions).where(Actions.action_type == ActionsActionType.MEMBER))
+        self.dept_business = session.scalar(select(Departments).where(Departments.name == "Business"))
+        self.dept_design = session.scalar(select(Departments).where(Departments.name == "Design"))
+        self.ahmed = session.scalar(select(Members).where(Members.uni_id == "111111111"))
+        self.sara = session.scalar(select(Members).where(Members.uni_id == "222222222"))
+
+
+@pytest.fixture(scope="function")
+def seed_refs(db_session):
+    return SeedRefs(db_session)
 
 
 def pytest_collection_modifyitems(items):

@@ -263,6 +263,30 @@ def dump_prod_to_local(prod_url: str):
     print("[dump] Production data copied to local database.")
 
 
+def prefix_event_names():
+    print("[dev] Prefixing event names with '[Dev] '...")
+    r = run(
+        [
+            "docker",
+            "exec",
+            "-e",
+            f"MYSQL_PWD={DB_PASSWORD}",
+            CONTAINER_NAME,
+            "mysql",
+            "-u",
+            DB_USER,
+            DB_NAME,
+            "-e",
+            "UPDATE events SET name = CONCAT('[Dev] ', name) WHERE name NOT LIKE '[Dev] %';",
+        ]
+    )
+    if r.returncode != 0:
+        print(f"[error] Failed to prefix event names:\n{r.stderr}")
+        sys.exit(1)
+    rows = r.stdout.strip()
+    print(f"[dev] Event names updated{f' ({rows} rows)' if rows else ''}.")
+
+
 def remove_container():
     print(f"[reset] Stopping and removing container '{CONTAINER_NAME}'...")
     run(["docker", "rm", "-f", CONTAINER_NAME])
@@ -309,6 +333,7 @@ def main():
 
         prod_url = get_prod_db_url()
         dump_prod_to_local(prod_url)
+        prefix_event_names()
 
     print(f"\n[done] Database URL: {LOCAL_DATABASE_URL}")
 

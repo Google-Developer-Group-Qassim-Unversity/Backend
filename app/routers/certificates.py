@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import events as events_queries, logs as log_queries
 from app.DB.main import SessionLocal
+from app.DB.schema import Events
 from app.routers.models import CertificateRequest, SimplifiedMember, CertificateJobResponse, ManualCertificateRequest
 from app.config import config
 from app.routers.logging import (
@@ -13,11 +14,39 @@ from app.routers.logging import (
     write_log_title,
 )
 from app.helpers import admin_guard, get_effective_date
+from app.exceptions import GatewayTimeout, BadGateway, ServiceUnavailable
 import httpx
 import json
 from typing import Annotated
 
 router = APIRouter()
+
+
+async def call_certificate_api(cert_request: CertificateRequest) -> dict:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            response = await client.post(
+                f"{config.CERTIFICATE_API_URL}/certificates",
+                json=cert_request.model_dump(mode="json"),
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.TimeoutException:
+            raise GatewayTimeout(detail="Certificate API request timed out")
+        except httpx.HTTPStatusError as e:
+            raise BadGateway(detail=f"Certificate API returned error: {e.response.status_code}")
+        except httpx.RequestError:
+            raise ServiceUnavailable(detail="Failed to connect to certificate API")
+
+
+def format_event_date(event: Events) -> str:
+    start_effective = get_effective_date(event.start_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+    end_effective = get_effective_date(event.end_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+    days = (end_effective - start_effective).days
+    if days == 0:
+        return start_effective.strftime("%Y-%m-%d")
+    return f"{start_effective.strftime('%Y-%m-%d')} - {end_effective.strftime('%Y-%m-%d')}"
 
 
 @router.post("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=CertificateJobResponse)
@@ -27,35 +56,12 @@ async def send_certificates(event_id: int, credentials: Annotated[HTTPAuthorizat
             write_log_title(f"Sending certificates for event [{event_id}]")
 
             event = events_queries.get_event_by_id(session, event_id)
-            if not event:
-                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-                write_log_exception(excep)
-                raise excep
             write_log(f"Found event: [{event.name}]")
 
             attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
-            attendance_count = len(attendance)
-            write_log(f"Found [{attendance_count}] attendees who attended all days for event [{event.name}]")
+            write_log(f"Found [{len(attendance)}] attendees who attended all days for event [{event.name}]")
 
-            if attendance_count == 0:
-                write_log_exception(
-                    HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="No attendees who completed all days found for this event",
-                    )
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No attendees who completed all days found for this event",
-                )
-
-            start_effective = get_effective_date(event.start_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
-            end_effective = get_effective_date(event.end_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
-            days = (end_effective - start_effective).days
-            if days == 0:
-                date_str = start_effective.strftime("%Y-%m-%d")
-            else:
-                date_str = f"{start_effective.strftime('%Y-%m-%d')} - {end_effective.strftime('%Y-%m-%d')}"
+            date_str = format_event_date(event)
             write_log(f"Event date formatted as: [{date_str}]")
 
             simplified_members = [
@@ -86,39 +92,12 @@ async def send_certificates(event_id: int, credentials: Annotated[HTTPAuthorizat
                 )
             )
 
-            certificate_api_url = config.CERTIFICATE_API_URL
-            write_log(f"Sending request to certificate API: [{certificate_api_url}/certificates]")
+            write_log(f"Sending request to certificate API: [{config.CERTIFICATE_API_URL}/certificates]")
+            response_data = await call_certificate_api(cert_request)
+            write_log(f"Certificate API responded with job_id: [{response_data.get('job_id')}]")
+            write_log_json(response_data)
+            return CertificateJobResponse(**response_data)
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                try:
-                    response = await client.post(
-                        f"{certificate_api_url}/certificates",
-                        json=cert_request.model_dump(mode="json"),
-                        headers={"Content-Type": "application/json"},
-                    )
-                    response.raise_for_status()
-                    response_data = response.json()
-                    write_log(f"Certificate API responded with job_id: [{response_data.get('job_id')}]")
-                    write_log_json(response_data)
-                    return CertificateJobResponse(**response_data)
-                except httpx.TimeoutException:
-                    write_log_exception(Exception("Certificate API request timed out after 30 seconds"))
-                    raise HTTPException(
-                        status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Certificate API request timed out"
-                    )
-                except httpx.HTTPStatusError as e:
-                    write_log_exception(
-                        Exception(f"Certificate API returned error status {e.response.status_code}: {e.response.text}")
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"Certificate API returned error: {e.response.status_code}",
-                    )
-                except httpx.RequestError as e:
-                    write_log_exception(Exception(f"Failed to connect to certificate API: {str(e)}"))
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to connect to certificate API"
-                    )
         except HTTPException:
             raise
         except Exception as e:
@@ -140,22 +119,12 @@ async def send_manual_certificates(
             write_log_title(f"Sending manual certificates for event [{event_id}]")
 
             event = events_queries.get_event_by_id(session, event_id)
-            if not event:
-                excep = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-                write_log_exception(excep)
-                raise excep
             write_log(f"Found event: [{event.name}]")
 
             members_count = len(request.members)
             write_log(f"Received [{members_count}] manual members for certificate generation")
 
-            start_effective = get_effective_date(event.start_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
-            end_effective = get_effective_date(event.end_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
-            days = (end_effective - start_effective).days
-            if days == 0:
-                date_str = start_effective.strftime("%Y-%m-%d")
-            else:
-                date_str = f"{start_effective.strftime('%Y-%m-%d')} - {end_effective.strftime('%Y-%m-%d')}"
+            date_str = format_event_date(event)
             write_log(f"Event date formatted as: [{date_str}]")
 
             cert_request = CertificateRequest(
@@ -178,39 +147,12 @@ async def send_manual_certificates(
                 )
             )
 
-            certificate_api_url = config.CERTIFICATE_API_URL
-            write_log(f"Sending request to certificate API: [{certificate_api_url}/certificates]")
+            write_log(f"Sending request to certificate API: [{config.CERTIFICATE_API_URL}/certificates]")
+            response_data = await call_certificate_api(cert_request)
+            write_log(f"Certificate API responded with job_id: [{response_data.get('job_id')}]")
+            write_log_json(response_data)
+            return CertificateJobResponse(**response_data)
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                try:
-                    response = await client.post(
-                        f"{certificate_api_url}/certificates",
-                        json=cert_request.model_dump(mode="json"),
-                        headers={"Content-Type": "application/json"},
-                    )
-                    response.raise_for_status()
-                    response_data = response.json()
-                    write_log(f"Certificate API responded with job_id: [{response_data.get('job_id')}]")
-                    write_log_json(response_data)
-                    return CertificateJobResponse(**response_data)
-                except httpx.TimeoutException:
-                    write_log_exception(Exception("Certificate API request timed out after 30 seconds"))
-                    raise HTTPException(
-                        status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Certificate API request timed out"
-                    )
-                except httpx.HTTPStatusError as e:
-                    write_log_exception(
-                        Exception(f"Certificate API returned error status {e.response.status_code}: {e.response.text}")
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"Certificate API returned error: {e.response.status_code}",
-                    )
-                except httpx.RequestError as e:
-                    write_log_exception(Exception(f"Failed to connect to certificate API: {str(e)}"))
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to connect to certificate API"
-                    )
         except HTTPException:
             raise
         except Exception as e:

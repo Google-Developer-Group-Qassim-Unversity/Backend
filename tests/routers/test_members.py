@@ -61,7 +61,7 @@ def test_get_all_members(admin_client: TestClient):
     response = admin_client.get("/members/")
     assert_2xx(response)
     members = response.json()
-    assert len(members) == 2, f"Expected 2 seeded members but got {len(members)}"
+    assert len(members) == 2
     names = {m["name"] for m in members}
     assert "Ahmed Ali" in names
     assert "Sara Khalid" in names
@@ -75,12 +75,12 @@ def test_unauthorized_get_all_members(clerk_client: TestClient):
 # === GET /uni-id/{uni_id} Tests ===
 
 
-def test_get_member_by_uni_id(admin_client: TestClient):
-    response = admin_client.get("/members/uni-id/111111111")
+def test_get_member_by_uni_id(admin_client: TestClient, seed_refs):
+    response = admin_client.get(f"/members/uni-id/{seed_refs.ahmed.uni_id}")
     assert_2xx(response)
     body = response.json()
-    assert body["name"] == "Ahmed Ali"
-    assert body["uni_id"] == "111111111"
+    assert body["name"] == seed_refs.ahmed.name
+    assert body["uni_id"] == seed_refs.ahmed.uni_id
 
 
 def test_get_member_by_uni_id_not_found(admin_client: TestClient):
@@ -180,11 +180,13 @@ def test_update_member_role_invalid_role(super_admin_client: TestClient):
     assert_unprocessable(response)
 
 
-def test_update_member_role_from_existing(super_admin_client: TestClient, db_session):
-    db_session.add(Role(member_id=1, role=RoleType.ADMIN))
+def test_update_member_role_from_existing(super_admin_client: TestClient, db_session, seed_refs):
+    db_session.add(Role(member_id=seed_refs.ahmed.id, role=RoleType.ADMIN))
     db_session.commit()
 
-    response = super_admin_client.post("/members/roles", params={"member_id": 1, "new_role": "super_admin"})
+    response = super_admin_client.post(
+        "/members/roles", params={"member_id": seed_refs.ahmed.id, "new_role": "super_admin"}
+    )
     assert_2xx(response)
     body = response.json()
     assert body["role"] == "super_admin"
@@ -193,16 +195,16 @@ def test_update_member_role_from_existing(super_admin_client: TestClient, db_ses
 # === GET /roles Tests ===
 
 
-def test_get_member_roles(super_admin_client: TestClient, db_session):
-    db_session.add(Role(member_id=1, role=RoleType.ADMIN))
+def test_get_member_roles(super_admin_client: TestClient, db_session, seed_refs):
+    db_session.add(Role(member_id=seed_refs.ahmed.id, role=RoleType.ADMIN))
     db_session.commit()
 
     response = super_admin_client.get("/members/roles")
     assert_2xx(response)
     roles = response.json()
     assert len(roles) >= 1, f"Expected at least 1 role but got {len(roles)}"
-    admin_role = next((r for r in roles if r["id"] == 1), None)
-    assert admin_role is not None, "Expected to find role for member 1"
+    admin_role = next((r for r in roles if r["id"] == seed_refs.ahmed.id), None)
+    assert admin_role is not None, f"Expected to find role for member {seed_refs.ahmed.id}"
     assert admin_role["role"] == "admin"
 
 

@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from typing import Sequence
+
+from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from .schema import Submissions, t_forms_submissions
@@ -95,7 +100,9 @@ def update_is_accepted(session: Session, submission_id: int, is_accepted: bool):
     return submission
 
 
-def get_accepted_not_invited_by_event(session: Session, event_id: int):
+def get_accepted_not_invited_by_event(session: Session, event_id: int) -> Sequence[Row[tuple]]:
+    """Returns rows from the forms_submissions view for accepted-not-invited submissions.
+    Each row always includes: submission_id, email, event_id, is_accepted, is_invited, etc."""
     submissions = session.execute(
         select(t_forms_submissions).where(
             t_forms_submissions.c.event_id == event_id,
