@@ -24,8 +24,10 @@ def health_check():
 )
 def db_check():
     with SessionLocal() as session:
+        times = []
+        status_rows = None
+        var_rows = None
         try:
-            times = []
             for _ in range(10):
                 t0 = perf_counter()
                 # Try a simple query to check database connectivity
@@ -69,8 +71,8 @@ def db_check():
                         "MySQL_status": {row.Variable_name: row.Value for row in status_rows} if status_rows else None,
                         "MySQL_variables": {row.Variable_name: row.Value for row in var_rows} if var_rows else None,
                         "======== Query Times ========": "",
-                        "average_query_time_ms": f"{int(sum(times) / len(times))}",
-                        "all_query_times_ms": [f"{int(t)}" for t in times],
+                        "average_query_time_ms": f"{int(sum(times) / len(times))}" if times else None,
+                        "all_query_times_ms": [f"{int(t)}" for t in times] if times else [],
                         "pid": os.getpid(),
                     },
                     indent=4,
