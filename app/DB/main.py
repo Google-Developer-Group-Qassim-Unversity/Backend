@@ -36,4 +36,3 @@ engine = create_engine(
     connect_args=_build_connect_args(config.DATABASE_URL),
 )
 SessionLocal = sessionmaker(bind=engine, autocommit=False, expire_on_commit=False)
-

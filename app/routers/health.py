@@ -10,12 +10,18 @@ from json import dumps
 router = APIRouter()
 
 
-@router.get("", status_code=status.HTTP_200_OK, description="Basic health check endpoint to verify that the API is running.")
+@router.get(
+    "", status_code=status.HTTP_200_OK, description="Basic health check endpoint to verify that the API is running."
+)
 def health_check():
     return {"status": "ok"}
 
 
-@router.get("/db", status_code=status.HTTP_200_OK, description="Check database connectivity and print to the console various debugstatus values, such as connection pool status and MySQL global status/variables as well as query performance metrics.")
+@router.get(
+    "/db",
+    status_code=status.HTTP_200_OK,
+    description="Check database connectivity and print to the console various debugstatus values, such as connection pool status and MySQL global status/variables as well as query performance metrics.",
+)
 def db_check():
     with SessionLocal() as session:
         try:
@@ -60,20 +66,24 @@ def db_check():
                         "======== MySQL Status ========": "",
                         "DB_name": engine.url.database,
                         "DB_host": engine.url.host,
-                        "MySQL_status": {row.Variable_name: row.Value for row in status_rows},
-                        "MySQL_variables": {row.Variable_name: row.Value for row in var_rows},
+                        "MySQL_status": {row.Variable_name: row.Value for row in status_rows} if status_rows else None,
+                        "MySQL_variables": {row.Variable_name: row.Value for row in var_rows} if var_rows else None,
                         "======== Query Times ========": "",
                         "average_query_time_ms": f"{int(sum(times) / len(times))}",
                         "all_query_times_ms": [f"{int(t)}" for t in times],
                         "pid": os.getpid(),
                     },
-                    indent=4
+                    indent=4,
                 ),
                 f"\n{'=' * 50}\n",
             )
 
 
-@router.get("/print-status", status_code=status.HTTP_200_OK, description="DEBUGGING ENDPOINT - Prints the current database connection pool status to the console. Useful for diagnosing connection leaks or pool exhaustion issues.")
+@router.get(
+    "/print-status",
+    status_code=status.HTTP_200_OK,
+    description="DEBUGGING ENDPOINT - Prints the current database connection pool status to the console. Useful for diagnosing connection leaks or pool exhaustion issues.",
+)
 def print_pool_status():
     print(
         dumps(
@@ -90,5 +100,5 @@ def print_pool_status():
                 "overflow": engine.pool.overflow(),
             },
             indent=4,
-        ),
+        )
     )
