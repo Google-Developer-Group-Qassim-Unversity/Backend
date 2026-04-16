@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
+from starlette.requests import Request
 from app.routers import (
     attendance,
     certificates,
@@ -15,6 +17,7 @@ from app.routers import (
     submissions_manual,
     points,
     acceptance,
+    health,
 )
 
 app = FastAPI()
@@ -24,11 +27,24 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(OperationalError)
+def database_operational_error_handler(request: Request, exc: OperationalError):
+    print(f"OperationalError: {str(exc)}...")  # Log the error message for debugging
+    return JSONResponse(status_code=503, content={"detail": "Database temporarily unavailable. Please retry shortly."})
+
+
+@app.exception_handler(SQLAlchemyTimeoutError)
+def database_timeout_error_handler(request: Request, exc: SQLAlchemyTimeoutError):
+    print(f"TimeoutError: {str(exc)}...")  # Log the error message for debugging
+    return JSONResponse(status_code=503, content={"detail": "Database is under heavy load. Please retry shortly."})
+
+
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse(url="/docs")
 
 
+app.include_router(health.router, prefix="/health", tags=["health"])
 app.include_router(members.router, prefix="/members", tags=["members"])
 app.include_router(events.router, prefix="/events", tags=["events"])
 app.include_router(points.router, prefix="/points", tags=["Points"])
