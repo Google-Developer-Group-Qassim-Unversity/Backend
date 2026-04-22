@@ -126,6 +126,17 @@ class OpenEventsLocationType(str, enum.Enum):
     HIDDEN = "hidden"
 
 
+class EmailLogsFromAddress(str, enum.Enum):
+    INFO_KERNELTICS = "info@kerneltics.com"
+    GDG_QASSIM = "gdg.qu1@gmail.com"
+
+
+class EmailLogsEmailType(str, enum.Enum):
+    CERTIFICATES = "certificates"
+    BLAST = "blast"
+    ACCEPTANCE = "acceptance"
+
+
 class OpenEventsStatus(str, enum.Enum):
     DRAFT = "draft"
     OPEN = "open"
@@ -200,6 +211,7 @@ class Events(Base):
 
     forms: Mapped[list["Forms"]] = relationship("Forms", back_populates="event", passive_deletes=True)
     logs: Mapped[list["Logs"]] = relationship("Logs", back_populates="event", passive_deletes=True)
+    email_logs: Mapped[list["EmailLogs"]] = relationship("EmailLogs", back_populates="event", passive_deletes=True)
 
 
 class Members(Base):
@@ -231,6 +243,7 @@ class Members(Base):
     submissions: Mapped[list["Submissions"]] = relationship(
         "Submissions", back_populates="member", passive_deletes=True
     )
+    email_logs: Mapped[list["EmailLogs"]] = relationship("EmailLogs", back_populates="member", passive_deletes=True)
 
 
 class Forms(Base):
@@ -396,6 +409,37 @@ class Submissions(Base):
 
     form: Mapped["Forms"] = relationship("Forms", back_populates="submissions")
     member: Mapped["Members"] = relationship("Members", back_populates="submissions")
+
+
+class EmailLogs(Base):
+    __tablename__ = "email_logs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["member_id"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_email_logs_member"
+        ),
+        ForeignKeyConstraint(
+            ["event_id"], ["events.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_email_logs_event"
+        ),
+        Index("fk_email_logs_member", "member_id"),
+        Index("fk_email_logs_event", "event_id"),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    member_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    from_address: Mapped[EmailLogsFromAddress] = mapped_column(
+        Enum(EmailLogsFromAddress, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    )
+    sent_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    recipient_count: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    email_type: Mapped[EmailLogsEmailType] = mapped_column(
+        Enum(EmailLogsEmailType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    )
+
+    member: Mapped[Optional["Members"]] = relationship("Members", back_populates="email_logs")
+    event: Mapped[Optional["Events"]] = relationship("Events", back_populates="email_logs")
 
 
 # =============================================================================

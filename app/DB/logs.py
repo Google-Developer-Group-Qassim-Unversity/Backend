@@ -141,7 +141,7 @@ def get_event_attendance(
     for row in rows:
         member = Member_model.model_validate(row.Members)
         dates = sorted(loads(row.dates) if row.dates else [], reverse=True)
-        result.append(AttendanceRecord_model(Members=member, dates=dates))
+        result.append(AttendanceRecord_model(Member=member, dates=dates))
 
     if day == "exclusive_all":
         result = [r for r in result if len(r.dates) == event_days]

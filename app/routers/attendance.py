@@ -268,7 +268,7 @@ def get_event_attendance(
             uni_id = credentials_to_member_model(credentials).uni_id
             member = member_queries.get_member_by_uni_id(session, uni_id)
             attendance = log_queries.get_event_attendance(session, event_id, day)
-            member_attendance = [a for a in attendance if a.Members.uni_id == uni_id]
+            member_attendance = [a for a in attendance if a.Member.uni_id == uni_id]
             return EventAttendanceResponse(attendance_count=len(member_attendance), attendance=member_attendance)
 
         raise HTTPException(

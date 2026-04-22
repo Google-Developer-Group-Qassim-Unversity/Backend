@@ -5,7 +5,7 @@ from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutEr
 from starlette.requests import Request
 from app.routers import (
     attendance,
-    certificates,
+    emails,
     upload,
     members,
     events,
@@ -49,7 +49,8 @@ app.include_router(members.router, prefix="/members", tags=["members"])
 app.include_router(events.router, prefix="/events", tags=["events"])
 app.include_router(points.router, prefix="/points", tags=["Points"])
 app.include_router(attendance.router, prefix="/attendance", tags=["Attendance"])
-app.include_router(certificates.router, prefix="/certificates", tags=["certificates"])
+# TODO: update prefix to /emails
+app.include_router(emails.router, prefix="/certificates", tags=["certificates"])
 app.include_router(departments.router, prefix="/departments", tags=["departments"])
 app.include_router(action.router, prefix="/actions", tags=["actions"])
 app.include_router(custom.router, prefix="/custom", tags=["custom"])
