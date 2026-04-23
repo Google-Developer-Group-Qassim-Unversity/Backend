@@ -29,7 +29,7 @@ def get_members_who_received_certificate(session: Session, event_id: int):
     return session.execute(stmt).mappings().all()
 
 
-def get_event_certificate_email_log(session: Session, event_id: int, offset: int = 0, limit: int = 100):
+def get_event_certificate_email_log(session: Session, event_id: int, after_id: int = 0, limit: int = 100):
     stmt = (
         select(
             EmailLogs.id,
@@ -41,9 +41,10 @@ def get_event_certificate_email_log(session: Session, event_id: int, offset: int
         .join(Members, EmailLogs.member_id == Members.id)
         .where(EmailLogs.event_id == event_id, EmailLogs.email_type == EmailLogsEmailType.EVENT_CERTIFICATE)
         .order_by(EmailLogs.sent_at.desc())
-        .offset(offset)
         .limit(limit)
     )
+    if after_id > 0:
+        stmt = stmt.where(EmailLogs.id > after_id)
     return session.execute(stmt).mappings().all()
 
 

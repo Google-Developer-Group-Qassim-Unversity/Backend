@@ -243,32 +243,32 @@ def get_certificate_event_logs(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
     last_event_id: Annotated[int | None, Header()] = None,
 ):
-    cursor = 0
+    last_id = 0
 
-    def get_logs_batch(cursor: int, batch_size: int = 10):
+    def get_logs_batch(after_id: int, batch_size: int = 10):
         with SessionLocal() as session:
-            logs = email_queries.get_event_certificate_email_log(session, event_id, offset=cursor, limit=batch_size)
+            logs = email_queries.get_event_certificate_email_log(session, event_id, after_id=after_id, limit=batch_size)
             print(
-                f"Fetched logs for event_id {event_id} with offset {cursor} and batch size {batch_size}: {[log.id for log in logs]}"
+                f"Fetched logs for event_id {event_id} with after_id {after_id} and batch size {batch_size}: {[log.id for log in logs]}"
             )
             return logs
 
     # initial fetch to get the last logs and then start streaming new ones
-    logs = get_logs_batch(cursor, 1000)
+    logs = get_logs_batch(0, 1000)
     if not logs:
-        yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(cursor))
+        yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(last_id))
     print(f"sending initial batch of logs with count {len(logs)}")
     for log in logs:
         yield ServerSentEvent(
             data=CertificateEventEmailLog.model_validate(log).model_dump(mode="json"), event="log", id=str(log["id"])
         )
-
-    cursor = len(logs)  # start from the next log after the initial batch
+        if log["id"] > last_id:
+            last_id = log["id"]
 
     while True:
-        logs = get_logs_batch(cursor)
+        logs = get_logs_batch(last_id)
         if not logs:
-            yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(cursor))
+            yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(last_id))
         else:
             for log in logs:
                 yield ServerSentEvent(
@@ -276,7 +276,8 @@ def get_certificate_event_logs(
                     event="log",
                     id=str(log["id"]),
                 )
-            cursor += len(logs)
+                if log["id"] > last_id:
+                    last_id = log["id"]
         time.sleep(1)  # Wait before checking for new logs
 
 
