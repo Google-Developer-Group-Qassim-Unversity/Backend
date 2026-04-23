@@ -132,8 +132,9 @@ class EmailLogsFromAddress(str, enum.Enum):
 
 
 class EmailLogsEmailType(str, enum.Enum):
-    CERTIFICATES = "certificates"
-    BLAST = "blast"
+    EVENT_CERTIFICATE = "event-certificate"
+    MANUAL_CERTIFICATE = "manual-certificate"
+    EVENT_ANNOUNCEMENT = "event_announcement"
     ACCEPTANCE = "acceptance"
 
 
@@ -243,7 +244,9 @@ class Members(Base):
     submissions: Mapped[list["Submissions"]] = relationship(
         "Submissions", back_populates="member", passive_deletes=True
     )
-    email_logs: Mapped[list["EmailLogs"]] = relationship("EmailLogs", back_populates="member", passive_deletes=True)
+    email_logs: Mapped[list["EmailLogs"]] = relationship(
+        "EmailLogs", back_populates="member", passive_deletes=True, foreign_keys="EmailLogs.member_id"
+    )
 
 
 class Forms(Base):
@@ -420,8 +423,12 @@ class EmailLogs(Base):
         ForeignKeyConstraint(
             ["event_id"], ["events.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_email_logs_event"
         ),
+        ForeignKeyConstraint(
+            ["sent_by"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_email_logs_sent_by"
+        ),
         Index("fk_email_logs_member", "member_id"),
         Index("fk_email_logs_event", "event_id"),
+        Index("fk_email_logs_sent_by", "sent_by"),
     )
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
@@ -433,13 +440,16 @@ class EmailLogs(Base):
     sent_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+    sent_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     recipient_count: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     email_type: Mapped[EmailLogsEmailType] = mapped_column(
         Enum(EmailLogsEmailType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
+    data: Mapped[Optional[dict]] = mapped_column(JSON)
 
-    member: Mapped[Optional["Members"]] = relationship("Members", back_populates="email_logs")
+    member: Mapped[Optional["Members"]] = relationship("Members", back_populates="email_logs", foreign_keys=[member_id])
     event: Mapped[Optional["Events"]] = relationship("Events", back_populates="email_logs")
+    sender: Mapped["Members"] = relationship("Members", foreign_keys=[sent_by], passive_deletes=True)
 
 
 # =============================================================================

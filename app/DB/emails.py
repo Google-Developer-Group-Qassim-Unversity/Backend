@@ -23,19 +23,23 @@ def get_email_address_usage(session: Session, days: int, address: EmailLogsFromA
 def create_email_log(
     session: Session,
     *,
+    sent_by: int,
     from_address: EmailLogsFromAddress,
     email_type: EmailLogsEmailType,
     member_id: Optional[int] = None,
     event_id: Optional[int] = None,
     recipient_count: int = 1,
+    data: Optional[dict] = None,
 ) -> EmailLogs:
     log = EmailLogs(
         member_id=member_id,
         event_id=event_id,
         from_address=EmailLogsFromAddress(from_address.value),
         sent_at=datetime.now(),
+        sent_by=sent_by,
         recipient_count=recipient_count,
         email_type=email_type,
+        data=data,
     )
     session.add(log)
     session.flush()
