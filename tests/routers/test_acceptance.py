@@ -32,9 +32,9 @@ def test_send_acceptance_blasts_success(admin_client: TestClient, db_session, se
     helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
     mock_response = {"message": "sent", "count": 1}
-    with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value=mock_response):
+    with patch("app.routers.emails.call_acceptance_api", new_callable=AsyncMock, return_value=mock_response):
         response = admin_client.post(
-            f"/acceptance/blasts/{event['id']}?subject=Test+Subject",
+            f"/emails/acceptance/blasts/{event['id']}?subject=Test+Subject",
             content="<html><body>Hello</body></html>",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )
@@ -49,9 +49,9 @@ def test_send_acceptance_blasts_marks_invited(admin_client: TestClient, db_sessi
     event, form_id = helper_create_event_with_form(admin_client)
     sub_id = helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
-    with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value={}):
+    with patch("app.routers.emails.call_acceptance_api", new_callable=AsyncMock, return_value={}):
         response = admin_client.post(
-            f"/acceptance/blasts/{event['id']}?subject=Test",
+            f"/emails/acceptance/blasts/{event['id']}?subject=Test",
             content="<html><body>Hi</body></html>",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )
@@ -66,9 +66,9 @@ def test_send_acceptance_blasts_empty_body(admin_client: TestClient, db_session,
     event, form_id = helper_create_event_with_form(admin_client)
     helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
-    with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value={}):
+    with patch("app.routers.emails.call_acceptance_api", new_callable=AsyncMock, return_value={}):
         response = admin_client.post(
-            f"/acceptance/blasts/{event['id']}?subject=Test",
+            f"/emails/acceptance/blasts/{event['id']}?subject=Test",
             content="",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )
@@ -80,9 +80,9 @@ def test_send_acceptance_blasts_no_accepted_submissions(admin_client: TestClient
     event, form_id = helper_create_event_with_form(admin_client)
     helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id, is_accepted=False)
 
-    with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value={}):
+    with patch("app.routers.emails.call_acceptance_api", new_callable=AsyncMock, return_value={}):
         response = admin_client.post(
-            f"/acceptance/blasts/{event['id']}?subject=Test",
+            f"/emails/acceptance/blasts/{event['id']}?subject=Test",
             content="<html><body>Hi</body></html>",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )
@@ -93,9 +93,9 @@ def test_send_acceptance_blasts_no_accepted_submissions(admin_client: TestClient
 
 def test_send_acceptance_test_success(admin_client: TestClient):
     mock_response = {"message": "sent", "count": 2}
-    with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value=mock_response):
+    with patch("app.routers.emails.call_acceptance_api", new_callable=AsyncMock, return_value=mock_response):
         response = admin_client.post(
-            "/acceptance/test?subject=Test+Subject&emails=a%40b.com&emails=c%40d.com",
+            "/emails/acceptance/test?subject=Test+Subject&emails=a%40b.com&emails=c%40d.com",
             content="<html><body>Hello</body></html>",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )
@@ -108,9 +108,9 @@ def test_send_acceptance_test_success(admin_client: TestClient):
 
 
 def test_send_acceptance_test_empty_body(admin_client: TestClient):
-    with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value={}):
+    with patch("app.routers.emails.call_acceptance_api", new_callable=AsyncMock, return_value={}):
         response = admin_client.post(
-            "/acceptance/test?subject=Test&emails=a%40b.com",
+            "/emails/acceptance/test?subject=Test&emails=a%40b.com",
             content="",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )
@@ -119,9 +119,9 @@ def test_send_acceptance_test_empty_body(admin_client: TestClient):
 
 
 def test_send_acceptance_test_no_emails(admin_client: TestClient):
-    with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value={}):
+    with patch("app.routers.emails.call_acceptance_api", new_callable=AsyncMock, return_value={}):
         response = admin_client.post(
-            "/acceptance/test?subject=Test",
+            "/emails/acceptance/test?subject=Test",
             content="<html><body>Hi</body></html>",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )
@@ -132,7 +132,7 @@ def test_send_acceptance_test_no_emails(admin_client: TestClient):
 
 def test_send_acceptance_blasts_unauthorized(client: TestClient):
     response = client.post(
-        "/acceptance/blasts/1?subject=Test",
+        "/emails/acceptance/blasts/1?subject=Test",
         content="<html><body>Hi</body></html>",
         headers={"Content-Type": "text/html; charset=utf-8"},
     )
@@ -141,7 +141,7 @@ def test_send_acceptance_blasts_unauthorized(client: TestClient):
 
 def test_send_acceptance_test_unauthorized(client: TestClient):
     response = client.post(
-        "/acceptance/test?subject=Test&emails=a%40b.com",
+        "/emails/acceptance/test?subject=Test&emails=a%40b.com",
         content="<html><body>Hi</body></html>",
         headers={"Content-Type": "text/html; charset=utf-8"},
     )
@@ -167,9 +167,9 @@ def test_send_acceptance_blasts_skips_already_invited(admin_client: TestClient, 
     db_session.add_all([sub1, sub2])
     db_session.flush()
 
-    with patch("app.routers.acceptance.call_acceptance_api", new_callable=AsyncMock, return_value={}) as mock_api:
+    with patch("app.routers.emails.call_acceptance_api", new_callable=AsyncMock, return_value={}) as mock_api:
         response = admin_client.post(
-            f"/acceptance/blasts/{event['id']}?subject=Test",
+            f"/emails/acceptance/blasts/{event['id']}?subject=Test",
             content="<html><body>Hi</body></html>",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )
@@ -188,12 +188,12 @@ def test_send_acceptance_blasts_gateway_timeout(admin_client: TestClient, db_ses
     helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
     with patch(
-        "app.routers.acceptance.call_acceptance_api",
+        "app.routers.emails.call_acceptance_api",
         new_callable=AsyncMock,
         side_effect=GatewayTimeout(detail="Acceptance API request timed out"),
     ):
         response = admin_client.post(
-            f"/acceptance/blasts/{event['id']}?subject=Test",
+            f"/emails/acceptance/blasts/{event['id']}?subject=Test",
             content="<html><body>Hi</body></html>",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )
@@ -209,12 +209,12 @@ def test_send_acceptance_blasts_bad_gateway(admin_client: TestClient, db_session
     helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
     with patch(
-        "app.routers.acceptance.call_acceptance_api",
+        "app.routers.emails.call_acceptance_api",
         new_callable=AsyncMock,
         side_effect=BadGateway(detail="Acceptance API returned error: 500"),
     ):
         response = admin_client.post(
-            f"/acceptance/blasts/{event['id']}?subject=Test",
+            f"/emails/acceptance/blasts/{event['id']}?subject=Test",
             content="<html><body>Hi</body></html>",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )
@@ -230,12 +230,12 @@ def test_send_acceptance_blasts_service_unavailable(admin_client: TestClient, db
     helper_insert_accepted_submission(db_session, form_id=form_id, member_id=seed_refs.ahmed.id)
 
     with patch(
-        "app.routers.acceptance.call_acceptance_api",
+        "app.routers.emails.call_acceptance_api",
         new_callable=AsyncMock,
         side_effect=ServiceUnavailable(detail="Failed to connect to acceptance API"),
     ):
         response = admin_client.post(
-            f"/acceptance/blasts/{event['id']}?subject=Test",
+            f"/emails/acceptance/blasts/{event['id']}?subject=Test",
             content="<html><body>Hi</body></html>",
             headers={"Content-Type": "text/html; charset=utf-8"},
         )

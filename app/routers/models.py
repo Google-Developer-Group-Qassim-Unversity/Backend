@@ -323,8 +323,3 @@ class BackfillAttendanceResponse(BaseClassModel):
     already_attended_count: int
     marked_count: int
     attendance_date: datetime
-
-
-class AcceptanceBlastResponse(BaseClassModel):
-    sent_count: int
-    emails: list[str]

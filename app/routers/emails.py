@@ -1,5 +1,5 @@
 # region imports
-from fastapi import APIRouter, Depends, HTTPException, Header, status, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, Request, status, BackgroundTasks, Query
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from collections.abc import AsyncIterable
 import time
@@ -8,14 +8,21 @@ from app.DB import events as events_queries, logs as log_queries
 from app.DB import emails as email_queries
 from app.DB.main import SessionLocal
 from enum import Enum
-from app.routers.models import Member_model
 from app.DB import members as members_queries
+import app.DB.submissions as submissions_queries
 from app.DB.schema import EmailLogsEmailType, Events, EmailLogsFromAddress, MembersGender
 from pydantic import BaseModel, EmailStr, field_validator, model_validator
 from app.config import config
-from app.routers.logging import LogFile, write_log, write_log_exception, write_log_traceback, write_log_title
+from app.routers.logging import (
+    LogFile,
+    write_log,
+    write_log_exception,
+    write_log_json,
+    write_log_traceback,
+    write_log_title,
+)
 from app.helpers import admin_guard, get_effective_date, get_uni_id_from_credentials
-from app.exceptions import GatewayTimeout, BadGateway, ServiceUnavailable
+from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
 import httpx
 import json
 from datetime import datetime
@@ -71,6 +78,11 @@ class CertificateEventEmailLog(BaseModel):
     from_address: str
 
 
+class BlaseResponse(BaseModel):
+    status: Literal["sent"]
+    recipients: int
+
+
 # this for this app's manual endpoint not be synced with the external Email service
 class ManualCertificateRequest(BaseModel):
     event: SimpleEvent | None = None
@@ -93,6 +105,35 @@ class ManualCertificateRequest(BaseModel):
 # endregion
 
 # region ============== Helper Functions ==============
+
+
+async def read_html_body(request: Request) -> str:
+    html_content = (await request.body()).decode("utf-8")
+    if not html_content or not html_content.strip():
+        raise EmptyBody()
+    return html_content
+
+
+async def call_acceptance_api(
+    emails: list[str], subject: str, html_content: str, from_address: EmailLogsFromAddress
+) -> BlaseResponse:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            response = await client.post(
+                f"{config.CERTIFICATE_API_URL}/blasts",
+                params={"emails": ",".join(emails), "subject": subject, "from_address": from_address.value},
+                content=html_content,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+            )
+            response.raise_for_status()
+            response_data = BlaseResponse.model_validate(response.json())
+            return response_data
+        except httpx.TimeoutException:
+            raise GatewayTimeout(detail="Acceptance API request timed out")
+        except httpx.HTTPStatusError as e:
+            raise BadGateway(detail=f"Acceptance API returned error: {e.response.status_code}")
+        except httpx.RequestError:
+            raise ServiceUnavailable(detail="Failed to connect to acceptance API")
 
 
 def call_certificate_api(cert_request: CertificateRequest) -> dict:
@@ -341,8 +382,10 @@ def send_manual_certificate(
         if request.member_id:
             member = members_queries.get_member_by_id(session, request.member_id)
             request.member = SimpleMember(
-                name=member.name, email=member.email, gender=member.gender
-            )  # ignore pylance because its stupid # type: ignore
+                name=member.name,
+                email=member.email,
+                gender=member.gender,  # ignore pylance because its stupid # type: ignore
+            )
         # c. call certificate API
         cert_request = CertificateRequest(
             event=request.event,  # ignore pylance because its stupid # type: ignore
@@ -361,12 +404,114 @@ def send_manual_certificate(
             event_id=request.event_id if request.event_id else None,
             recipient_count=1,
             data={
-                "member": request.member.model_dump(mode="json"),
-                "event": request.event.model_dump(mode="json"),
-            },  # ignore mypy because its stupid # type: ignore
+                "member": request.member.model_dump(mode="json"),  # ignore mypy because its stupid # type: ignore
+                "event": request.event.model_dump(mode="json"),  # ignore mypy because its stupid # type: ignore
+            },
         )
         session.commit()
     return {"message": "Manual certificate generation initiated", "job_id": response_data.get("job_id")}
+
+
+# endregion
+
+# region ============== Acceptance API Endpoints ==============
+
+
+@router.post("/acceptance/blasts/{event_id:int}", status_code=status.HTTP_200_OK)
+async def send_acceptance_blasts(
+    event_id: int,
+    request: Request,
+    subject: Annotated[str, Query(description="Email subject line")],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+):
+    with LogFile("send acceptance blasts"), SessionLocal() as session:
+        try:
+            write_log_title(f"Sending acceptance blasts for event [{event_id}]")
+            requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
+
+            event = events_queries.get_event_by_id(session, event_id)
+
+            html_content = await read_html_body(request)
+            write_log(f"Received HTML body with {len(html_content)} characters")
+
+            submissions = submissions_queries.get_accepted_not_invited_by_event(session, event.id)
+            emails = [sub.email for sub in submissions if sub.email]
+            write_log(f"Found [{len(submissions)}] submissions, [{len(emails)}] emails")
+
+            write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
+            write_log_json({"subject": subject, "email_count": len(emails), "emails": emails})
+
+            response_data = await call_acceptance_api(emails, subject, html_content, get_from_address())
+            write_log("Acceptance API responded successfully")
+            email_queries.create_email_log(
+                session,
+                sent_by=requesting_member.id,
+                from_address=get_from_address(),
+                email_type=EmailLogsEmailType.ACCEPTANCE,
+                event_id=event.id,
+                recipient_count=len(emails),
+                data={
+                    "subject": subject,
+                    "html_content": html_content,
+                    "event": {
+                        "name": event.name,
+                        "date": format_event_date(event),
+                        "official": bool(event.is_official),
+                    },
+                    "member": [{"name": sub.name, "email": sub.email} for sub in submissions],
+                },
+            )
+
+            submission_ids = [sub.submission_id for sub in submissions]
+            submissions_queries.mark_submissions_as_invited(session, submission_ids)
+            session.commit()
+            write_log(f"Marked [{len(submission_ids)}] submissions as invited")
+
+            return {"sent_count": len(emails), "emails": emails}
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while sending acceptance emails",
+            )
+
+
+@router.post("/acceptance/test", status_code=status.HTTP_200_OK)
+async def send_acceptance_test(
+    request: Request,
+    subject: Annotated[str, Query(description="Email subject line")],
+    emails: Annotated[list[str], Query(description="Email addresses to send to")],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+):
+    with LogFile("send acceptance test"):
+        try:
+            write_log_title("Sending acceptance test emails")
+
+            html_content = await read_html_body(request)
+            write_log(f"Received HTML body with {len(html_content)} characters")
+
+            write_log(f"Parsed [{len(emails)}] test emails")
+            write_log_json({"emails": emails})
+            write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
+
+            response_data = await call_acceptance_api(emails, subject, html_content, get_from_address())
+            write_log("Acceptance API responded successfully")
+
+            return {"sent_count": len(emails), "emails": emails}
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while sending test acceptance emails",
+            )
 
 
 # endregion
