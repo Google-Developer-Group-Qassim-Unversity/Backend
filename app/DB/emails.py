@@ -19,6 +19,31 @@ def get_email_address_usage(session: Session, days: int, address: EmailLogsFromA
     result = session.scalar(stmt)
     return result if isinstance(result, int) else 0
 
+def get_members_who_received_certificate(session: Session, event_id: int):
+    stmt = (
+        select(Members.id, Members.name, Members.email)
+        .join(EmailLogs, EmailLogs.member_id == Members.id)
+        .where(EmailLogs.event_id == event_id, EmailLogs.email_type == EmailLogsEmailType.EVENT_CERTIFICATE)
+    )
+    return session.execute(stmt).mappings().all()
+
+def get_event_certificate_email_log(session: Session, event_id: int, offset: int = 0, limit: int = 100):
+    stmt = (
+        select(
+            EmailLogs.id,
+            Members.name.label("member_name"),
+            Members.email.label("member_email"),
+            EmailLogs.sent_at,
+            EmailLogs.from_address,
+        )
+        .join(Members, EmailLogs.member_id == Members.id)
+        .where(EmailLogs.event_id == event_id, EmailLogs.email_type == EmailLogsEmailType.EVENT_CERTIFICATE)
+        .order_by(EmailLogs.sent_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    return session.execute(stmt).mappings().all()
+
 
 def create_email_log(
     session: Session,

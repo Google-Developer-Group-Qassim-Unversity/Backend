@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, status, BackgroundTasks, Query
+from fastapi.sse import EventSourceResponse, ServerSentEvent
+from collections.abc import AsyncIterable
+import time
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import events as events_queries, logs as log_queries
 from app.DB import emails as email_queries
@@ -9,18 +12,12 @@ from app.DB import members as members_queries
 from app.DB.schema import EmailLogsEmailType, Events, EmailLogsFromAddress, MembersGender
 from pydantic import BaseModel, EmailStr, field_validator, model_validator
 from app.config import config
-from app.routers.logging import (
-    LogFile,
-    write_log,
-    write_log_json,
-    write_log_exception,
-    write_log_traceback,
-    write_log_title,
-)
+from app.routers.logging import LogFile, write_log, write_log_exception, write_log_traceback, write_log_title
 from app.helpers import admin_guard, get_effective_date, get_uni_id_from_credentials
 from app.exceptions import GatewayTimeout, BadGateway, ServiceUnavailable
 import httpx
 import json
+from datetime import datetime
 from typing import Annotated, Literal
 
 router = APIRouter()
@@ -61,6 +58,14 @@ class CertificateRequest(BaseModel):
     member: SimpleMember
     from_address: EmailLogsFromAddress
     language: CertificateLanguage
+
+
+class CertificateEventEmailLog(BaseModel):
+    id: int
+    member_name: str
+    member_email: str
+    sent_at: datetime
+    from_address: str
 
 
 # this for this app's manual endpoint not be synced with the external Email service
@@ -132,28 +137,44 @@ def send_certificates(
     background_tasks: BackgroundTasks,
 ):
     # Background task definition
-    def send_certificates_by_event_id(event: Events, attendance: list, date_str: str):
+    def send_certificates_by_event_id(event: Events, attendance: list, date_str: str, sent_by_id: int):
         with LogFile("send certificates"), SessionLocal() as session:
             try:
+                event = events_queries.get_event_by_id(session, event_id)
+                simple_event = SimpleEvent(name=event.name, date=date_str, official=bool(event.is_official))
+                write_log(f"Processing certificate sending for event [{event.name}] with [{len(attendance)}] attendees")
+
+                already_sent = email_queries.get_members_who_received_certificate(session, event_id)
+                attendance = [
+                    record for record in attendance if record.Member.id not in {member["id"] for member in already_sent}
+                ]
+                write_log(
+                    f"Filtered out [{len(already_sent)}] attendees who already received certificates, remaining attendees to process: [{len(attendance)}]"
+                )
                 for attendanceRecord in attendance:
                     member = attendanceRecord.Member
+                    simple_member = SimpleMember(name=member.name, email=member.email, gender=member.gender)
                     write_log(f"Sending certificate for member [{member.name}] with email [{member.email}]")
                     cert_request = CertificateRequest(
-                        event_name=event.name,
-                        date=date_str,
-                        official=bool(event.is_official),
-                        member=member,
+                        event=simple_event,
+                        member=simple_member,
                         from_address=get_from_address(),
+                        language=CertificateLanguage.ARABIC,
                     )
                     response_data = call_certificate_api(cert_request)
-                    write_log(f"Certificate API responded with job_id: [{response_data.get('job_id')}]")
+                    write_log(f"Certificate API responded with 200 OK")
                     email_queries.create_email_log(
                         session,
+                        sent_by=sent_by_id,
                         from_address=cert_request.from_address,
                         email_type=EmailLogsEmailType.EVENT_CERTIFICATE,
                         member_id=member.id,
-                        event_id=event.id,
+                        event_id=event_id,
                         recipient_count=1,
+                        data={
+                            "member": simple_member.model_dump(mode="json"),
+                            "event": simple_event.model_dump(mode="json"),
+                        },
                     )
 
                 session.commit()
@@ -182,11 +203,56 @@ def send_certificates(
         date_str = format_event_date(event)
         write_log(f"Event date formatted as: [{date_str}]")
 
-        background_tasks.add_task(send_certificates_by_event_id, event, attendance, date_str)
+        requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
+        background_tasks.add_task(send_certificates_by_event_id, event, attendance, date_str, requesting_member.id)
 
         return {
             "message": f"Certificate generation initiated for event [{event.name}] with [{len(attendance)}] attendees."
         }
+
+
+@router.get(
+    "/certificate-event/logs/stream/{event_id:int}", status_code=status.HTTP_200_OK, response_class=EventSourceResponse
+)
+def get_certificate_event_logs(
+    event_id: int,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    last_event_id: Annotated[int | None, Header()] = None,
+):
+    cursor = 0
+
+    def get_logs_batch(cursor: int, batch_size: int = 10):
+        with SessionLocal() as session:
+            logs = email_queries.get_event_certificate_email_log(session, event_id, offset=cursor, limit=batch_size)
+            print(
+                f"Fetched logs for event_id {event_id} with offset {cursor} and batch size {batch_size}: {[log.id for log in logs]}"
+            )
+            return logs
+
+    # initial fetch to get the last logs and then start streaming new ones
+    logs = get_logs_batch(cursor, 1000)
+    if not logs:
+        yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(cursor))
+    for log in logs:
+        yield ServerSentEvent(
+            data=CertificateEventEmailLog.model_validate(log).model_dump(mode="json"), event="log", id=str(log["id"])
+        )
+
+    cursor = len(logs)  # start from the next log after the initial batch
+
+    while True:
+        logs = get_logs_batch(cursor)
+        if not logs:
+            yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(cursor))
+        else:
+            for log in logs:
+                yield ServerSentEvent(
+                    data=CertificateEventEmailLog.model_validate(log).model_dump(mode="json"),
+                    event="log",
+                    id=str(log["id"]),
+                )
+            cursor += 1
+        time.sleep(1)  # Wait before checking for new logs
 
 
 @router.get("/stats", status_code=status.HTTP_200_OK)
@@ -249,13 +315,14 @@ def send_manual_certificate(
         if request.member_id:
             member = members_queries.get_member_by_id(session, request.member_id)
             request.member = SimpleMember(
-                name=member.name,
-                email=member.email,  # ignore pylance # type: ignore
-                gender=member.gender,
-            )
+                name=member.name, email=member.email, gender=member.gender
+            )  # ignore pylance because its stupid # type: ignore
         # c. call certificate API
         cert_request = CertificateRequest(
-            event=request.event, member=request.member, language=request.language, from_address=from_address # ignore pylance because its stupid # type: ignore
+            event=request.event,  # ignore pylance because its stupid # type: ignore
+            member=request.member,  # ignore pylance because its stupid # type: ignore
+            language=request.language,
+            from_address=from_address,
         )
         response_data = call_certificate_api(cert_request)
         # 3. log the email in the database
@@ -267,7 +334,10 @@ def send_manual_certificate(
             member_id=request.member_id if request.member_id else None,
             event_id=request.event_id if request.event_id else None,
             recipient_count=1,
-            data={"member": request.member.model_dump(mode="json"), "event": request.event.model_dump(mode="json")}, # ignore mypy because its stupid # type: ignore
+            data={
+                "member": request.member.model_dump(mode="json"),
+                "event": request.event.model_dump(mode="json"),
+            },  # ignore mypy because its stupid # type: ignore
         )
         session.commit()
     return {"message": "Manual certificate generation initiated", "job_id": response_data.get("job_id")}
