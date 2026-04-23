@@ -1,3 +1,4 @@
+# region imports
 from fastapi import APIRouter, Depends, HTTPException, Header, status, BackgroundTasks, Query
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from collections.abc import AsyncIterable
@@ -19,11 +20,13 @@ import httpx
 import json
 from datetime import datetime
 from typing import Annotated, Literal
+# endregion
+
 
 router = APIRouter()
 
 
-# ============== Data Models ==============
+# region ============== Data Models ==============
 
 
 class CertificateLanguage(str, Enum):
@@ -87,7 +90,9 @@ class ManualCertificateRequest(BaseModel):
         return self
 
 
-# ============== Helper Functions ==============
+# endregion
+
+# region ============== Helper Functions ==============
 
 
 def call_certificate_api(cert_request: CertificateRequest) -> dict:
@@ -127,7 +132,26 @@ def get_from_address() -> EmailLogsFromAddress:
         return EmailLogsFromAddress.INFO_KERNELTICS
 
 
-# ============== API Endpoints ==============
+# endregion
+
+# region ============== API Endpoints ==============
+
+
+@router.get("/certificate-event/eligible-count/{event_id:int}", status_code=status.HTTP_200_OK)
+def get_certificate_eligible_count(
+    event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+):
+    with SessionLocal() as session:
+        event = events_queries.get_event_by_id(session, event_id)
+        attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
+        already_sent = email_queries.get_members_who_received_certificate(session, event_id)
+        already_sent_ids = {m["id"] for m in already_sent}
+        eligible = [r for r in attendance if r.Member.id not in already_sent_ids]
+        return {
+            "eligible_count": len(eligible),
+            "eligible_members": [{"id": r.Member.id, "name": r.Member.name, "email": r.Member.email} for r in eligible],
+            "sent_count": len(already_sent),
+        }
 
 
 @router.post("/{event_id:int}", status_code=status.HTTP_200_OK)
@@ -176,8 +200,8 @@ def send_certificates(
                             "event": simple_event.model_dump(mode="json"),
                         },
                     )
+                    session.commit()
 
-                session.commit()
             except HTTPException:
                 session.rollback()
                 raise
@@ -233,6 +257,7 @@ def get_certificate_event_logs(
     logs = get_logs_batch(cursor, 1000)
     if not logs:
         yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(cursor))
+    print(f"sending initial batch of logs with count {len(logs)}")
     for log in logs:
         yield ServerSentEvent(
             data=CertificateEventEmailLog.model_validate(log).model_dump(mode="json"), event="log", id=str(log["id"])
@@ -251,7 +276,7 @@ def get_certificate_event_logs(
                     event="log",
                     id=str(log["id"]),
                 )
-            cursor += 1
+            cursor += len(logs)
         time.sleep(1)  # Wait before checking for new logs
 
 
@@ -341,3 +366,6 @@ def send_manual_certificate(
         )
         session.commit()
     return {"message": "Manual certificate generation initiated", "job_id": response_data.get("job_id")}
+
+
+# endregion

@@ -19,6 +19,7 @@ def get_email_address_usage(session: Session, days: int, address: EmailLogsFromA
     result = session.scalar(stmt)
     return result if isinstance(result, int) else 0
 
+
 def get_members_who_received_certificate(session: Session, event_id: int):
     stmt = (
         select(Members.id, Members.name, Members.email)
@@ -26,6 +27,7 @@ def get_members_who_received_certificate(session: Session, event_id: int):
         .where(EmailLogs.event_id == event_id, EmailLogs.email_type == EmailLogsEmailType.EVENT_CERTIFICATE)
     )
     return session.execute(stmt).mappings().all()
+
 
 def get_event_certificate_email_log(session: Session, event_id: int, offset: int = 0, limit: int = 100):
     stmt = (
