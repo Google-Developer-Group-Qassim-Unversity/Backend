@@ -25,7 +25,7 @@ from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavail
 import httpx
 import json
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 # endregion
 
 
@@ -75,6 +75,29 @@ class CertificateEventEmailLog(BaseModel):
     member_email: str
     sent_at: datetime
     from_address: str
+
+
+class EnrichedEmailLog(BaseModel):
+    id: int
+    email_type: EmailLogsEmailType
+    from_address: EmailLogsFromAddress
+    sent_at: datetime
+    sent_by: int
+    recipient_count: int
+    data: Optional[dict] = None
+    member_id: Optional[int] = None
+    event_id: Optional[int] = None
+    member_name: Optional[str] = None
+    member_email: Optional[str] = None
+    event_name: Optional[str] = None
+    event_is_official: Optional[int] = None
+    sender_name: Optional[str] = None
+
+
+class DashboardStats(BaseModel):
+    addresses: dict[str, dict[str, int]]
+    by_type: dict[str, int]
+    total_24h: int
 
 
 class BlaseResponse(BaseModel):
@@ -404,6 +427,97 @@ def get_email_logs_by_member_id(
     with SessionLocal() as session:
         logs = email_queries.get_email_logs_by_member_id(session, member_id)
         return logs
+
+
+@router.get("/logs/enriched", status_code=status.HTTP_200_OK, response_model=list[EnrichedEmailLog])
+def get_enriched_email_logs(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    email_type: Annotated[Optional[EmailLogsEmailType], Query(description="Filter by email type")] = None,
+    event_id: Annotated[Optional[int], Query(description="Filter by event ID")] = None,
+    member_id: Annotated[Optional[int], Query(description="Filter by member ID")] = None,
+    start_date: Annotated[Optional[datetime], Query(description="Filter from date")] = None,
+    end_date: Annotated[Optional[datetime], Query(description="Filter to date")] = None,
+    offset: Annotated[int, Query(description="Number of logs to skip")] = 0,
+    limit: Annotated[int, Query(description="Maximum number of logs to return")] = 100,
+):
+    with SessionLocal() as session:
+        rows = email_queries.get_enriched_email_logs(
+            session,
+            email_type=email_type,
+            event_id=event_id,
+            member_id=member_id,
+            start_date=start_date,
+            end_date=end_date,
+            offset=offset,
+            limit=limit,
+        )
+        return [EnrichedEmailLog.model_validate(dict(r)) for r in rows]
+
+
+@router.get("/logs/enriched/stream", status_code=status.HTTP_200_OK, response_class=EventSourceResponse)
+def stream_enriched_email_logs(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    last_event_id: Annotated[int | None, Header()] = None,
+    email_type: Annotated[Optional[EmailLogsEmailType], Query(description="Filter by email type")] = None,
+    event_id: Annotated[Optional[int], Query(description="Filter by event ID")] = None,
+    member_id: Annotated[Optional[int], Query(description="Filter by member ID")] = None,
+    start_date: Annotated[Optional[datetime], Query(description="Filter from date")] = None,
+    end_date: Annotated[Optional[datetime], Query(description="Filter to date")] = None,
+):
+    last_id = int(last_event_id) if last_event_id else 0
+
+    def get_batch(after_id: int, batch_size: int = 50, order_asc: bool = False):
+        with SessionLocal() as session:
+            return email_queries.get_enriched_email_logs(
+                session,
+                email_type=email_type,
+                event_id=event_id,
+                member_id=member_id,
+                start_date=start_date,
+                end_date=end_date,
+                after_id=after_id,
+                limit=batch_size,
+                order_asc=order_asc,
+            )
+
+    if last_id == 0:
+        initial = get_batch(0, 200, order_asc=True)
+        if not initial:
+            yield ServerSentEvent(data=json.dumps({"message": "No logs found"}), event="no_logs", id=str(last_id))
+        for row in initial:
+            log = EnrichedEmailLog.model_validate(dict(row))
+            yield ServerSentEvent(data=log.model_dump(mode="json"), event="log", id=str(log.id))
+            if log.id > last_id:
+                last_id = log.id
+
+    while True:
+        batch = get_batch(last_id, 50, order_asc=True)
+        if not batch:
+            yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(last_id))
+        else:
+            for row in batch:
+                log = EnrichedEmailLog.model_validate(dict(row))
+                yield ServerSentEvent(data=log.model_dump(mode="json"), event="log", id=str(log.id))
+                if log.id > last_id:
+                    last_id = log.id
+        time.sleep(1.5)
+
+
+@router.get("/stats/dashboard", status_code=status.HTTP_200_OK, response_model=DashboardStats)
+def get_dashboard_stats(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    period: Annotated[int, Query(description="Time period in days")] = 1,
+):
+    with SessionLocal() as session:
+        addresses = {}
+        for addr in EmailLogsFromAddress:
+            usage = email_queries.get_email_address_usage(session, period, addr)
+            addresses[addr.value] = {"usage": usage, "threshold": config.CLUB_EMAIL_THRESHOLD}
+
+        by_type = email_queries.get_email_usage_by_type(session, period)
+        total_24h = sum(by_type.values())
+
+        return DashboardStats(addresses=addresses, by_type=by_type, total_24h=total_24h)
 
 
 # endregion

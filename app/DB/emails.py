@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.DB.schema import EmailLogs, EmailLogsEmailType, EmailLogsFromAddress, Events, Members
 from app.exceptions import EventNotFound, MemberNotFound
@@ -91,3 +91,70 @@ def get_email_logs_by_member_id(session: Session, member_id: int):
         raise MemberNotFound(member_id)
     stmt = select(EmailLogs).where(EmailLogs.member_id == member_id).order_by(EmailLogs.sent_at.desc())
     return session.scalars(stmt).all()
+
+
+Sender = aliased(Members)
+
+
+def get_enriched_email_logs(
+    session: Session,
+    *,
+    email_type: Optional[EmailLogsEmailType] = None,
+    event_id: Optional[int] = None,
+    member_id: Optional[int] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    after_id: int = 0,
+    limit: int = 100,
+    offset: int = 0,
+    order_asc: bool = False,
+):
+    stmt = (
+        select(
+            EmailLogs.id,
+            EmailLogs.email_type,
+            EmailLogs.from_address,
+            EmailLogs.sent_at,
+            EmailLogs.sent_by,
+            EmailLogs.recipient_count,
+            EmailLogs.data,
+            EmailLogs.member_id,
+            EmailLogs.event_id,
+            Members.name.label("member_name"),
+            Members.email.label("member_email"),
+            Events.name.label("event_name"),
+            Events.is_official.label("event_is_official"),
+            Sender.name.label("sender_name"),
+        )
+        .outerjoin(Members, EmailLogs.member_id == Members.id)
+        .outerjoin(Events, EmailLogs.event_id == Events.id)
+        .outerjoin(Sender, EmailLogs.sent_by == Sender.id)
+        .order_by(EmailLogs.sent_at.asc() if order_asc else EmailLogs.sent_at.desc())
+    )
+
+    if email_type is not None:
+        stmt = stmt.where(EmailLogs.email_type == email_type)
+    if event_id is not None:
+        stmt = stmt.where(EmailLogs.event_id == event_id)
+    if member_id is not None:
+        stmt = stmt.where(EmailLogs.member_id == member_id)
+    if start_date is not None:
+        stmt = stmt.where(EmailLogs.sent_at >= start_date)
+    if end_date is not None:
+        stmt = stmt.where(EmailLogs.sent_at <= end_date)
+    if after_id > 0:
+        stmt = stmt.where(EmailLogs.id > after_id)
+
+    stmt = stmt.offset(offset).limit(limit)
+    return session.execute(stmt).mappings().all()
+
+
+def get_email_usage_by_type(session: Session, days: int = 1) -> dict[str, int]:
+    cutoff = datetime.now() - timedelta(days=days)
+    stmt = (
+        select(EmailLogs.email_type, func.coalesce(func.sum(EmailLogs.recipient_count), 0))
+        .where(EmailLogs.sent_at >= cutoff)
+        .group_by(EmailLogs.email_type)
+    )
+    rows = session.execute(stmt).all()
+    return {row[0].value: row[1] for row in rows}
