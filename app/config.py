@@ -23,10 +23,7 @@ ATTENDANCE_EARLY_HOURS_THRESHOLD = 6
 
 CLUB_EMAIL_THRESHOLD = 350
 
-EMAIL_THRESHOLDS: dict[str, int] = {
-    "info@kerneltics.com": 1500,
-    "gdg.qu1@gmail.com": 400,
-}
+EMAIL_THRESHOLDS: dict[str, int] = {"info@kerneltics.com": 1500, "gdg.qu1@gmail.com": 400}
 
 
 class Config:

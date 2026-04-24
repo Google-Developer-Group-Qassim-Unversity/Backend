@@ -143,7 +143,7 @@ async def call_acceptance_api(
         try:
             response = await client.post(
                 f"{config.CERTIFICATE_API_URL}/blasts",
-                params={"emails": ",".join(emails), "subject": subject, "from_address": from_address.value},
+                params={"emails": emails, "subject": subject, "from_address": from_address.value},
                 content=html_content,
                 headers={"Content-Type": "text/html; charset=utf-8"},
             )
