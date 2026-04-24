@@ -247,6 +247,8 @@ def send_certificates(
                     )
                     session.commit()
 
+            # TODO - These exception don't make sense this is a background task
+            # we generally need better job management (job start message, job failed message, job finished message) in the email
             except HTTPException:
                 session.rollback()
                 raise
