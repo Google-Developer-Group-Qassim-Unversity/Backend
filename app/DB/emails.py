@@ -9,15 +9,13 @@ from app.exceptions import EventNotFound, MemberNotFound
 
 
 def get_email_address_usage(session: Session, days: int, address: EmailLogsFromAddress) -> int:
-    # Returns the total number of recipients emailed from `address` in the last `days` days.
-    # Each row's `recipient_count` is summed (since a single email log can represent a batch).
     from_address = EmailLogsFromAddress(address.value)
     cutoff = datetime.now() - timedelta(days=days)
     stmt = select(func.coalesce(func.sum(EmailLogs.recipient_count), 0)).where(
         EmailLogs.from_address == from_address, EmailLogs.sent_at >= cutoff
     )
     result = session.scalar(stmt)
-    return result if isinstance(result, int) else 0
+    return int(result or 0)
 
 
 def get_members_who_received_certificate(session: Session, event_id: int):

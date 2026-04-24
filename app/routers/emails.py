@@ -301,8 +301,8 @@ def send_manual_certificate(
             member = members_queries.get_member_by_id(session, request.member_id)
             request.member = SimpleMember(
                 name=member.name,
-                email=member.email,
-                gender=member.gender,  # ignore pylance because its stupid # type: ignore
+                email=member.email,  # ignore pylance because its stupid # type: ignore
+                gender=member.gender,
             )
         # c. call certificate API
         cert_request = CertificateRequest(
@@ -514,7 +514,10 @@ def get_dashboard_stats(
         addresses = {}
         for addr in EmailLogsFromAddress:
             usage = email_queries.get_email_address_usage(session, period, addr)
-            addresses[addr.value] = {"usage": usage, "threshold": config.CLUB_EMAIL_THRESHOLD}
+            addresses[addr.value] = {
+                "usage": usage,
+                "threshold": config.EMAIL_THRESHOLDS.get(addr.value, config.CLUB_EMAIL_THRESHOLD),
+            }
 
         by_type = email_queries.get_email_usage_by_type(session, period)
         total_24h = sum(by_type.values())

@@ -23,6 +23,11 @@ ATTENDANCE_EARLY_HOURS_THRESHOLD = 6
 
 CLUB_EMAIL_THRESHOLD = 350
 
+EMAIL_THRESHOLDS: dict[str, int] = {
+    "info@kerneltics.com": 1500,
+    "gdg.qu1@gmail.com": 400,
+}
+
 
 class Config:
     @property
@@ -58,6 +63,10 @@ class Config:
     @property
     def CLUB_EMAIL_THRESHOLD(self) -> int:
         return CLUB_EMAIL_THRESHOLD
+
+    @property
+    def EMAIL_THRESHOLDS(self) -> dict[str, int]:
+        return EMAIL_THRESHOLDS
 
     @property
     def ATTENDANCE_EARLY_HOURS_THRESHOLD(self) -> int:
