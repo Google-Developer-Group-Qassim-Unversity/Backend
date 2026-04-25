@@ -1,5 +1,6 @@
 # region imports
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status, BackgroundTasks, Query
+from fastapi.responses import StreamingResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 import time
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
@@ -20,7 +21,7 @@ from app.routers.logging import (
     write_log_traceback,
     write_log_title,
 )
-from app.helpers import admin_guard, get_effective_date, get_uni_id_from_credentials
+from app.helpers import admin_guard, authenticated_guard, get_effective_date, get_uni_id_from_credentials
 from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
 import httpx
 import json
@@ -40,6 +41,11 @@ class CertificateLanguage(str, Enum):
     ENGLISH = "en"
 
 
+class CertificateFormat(str, Enum):
+    PNG = "png"
+    PDF = "pdf"
+
+
 class SimpleMember(BaseModel):
     name: str
     email: EmailStr
@@ -50,6 +56,13 @@ class SimpleEvent(BaseModel):
     name: str
     date: str
     official: bool
+
+
+class CertificateGenerationRequest(BaseModel):
+    language: CertificateLanguage
+    format: CertificateFormat
+    event: SimpleEvent
+    member: SimpleMember
 
 
 class EmailLogs(BaseModel):
@@ -564,6 +577,67 @@ def get_dashboard_stats(
         total_24h = sum(by_type.values())
 
         return DashboardStats(addresses=addresses, by_type=by_type, total_24h=total_24h)
+
+
+@router.post("/download-certificate/{event_id:int}", status_code=status.HTTP_200_OK)
+def download_certificate(
+    event_id: int,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)],
+    lang: Annotated[CertificateLanguage, Query(description="Certificate language")] = CertificateLanguage.ARABIC,
+    format: Annotated[CertificateFormat, Query(description="Certificate format")] = CertificateFormat.PNG,
+):
+    with SessionLocal() as session:
+        event = events_queries.get_event_by_id(session, event_id)
+
+        uni_id = get_uni_id_from_credentials(credentials)
+        member = members_queries.get_member_by_uni_id(session, uni_id)
+
+        attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
+        attended_member_ids = {r.Member.id for r in attendance}
+
+        if member.id not in attended_member_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="You did not attend all days of this event"
+            )
+
+        simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
+        simple_member = SimpleMember(name=member.name, email=member.email, gender=member.gender)
+
+        cert_request = CertificateGenerationRequest(
+            language=lang, format=format, event=simple_event, member=simple_member
+        )
+
+        with httpx.Client(timeout=120.0) as client:
+            try:
+                response = client.post(
+                    f"{config.CERTIFICATE_API_URL}/generations/certificate",
+                    json=cert_request.model_dump(mode="json"),
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+                data = response.json()
+            except httpx.TimeoutException:
+                raise GatewayTimeout(detail="Certificate generation API request timed out")
+            except httpx.HTTPStatusError as e:
+                raise BadGateway(detail=f"Certificate generation API returned error: {e.response.status_code}")
+            except httpx.RequestError:
+                raise ServiceUnavailable(detail="Failed to connect to certificate generation API")
+
+        file_url = data if isinstance(data, str) else data.get("url", data.get("key", str(data)))
+        filename = f"certificate-{event.name}-{member.name}.{format.value}"
+
+        file_response = httpx.get(file_url, timeout=60.0, follow_redirects=True)
+        file_response.raise_for_status()
+
+        content_type = file_response.headers.get(
+            "content-type", f"image/{format.value}" if format == CertificateFormat.PNG else "application/pdf"
+        )
+
+        return StreamingResponse(
+            iter([file_response.content]),
+            media_type=content_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
 
 # endregion
