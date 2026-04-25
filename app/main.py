@@ -5,7 +5,7 @@ from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutEr
 from starlette.requests import Request
 from app.routers import (
     attendance,
-    certificates,
+    emails,
     upload,
     members,
     events,
@@ -16,7 +16,6 @@ from app.routers import (
     submissions,
     submissions_manual,
     points,
-    acceptance,
     health,
 )
 
@@ -49,7 +48,7 @@ app.include_router(members.router, prefix="/members", tags=["members"])
 app.include_router(events.router, prefix="/events", tags=["events"])
 app.include_router(points.router, prefix="/points", tags=["Points"])
 app.include_router(attendance.router, prefix="/attendance", tags=["Attendance"])
-app.include_router(certificates.router, prefix="/certificates", tags=["certificates"])
+app.include_router(emails.router, prefix="/emails", tags=["emails"])
 app.include_router(departments.router, prefix="/departments", tags=["departments"])
 app.include_router(action.router, prefix="/actions", tags=["actions"])
 app.include_router(custom.router, prefix="/custom", tags=["custom"])
@@ -57,4 +56,3 @@ app.include_router(forms.router, prefix="/forms", tags=["Forms"])
 app.include_router(submissions.router, prefix="/submissions", tags=["Submissions"])
 app.include_router(submissions_manual.router, prefix="/submissions_manual", tags=["Submissions Manual"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
-app.include_router(acceptance.router, prefix="/acceptance", tags=["acceptance"])

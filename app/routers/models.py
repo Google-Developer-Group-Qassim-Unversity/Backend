@@ -2,7 +2,6 @@ from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist, Con
 from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
-from enum import Enum
 from app.DB.schema import EventsLocationType, MembersGender, RoleType, FormType
 
 
@@ -276,50 +275,11 @@ class CardData(BaseClassModel):
     url: str
 
 
-class JobStatus(str, Enum):
-    pending = "pending"
-    processing = "processing"
-    completed = "completed"
-    failed = "failed"
-
-
-class SimplifiedMember(BaseModel):
-    name: str
-    email: EmailStr
-    gender: Literal["Male", "Female"]
-
-
-class CertificateRequest(BaseModel):
-    event_name: str
-    announced_name: str
-    date: str
-    official: bool
-    members: list[SimplifiedMember]
-
-
-class CertificateJobResponse(BaseModel):
-    job_id: str
-    event_name: str
-    folder_name: str
-    status: JobStatus
-    message: str
-
-
 class customeDepartmentsPoints_model(BaseClassModel):
     department_id: int
     points: int
     action_id: int
     events_id: int
-
-
-class ManualCertificateRequest(BaseModel):
-    members: list[SimplifiedMember]
-
-    @field_validator("members")
-    def validate_members(cls, v):
-        if not v or len(v) == 0:
-            raise ValueError("At least one member is required")
-        return v
 
 
 class MemberUpdateModel(BaseModel):
@@ -332,7 +292,7 @@ class MemberUpdateModel(BaseModel):
 
 
 class AttendanceRecord_model(BaseClassModel):
-    Members: Member_model
+    Member: Member_model
     dates: list[datetime]
 
 
@@ -363,8 +323,3 @@ class BackfillAttendanceResponse(BaseClassModel):
     already_attended_count: int
     marked_count: int
     attendance_date: datetime
-
-
-class AcceptanceBlastResponse(BaseClassModel):
-    sent_count: int
-    emails: list[str]

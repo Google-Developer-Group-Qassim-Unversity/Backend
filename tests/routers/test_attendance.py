@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.DB.schema import MembersLogs, Members, MembersGender, Logs, Submissions
+from app.DB.schema import Events, MembersLogs, Members, MembersGender, Logs, Submissions
 from app.DB import logs as log_queries
 from tests.factories import make_create_event_payload
 from tests.utils import assert_2xx, assert_forbidden, assert_not_found, assert_bad_request
@@ -179,13 +179,16 @@ def test_attendance_day_out_of_range(admin_client: TestClient):
 def test_remove_attendance_success(admin_client: TestClient, db_session: Session, seed_refs):
     event_id = create_attendance_ready_event(admin_client)
     log_id = get_member_log_id(db_session, event_id, seed_refs.member_action.id)
-    member_log = MembersLogs(member_id=seed_refs.ahmed.id, log_id=log_id, date=datetime.now())
+    event = db_session.query(Events).filter(Events.id == event_id).first()
+    target_date = event.start_datetime
+    member_log = MembersLogs(member_id=seed_refs.ahmed.id, log_id=log_id, date=target_date)
     db_session.add(member_log)
     db_session.commit()
     response = admin_client.request(
         "DELETE",
         f"/attendance/{event_id}/manual",
-        content=json.dumps({"member_ids": [seed_refs.ahmed.id], "day": None}),
+        content=json.dumps({"member_ids": [seed_refs.ahmed.id], "day": 1}),
+        headers={"Content-Type": "application/json"},
     )
     assert_2xx(response)
     data = response.json()
@@ -196,7 +199,10 @@ def test_remove_attendance_success(admin_client: TestClient, db_session: Session
 def test_remove_attendance_member_not_found(admin_client: TestClient):
     event_id = create_attendance_ready_event(admin_client)
     response = admin_client.request(
-        "DELETE", f"/attendance/{event_id}/manual", content=json.dumps({"member_ids": [9999], "day": None})
+        "DELETE",
+        f"/attendance/{event_id}/manual",
+        content=json.dumps({"member_ids": [9999], "day": 1}),
+        headers={"Content-Type": "application/json"},
     )
     assert_2xx(response)
     data = response.json()
@@ -206,7 +212,10 @@ def test_remove_attendance_member_not_found(admin_client: TestClient):
 
 def test_remove_attendance_event_not_found(admin_client: TestClient):
     response = admin_client.request(
-        "DELETE", "/attendance/9999/manual", content=json.dumps({"member_ids": [1], "day": None})
+        "DELETE",
+        "/attendance/9999/manual",
+        content=json.dumps({"member_ids": [1], "day": 1}),
+        headers={"Content-Type": "application/json"},
     )
     assert_not_found(response)
 
@@ -237,7 +246,7 @@ def test_manual_mark_event_closed(admin_client: TestClient, seed_refs):
 
 def test_manual_mark_member_not_found(admin_client: TestClient):
     event_id = create_attendance_ready_event(admin_client)
-    response = admin_client.post(f"/attendance/{event_id}/manual", json={"member_ids": [9999]})
+    response = admin_client.post(f"/attendance/{event_id}/manual", json={"member_ids": [9999], "day": 1})
     assert_2xx(response)
     data = response.json()
     assert data["success"] == 0

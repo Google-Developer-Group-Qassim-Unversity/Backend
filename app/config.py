@@ -7,6 +7,7 @@ import os
 from typing import Optional
 from pathlib import Path
 from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
+from enum import Enum
 
 if os.getenv("ENV") != "testing":
     load_dotenv(".env.local", override=True)
@@ -19,6 +20,10 @@ PUBLIC_SEMESTERS = [472]
 SEMESTERS = {472: ("2026-01-18", "2026-08-23"), 471: ("2025-08-24", "2026-01-17")}
 
 ATTENDANCE_EARLY_HOURS_THRESHOLD = 6
+
+CLUB_EMAIL_THRESHOLD = 350
+
+EMAIL_THRESHOLDS: dict[str, int] = {"info@kerneltics.com": 1500, "gdg.qu1@gmail.com": 400}
 
 
 class Config:
@@ -51,6 +56,14 @@ class Config:
         else:
             os.makedirs(LOG_DIR_PROD, exist_ok=True)
             return LOG_DIR_PROD
+
+    @property
+    def CLUB_EMAIL_THRESHOLD(self) -> int:
+        return CLUB_EMAIL_THRESHOLD
+
+    @property
+    def EMAIL_THRESHOLDS(self) -> dict[str, int]:
+        return EMAIL_THRESHOLDS
 
     @property
     def ATTENDANCE_EARLY_HOURS_THRESHOLD(self) -> int:
