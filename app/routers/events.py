@@ -18,8 +18,9 @@ from app.routers.models import (
     createEvent_model,
     Member_model,
     MemberEvents_model,
-    InternalServerErrorResponse,
+    EventWithAttendance_model,
     EventDetailsModel,
+    InternalServerErrorResponse,
     UpdateEventModel,
     UpdateEventStatus_model,
 )
@@ -93,8 +94,11 @@ def get_my_events(credentials: Annotated[HTTPAuthorizationCredentials, Depends(a
     uni_id = get_uni_id_from_credentials(credentials)
     with SessionLocal() as session:
         member = member_queries.get_member_by_uni_id(session, uni_id)
-        attended, participated = events_queries.get_member_events(session, member.id)
-    return MemberEvents_model(attended=attended, participated=participated)
+        attended_raw, participated_raw = events_queries.get_member_events(session, member.id)
+    return MemberEvents_model(
+        attended=[EventWithAttendance_model(**e) for e in attended_raw],
+        participated=[Events_model(**e) for e in participated_raw],
+    )
 
 
 @router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=EventDetailsModel)

@@ -330,6 +330,15 @@ class BackfillAttendanceResponse(BaseClassModel):
     attendance_date: datetime
 
 
+class AttendanceDateEntry(BaseClassModel):
+    date: datetime
+    attended: bool
+
+
+class EventWithAttendance_model(Events_model):
+    attendance_dates: list[AttendanceDateEntry]
+
+
 class MemberEvents_model(BaseClassModel):
-    attended: list[Events_model]
+    attended: list[EventWithAttendance_model]
     participated: list[Events_model]
