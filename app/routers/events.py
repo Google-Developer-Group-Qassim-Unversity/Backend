@@ -19,6 +19,7 @@ from app.routers.models import (
     Member_model,
     MemberEvents_model,
     InternalServerErrorResponse,
+    EventDetailsModel,
     UpdateEventModel,
     UpdateEventStatus_model,
 )
@@ -96,7 +97,7 @@ def get_my_events(credentials: Annotated[HTTPAuthorizationCredentials, Depends(a
     return MemberEvents_model(attended=attended, participated=participated)
 
 
-@router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEventModel)
+@router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=EventDetailsModel)
 def get_event_details(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     """return an event + its associated actions, this is needed by the frontend to populate the update event form with the current event data and associated actions"""
     with SessionLocal() as session:
