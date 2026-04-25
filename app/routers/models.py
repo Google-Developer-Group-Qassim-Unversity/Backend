@@ -55,7 +55,7 @@ class EventDetailsModel(BaseClassModel):
 
 class UpdateEventModel(BaseClassModel):
     event: Events_model
-    actions: conlist(event_actions_model, min_length=2)  # pyright: ignore[reportInvalidTypeForm]
+    actions: conlist(event_actions_model, min_length=1)  # pyright: ignore[reportInvalidTypeForm]
 
 
 class UpdateEventStatus_model(BaseClassModel):
