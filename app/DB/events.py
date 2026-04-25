@@ -3,7 +3,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
 from app.exceptions import EventNotFound
-from .schema import Events, t_open_events, Logs, DepartmentsLogs, Actions, Departments
+from .schema import (
+    Events,
+    EventsLocationType,
+    EventsStatus,
+    MembersLogs,
+    t_open_events,
+    Logs,
+    DepartmentsLogs,
+    Actions,
+    Departments,
+)
 from app.routers.models import Events_model
 from datetime import datetime
 
@@ -108,3 +118,22 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         session.rollback()
         print(f"IntegrityError in update_event: {str(e)}")
         return -1
+
+
+def get_member_events(session: Session, member_id: int):
+    stmt = (
+        select(Events)
+        .join(Logs, Events.id == Logs.event_id)
+        .join(MembersLogs, MembersLogs.log_id == Logs.id)
+        .where(
+            MembersLogs.member_id == member_id,
+            Events.status != EventsStatus.DRAFT,
+            Events.location_type != EventsLocationType.HIDDEN,
+        )
+        .distinct()
+        .order_by(Events.start_datetime.desc())
+    )
+    events = session.scalars(stmt).all()
+    attended = [e for e in events if e.location_type != EventsLocationType.NONE]
+    participated = [e for e in events if e.location_type == EventsLocationType.NONE]
+    return attended, participated

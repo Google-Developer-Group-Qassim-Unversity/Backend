@@ -3,6 +3,7 @@ from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import (
     events as events_queries,
     forms as form_queries,
+    members as member_queries,
     submissions as submission_queries,
     logs as log_queries,
 )
@@ -16,6 +17,7 @@ from app.routers.models import (
     Get_Submission_model,
     createEvent_model,
     Member_model,
+    MemberEvents_model,
     InternalServerErrorResponse,
     UpdateEventModel,
     UpdateEventStatus_model,
@@ -29,7 +31,7 @@ from app.routers.logging import (
     write_log_title,
     write_log_traceback,
 )
-from app.helpers import admin_guard
+from app.helpers import admin_guard, authenticated_guard, get_uni_id_from_credentials
 from time import perf_counter
 from typing import Annotated
 from app.exceptions import NotFound
@@ -83,6 +85,15 @@ def get_registrable_events():
         end = perf_counter()
         write_log(f"fetched [{len(open_events)}] open events DB took [{(end - start) * 1000:.2f}]ms to execute")
     return open_events
+
+
+@router.get("/me", status_code=status.HTTP_200_OK, response_model=MemberEvents_model)
+def get_my_events(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]):
+    uni_id = get_uni_id_from_credentials(credentials)
+    with SessionLocal() as session:
+        member = member_queries.get_member_by_uni_id(session, uni_id)
+        attended, participated = events_queries.get_member_events(session, member.id)
+    return MemberEvents_model(attended=attended, participated=participated)
 
 
 @router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=UpdateEventModel)

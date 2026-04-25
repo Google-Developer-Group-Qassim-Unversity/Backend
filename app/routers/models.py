@@ -323,3 +323,8 @@ class BackfillAttendanceResponse(BaseClassModel):
     already_attended_count: int
     marked_count: int
     attendance_date: datetime
+
+
+class MemberEvents_model(BaseClassModel):
+    attended: list[Events_model]
+    participated: list[Events_model]
