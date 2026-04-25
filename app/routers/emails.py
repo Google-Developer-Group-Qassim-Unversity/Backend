@@ -1,5 +1,6 @@
 # region imports
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status, BackgroundTasks, Query
+from fastapi.responses import StreamingResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 import time
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
@@ -20,7 +21,7 @@ from app.routers.logging import (
     write_log_traceback,
     write_log_title,
 )
-from app.helpers import admin_guard, get_effective_date, get_uni_id_from_credentials
+from app.helpers import admin_guard, authenticated_guard, get_effective_date, get_uni_id_from_credentials
 from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
 import httpx
 import json
@@ -40,6 +41,11 @@ class CertificateLanguage(str, Enum):
     ENGLISH = "en"
 
 
+class CertificateFormat(str, Enum):
+    PNG = "png"
+    PDF = "pdf"
+
+
 class SimpleMember(BaseModel):
     name: str
     email: EmailStr
@@ -50,6 +56,13 @@ class SimpleEvent(BaseModel):
     name: str
     date: str
     official: bool
+
+
+class CertificateGenerationRequest(BaseModel):
+    language: CertificateLanguage
+    format: CertificateFormat
+    event: SimpleEvent
+    member: SimpleMember
 
 
 class EmailLogs(BaseModel):
@@ -105,22 +118,27 @@ class BlaseResponse(BaseModel):
     recipients: int
 
 
-# this for this app's manual endpoint not be synced with the external Email service
+class ManualCertificateMember(BaseModel):
+    member_id: int | None = None
+    member: SimpleMember | None = None
+
+    @model_validator(mode="after")
+    def validate_member(self) -> "ManualCertificateMember":
+        if (self.member is None) == (self.member_id is None):
+            raise ValueError("Provide exactly one of 'member' or 'member_id'")
+        return self
+
+
 class ManualCertificateRequest(BaseModel):
     event: SimpleEvent | None = None
     event_id: int | None = None
-    member_id: int | None = None
-    member: SimpleMember | None = None
+    members: list[ManualCertificateMember]
     language: CertificateLanguage
 
     @model_validator(mode="after")
-    def validate_event_and_member(self) -> "ManualCertificateRequest":
+    def validate_event(self) -> "ManualCertificateRequest":
         if (self.event is None) == (self.event_id is None):
             raise ValueError("Provide exactly one of 'event' or 'event_id'")
-
-        if (self.member is None) == (self.member_id is None):
-            raise ValueError("Provide exactly one of 'member' or 'member_id'")
-
         return self
 
 
@@ -282,52 +300,88 @@ def send_certificates(
         }
 
 
+def _resolve_event(request: ManualCertificateRequest, session) -> tuple[SimpleEvent, int | None]:
+    if request.event_id:
+        event = events_queries.get_event_by_id(session, request.event_id)
+        return (
+            SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official)),
+            request.event_id,
+        )
+    assert request.event is not None
+    return request.event, None
+
+
+def _resolve_member(member_item: ManualCertificateMember, session) -> tuple[SimpleMember, int | None]:
+    if member_item.member_id:
+        member = members_queries.get_member_by_id(session, member_item.member_id)
+        return (SimpleMember(name=member.name, email=member.email, gender=member.gender), member_item.member_id)
+    assert member_item.member is not None
+    return member_item.member, None
+
+
 @router.post("/manual-certificate", status_code=status.HTTP_200_OK)
 def send_manual_certificate(
-    request: ManualCertificateRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+    request: ManualCertificateRequest,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    background_tasks: BackgroundTasks,
 ):
-    with SessionLocal() as session:
+    def send_manual_certificates_job(request_data: ManualCertificateRequest, sent_by_id: int):
+        with LogFile("manual certificates"), SessionLocal() as session:
+            try:
+                from_address = get_from_address()
+                simple_event, event_id = _resolve_event(request_data, session)
+                write_log(
+                    f"Processing manual certificates for event [{simple_event.name}] with [{len(request_data.members)}] recipients"
+                )
+
+                for member_item in request_data.members:
+                    simple_member, member_id = _resolve_member(member_item, session)
+                    write_log(
+                        f"Sending certificate for member [{simple_member.name}] with email [{simple_member.email}]"
+                    )
+                    cert_request = CertificateRequest(
+                        event=simple_event,
+                        member=simple_member,
+                        from_address=from_address,
+                        language=request_data.language,
+                    )
+                    call_certificate_api(cert_request)
+                    write_log(f"Certificate API responded with 200 OK")
+                    email_queries.create_email_log(
+                        session,
+                        sent_by=sent_by_id,
+                        from_address=from_address,
+                        email_type=EmailLogsEmailType.MANUAL_CERTIFICATE,
+                        member_id=member_id,
+                        event_id=event_id,
+                        recipient_count=1,
+                        data={
+                            "member": simple_member.model_dump(mode="json"),
+                            "event": simple_event.model_dump(mode="json"),
+                        },
+                    )
+                    session.commit()
+
+            except HTTPException:
+                session.rollback()
+                raise
+            except Exception as e:
+                session.rollback()
+                write_log_exception(e)
+                write_log_traceback()
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="An error occurred while sending manual certificates",
+                )
+
+    with LogFile("manual certificates [JOB]"), SessionLocal() as session:
         requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
-        # 2. call certificate API to send eamil
-        # a. get from address based on usage
-        from_address = get_from_address()
-        # b. enrich request with event and member data if ids are provided, else use the provided data as is.
-        if request.event_id:
-            event = events_queries.get_event_by_id(session, request.event_id)
-            request.event = SimpleEvent(
-                name=event.name, date=format_event_date(event), official=bool(event.is_official)
-            )
-        if request.member_id:
-            member = members_queries.get_member_by_id(session, request.member_id)
-            request.member = SimpleMember(
-                name=member.name,
-                email=member.email,  # ignore pylance because its stupid # type: ignore
-                gender=member.gender,
-            )
-        # c. call certificate API
-        cert_request = CertificateRequest(
-            event=request.event,  # ignore pylance because its stupid # type: ignore
-            member=request.member,  # ignore pylance because its stupid # type: ignore
-            language=request.language,
-            from_address=from_address,
-        )
-        response_data = call_certificate_api(cert_request)
-        # 3. log the email in the database
-        email_queries.create_email_log(
-            session,
-            sent_by=requesting_member.id,
-            from_address=from_address,
-            email_type=EmailLogsEmailType.MANUAL_CERTIFICATE,
-            member_id=request.member_id if request.member_id else None,
-            event_id=request.event_id if request.event_id else None,
-            recipient_count=1,
-            data={
-                "member": request.member.model_dump(mode="json"),  # ignore mypy because its stupid # type: ignore
-                "event": request.event.model_dump(mode="json"),  # ignore mypy because its stupid # type: ignore
-            },
-        )
-        session.commit()
-    return {"message": "Manual certificate generation initiated", "job_id": response_data.get("job_id")}
+        background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id)
+
+    return {
+        "message": f"Manual certificate generation initiated for [{len(request.members)}] recipient(s).",
+        "recipient_count": len(request.members),
+    }
 
 
 @router.get("/certificate-event/eligible-count/{event_id:int}", status_code=status.HTTP_200_OK)
@@ -523,6 +577,67 @@ def get_dashboard_stats(
         total_24h = sum(by_type.values())
 
         return DashboardStats(addresses=addresses, by_type=by_type, total_24h=total_24h)
+
+
+@router.post("/download-certificate/{event_id:int}", status_code=status.HTTP_200_OK)
+def download_certificate(
+    event_id: int,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)],
+    lang: Annotated[CertificateLanguage, Query(description="Certificate language")] = CertificateLanguage.ARABIC,
+    format: Annotated[CertificateFormat, Query(description="Certificate format")] = CertificateFormat.PNG,
+):
+    with SessionLocal() as session:
+        event = events_queries.get_event_by_id(session, event_id)
+
+        uni_id = get_uni_id_from_credentials(credentials)
+        member = members_queries.get_member_by_uni_id(session, uni_id)
+
+        attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
+        attended_member_ids = {r.Member.id for r in attendance}
+
+        if member.id not in attended_member_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="You did not attend all days of this event"
+            )
+
+        simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
+        simple_member = SimpleMember(name=member.name, email=member.email, gender=member.gender)
+
+        cert_request = CertificateGenerationRequest(
+            language=lang, format=format, event=simple_event, member=simple_member
+        )
+
+        with httpx.Client(timeout=120.0) as client:
+            try:
+                response = client.post(
+                    f"{config.CERTIFICATE_API_URL}/generations/certificate",
+                    json=cert_request.model_dump(mode="json"),
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+                data = response.json()
+            except httpx.TimeoutException:
+                raise GatewayTimeout(detail="Certificate generation API request timed out")
+            except httpx.HTTPStatusError as e:
+                raise BadGateway(detail=f"Certificate generation API returned error: {e.response.status_code}")
+            except httpx.RequestError:
+                raise ServiceUnavailable(detail="Failed to connect to certificate generation API")
+
+        file_url = data if isinstance(data, str) else data.get("url", data.get("key", str(data)))
+        filename = f"certificate-{event.name}-{member.name}.{format.value}"
+
+        file_response = httpx.get(file_url, timeout=60.0, follow_redirects=True)
+        file_response.raise_for_status()
+
+        content_type = file_response.headers.get(
+            "content-type", f"image/{format.value}" if format == CertificateFormat.PNG else "application/pdf"
+        )
+
+        return StreamingResponse(
+            iter([file_response.content]),
+            media_type=content_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
 
 # endregion
