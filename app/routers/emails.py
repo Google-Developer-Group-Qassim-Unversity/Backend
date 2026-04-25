@@ -8,6 +8,7 @@ from app.DB import events as events_queries, logs as log_queries
 from app.DB import emails as email_queries
 from app.DB.main import SessionLocal
 from enum import Enum
+from urllib.parse import quote
 from app.DB import members as members_queries
 import app.DB.submissions as submissions_queries
 from app.DB.schema import EmailLogsEmailType, Events, EmailLogsFromAddress, MembersGender
@@ -584,7 +585,7 @@ def download_certificate(
     event_id: int,
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)],
     lang: Annotated[CertificateLanguage, Query(description="Certificate language")] = CertificateLanguage.ARABIC,
-    format: Annotated[CertificateFormat, Query(description="Certificate format")] = CertificateFormat.PNG,
+    format: Annotated[CertificateFormat, Query(description="Certificate format")] = CertificateFormat.PDF,
 ):
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
@@ -601,7 +602,7 @@ def download_certificate(
             )
 
         simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
-        simple_member = SimpleMember(name=member.name, email=member.email, gender=member.gender)
+        simple_member = SimpleMember(name=member.name, email=member.email, gender=member.gender)  # type: ignore
 
         cert_request = CertificateGenerationRequest(
             language=lang, format=format, event=simple_event, member=simple_member
@@ -633,10 +634,13 @@ def download_certificate(
             "content-type", f"image/{format.value}" if format == CertificateFormat.PNG else "application/pdf"
         )
 
+        encoded_filename = quote(filename)
         return StreamingResponse(
             iter([file_response.content]),
             media_type=content_type,
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{encoded_filename}\"; filename*=UTF-8''{encoded_filename}"
+            },
         )
 
 

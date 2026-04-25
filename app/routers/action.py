@@ -28,6 +28,10 @@ def get_categorized_actions():
     member_ids = [76, 77, 78, 79, 87, 89, 91, 108]
 
     with SessionLocal() as session:
+        actions_queries.get_bonus_action(session)
+        actions_queries.get_discount_action(session)
+        session.commit()
+
         actions = actions_queries.get_actions(session)
 
     categorized_action = {"composite_actions": [], "department_actions": [], "member_actions": [], "custom_actions": []}

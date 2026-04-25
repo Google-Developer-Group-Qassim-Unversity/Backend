@@ -48,9 +48,14 @@ class event_actions_model(BaseClassModel):
     department_ar_name: str | None = None
 
 
+class EventDetailsModel(BaseClassModel):
+    event: Events_model
+    actions: conlist(event_actions_model, min_length=1)  # pyright: ignore[reportInvalidTypeForm]
+
+
 class UpdateEventModel(BaseClassModel):
     event: Events_model
-    actions: conlist(event_actions_model, min_length=2)  # pyright: ignore[reportInvalidTypeForm]
+    actions: conlist(event_actions_model, min_length=1)  # pyright: ignore[reportInvalidTypeForm]
 
 
 class UpdateEventStatus_model(BaseClassModel):
@@ -323,3 +328,17 @@ class BackfillAttendanceResponse(BaseClassModel):
     already_attended_count: int
     marked_count: int
     attendance_date: datetime
+
+
+class AttendanceDateEntry(BaseClassModel):
+    date: datetime
+    attended: bool
+
+
+class EventWithAttendance_model(Events_model):
+    attendance_dates: list[AttendanceDateEntry]
+
+
+class MemberEvents_model(BaseClassModel):
+    attended: list[EventWithAttendance_model]
+    participated: list[Events_model]

@@ -3,9 +3,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
 from app.exceptions import EventNotFound
-from .schema import Events, t_open_events, Logs, DepartmentsLogs, Actions, Departments
+from .schema import (
+    Events,
+    EventsLocationType,
+    EventsStatus,
+    MembersLogs,
+    t_open_events,
+    Logs,
+    DepartmentsLogs,
+    Actions,
+    Departments,
+)
 from app.routers.models import Events_model
-from datetime import datetime
+from app.config import config
+from app.helpers import get_effective_date
+from datetime import datetime, timedelta
 
 
 def get_events(session: Session):
@@ -108,3 +120,48 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         session.rollback()
         print(f"IntegrityError in update_event: {str(e)}")
         return -1
+
+
+def get_member_events(session: Session, member_id: int):
+    stmt = (
+        select(Events, MembersLogs.date)
+        .join(Logs, Events.id == Logs.event_id)
+        .join(MembersLogs, MembersLogs.log_id == Logs.id)
+        .where(
+            MembersLogs.member_id == member_id,
+            Events.status != EventsStatus.DRAFT,
+            Events.location_type != EventsLocationType.HIDDEN,
+        )
+        .order_by(Events.start_datetime.desc(), MembersLogs.date)
+    )
+    results = session.execute(stmt).all()
+
+    events_map: dict[int, dict] = {}
+    for event, att_date in results:
+        if event.id not in events_map:
+            events_map[event.id] = {"event": event, "dates": []}
+        events_map[event.id]["dates"].append(att_date)
+
+    threshold = config.ATTENDANCE_EARLY_HOURS_THRESHOLD
+    attended = []
+    participated = []
+    for data in events_map.values():
+        event = data["event"]
+        raw_dates = data["dates"]
+        event_dict = {col.name: getattr(event, col.name) for col in event.__table__.columns}
+
+        if event.location_type == EventsLocationType.NONE:
+            participated.append(event_dict)
+        else:
+            total_days = max((event.end_datetime - event.start_datetime).days + 1, 1)
+            attended_set = {get_effective_date(d, threshold) for d in raw_dates}
+            attendance_dates = []
+            for day_offset in range(total_days):
+                day = event.start_datetime.date() + timedelta(days=day_offset)
+                attendance_dates.append(
+                    {"date": datetime.combine(day, datetime.min.time()), "attended": day in attended_set}
+                )
+            event_dict["attendance_dates"] = attendance_dates
+            attended.append(event_dict)
+
+    return attended, participated
