@@ -100,6 +100,12 @@ def create_member_manual(
     with LogFile("create member manual"), SessionLocal() as session:
         try:
             write_log_title(f"Manually creating member with uni_id {member_data.uni_id}")
+            existing = member_queries.get_member_by_uni_id_or_none(session, member_data.uni_id)
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Member with uni_id {member_data.uni_id} already exists",
+                )
             member = Member_model(
                 name=member_data.name,
                 email=member_data.email,
@@ -109,20 +115,15 @@ def create_member_manual(
                 uni_level=0,
                 uni_college="UNKNOWN",
             )
-            new_member, already_exists = member_queries.create_member_if_not_exists(
-                session, member, is_authenticated=False
-            )
+            new_member = member_queries.create_member(session, member, is_authenticated=False)
             if new_member is None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Member with uni_id {member_data.uni_id} already exists and could not be created",
+                    detail=f"Member with uni_id {member_data.uni_id} already exists",
                 )
-            if not already_exists:
-                write_log(f"Member with uni_id {member_data.uni_id} created successfully with ID {new_member.id}")
-            else:
-                write_log(f"Member with uni_id {member_data.uni_id} already exists with ID {new_member.id}")
+            write_log(f"Member with uni_id {member_data.uni_id} created successfully with ID {new_member.id}")
             session.commit()
-            return {"member": new_member, "already_exists": already_exists}
+            return {"member": new_member, "already_exists": False}
         except HTTPException:
             raise
         except Exception as e:
@@ -146,6 +147,13 @@ def batch_create_members(
 
         for member_data in request.members:
             try:
+                existing = member_queries.get_member_by_uni_id_or_none(session, member_data.uni_id)
+                if existing:
+                    existing_count += 1
+                    result_members.append(existing)
+                    write_log(f"Member with uni_id {member_data.uni_id} already exists")
+                    continue
+
                 member = Member_model(
                     name=member_data.name,
                     email=member_data.email,
@@ -155,20 +163,14 @@ def batch_create_members(
                     uni_level=member_data.uni_level if member_data.uni_level is not None else 0,
                     uni_college=member_data.uni_college if member_data.uni_college is not None else "UNKNOWN",
                 )
-                new_member, already_exists = member_queries.create_member_if_not_exists(
-                    session, member, is_authenticated=False
-                )
+                new_member = member_queries.create_member(session, member, is_authenticated=False)
                 if new_member is None:
                     failed_count += 1
                     write_log_exception(f"Failed to create member with uni_id {member_data.uni_id}")
                     continue
-                if already_exists:
-                    existing_count += 1
-                    write_log(f"Member with uni_id {member_data.uni_id} already exists")
-                else:
-                    created_count += 1
-                    write_log(f"Member with uni_id {member_data.uni_id} created successfully")
+                created_count += 1
                 result_members.append(new_member)
+                write_log(f"Member with uni_id {member_data.uni_id} created successfully")
             except Exception as e:
                 failed_count += 1
                 write_log_exception(f"Error creating member with uni_id {member_data.uni_id}: {e}")
