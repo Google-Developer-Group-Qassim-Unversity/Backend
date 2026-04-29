@@ -5,10 +5,15 @@ from app.DB.main import SessionLocal
 from app.routers.models import (
     Member_model,
     NotFoundResponse,
+    ConflictResponse,
     CreatedMemberModel,
     manual_members,
     MemberWithRole_model,
     MemberUpdateModel,
+    ManualMemberCreateModel,
+    BatchCreateMembersRequest,
+    BatchCreateMembersResponse,
+    BatchCreateMemberItem,
 )
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import (
@@ -80,6 +85,115 @@ def get_all_members(credentials: Annotated[HTTPAuthorizationCredentials, Depends
     with SessionLocal() as session:
         members = member_queries.get_members(session)
     return members
+
+
+@router.post(
+    "/manual",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CreatedMemberModel,
+    responses={409: {"model": ConflictResponse, "description": "Member already exists"}},
+)
+def create_member_manual(
+    member_data: ManualMemberCreateModel,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)],
+):
+    with LogFile("create member manual"), SessionLocal() as session:
+        try:
+            write_log_title(f"Manually creating member with uni_id {member_data.uni_id}")
+            existing = member_queries.get_member_by_uni_id_or_none(session, member_data.uni_id)
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Member with uni_id {member_data.uni_id} already exists",
+                )
+            member = Member_model(
+                name=member_data.name,
+                email=member_data.email,
+                phone_number=member_data.phone_number or "",
+                uni_id=member_data.uni_id,
+                gender=member_data.gender,
+                uni_level=0,
+                uni_college="UNKNOWN",
+            )
+            new_member = member_queries.create_member(session, member, is_authenticated=False)
+            if new_member is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Member with uni_id {member_data.uni_id} already exists",
+                )
+            write_log(f"Member with uni_id {member_data.uni_id} created successfully with ID {new_member.id}")
+            session.commit()
+            return {"member": new_member, "already_exists": False}
+        except HTTPException:
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while creating the member"
+            )
+
+
+@router.post("/batch", status_code=status.HTTP_200_OK, response_model=BatchCreateMembersResponse)
+def batch_create_members(
+    request: BatchCreateMembersRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)]
+):
+    with LogFile("batch create members"), SessionLocal() as session:
+        created_count = 0
+        existing_count = 0
+        failed_count = 0
+        result_members: list[Member_model] = []
+
+        for member_data in request.members:
+            try:
+                existing = member_queries.get_member_by_uni_id_or_none(session, member_data.uni_id)
+                if existing:
+                    existing_count += 1
+                    result_members.append(existing)
+                    write_log(f"Member with uni_id {member_data.uni_id} already exists")
+                    continue
+
+                member = Member_model(
+                    name=member_data.name,
+                    email=member_data.email,
+                    phone_number=member_data.phone_number or "",
+                    uni_id=member_data.uni_id,
+                    gender=member_data.gender,
+                    uni_level=member_data.uni_level if member_data.uni_level is not None else 0,
+                    uni_college=member_data.uni_college if member_data.uni_college is not None else "UNKNOWN",
+                )
+                new_member = member_queries.create_member(session, member, is_authenticated=False)
+                if new_member is None:
+                    failed_count += 1
+                    write_log_exception(f"Failed to create member with uni_id {member_data.uni_id}")
+                    continue
+                created_count += 1
+                result_members.append(new_member)
+                write_log(f"Member with uni_id {member_data.uni_id} created successfully")
+            except Exception as e:
+                failed_count += 1
+                write_log_exception(f"Error creating member with uni_id {member_data.uni_id}: {e}")
+                write_log_traceback()
+                continue
+
+        try:
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while committing batch member creation",
+            )
+
+        return BatchCreateMembersResponse(
+            created_count=created_count,
+            existing_count=existing_count,
+            failed_count=failed_count,
+            members=result_members,
+        )
 
 
 @router.get(

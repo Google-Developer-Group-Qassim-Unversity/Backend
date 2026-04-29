@@ -207,6 +207,35 @@ class Categorized_action(BaseClassModel):
     custom_actions: List[Action_model]
 
 
+class ManualMemberCreateModel(BaseModel):
+    name: str
+    email: EmailStr
+    phone_number: str | None = None
+    uni_id: str
+    gender: MembersGender
+
+
+class BatchCreateMemberItem(BaseClassModel):
+    name: str
+    email: EmailStr
+    phone_number: str | None = None
+    uni_id: str
+    gender: MembersGender
+    uni_level: int | None = None
+    uni_college: str | None = None
+
+
+class BatchCreateMembersRequest(BaseModel):
+    members: list[BatchCreateMemberItem]
+
+
+class BatchCreateMembersResponse(BaseClassModel):
+    created_count: int
+    existing_count: int
+    failed_count: int
+    members: list[Member_model]
+
+
 class manual_members(BaseClassModel):
     members_sheet: HttpUrl
 

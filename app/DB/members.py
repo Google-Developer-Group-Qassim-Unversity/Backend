@@ -9,23 +9,23 @@ from datetime import datetime
 
 def create_member(session: Session, member: Member_model, is_authenticated: bool = False):
     try:
-        new_member = Members(
-            name=member.name,
-            email=member.email,
-            phone_number=member.phone_number,
-            uni_id=member.uni_id,
-            gender=member.gender,
-            uni_level=member.uni_level,
-            uni_college=member.uni_college,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-            is_authenticated=is_authenticated,
-        )
-        session.add(new_member)
-        session.flush()
+        with session.begin_nested():
+            new_member = Members(
+                name=member.name,
+                email=member.email,
+                phone_number=member.phone_number,
+                uni_id=member.uni_id,
+                gender=member.gender,
+                uni_level=member.uni_level,
+                uni_college=member.uni_college,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                is_authenticated=is_authenticated,
+            )
+            session.add(new_member)
+            session.flush()
         return new_member
     except IntegrityError as e:
-        session.rollback()
         print(f"IntegrityError in create_member: {str(e)[:50]}...")
         return None
 
@@ -63,11 +63,15 @@ def get_members_by_id(session: Session, member_ids: list[int]):
 
 
 def get_member_by_uni_id(session: Session, uni_id: str):
-    statement = select(Members).where(Members.uni_id == uni_id)
-    member = session.scalars(statement).first()
+    member = get_member_by_uni_id_or_none(session, uni_id)
     if not member:
         raise MemberNotFound(uni_id)
     return member
+
+
+def get_member_by_uni_id_or_none(session: Session, uni_id: str) -> Members | None:
+    statement = select(Members).where(Members.uni_id == uni_id)
+    return session.scalars(statement).first()
 
 
 def update_member(session: Session, member: Member_model, is_authenticated: bool):
