@@ -116,7 +116,7 @@ def test_update_event(admin_client: TestClient, seed_refs):
 
     update_payload = {
         "event": make_event(
-            name="my event", start_datetime="2026-03-01T00:00:00", end_datetime="2026-03-03T00:00:00", status="open"
+            name="my event", start_datetime="2026-06-28T00:00:00", end_datetime="2026-06-30T00:00:00", status="open"
         ),
         "actions": [
             {
@@ -130,8 +130,8 @@ def test_update_event(admin_client: TestClient, seed_refs):
     update_response = admin_client.put(f"/events/{event['id']}", json=update_payload)
     assert_2xx(update_response)
     updated = update_response.json()
-    assert updated["start_datetime"] == "2026-03-01T00:00:00"
-    assert updated["end_datetime"] == "2026-03-03T00:00:00"
+    assert updated["start_datetime"] == "2026-06-28T00:00:00"
+    assert updated["end_datetime"] == "2026-06-30T00:00:00"
 
     dept1_after = admin_client.get(f"/points/departments/{seed_refs.dept_business.id}")
     assert_2xx(dept1_after)
@@ -325,7 +325,7 @@ def test_update_event_days_increase(admin_client: TestClient, seed_refs):
     details = admin_client.get(f"/events/{event['id']}/details").json()
     update_payload = {
         "event": make_event(
-            name="my event", start_datetime="2026-03-01T00:00:00", end_datetime="2026-03-03T00:00:00", status="open"
+            name="my event", start_datetime="2026-06-28T00:00:00", end_datetime="2026-06-30T00:00:00", status="open"
         ),
         "actions": details["actions"],
     }
@@ -342,7 +342,7 @@ def test_update_event_days_decrease(admin_client: TestClient, seed_refs):
         json=make_create_event_payload(
             seed_refs=seed_refs,
             department_id=seed_refs.dept_business.id,
-            event=make_event(start_datetime="2026-03-01T00:00:00", end_datetime="2026-03-03T00:00:00"),
+            event=make_event(start_datetime="2026-06-28T00:00:00", end_datetime="2026-06-30T00:00:00"),
         ),
     ).json()
     admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
@@ -353,7 +353,7 @@ def test_update_event_days_decrease(admin_client: TestClient, seed_refs):
     details = admin_client.get(f"/events/{event['id']}/details").json()
     update_payload = {
         "event": make_event(
-            name="my event", start_datetime="2026-03-01T00:00:00", end_datetime="2026-03-01T00:00:00", status="open"
+            name="my event", start_datetime="2026-06-28T00:00:00", end_datetime="2026-06-28T00:00:00", status="open"
         ),
         "actions": details["actions"],
     }
