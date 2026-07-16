@@ -15,9 +15,14 @@ if os.getenv("ENV") != "testing":
 LOG_DIR_DEV = "logs"
 LOG_DIR_PROD = str(Path.home() / "GDG-Logs")
 
-CURRENT_SEMESTER = 472
-PUBLIC_SEMESTERS = [472, 471]
-SEMESTERS = {472: ("2026-01-18", "2026-05-31"), 471: ("2025-08-24", "2026-01-17")}
+# Added the new summer semester
+CURRENT_SEMESTER = 475
+PUBLIC_SEMESTERS = [475, 472, 471]
+SEMESTERS = {
+    475: ("2026-06-28", "2026-08-20"),
+    472: ("2026-01-18", "2026-05-31"),
+    471: ("2025-08-24", "2026-01-17")
+}
 
 ATTENDANCE_EARLY_HOURS_THRESHOLD = 6
 
