@@ -52,6 +52,11 @@ class Department_points_history_model(BaseClassModel):
     events: list[Event_model]
 
 
+class Semesters_model(BaseClassModel):
+    current_semester: int
+    semesters: list[int]
+
+
 # ============ helpers ============
 
 
@@ -65,6 +70,11 @@ def _validate_semester_access(semester: int, credentials: HTTPAuthorizationCrede
 
 
 # ============ routes ============
+
+
+@router.get("/semesters", status_code=status.HTTP_200_OK, response_model=Semesters_model)
+def get_semesters():
+    return Semesters_model(current_semester=config.CURRENT_SEMESTER, semesters=config.PUBLIC_SEMESTERS)
 
 
 @router.get("/members/total", status_code=status.HTTP_200_OK, response_model=list[Member_points_model])
