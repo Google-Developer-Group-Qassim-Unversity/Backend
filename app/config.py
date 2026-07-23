@@ -18,11 +18,7 @@ LOG_DIR_PROD = str(Path.home() / "GDG-Logs")
 # Added the new summer semester
 CURRENT_SEMESTER = 475
 PUBLIC_SEMESTERS = [475, 472, 471]
-SEMESTERS = {
-    475: ("2026-06-28", "2026-08-20"),
-    472: ("2026-01-18", "2026-05-31"),
-    471: ("2025-08-24", "2026-01-17")
-}
+SEMESTERS = {475: ("2026-06-28", "2026-08-20"), 472: ("2026-01-18", "2026-05-31"), 471: ("2025-08-24", "2026-01-17")}
 
 ATTENDANCE_EARLY_HOURS_THRESHOLD = 6
 
@@ -106,6 +102,14 @@ class Config:
     @property
     def CERTIFICATE_API_URL(self) -> str:
         return env_or_except("CERTIFICATE_API_URL")
+
+    @property
+    def MEMBER_APP_URL(self) -> str:
+        return env_or_except("MEMBER_APP_URL")
+
+    @property
+    def MEMBER_APP_REVALIDATE_SECRET(self) -> str:
+        return env_or_except("MEMBER_APP_REVALIDATE_SECRET")
 
     @property
     def R2_ACCOUNT_ID(self) -> str:

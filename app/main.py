@@ -17,6 +17,7 @@ from app.routers import (
     submissions_manual,
     points,
     health,
+    cache,
 )
 
 app = FastAPI()
@@ -56,3 +57,4 @@ app.include_router(forms.router, prefix="/forms", tags=["Forms"])
 app.include_router(submissions.router, prefix="/submissions", tags=["Submissions"])
 app.include_router(submissions_manual.router, prefix="/submissions_manual", tags=["Submissions Manual"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
+app.include_router(cache.router, prefix="/cache", tags=["cache"])
