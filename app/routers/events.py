@@ -34,6 +34,7 @@ from app.routers.logging import (
     write_log_traceback,
 )
 from app.helpers import admin_guard, authenticated_guard, get_uni_id_from_credentials
+from app.leaderboard_cache import reset_leaderboard_cache
 from time import perf_counter
 from typing import Annotated
 from app.exceptions import NotFound
@@ -147,6 +148,14 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
             )
             session.commit()
             session.refresh(new_event)
+
+            # Best-effort: reset the leaderboard app's data cache so the new event is visible immediately.
+            try:
+                reset_leaderboard_cache()
+                write_log("Leaderboard cache reset triggered after event creation")
+            except Exception as cache_err:
+                write_log_exception(cache_err)
+
             return new_event
         except Exception as e:
             session.rollback()
@@ -353,9 +362,19 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, cre
         event = events_queries.get_event_by_id(session, event_id)
         if not event:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+        old_status = event.status
         event.status = status_data.status
         session.commit()
         session.refresh(event)
+
+    # Best-effort: reset the leaderboard cache when entering or leaving the "open" status,
+    # since the leaderboard's open-events view is gated on status = 'open'.
+    if status_data.status == "open" or old_status == "open":
+        try:
+            reset_leaderboard_cache()
+        except Exception:
+            pass
+
     return event
 
 

@@ -45,6 +45,8 @@ required_env_vars = {
     "GOOGLE_CLIENT_SECRET": "test_client_secret",
     "JWT_SECRET": "test_jwt_secret_for_testing_only",
     "CERTIFICATE_API_URL": "http://localhost:8000",
+    "MEMBER_APP_URL": "http://localhost:3000",
+    "MEMBER_APP_REVALIDATE_SECRET": "test_revalidate_secret",
 }
 
 for key, value in required_env_vars.items():

@@ -20,9 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "departments", sa.Column("active", mysql.TINYINT(1), nullable=False, server_default=sa.text("'1'"))
-    )
+    op.add_column("departments", sa.Column("active", mysql.TINYINT(1), nullable=False, server_default=sa.text("'1'")))
 
 
 def downgrade() -> None:
