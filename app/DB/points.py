@@ -105,7 +105,7 @@ def get_departments_points_semester(session: Session, start_date: str, end_date:
             GROUP BY modifications.log_id
         ) m ON m.log_id = l.id
     """
-        + ("WHERE d.id = :department_id\n    " if department_id else "")
+        + ("WHERE d.id = :department_id\n    " if department_id else "WHERE d.active = 1\n    ")
         + """GROUP BY d.id, d.name, d.type, d.ar_name
         ORDER BY total_points DESC
     """
