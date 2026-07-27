@@ -1,38 +1,56 @@
-    
+# Local Development
+## Virtual Environment and Dependencies
+This project uses [uv](https://docs.astral.sh/uv/) for package and project management. [install](https://docs.astral.sh/uv/#installation)
 
-# Local development requirements
-
-* create a `.env` and add a DATABASE_URL varible
-
-#### uv, Virtual environment and Dependencies
-
-> This is technically optional, if you know what you are doing then do your thing otherwise follow these steps
-
-To setup uv a venv and and install all the depedencies like fastAPI sqlalchemy and 50 others follow these steps
-
-1. **Install `uv`** [official site](https://docs.astral.sh/uv/getting-started/installation/)
-2. **Set up a vertual env**
-   after installing uv and while in the root directory of the backend
-   run `uv venv -p python3.13 .venv` ⚠️ don't change this command the specific version python3.13 is intentional
-3. Install depedencies
-   after setting up a .venv run `uv pip install -r requirements.txt`
-   which will install all the required modules used by this server.
-4. all done run the script `run.sh` to start the server, and go to http://localhost:7001/docs
-
-## Automatically generate DB schema
-
-use the sqlacodegen tool which can be installed with
-
+to create a virtual environment and install all the dependencies as defined in [pyproject.toml](./pyproject.toml)
 ```bash
-pip install sqlacodegen mysqlclient
+uv sync
 ```
 
-mysqlclient is a dependency for `sqlacodegen` to work
-
-To generate the shcema run
-
+to see all dependencies including transitive ones:
 ```bash
-sqlacodegen --generator declarative --outfile <path> <DATABASE_URL>
+uv tree
 ```
 
-However This will not generate all the required code, you need to add `passive_deletes=True` so that ON CASCADE DELETE rules work properly
+## Environment Varibles and Secret Management
+This project uses [Infiscal](https://infisical.com/) on a self hosted instance at [infisical.albrrak773.com](https://infisical.albrrak773.com/)
+to manage secrets.
+**We do not use `.env` files!** [learn why](https://infisical.com/blog/stop-using-env-files)
+
+Almost all commands that interact with the FastAPI server and other stuff like migrations or scripts 
+use `infisical run` to get the environment varibles **as expected by [Settings](./config.py)**
+
+
+## Running commands
+we use poethepoet task manger to get an `npm run`-like experince over form JS land.
+
+This is development dpendncy so you don't need to install it, running `uv sync` means you alrady have it
+
+You can see all commands and their implementaion in [pyproject.toml](./pyproject.toml) under the `[tool.poe.tasks]` section
+
+You can list all avalible commands by running
+```bash
+uv run poe 
+```
+### Run the FastAPI server
+```bash
+uv run poe dev
+# runs 'fastapi dev' to start the server in dev mode
+```
+
+### Run Type Check, Lint and Format
+```bash
+uv run poe typecheck
+uv run poe lint
+uv run format 
+```
+
+### Create and Run Migrations
+```bash
+# create a new migration after app/models.py changes
+uv run poe revision -m "describe change"
+
+# run the migrataion
+# > alembic upgrade head
+uv run poe migrate 
+```
