@@ -1,0 +1,1 @@
+infisical run --path=/admin-backend --env=dev -- uv run uvicorn app.main:app --reload --port 7001 --workers 2
