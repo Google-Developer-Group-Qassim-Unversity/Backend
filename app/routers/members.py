@@ -19,8 +19,8 @@ from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import (
     admin_guard,
     authenticated_guard,
-    get_uni_id_from_credentials,
     credentials_to_member_model,
+    resolve_member,
     super_admin_guard,
 )
 from app.routers.logging import (
@@ -44,9 +44,9 @@ router = APIRouter()
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
 def get_current_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]):
-    uni_id = get_uni_id_from_credentials(credentials)
     with SessionLocal() as session:
-        member = member_queries.get_member_by_uni_id(session, uni_id)
+        member = resolve_member(session, credentials)
+        session.commit()
     return member
 
 
@@ -59,14 +59,14 @@ def get_current_member(credentials: Annotated[HTTPAuthorizationCredentials, Depe
 def update_current_member(
     updates: MemberUpdateModel, credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]
 ):
-    uni_id = get_uni_id_from_credentials(credentials)
     with LogFile("update current member"), SessionLocal() as session:
         try:
-            write_log_title(f"Updating member with uni_id {uni_id}")
-            updated_member = member_queries.update_member_by_uni_id(
-                session, uni_id, updates.model_dump(exclude_none=True)
+            member = resolve_member(session, credentials)
+            write_log_title(f"Updating member with id {member.id}")
+            updated_member = member_queries.update_member_by_id(
+                session, member.id, updates.model_dump(exclude_none=True)
             )
-            write_log(f"Member with uni_id {uni_id} updated successfully")
+            write_log(f"Member with id {member.id} updated successfully")
             session.commit()
             return updated_member
         except HTTPException:
@@ -100,12 +100,13 @@ def create_member_manual(
     with LogFile("create member manual"), SessionLocal() as session:
         try:
             write_log_title(f"Manually creating member with uni_id {member_data.uni_id}")
-            existing = member_queries.get_member_by_uni_id_or_none(session, member_data.uni_id)
-            if existing:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Member with uni_id {member_data.uni_id} already exists",
-                )
+            if member_data.uni_id is not None:
+                existing = member_queries.get_member_by_uni_id_or_none(session, member_data.uni_id)
+                if existing:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Member with uni_id {member_data.uni_id} already exists",
+                    )
             member = Member_model(
                 name=member_data.name,
                 email=member_data.email,
@@ -147,7 +148,11 @@ def batch_create_members(
 
         for member_data in request.members:
             try:
-                existing = member_queries.get_member_by_uni_id_or_none(session, member_data.uni_id)
+                existing = (
+                    member_queries.get_member_by_uni_id_or_none(session, member_data.uni_id)
+                    if member_data.uni_id is not None
+                    else None
+                )
                 if existing:
                     existing_count += 1
                     result_members.append(existing)

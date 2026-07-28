@@ -83,13 +83,15 @@ dev = [
 ]
 
 [tool.poe.tasks]
-dev = "infisical run --env='dev' --path='/admin-backend' -- uv run fastapi dev"
-run = "infisical run --env='dev' --path='/admin-backend' -- uv run fastapi run"
+dev = "infisical run --env='dev' --path='/admin-backend' -- uv run fastapi dev --port 7001"
+run = "infisical run --env='dev' --path='/admin-backend' -- uv run fastapi run --port 7001"
 typecheck = "uv run pyright ."
 lint = "uv run ruff check  --fix ."
 format = "uv run ruff format ."
 revision = "infisical run --env='dev' --path='/admin-backend' -- uv run alembic revision --autogenerate"
-migrate =  "infisical run --env='dev' --path='/admin-backend' -- uv run alembic upgrade head"
+migrate-dev =  "infisical run --env='dev' --path='/admin-backend' -- uv run alembic upgrade head"
+migrate-prod =  "infisical run --env='prod' --path='/admin-backend' -- uv run alembic upgrade head"
+migrate-local = "uv run alembic upgrade head"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

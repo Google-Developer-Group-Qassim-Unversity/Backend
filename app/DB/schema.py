@@ -218,11 +218,15 @@ class Events(Base):
 
 class Members(Base):
     __tablename__ = "members"
-    __table_args__ = (Index("uni_id", "uni_id", unique=True),)
+    __table_args__ = (
+        Index("uni_id", "uni_id", unique=True),
+        Index("ix_members_clerk_user_id", "clerk_user_id", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
-    uni_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    uni_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    clerk_user_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     gender: Mapped[MembersGender] = mapped_column(
         Enum(MembersGender, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )

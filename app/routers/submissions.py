@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Request, status, HTTPException, Backgrou
 from app.DB.main import SessionLocal
 from app.DB import submissions as submission_queries, members as member_queries, forms as form_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.helpers import admin_guard, get_uni_id_from_credentials, authenticated_guard
+from app.helpers import admin_guard, resolve_member, authenticated_guard
 from app.config import config
 from app.routers.logging import (
     LogFile,
@@ -36,8 +36,7 @@ def create_submission(
 ):
     with SessionLocal() as session:
         try:
-            uni_id = get_uni_id_from_credentials(credentials)
-            member_id = member_queries.get_member_by_uni_id(session, uni_id).id
+            member_id = resolve_member(session, credentials).id
             new_submission = submission_queries.create_submission(session, form_id, submission_type, member_id)
             if not new_submission:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission already exists")
@@ -54,11 +53,10 @@ def check_submission_exists(
 ):
     with LogFile("check submission exists"), SessionLocal() as session:
         try:
-            uni_id = get_uni_id_from_credentials(credentials)
-
-            write_log(f"Querying DB for form_id [{form_id}] and uni_id [{uni_id}]")
+            write_log(f"Querying DB for form_id [{form_id}]")
             start = perf_counter()
-            member_id = member_queries.get_member_by_uni_id(session, uni_id).id
+            member_id = resolve_member(session, credentials).id
+            session.commit()
             submission = submission_queries.get_submission_by_form_and_member(session, form_id, member_id)
             end = perf_counter()
             write_log(

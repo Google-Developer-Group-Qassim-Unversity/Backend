@@ -33,7 +33,7 @@ from app.routers.logging import (
     write_log_title,
     write_log_traceback,
 )
-from app.helpers import admin_guard, authenticated_guard, get_uni_id_from_credentials
+from app.helpers import admin_guard, authenticated_guard, resolve_member
 from app.leaderboard_cache import reset_leaderboard_cache
 from time import perf_counter
 from typing import Annotated
@@ -92,9 +92,9 @@ def get_registrable_events():
 
 @router.get("/me", status_code=status.HTTP_200_OK, response_model=MemberEvents_model)
 def get_my_events(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]):
-    uni_id = get_uni_id_from_credentials(credentials)
     with SessionLocal() as session:
-        member = member_queries.get_member_by_uni_id(session, uni_id)
+        member = resolve_member(session, credentials)
+        session.commit()
         attended_raw, participated_raw = events_queries.get_member_events(session, member.id)
     return MemberEvents_model(
         attended=[EventWithAttendance_model(**e) for e in attended_raw],

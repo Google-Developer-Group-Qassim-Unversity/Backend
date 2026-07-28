@@ -15,6 +15,7 @@ def create_member(session: Session, member: Member_model, is_authenticated: bool
                 email=member.email,
                 phone_number=member.phone_number,
                 uni_id=member.uni_id,
+                clerk_user_id=member.clerk_user_id,
                 gender=member.gender,
                 uni_level=member.uni_level,
                 uni_college=member.uni_college,
@@ -33,7 +34,11 @@ def create_member(session: Session, member: Member_model, is_authenticated: bool
 def create_member_if_not_exists(
     session: Session, member: Member_model, is_authenticated: bool = False
 ) -> tuple[Members | None, bool]:
-    existing_member = session.scalar(select(Members).where(Members.uni_id == member.uni_id))
+    existing_member = None
+    if member.clerk_user_id is not None:
+        existing_member = session.scalar(select(Members).where(Members.clerk_user_id == member.clerk_user_id))
+    if not existing_member and member.uni_id is not None:
+        existing_member = session.scalar(select(Members).where(Members.uni_id == member.uni_id))
     if existing_member:
         member.id = existing_member.id
         already_exist = True
@@ -74,6 +79,18 @@ def get_member_by_uni_id_or_none(session: Session, uni_id: str) -> Members | Non
     return session.scalars(statement).first()
 
 
+def get_member_by_clerk_user_id(session: Session, clerk_user_id: str) -> Members:
+    member = get_member_by_clerk_user_id_or_none(session, clerk_user_id)
+    if not member:
+        raise MemberNotFound(clerk_user_id)
+    return member
+
+
+def get_member_by_clerk_user_id_or_none(session: Session, clerk_user_id: str) -> Members | None:
+    statement = select(Members).where(Members.clerk_user_id == clerk_user_id)
+    return session.scalars(statement).first()
+
+
 def update_member(session: Session, member: Member_model, is_authenticated: bool):
     existing_member = session.scalar(select(Members).where(Members.id == member.id))
     if not existing_member:
@@ -85,6 +102,8 @@ def update_member(session: Session, member: Member_model, is_authenticated: bool
     existing_member.gender = member.gender
     existing_member.uni_level = member.uni_level
     existing_member.uni_college = member.uni_college
+    if member.clerk_user_id is not None:
+        existing_member.clerk_user_id = member.clerk_user_id
     existing_member.updated_at = datetime.now()
     existing_member.is_authenticated = is_authenticated
     session.flush()
@@ -153,11 +172,27 @@ def update_member_role(session: Session, member_id: int, new_role: RoleType):
     return result._asdict()
 
 
+def set_member_clerk_user_id(session: Session, member: Members, clerk_user_id: str) -> Members:
+    member.clerk_user_id = clerk_user_id
+    session.flush()
+    return member
+
+
 def update_member_by_uni_id(session: Session, uni_id: str, updates: dict) -> Members | None:
     member = session.scalar(select(Members).where(Members.uni_id == uni_id))
     if not member:
         raise MemberNotFound(uni_id)
+    return _apply_member_updates(session, member, updates)
 
+
+def update_member_by_id(session: Session, member_id: int, updates: dict) -> Members | None:
+    member = session.scalar(select(Members).where(Members.id == member_id))
+    if not member:
+        raise MemberNotFound(member_id)
+    return _apply_member_updates(session, member, updates)
+
+
+def _apply_member_updates(session: Session, member: Members, updates: dict) -> Members:
     for key, value in updates.items():
         if value is not None and hasattr(member, key):
             setattr(member, key, value)
