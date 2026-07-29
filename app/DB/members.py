@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import select, func
 from app.DB.schema import Actions, Members, MembersLogs, Logs, Events, Role, RoleType
 from app.exceptions import MemberNotFound
 from app.routers.models import Member_model
@@ -76,6 +76,21 @@ def get_member_by_uni_id(session: Session, uni_id: str):
 
 def get_member_by_uni_id_or_none(session: Session, uni_id: str) -> Members | None:
     statement = select(Members).where(Members.uni_id == uni_id)
+    return session.scalars(statement).first()
+
+
+def get_member_by_email_or_none(session: Session, email: str) -> Members | None:
+    statement = select(Members).where(func.lower(Members.email) == email.strip().lower())
+    return session.scalars(statement).first()
+
+
+def get_unclaimed_member_by_email_or_none(session: Session, email: str) -> Members | None:
+    """Find an admin-created member (no Clerk identity attached yet) by email, for the account-claim flow."""
+    statement = select(Members).where(
+        func.lower(Members.email) == email.strip().lower(),
+        Members.clerk_user_id.is_(None),
+        Members.is_authenticated == 0,
+    )
     return session.scalars(statement).first()
 
 

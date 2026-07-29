@@ -121,6 +121,25 @@ class CreatedMemberModel(BaseClassModel):
     already_exists: bool
 
 
+class ClaimCandidate_model(BaseClassModel):
+    id: int
+    name: str
+    email: str | None = None
+    uni_college: str
+    uni_level: int
+    gender: MembersGender
+    attended_events: list[str] = []
+
+
+class ClaimCheckResponse(BaseClassModel):
+    found: bool
+    member: ClaimCandidate_model | None = None
+
+
+class ClaimMemberRequest(BaseModel):
+    member_id: int
+
+
 class MemberWithRole_model(Member_model):
     role: RoleType
 

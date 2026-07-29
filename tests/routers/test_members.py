@@ -267,3 +267,129 @@ def test_update_member_invalid_email(clerk_client: TestClient):
     clerk_client.post("/members/")
     response = clerk_client.patch("/members/me", json={"email": "not-an-email"})
     assert_unprocessable(response)
+
+
+# === Account Claim Tests ===
+# clerk_client's FAKE_CLERK_CREDENTIALS carries personalEmail "test@example.com"
+# and sub "clerk_test_member_sub" (see tests/conftest.py).
+
+
+def test_claim_check_found(clerk_client: TestClient, db_session):
+    shadow = Members(
+        name="Shadow Member",
+        email="test@example.com",
+        phone_number="0500000000",
+        uni_id=None,
+        gender=MembersGender.MALE,
+        uni_level=2,
+        uni_college="Science",
+        is_authenticated=False,
+    )
+    db_session.add(shadow)
+    db_session.commit()
+
+    response = clerk_client.get("/members/claim-check", params={"email": "test@example.com"})
+    assert_2xx(response)
+    body = response.json()
+    assert body["found"] is True
+    assert body["member"]["id"] == shadow.id
+    assert body["member"]["name"] == "Shadow Member"
+
+
+def test_claim_check_not_found(clerk_client: TestClient):
+    response = clerk_client.get("/members/claim-check", params={"email": "nobody@example.com"})
+    assert_2xx(response)
+    assert response.json() == {"found": False, "member": None}
+
+
+def test_claim_check_ignores_already_claimed(clerk_client: TestClient, db_session):
+    claimed = Members(
+        name="Already Claimed",
+        email="test@example.com",
+        phone_number="0500000000",
+        uni_id="999999998",
+        gender=MembersGender.MALE,
+        uni_level=2,
+        uni_college="Science",
+        is_authenticated=True,
+        clerk_user_id="some_other_clerk_user",
+    )
+    db_session.add(claimed)
+    db_session.commit()
+
+    response = clerk_client.get("/members/claim-check", params={"email": "test@example.com"})
+    assert_2xx(response)
+    assert response.json()["found"] is False
+
+
+def test_claim_member_success(clerk_client: TestClient, db_session):
+    shadow = Members(
+        name="Shadow Member",
+        email="test@example.com",
+        phone_number="0500000000",
+        uni_id=None,
+        gender=MembersGender.MALE,
+        uni_level=0,
+        uni_college="UNKNOWN",
+        is_authenticated=False,
+    )
+    db_session.add(shadow)
+    db_session.commit()
+    shadow_id = shadow.id
+
+    response = clerk_client.post("/members/claim", json={"member_id": shadow_id})
+    assert_2xx(response)
+    body = response.json()
+    assert body["already_exists"] is True
+    assert body["member"]["id"] == shadow_id
+    # Onboarding data (from FAKE_CLERK_CREDENTIALS metadata) overwrote the shadow record
+    assert body["member"]["name"] == "Test Member"
+    assert body["member"]["uni_college"] == "Engineering"
+    assert body["member"]["is_authenticated"] is True
+
+    # No duplicate row was created - /me now resolves to the claimed row
+    me_response = clerk_client.get("/members/me")
+    assert_2xx(me_response)
+    assert me_response.json()["id"] == shadow_id
+
+
+def test_claim_member_wrong_email_forbidden(clerk_client: TestClient, db_session):
+    shadow = Members(
+        name="Someone Else",
+        email="someone-else@example.com",
+        phone_number="0500000000",
+        uni_id=None,
+        gender=MembersGender.MALE,
+        uni_level=2,
+        uni_college="Science",
+        is_authenticated=False,
+    )
+    db_session.add(shadow)
+    db_session.commit()
+
+    response = clerk_client.post("/members/claim", json={"member_id": shadow.id})
+    assert response.status_code == 403
+
+
+def test_claim_member_not_found(clerk_client: TestClient):
+    response = clerk_client.post("/members/claim", json={"member_id": 9999})
+    assert_not_found(response)
+
+
+def test_claim_member_already_claimed_conflict(clerk_client: TestClient, db_session):
+    claimed = Members(
+        name="Already Claimed",
+        email="test@example.com",
+        phone_number="0500000000",
+        uni_id="999999997",
+        gender=MembersGender.MALE,
+        uni_level=2,
+        uni_college="Science",
+        is_authenticated=True,
+        clerk_user_id="some_other_clerk_user",
+    )
+    db_session.add(claimed)
+    db_session.commit()
+
+    response = clerk_client.post("/members/claim", json={"member_id": claimed.id})
+    assert response.status_code == 409

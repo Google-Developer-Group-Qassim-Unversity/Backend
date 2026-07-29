@@ -94,7 +94,6 @@ def get_registrable_events():
 def get_my_events(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]):
     with SessionLocal() as session:
         member = resolve_member(session, credentials)
-        session.commit()
         attended_raw, participated_raw = events_queries.get_member_events(session, member.id)
     return MemberEvents_model(
         attended=[EventWithAttendance_model(**e) for e in attended_raw],

@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, Query, status, Depends
 from app.DB import members as member_queries
+from app.DB import events as event_queries
 from app.DB.schema import RoleType
 from app.DB.main import SessionLocal
 from app.routers.models import (
@@ -14,6 +15,8 @@ from app.routers.models import (
     BatchCreateMembersRequest,
     BatchCreateMembersResponse,
     BatchCreateMemberItem,
+    ClaimCheckResponse,
+    ClaimMemberRequest,
 )
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import (
@@ -223,6 +226,79 @@ def get_member_by_id(member_id: int, credentials: Annotated[HTTPAuthorizationCre
     with SessionLocal() as session:
         member = member_queries.get_member_by_id(session, member_id)
     return member
+
+
+@router.get("/claim-check", status_code=status.HTTP_200_OK, response_model=ClaimCheckResponse)
+def claim_check(
+    email: Annotated[str, Query(min_length=1)],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)],
+):
+    """Look for an existing admin-created (unauthenticated, unclaimed) member with this email.
+
+    Used during onboarding for members with no uni_id (e.g. Google sign-ups) so they can be
+    offered a chance to link their existing points/attendance history instead of starting fresh.
+    """
+    with SessionLocal() as session:
+        match = member_queries.get_unclaimed_member_by_email_or_none(session, email)
+        if not match:
+            return ClaimCheckResponse(found=False)
+        attended, _participated = event_queries.get_member_events(session, match.id)
+        attended_events = [event["name"] for event in attended]
+
+    return ClaimCheckResponse(
+        found=True,
+        member={
+            "id": match.id,
+            "name": match.name,
+            "email": match.email,
+            "uni_college": match.uni_college,
+            "uni_level": match.uni_level,
+            "gender": match.gender,
+            "attended_events": attended_events,
+        },
+    )
+
+
+@router.post(
+    "/claim",
+    status_code=status.HTTP_200_OK,
+    response_model=CreatedMemberModel,
+    responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
+)
+def claim_member(
+    request: ClaimMemberRequest,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)],
+):
+    """Attach the calling Clerk identity to an existing unclaimed member row, preserving its history."""
+    with LogFile("claim member"), SessionLocal() as session:
+        try:
+            new_member_data = credentials_to_member_model(credentials)
+
+            target = member_queries.get_member_by_id(session, request.member_id)
+
+            if target.clerk_user_id is not None or target.is_authenticated:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="This member has already been claimed"
+                )
+            if not target.email or target.email.strip().lower() != (new_member_data.email or "").strip().lower():
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email does not match this member")
+
+            new_member_data.id = target.id
+            write_log_title(f"Claiming member {target.id} for clerk user {new_member_data.clerk_user_id}")
+            updated_member = member_queries.update_member(session, new_member_data, is_authenticated=True)
+            session.commit()
+            write_log(f"Member {target.id} claimed successfully")
+            return {"member": updated_member, "already_exists": True}
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while claiming the member"
+            )
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=CreatedMemberModel)
