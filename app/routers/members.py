@@ -287,7 +287,9 @@ def claim_member(
             write_log_title(f"Claiming member {target.id} for clerk user {new_member_data.clerk_user_id}")
             updated_member = member_queries.update_member(session, new_member_data, is_authenticated=True)
             session.commit()
-            write_log(f"Member {target.id} claimed successfully")
+            write_log(
+                f"clerk_user_id={new_member_data.clerk_user_id} claimed the email={target.email} on db_row_id={target.id}"
+            )
             return {"member": updated_member, "already_exists": True}
         except HTTPException:
             session.rollback()
