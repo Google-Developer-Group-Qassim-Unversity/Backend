@@ -221,6 +221,7 @@ class Members(Base):
     __table_args__ = (
         Index("uni_id", "uni_id", unique=True),
         Index("ix_members_clerk_user_id", "clerk_user_id", unique=True),
+        Index("ix_members_email", "email", unique=True),
     )
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)

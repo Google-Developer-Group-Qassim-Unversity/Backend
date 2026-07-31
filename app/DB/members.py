@@ -39,6 +39,11 @@ def create_member_if_not_exists(
         existing_member = session.scalar(select(Members).where(Members.clerk_user_id == member.clerk_user_id))
     if not existing_member and member.uni_id is not None:
         existing_member = session.scalar(select(Members).where(Members.uni_id == member.uni_id))
+    if not existing_member and member.email is not None:
+        # Clerk verifies the signup email (and doesn't let members change it), so an
+        # unclaimed admin-created row with a matching email is safe to fold in
+        # automatically - no "is this you?" confirmation needed.
+        existing_member = get_unclaimed_member_by_email_or_none(session, member.email)
     if existing_member:
         member.id = existing_member.id
         already_exist = True
@@ -85,7 +90,10 @@ def get_member_by_email_or_none(session: Session, email: str) -> Members | None:
 
 
 def get_unclaimed_member_by_email_or_none(session: Session, email: str) -> Members | None:
-    """Find an admin-created member (no Clerk identity attached yet) by email, for the account-claim flow."""
+    """Find an admin-created member (no Clerk identity attached yet) by email.
+
+    Used by ``create_member_if_not_exists`` to automatically fold an admin-created
+    shadow row into a new signup's Clerk identity when the email matches."""
     statement = select(Members).where(
         func.lower(Members.email) == email.strip().lower(),
         Members.clerk_user_id.is_(None),
@@ -117,6 +125,8 @@ def update_member(session: Session, member: Member_model, is_authenticated: bool
     existing_member.gender = member.gender
     existing_member.uni_level = member.uni_level
     existing_member.uni_college = member.uni_college
+    if member.uni_id is not None:
+        existing_member.uni_id = member.uni_id
     if member.clerk_user_id is not None:
         existing_member.clerk_user_id = member.clerk_user_id
     existing_member.updated_at = datetime.now()
