@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from app.DB.schema import Actions, Members, MembersLogs, Logs, Events, Role, RoleType
 from app.exceptions import MemberNotFound
 from app.routers.models import Member_model
@@ -166,3 +166,31 @@ def update_member_by_uni_id(session: Session, uni_id: str, updates: dict) -> Mem
     member.is_authenticated = True
     session.flush()
     return member
+
+
+def get_blast_eligible_count(session: Session) -> int:
+    stmt = select(func.count()).select_from(Members).where(Members.email.isnot(None), Members.email != "")
+    return int(session.scalar(stmt) or 0)
+
+
+def get_blast_recipients_by_activity(session: Session, limit: int, exclude_ids: list[int]):
+    stmt = (
+        select(Members)
+        .outerjoin(MembersLogs, MembersLogs.member_id == Members.id)
+        .where(Members.email.isnot(None), Members.email != "")
+        .group_by(Members.id)
+        .order_by(func.max(MembersLogs.date).desc())
+        .limit(limit)
+    )
+    if exclude_ids:
+        stmt = stmt.where(Members.id.notin_(exclude_ids))
+    return session.scalars(stmt).all()
+
+
+def get_blast_recipients_alphabetical(session: Session, limit: int, exclude_ids: list[int]):
+    stmt = (
+        select(Members).where(Members.email.isnot(None), Members.email != "").order_by(Members.name.asc()).limit(limit)
+    )
+    if exclude_ids:
+        stmt = stmt.where(Members.id.notin_(exclude_ids))
+    return session.scalars(stmt).all()

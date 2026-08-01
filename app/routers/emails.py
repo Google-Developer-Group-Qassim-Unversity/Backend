@@ -6,6 +6,7 @@ import time
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import events as events_queries, logs as log_queries
 from app.DB import emails as email_queries
+from app.DB import email_templates as email_template_queries
 from app.DB.main import SessionLocal
 from enum import Enum
 from urllib.parse import quote
@@ -165,6 +166,60 @@ class CustomEmailTestRequest(BaseModel):
     language: CertificateLanguage = CertificateLanguage.ARABIC
 
 
+class BlastAttachment(BaseModel):
+    url: str
+    filename: str
+    content_type: str | None = None
+
+
+class BlastGuaranteedRecipient(BaseModel):
+    member_id: int | None = None
+    email: EmailStr | None = None
+    name: str | None = None
+
+    @model_validator(mode="after")
+    def validate_recipient(self) -> "BlastGuaranteedRecipient":
+        if self.member_id is None and self.email is None:
+            raise ValueError("Provide either 'member_id' or 'email'")
+        return self
+
+
+class BlastSendRequest(BaseModel):
+    subject: str
+    html_content: str
+    preview_text: str | None = None
+    count: int
+    order_by: Literal["activity", "alphabetical"]
+    guaranteed_recipients: list[BlastGuaranteedRecipient] = []
+    attachments: list[BlastAttachment] = []
+
+
+class BlastTestRequest(BaseModel):
+    subject: str
+    html_content: str
+    preview_text: str | None = None
+    test_emails: list[EmailStr]
+    attachments: list[BlastAttachment] = []
+
+
+class EmailTemplateIn(BaseModel):
+    name: str
+    subject: str
+    html_content: str
+    preview_text: str | None = None
+
+
+class EmailTemplateOut(BaseModel):
+    id: int
+    name: str
+    subject: str
+    html_content: str
+    preview_text: str | None
+    created_by: int
+    created_at: datetime
+    updated_at: datetime
+
+
 # endregion
 
 # region ============== Helper Functions ==============
@@ -197,6 +252,39 @@ async def call_acceptance_api(
             raise BadGateway(detail=f"Acceptance API returned error: {e.response.status_code}")
         except httpx.RequestError:
             raise ServiceUnavailable(detail="Failed to connect to acceptance API")
+
+
+async def call_blast_api(
+    emails: list[str],
+    subject: str,
+    html_content: str,
+    from_address: EmailLogsFromAddress,
+    preview_text: str | None,
+    attachments: list[BlastAttachment],
+) -> BlaseResponse:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            response = await client.post(
+                f"{config.CERTIFICATE_API_URL}/blasts",
+                params={
+                    "emails": emails,
+                    "subject": subject,
+                    "from_address": from_address.value,
+                    "preview_text": preview_text,
+                    "attachments": json.dumps([a.model_dump(mode="json") for a in attachments]),
+                },
+                content=html_content,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+            )
+            response.raise_for_status()
+            response_data = BlaseResponse.model_validate(response.json())
+            return response_data
+        except httpx.TimeoutException:
+            raise GatewayTimeout(detail="Blast API request timed out")
+        except httpx.HTTPStatusError as e:
+            raise BadGateway(detail=f"Blast API returned error: {e.response.status_code}")
+        except httpx.RequestError:
+            raise ServiceUnavailable(detail="Failed to connect to blast API")
 
 
 def call_certificate_api(cert_request: CertificateRequest) -> dict:
@@ -935,6 +1023,202 @@ async def send_acceptance_test(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An error occurred while sending test acceptance emails",
             )
+
+
+# endregion
+
+# region ============== Blast API Endpoints ==============
+
+
+@router.post("/blast", status_code=status.HTTP_200_OK)
+async def send_blast(
+    request: BlastSendRequest,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    background_tasks: BackgroundTasks,
+):
+    async def send_blast_job(
+        recipients: list[dict], guaranteed_snapshot: list[dict], requested_count: int, sent_by_id: int
+    ):
+        with LogFile("send blast [JOB]"), SessionLocal() as session:
+            try:
+                emails = [r["email"] for r in recipients]
+                write_log_title(f"Sending blast to [{len(emails)}] recipients")
+
+                from_addr = get_from_address()
+                await call_blast_api(
+                    emails, request.subject, request.html_content, from_addr, request.preview_text, request.attachments
+                )
+                write_log("Blast API responded successfully")
+
+                email_queries.create_email_log(
+                    session,
+                    sent_by=sent_by_id,
+                    from_address=from_addr,
+                    email_type=EmailLogsEmailType.BLAST,
+                    recipient_count=len(emails),
+                    data={
+                        "subject": request.subject,
+                        "html_content": request.html_content,
+                        "preview_text": request.preview_text,
+                        "order_by": request.order_by,
+                        "requested_count": requested_count,
+                        "guaranteed_recipients": guaranteed_snapshot,
+                        "recipients": recipients,
+                        "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
+                    },
+                )
+                session.commit()
+
+            except Exception as e:
+                session.rollback()
+                write_log_exception(e)
+                write_log_traceback()
+
+    with LogFile("send blast [SETUP]"), SessionLocal() as session:
+        write_log_title("Preparing blast email")
+        requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
+
+        guaranteed_member_ids = [r.member_id for r in request.guaranteed_recipients if r.member_id is not None]
+        resolved_members = (
+            members_queries.get_members_by_id(session, guaranteed_member_ids) if guaranteed_member_ids else []
+        )
+        members_by_id = {m.id: m for m in resolved_members}
+
+        guaranteed: dict[str, dict] = {}
+        for recipient in request.guaranteed_recipients:
+            if recipient.member_id is not None:
+                member = members_by_id.get(recipient.member_id)
+                if member is None or not member.email:
+                    continue
+                guaranteed[member.email.lower()] = {"name": member.name, "email": member.email}
+            elif recipient.email is not None:
+                guaranteed[recipient.email.lower()] = {"name": recipient.name, "email": recipient.email}
+
+        write_log(f"Resolved [{len(guaranteed)}] guaranteed recipients")
+
+        if request.order_by == "activity":
+            pool = members_queries.get_blast_recipients_by_activity(
+                session, limit=request.count, exclude_ids=list(members_by_id.keys())
+            )
+        else:
+            pool = members_queries.get_blast_recipients_alphabetical(
+                session, limit=request.count, exclude_ids=list(members_by_id.keys())
+            )
+        write_log(f"Selected [{len(pool)}] recipients via [{request.order_by}] ordering")
+
+        all_recipients = dict(guaranteed)
+        for member in pool:
+            if member.email:
+                all_recipients.setdefault(member.email.lower(), {"name": member.name, "email": member.email})
+
+        recipients = list(all_recipients.values())
+        write_log(f"Queuing blast to [{len(recipients)}] total recipients")
+
+        background_tasks.add_task(
+            send_blast_job, recipients, list(guaranteed.values()), request.count, requesting_member.id
+        )
+
+    return {
+        "message": f"Blast email queued for [{len(recipients)}] recipient(s).",
+        "recipient_count": len(recipients),
+        "guaranteed_count": len(guaranteed),
+        "algorithmic_count": len(pool),
+    }
+
+
+@router.post("/blast/test", status_code=status.HTTP_200_OK)
+async def send_blast_test(
+    request: BlastTestRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+):
+    with LogFile("send blast test"):
+        try:
+            write_log_title("Sending blast test email")
+            write_log(f"Sending test blast to [{len(request.test_emails)}] test emails")
+
+            await call_blast_api(
+                list(request.test_emails),
+                request.subject,
+                request.html_content,
+                get_from_address(),
+                request.preview_text,
+                request.attachments,
+            )
+            write_log("Blast API responded successfully")
+
+            return {"sent_count": len(request.test_emails), "emails": request.test_emails}
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while sending the blast test email",
+            )
+
+
+@router.get("/blast/eligible-count", status_code=status.HTTP_200_OK)
+def get_blast_eligible_count(credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
+    with SessionLocal() as session:
+        return {"eligible_count": members_queries.get_blast_eligible_count(session)}
+
+
+# endregion
+
+# region ============== Email Template Endpoints ==============
+
+
+@router.get("/blast/templates", status_code=status.HTTP_200_OK)
+def list_email_templates(credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
+    with SessionLocal() as session:
+        templates = email_template_queries.list_templates(session)
+        return [EmailTemplateOut.model_validate(t, from_attributes=True) for t in templates]
+
+
+@router.post("/blast/templates", status_code=status.HTTP_201_CREATED)
+def create_email_template(
+    request: EmailTemplateIn, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+):
+    with SessionLocal() as session:
+        requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
+        template = email_template_queries.create_template(
+            session,
+            name=request.name,
+            subject=request.subject,
+            html_content=request.html_content,
+            preview_text=request.preview_text,
+            created_by=requesting_member.id,
+        )
+        session.commit()
+        return EmailTemplateOut.model_validate(template, from_attributes=True)
+
+
+@router.put("/blast/templates/{template_id:int}", status_code=status.HTTP_200_OK)
+def update_email_template(
+    template_id: int,
+    request: EmailTemplateIn,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+):
+    with SessionLocal() as session:
+        template = email_template_queries.update_template(
+            session,
+            template_id,
+            name=request.name,
+            subject=request.subject,
+            html_content=request.html_content,
+            preview_text=request.preview_text,
+        )
+        session.commit()
+        return EmailTemplateOut.model_validate(template, from_attributes=True)
+
+
+@router.delete("/blast/templates/{template_id:int}", status_code=status.HTTP_200_OK)
+def delete_email_template(template_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
+    with SessionLocal() as session:
+        email_template_queries.delete_template(session, template_id)
+        session.commit()
+        return {"message": f"Template [{template_id}] deleted."}
 
 
 # endregion
