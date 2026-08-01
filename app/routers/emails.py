@@ -363,6 +363,23 @@ def get_from_address() -> EmailLogsFromAddress:
         return EmailLogsFromAddress.INFO_KERNELTICS
 
 
+def get_send_capacity(from_address: EmailLogsFromAddress) -> int:
+    """returns how many more emails can be sent today via the given address, measured against its real daily
+    threshold (the same numbers shown on the usage dashboard) -- not `CLUB_EMAIL_THRESHOLD`, which is a
+    conservative early-switch buffer used only by `get_from_address` for many small reactive calls."""
+    with SessionLocal() as session:
+        usage = email_queries.get_email_address_usage(session, 1, from_address)
+    threshold = config.EMAIL_THRESHOLDS.get(from_address.value, config.CLUB_EMAIL_THRESHOLD)
+    return max(0, threshold - usage)
+
+
+def get_total_remaining_send_capacity() -> int:
+    """returns the combined remaining daily send capacity across both addresses. Unlike `get_from_address`
+    (which picks a single address per call, for many small independent sends), a blast can split across both
+    addresses within one send, so its ceiling is the sum of what's left on each."""
+    return sum(get_send_capacity(addr) for addr in EmailLogsFromAddress)
+
+
 # endregion
 
 # region ============== API Endpoints ==============
@@ -1041,33 +1058,60 @@ async def send_blast(
     ):
         with LogFile("send blast [JOB]"), SessionLocal() as session:
             try:
-                emails = [r["email"] for r in recipients]
-                write_log_title(f"Sending blast to [{len(emails)}] recipients")
+                write_log_title(f"Sending blast to [{len(recipients)}] recipients")
 
-                from_addr = get_from_address()
-                await call_blast_api(
-                    emails, request.subject, request.html_content, from_addr, request.preview_text, request.attachments
-                )
-                write_log("Blast API responded successfully")
+                gdg_capacity = get_send_capacity(EmailLogsFromAddress.GDG_QASSIM)
+                info_capacity = get_send_capacity(EmailLogsFromAddress.INFO_KERNELTICS)
 
-                email_queries.create_email_log(
-                    session,
-                    sent_by=sent_by_id,
-                    from_address=from_addr,
-                    email_type=EmailLogsEmailType.BLAST,
-                    recipient_count=len(emails),
-                    data={
-                        "subject": request.subject,
-                        "html_content": request.html_content,
-                        "preview_text": request.preview_text,
-                        "order_by": request.order_by,
-                        "requested_count": requested_count,
-                        "guaranteed_recipients": guaranteed_snapshot,
-                        "recipients": recipients,
-                        "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
-                    },
-                )
-                session.commit()
+                gdg_chunk = recipients[:gdg_capacity]
+                info_chunk = recipients[gdg_capacity : gdg_capacity + info_capacity]
+                overflow = recipients[gdg_capacity + info_capacity :]
+                if overflow:
+                    write_log(
+                        f"[{len(overflow)}] recipients exceed today's combined capacity; "
+                        f"sending them via [{EmailLogsFromAddress.INFO_KERNELTICS.value}] anyway to honor guaranteed delivery"
+                    )
+                    info_chunk = info_chunk + overflow
+
+                guaranteed_emails = {g["email"] for g in guaranteed_snapshot}
+
+                for from_addr, chunk in (
+                    (EmailLogsFromAddress.GDG_QASSIM, gdg_chunk),
+                    (EmailLogsFromAddress.INFO_KERNELTICS, info_chunk),
+                ):
+                    if not chunk:
+                        continue
+                    emails = [r["email"] for r in chunk]
+                    write_log(f"Sending [{len(emails)}] recipients via [{from_addr.value}]")
+
+                    await call_blast_api(
+                        emails,
+                        request.subject,
+                        request.html_content,
+                        from_addr,
+                        request.preview_text,
+                        request.attachments,
+                    )
+                    write_log(f"Blast API responded successfully for [{from_addr.value}]")
+
+                    email_queries.create_email_log(
+                        session,
+                        sent_by=sent_by_id,
+                        from_address=from_addr,
+                        email_type=EmailLogsEmailType.BLAST,
+                        recipient_count=len(emails),
+                        data={
+                            "subject": request.subject,
+                            "html_content": request.html_content,
+                            "preview_text": request.preview_text,
+                            "order_by": request.order_by,
+                            "requested_count": requested_count,
+                            "guaranteed_recipients": [r for r in chunk if r["email"] in guaranteed_emails],
+                            "recipients": chunk,
+                            "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
+                        },
+                    )
+                    session.commit()
 
             except Exception as e:
                 session.rollback()
@@ -1096,13 +1140,19 @@ async def send_blast(
 
         write_log(f"Resolved [{len(guaranteed)}] guaranteed recipients")
 
+        capped_count = min(request.count, get_total_remaining_send_capacity())
+        if capped_count < request.count:
+            write_log(
+                f"Capping requested count [{request.count}] down to [{capped_count}] based on remaining send capacity"
+            )
+
         if request.order_by == "activity":
             pool = members_queries.get_blast_recipients_by_activity(
-                session, limit=request.count, exclude_ids=list(members_by_id.keys())
+                session, limit=capped_count, exclude_ids=list(members_by_id.keys())
             )
         else:
             pool = members_queries.get_blast_recipients_alphabetical(
-                session, limit=request.count, exclude_ids=list(members_by_id.keys())
+                session, limit=capped_count, exclude_ids=list(members_by_id.keys())
             )
         write_log(f"Selected [{len(pool)}] recipients via [{request.order_by}] ordering")
 
@@ -1161,7 +1211,8 @@ async def send_blast_test(
 @router.get("/blast/eligible-count", status_code=status.HTTP_200_OK)
 def get_blast_eligible_count(credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
     with SessionLocal() as session:
-        return {"eligible_count": members_queries.get_blast_eligible_count(session)}
+        eligible_count = members_queries.get_blast_eligible_count(session)
+    return {"eligible_count": eligible_count, "remaining_capacity": get_total_remaining_send_capacity()}
 
 
 # endregion
