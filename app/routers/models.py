@@ -94,8 +94,8 @@ class Member_model(BaseClassModel):
     uni_id: str | None = None
     clerk_user_id: str | None = None
     gender: MembersGender
-    uni_level: int
-    uni_college: str
+    uni_level: int | None = None
+    uni_college: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     is_authenticated: bool | None = None

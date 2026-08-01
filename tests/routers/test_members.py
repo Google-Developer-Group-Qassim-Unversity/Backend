@@ -13,6 +13,38 @@ def test_create_member(clerk_client: TestClient):
     assert body["already_exists"] is False
 
 
+def test_create_member_without_academic_info(client: TestClient):
+    """Google sign-ups may skip uni_level/uni_college entirely (e.g. non-students) -
+    the backend must accept a member with no academic info rather than 500ing."""
+    from app.main import app
+    from app.helpers import authenticated_guard
+    from fastapi_clerk_auth import HTTPAuthorizationCredentials as ClerkHTTPAuthorizationCredentials
+
+    no_academic_creds = ClerkHTTPAuthorizationCredentials(
+        scheme="Bearer",
+        credentials="fake-token-no-academic",
+        decoded={
+            "sub": "clerk_no_academic_sub",
+            "metadata": {
+                "fullArabicName": "No Academic Member",
+                "saudiPhone": "0501234567",
+                "gender": "Male",
+                "personalEmail": "no-academic@example.com",
+            },
+        },
+    )
+    app.dependency_overrides[authenticated_guard] = lambda: no_academic_creds
+    try:
+        response = client.post("/members/")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert_2xx(response)
+    body = response.json()
+    assert body["member"]["uni_level"] is None
+    assert body["member"]["uni_college"] is None
+
+
 def test_create_member_already_exists(clerk_client: TestClient, db_session):
     # 1. insert member into DB
     member = Members(
