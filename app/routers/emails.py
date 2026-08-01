@@ -143,6 +143,28 @@ class ManualCertificateRequest(BaseModel):
         return self
 
 
+class CustomEmailAttachment(BaseModel):
+    url: str
+    filename: str
+    content_type: str | None = None
+
+
+class CustomEmailRequest(BaseModel):
+    subject: str
+    html_content: str
+    members: list[ManualCertificateMember]
+    attachments: list[CustomEmailAttachment] = []
+    language: CertificateLanguage = CertificateLanguage.ARABIC
+
+
+class CustomEmailTestRequest(BaseModel):
+    subject: str
+    html_content: str
+    test_recipients: list[ManualCertificateMember]
+    attachments: list[CustomEmailAttachment] = []
+    language: CertificateLanguage = CertificateLanguage.ARABIC
+
+
 # endregion
 
 # region ============== Helper Functions ==============
@@ -193,6 +215,46 @@ def call_certificate_api(cert_request: CertificateRequest) -> dict:
             raise BadGateway(detail=f"Certificate API returned error: {e.response.status_code}")
         except httpx.RequestError:
             raise ServiceUnavailable(detail="Failed to connect to certificate API")
+
+
+async def call_custom_email_api(
+    recipient_email: str,
+    subject: str,
+    html_content: str,
+    attachments: list[CustomEmailAttachment],
+    event: SimpleEvent,
+    member: SimpleMember,
+    language: CertificateLanguage,
+    from_address: EmailLogsFromAddress,
+) -> dict:
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        try:
+            response = await client.post(
+                f"{config.CERTIFICATE_API_URL}/emails/custom",
+                json={
+                    "from_address": from_address.value,
+                    "recipient_email": recipient_email,
+                    "subject": subject,
+                    "html_content": html_content,
+                    "event": event.model_dump(mode="json"),
+                    "member": member.model_dump(mode="json"),
+                    "language": language.value,
+                    "attachments": [a.model_dump(mode="json") for a in attachments],
+                },
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.TimeoutException:
+            raise GatewayTimeout(detail="Custom email API request timed out")
+        except httpx.HTTPStatusError as e:
+            raise BadGateway(detail=f"Custom email API returned error: {e.response.status_code}")
+        except httpx.RequestError:
+            raise ServiceUnavailable(detail="Failed to connect to custom email API")
+
+
+def _personalize(text: str, name: str, event_name: str) -> str:
+    return text.replace("[Name]", name).replace("[Event Name]", event_name)
 
 
 def format_event_date(event: Events) -> str:
@@ -385,6 +447,131 @@ def send_manual_certificate(
     }
 
 
+@router.post("/custom/{event_id:int}", status_code=status.HTTP_200_OK)
+def send_custom_email(
+    event_id: int,
+    request: CustomEmailRequest,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    background_tasks: BackgroundTasks,
+):
+    async def send_custom_email_job(
+        request_data: CustomEmailRequest, simple_event: SimpleEvent, event_id: int, sent_by_id: int
+    ):
+        with LogFile("custom email"), SessionLocal() as session:
+            try:
+                from_address = get_from_address()
+                write_log(
+                    f"Processing custom email for event [{simple_event.name}] with [{len(request_data.members)}] recipients"
+                )
+
+                for member_item in request_data.members:
+                    simple_member, member_id = _resolve_member(member_item, session)
+                    write_log(f"Sending custom email to [{simple_member.name}] at [{simple_member.email}]")
+                    subject = _personalize(request_data.subject, simple_member.name, simple_event.name)
+                    html_content = _personalize(request_data.html_content, simple_member.name, simple_event.name)
+                    await call_custom_email_api(
+                        simple_member.email,
+                        subject,
+                        html_content,
+                        request_data.attachments,
+                        simple_event,
+                        simple_member,
+                        request_data.language,
+                        from_address,
+                    )
+                    write_log("Custom email API responded with 200 OK")
+                    email_queries.create_email_log(
+                        session,
+                        sent_by=sent_by_id,
+                        from_address=from_address,
+                        email_type=EmailLogsEmailType.EVENT_ANNOUNCEMENT,
+                        member_id=member_id,
+                        event_id=event_id,
+                        recipient_count=1,
+                        data={
+                            "subject": request_data.subject,
+                            "html_content": request_data.html_content,
+                            "member": simple_member.model_dump(mode="json"),
+                            "certificate_attached": True,
+                            "attachments": [
+                                {"filename": a.filename, "content_type": a.content_type}
+                                for a in request_data.attachments
+                            ],
+                        },
+                    )
+                    session.commit()
+
+            except HTTPException:
+                session.rollback()
+                raise
+            except Exception as e:
+                session.rollback()
+                write_log_exception(e)
+                write_log_traceback()
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="An error occurred while sending custom emails",
+                )
+
+    with LogFile("custom email [JOB]"), SessionLocal() as session:
+        event = events_queries.get_event_by_id(session, event_id)
+        simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
+        requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
+        background_tasks.add_task(
+            send_custom_email_job, request.model_copy(deep=True), simple_event, event_id, requesting_member.id
+        )
+
+    return {
+        "message": f"Custom email sending initiated for [{len(request.members)}] recipient(s).",
+        "recipient_count": len(request.members),
+    }
+
+
+@router.post("/custom/{event_id:int}/test", status_code=status.HTTP_200_OK)
+async def send_custom_email_test(
+    event_id: int,
+    request: CustomEmailTestRequest,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+):
+    with LogFile("send custom email test"), SessionLocal() as session:
+        try:
+            write_log_title(f"Sending custom email test for event [{event_id}]")
+            event = events_queries.get_event_by_id(session, event_id)
+            simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
+            from_address = get_from_address()
+
+            emails: list[str] = []
+            for member_item in request.test_recipients:
+                simple_member, _ = _resolve_member(member_item, session)
+                subject = _personalize(request.subject, simple_member.name, simple_event.name)
+                html_content = _personalize(request.html_content, simple_member.name, simple_event.name)
+                write_log(f"Sending test custom email to [{simple_member.name}] at [{simple_member.email}]")
+                await call_custom_email_api(
+                    simple_member.email,
+                    subject,
+                    html_content,
+                    request.attachments,
+                    simple_event,
+                    simple_member,
+                    request.language,
+                    from_address,
+                )
+                emails.append(simple_member.email)
+
+            write_log("Custom email API responded successfully for all test recipients")
+            return {"sent_count": len(emails), "emails": emails}
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while sending test custom emails",
+            )
+
+
 @router.get("/certificate-event/eligible-count/{event_id:int}", status_code=status.HTTP_200_OK)
 def get_certificate_eligible_count(
     event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
@@ -397,7 +584,10 @@ def get_certificate_eligible_count(
         eligible = [r for r in attendance if r.Member.id not in already_sent_ids]
         return {
             "eligible_count": len(eligible),
-            "eligible_members": [{"id": r.Member.id, "name": r.Member.name, "email": r.Member.email} for r in eligible],
+            "eligible_members": [
+                {"id": r.Member.id, "name": r.Member.name, "email": r.Member.email, "gender": r.Member.gender}
+                for r in eligible
+            ],
             "sent_count": len(already_sent),
         }
 

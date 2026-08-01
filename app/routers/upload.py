@@ -14,6 +14,9 @@ from app.routers.logging import LogFile, write_log, write_log_exception, write_l
 
 router = APIRouter()
 
+ALLOWED_ATTACHMENT_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"}
+MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024
+
 
 def get_r2_client():
     return boto3.client(
@@ -60,3 +63,40 @@ async def upload_file(
         url = f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}"
         write_log(f"Upload successful: {url}")
         return {"url": url}
+
+
+@router.post("/email-attachment", status_code=201)
+async def upload_email_attachment(
+    file: Annotated[UploadFile, File()], credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+):
+    with LogFile("upload email attachment"):
+        if file.content_type not in ALLOWED_ATTACHMENT_CONTENT_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported attachment type: {file.content_type}. Allowed types: images and PDF.",
+            )
+
+        content = await file.read()
+        if len(content) > MAX_ATTACHMENT_SIZE_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Attachment exceeds the {MAX_ATTACHMENT_SIZE_BYTES // (1024 * 1024)}MB size limit.",
+            )
+
+        file_id = str(uuid.uuid4())
+        extension = get_extension(file.filename, file.content_type)
+        key = f"email-attachments/{file_id}{extension}"
+
+        write_log(f"Uploading email attachment: {file.filename} -> {key}")
+
+        try:
+            client = get_r2_client()
+            client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
+        except Exception as e:
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+
+        url = f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}"
+        write_log(f"Upload successful: {url}")
+        return {"url": url, "filename": file.filename, "content_type": file.content_type, "size": len(content)}
