@@ -3,7 +3,7 @@ import datetime
 import enum
 
 from sqlalchemy import Column, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, String, Table, Text, text
-from sqlalchemy.dialects.mysql import INTEGER, TEXT, TINYINT, VARCHAR
+from sqlalchemy.dialects.mysql import INTEGER, LONGTEXT, TEXT, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -136,6 +136,7 @@ class EmailLogsEmailType(str, enum.Enum):
     MANUAL_CERTIFICATE = "manual-certificate"
     EVENT_ANNOUNCEMENT = "event_announcement"
     ACCEPTANCE = "acceptance"
+    BLAST = "blast"
 
 
 class OpenEventsStatus(str, enum.Enum):
@@ -456,6 +457,36 @@ class EmailLogs(Base):
     member: Mapped[Optional["Members"]] = relationship("Members", back_populates="email_logs", foreign_keys=[member_id])
     event: Mapped[Optional["Events"]] = relationship("Events", back_populates="email_logs")
     sender: Mapped["Members"] = relationship("Members", foreign_keys=[sent_by], passive_deletes=True)
+
+
+class EmailTemplates(Base):
+    __tablename__ = "email_templates"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["created_by"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_email_templates_created_by"
+        ),
+        Index("name", "name", unique=True),
+        Index("fk_email_templates_created_by", "created_by"),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    name: Mapped[str] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
+    subject: Mapped[str] = mapped_column(
+        VARCHAR(255, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
+    )
+    html_content: Mapped[str] = mapped_column(
+        LONGTEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
+    )
+    preview_text: Mapped[Optional[str]] = mapped_column(VARCHAR(255, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    created_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    creator: Mapped["Members"] = relationship("Members", foreign_keys=[created_by], passive_deletes=True)
 
 
 # =============================================================================

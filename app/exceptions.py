@@ -67,3 +67,8 @@ class ActionNotFound(NotFound):
 class MemberNotFound(NotFound):
     def __init__(self, id: str | int):
         super().__init__("Member", id)
+
+
+class EmailTemplateNotFound(NotFound):
+    def __init__(self, id: str | int):
+        super().__init__("Email template", id)
