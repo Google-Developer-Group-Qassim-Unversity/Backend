@@ -68,7 +68,8 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     qr_target_url = f"https://gdg-q.com/p/{uuid}" if uuid else "https://gdg-q.com"
 
     full_name = card_data.get("fullName") or "عضو GDG"
-    english_name = card_data.get("englishName") or full_name
+    name_language = (card_data.get("nameLanguage") or "ar").lower()
+    name_label = "الاسم" if name_language == "ar" else "Name"
 
     # 1. Build pass.json
     pass_json = {
@@ -92,26 +93,26 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
             ],
             "secondaryFields": [
                 {
-                    "key": "name_en",
-                    "label": "Name",
-                    "value": english_name,
-                },
-                {
-                    "key": "name_ar",
-                    "label": "الاسم",
+                    "key": "member_name",
+                    "label": name_label,
                     "value": full_name,
-                },
+                }
             ],
             "backFields": [
+                {
+                    "key": "uni_id",
+                    "label": "الرقم الجامعي",
+                    "value": str(card_data.get("uniId") or ""),
+                },
                 {
                     "key": "email",
                     "label": "البريد الإلكتروني",
                     "value": card_data.get("email", ""),
                 },
                 {
-                    "key": "status",
-                    "label": "حالة العضوية",
-                    "value": "خريج" if card_data.get("userStatus") == "graduate" else "طالب مسجل",
+                    "key": "college",
+                    "label": "الكلية",
+                    "value": card_data.get("uniCollege") or "جامعة القصيم",
                 },
                 {
                     "key": "about",
@@ -248,18 +249,7 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     card_id = f"{issuer_id}.{uuid.replace('-', '_')}" if uuid else f"{issuer_id}.card_{int(time.time())}"
     qr_target_url = f"https://gdg-q.com/p/{uuid}" if uuid else "https://gdg-q.com"
 
-    major = card_data.get("major") or (
-        "المرحلة الثانوية" if card_data.get("educationLevel") == "highschool" else "علوم حاسب"
-    )
-    institution = card_data.get("institution") or (
-        "مدرسة ثانوية" if card_data.get("educationLevel") == "highschool" else "جامعة القصيم"
-    )
-    level = card_data.get("studyYearOrLevel") or (
-        "خريج معتمد" if card_data.get("userStatus") == "graduate" else "عضو مجتمع GDG"
-    )
     full_name = card_data.get("fullName") or "عضو GDG"
-    phone = card_data.get("phone", "")
-    country_code = card_data.get("countryCode", "+966")
     email = card_data.get("email", "")
 
     generic_object = {
@@ -280,7 +270,7 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
         "subheader": {
             "defaultValue": {
                 "language": "ar",
-                "value": major,
+                "value": theme["role_title"],
             }
         },
         "hexBackgroundColor": theme["badge_color"],
@@ -297,14 +287,14 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
         },
         "textModulesData": [
             {
-                "id": "institution",
-                "header": "الصرح التعليمي",
-                "body": institution,
+                "id": "uni_id",
+                "header": "الرقم الجامعي",
+                "body": str(card_data.get("uniId") or ""),
             },
             {
-                "id": "level",
-                "header": "المستوى / المرحلة",
-                "body": level,
+                "id": "college",
+                "header": "الكلية",
+                "body": card_data.get("uniCollege") or "جامعة القصيم",
             },
         ],
         "barcode": {
@@ -313,13 +303,6 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
             "alternateText": uuid[:8].upper() if uuid else "GDGQ",
         },
     }
-
-    if phone:
-        generic_object["textModulesData"].append({
-            "id": "phone",
-            "header": "الجوال",
-            "body": f"{country_code} {phone}",
-        })
 
     if email:
         generic_object["textModulesData"].append({

@@ -88,6 +88,11 @@ class RoleType(str, enum.Enum):
     NONE = "none"
 
 
+class MemberProfilesNameLanguage(str, enum.Enum):
+    AR = "ar"
+    EN = "en"
+
+
 class SubmissionsSubmissionType(str, enum.Enum):
     NONE = "none"
     REGISTRATION = "registration"
@@ -242,6 +247,9 @@ class Members(Base):
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
 
     role: Mapped[list["Role"]] = relationship("Role", back_populates="member", passive_deletes=True)
+    profile: Mapped[Optional["MemberProfiles"]] = relationship(
+        "MemberProfiles", back_populates="member", uselist=False, passive_deletes=True
+    )
     members_logs: Mapped[list["MembersLogs"]] = relationship("MembersLogs", back_populates="member")
     submissions: Mapped[list["Submissions"]] = relationship(
         "Submissions", back_populates="member", passive_deletes=True
@@ -290,6 +298,9 @@ class Logs(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     action_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
 
     action: Mapped["Actions"] = relationship("Actions", back_populates="logs")
     event: Mapped[Optional["Events"]] = relationship("Events", back_populates="logs")
@@ -318,6 +329,38 @@ class Role(Base):
     )
 
     member: Mapped["Members"] = relationship("Members", back_populates="role")
+
+
+class MemberProfiles(Base):
+    __tablename__ = "member_profiles"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["member_id"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_member_profiles_member"
+        ),
+        Index("idx_member_profiles_member_id", "member_id", unique=True),
+        Index("idx_member_profiles_uuid", "uuid", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True, autoincrement=True)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, unique=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    theme_id: Mapped[str] = mapped_column(String(50), nullable=False, server_default=text("'gdg-blue'"))
+    name_language: Mapped[MemberProfilesNameLanguage] = mapped_column(
+        Enum(MemberProfilesNameLanguage, values_callable=lambda cls: [member.value for member in cls]),
+        nullable=False,
+        server_default=text("'ar'"),
+    )
+    bio: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    social_links: Mapped[Optional[dict]] = mapped_column(JSON)
+    visibility: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    )
+
+    member: Mapped["Members"] = relationship("Members", back_populates="profile")
 
 
 class DepartmentsLogs(Base):
