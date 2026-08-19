@@ -12,4 +12,11 @@ logs
 uploads
 .ruff_cache
 .pytest_cache
-.coverage 
+.coverage
+
+# Certificates and Secrets
+certificates/
+*.p12
+*.pem
+*.cer
+*.pkpass

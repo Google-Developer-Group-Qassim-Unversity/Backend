@@ -1,0 +1,64 @@
+{
+  "formatVersion": 1,
+  "passTypeIdentifier": "pass.pass.com.gdg-q.wallet",
+  "teamIdentifier": "7NN7W24VXR",
+  "organizationName": "GDG Qassim",
+  "description": "بطاقة عضوية مجتمع المطورين GDG Qassim",
+  "logoText": "GDG Qassim",
+  "foregroundColor": "rgb(240, 233, 222)",
+  "backgroundColor": "rgb(23, 19, 15)",
+  "labelColor": "rgb(142, 134, 125)",
+  "generic": {
+    "primaryFields": [
+      {
+        "key": "name",
+        "label": "الاسم",
+        "value": "عضو النادي"
+      }
+    ],
+    "secondaryFields": [
+      {
+        "key": "major",
+        "label": "التخصص",
+        "value": "علوم حاسب"
+      },
+      {
+        "key": "institution",
+        "label": "الصرح التعليمي",
+        "value": "جامعة القصيم"
+      }
+    ],
+    "auxiliaryFields": [
+      {
+        "key": "level",
+        "label": "المستوى",
+        "value": "المستوى 1"
+      },
+      {
+        "key": "phone",
+        "label": "الجوال",
+        "value": "+966551234567"
+      }
+    ],
+    "backFields": [
+      {
+        "key": "about",
+        "label": "عن النادي",
+        "value": "Google Developer Groups on Campus - Qassim University"
+      },
+      {
+        "key": "website",
+        "label": "الموقع الإلكتروني",
+        "value": "https://gdg-q.com"
+      }
+    ]
+  },
+  "barcodes": [
+    {
+      "format": "PKBarcodeFormatQR",
+      "message": "https://gdg-q.com",
+      "messageEncoding": "iso-8859-1",
+      "altText": "GDGQ-PASS"
+    }
+  ]
+}

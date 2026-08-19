@@ -18,6 +18,7 @@ from app.routers import (
     points,
     health,
     cache,
+    wallet,
 )
 
 app = FastAPI()
@@ -58,3 +59,4 @@ app.include_router(submissions.router, prefix="/submissions", tags=["Submissions
 app.include_router(submissions_manual.router, prefix="/submissions_manual", tags=["Submissions Manual"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(cache.router, prefix="/cache", tags=["cache"])
+app.include_router(wallet.router, prefix="/wallet", tags=["wallet"])
