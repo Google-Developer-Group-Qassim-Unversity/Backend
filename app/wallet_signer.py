@@ -133,6 +133,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     assets_dir = Path(__file__).parent / "assets" / "gdg.pass"
     files_to_pack: Dict[str, bytes] = {"pass.json": pass_json_bytes}
 
+    # Base Icons and Logos
     for img_name in [
         "icon.png",
         "icon@2x.png",
@@ -140,13 +141,22 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "logo.png",
         "logo@2x.png",
         "logo@3x.png",
-        "strip.png",
-        "strip@2x.png",
-        "strip@3x.png",
     ]:
         img_path = assets_dir / img_name
         if img_path.exists():
             files_to_pack[img_name] = img_path.read_bytes()
+
+    # Dynamic Theme Strip Artwork (Figma waves and medal)
+    theme_strip_map = {
+        "strip.png": assets_dir / f"strip-{theme_id}.png",
+        "strip@2x.png": assets_dir / f"strip-{theme_id}@2x.png",
+        "strip@3x.png": assets_dir / f"strip-{theme_id}@3x.png",
+    }
+    for target_name, theme_path in theme_strip_map.items():
+        if theme_path.exists():
+            files_to_pack[target_name] = theme_path.read_bytes()
+        elif (assets_dir / target_name).exists():
+            files_to_pack[target_name] = (assets_dir / target_name).read_bytes()
 
     manifest: Dict[str, str] = {}
     for filename, content in files_to_pack.items():
