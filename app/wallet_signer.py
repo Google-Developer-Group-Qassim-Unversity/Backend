@@ -21,27 +21,27 @@ THEMES_CONFIG = {
         "is_admin": False,
         "bg_hex": "#ffffff",
         "badge_color": "#2563eb",
-        "bg_rgb": "rgb(37, 99, 235)",
-        "fg_rgb": "rgb(255, 255, 255)",
-        "label_rgb": "rgb(226, 232, 240)",
+        "bg_rgb": "rgb(255, 255, 255)",
+        "fg_rgb": "rgb(151, 151, 151)",
+        "label_rgb": "rgb(0, 0, 0)",
     },
     "gdg-red": {
         "role_title": "عضو نادي قوقل للطلبة المطورين",
         "is_admin": False,
         "bg_hex": "#ffffff",
         "badge_color": "#e11d48",
-        "bg_rgb": "rgb(225, 29, 72)",
-        "fg_rgb": "rgb(255, 255, 255)",
-        "label_rgb": "rgb(226, 232, 240)",
+        "bg_rgb": "rgb(255, 255, 255)",
+        "fg_rgb": "rgb(151, 151, 151)",
+        "label_rgb": "rgb(0, 0, 0)",
     },
     "gdg-gold-admin": {
         "role_title": "إداري نادي قوقل للطلبة المطورين",
         "is_admin": True,
         "bg_hex": "#ffffff",
         "badge_color": "#f59e0b",
-        "bg_rgb": "rgb(245, 158, 11)",
-        "fg_rgb": "rgb(255, 255, 255)",
-        "label_rgb": "rgb(226, 232, 240)",
+        "bg_rgb": "rgb(255, 255, 255)",
+        "fg_rgb": "rgb(151, 151, 151)",
+        "label_rgb": "rgb(0, 0, 0)",
     },
 }
 
@@ -67,19 +67,8 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     serial_number = f"GDGQ-{uuid[:8].upper()}" if uuid else f"GDGQ-{str(int(time.time()))[-6:]}"
     qr_target_url = f"https://gdg-q.com/wallet/{uuid}" if uuid else "https://gdg-q.com"
 
-    major = card_data.get("major") or (
-        "المرحلة الثانوية" if card_data.get("educationLevel") == "highschool" else "علوم حاسب"
-    )
-    institution = card_data.get("institution") or (
-        "مدرسة ثانوية" if card_data.get("educationLevel") == "highschool" else "جامعة القصيم"
-    )
-    level = card_data.get("studyYearOrLevel") or (
-        "خريج معتمد" if card_data.get("userStatus") == "graduate" else "عضو مجتمع GDG"
-    )
     full_name = card_data.get("fullName") or "عضو GDG"
-    phone = card_data.get("phone", "")
-    country_code = card_data.get("countryCode", "+966")
-    email = card_data.get("email", "")
+    english_name = card_data.get("englishName") or full_name
 
     # 1. Build pass.json
     pass_json = {
@@ -89,7 +78,6 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "organizationName": "GDG Qassim",
         "serialNumber": serial_number,
         "description": theme["role_title"],
-        "logoText": "GDG QASSIM",
         "foregroundColor": theme["fg_rgb"],
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
@@ -97,27 +85,9 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         # current iOS releases. A generic pass ignores the strip artwork, which
         # left members with a flat colour card instead of the Figma ribbon.
         "storeCard": {
-            "headerFields": [
-                {"key": "role", "label": "الصفة", "value": "إداري النادي" if theme["is_admin"] else "عضو النادي"}
-            ],
-            "primaryFields": [{"key": "name", "label": "الاسم", "value": full_name}],
             "secondaryFields": [
-                {"key": "major", "label": "التخصص", "value": major},
-                {"key": "institution", "label": "الصرح التعليمي", "value": institution},
-            ],
-            "auxiliaryFields": [
-                {"key": "level", "label": "المستوى / المرحلة", "value": level},
-                {"key": "phone", "label": "الجوال", "value": f"{country_code} {phone}" if phone else "+966"},
-            ],
-            "backFields": [
-                {"key": "email", "label": "البريد الإلكتروني", "value": email},
-                {
-                    "key": "status",
-                    "label": "حالة العضوية",
-                    "value": "خريج" if card_data.get("userStatus") == "graduate" else "طالب مسجل",
-                },
-                {"key": "about", "label": "عن النادي", "value": "Google Developer Groups - Qassim"},
-                {"key": "website", "label": "الموقع الإلكتروني", "value": "https://gdg-q.com"},
+                {"key": "english-name", "label": "Name", "value": english_name},
+                {"key": "arabic-name", "label": "الاسم", "value": full_name},
             ],
         },
         "barcodes": [

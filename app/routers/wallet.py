@@ -15,6 +15,7 @@ router = APIRouter()
 class WalletCardPayload(BaseModel):
     uuid: Optional[str] = Field(default=None, description="Unique Identifier of the Card")
     fullName: str = Field(..., description="Full Name of the member")
+    englishName: Optional[str] = Field(default="", description="Member name in English")
     countryCode: Optional[str] = Field(default="+966")
     phone: Optional[str] = Field(default="")
     email: Optional[str] = Field(default="")
