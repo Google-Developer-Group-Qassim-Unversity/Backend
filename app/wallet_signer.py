@@ -65,7 +65,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
 
     uuid = card_data.get("uuid")
     serial_number = f"GDGQ-{uuid[:8].upper()}" if uuid else f"GDGQ-{str(int(time.time()))[-6:]}"
-    qr_target_url = f"https://gdg-q.com/wallet/{uuid}" if uuid else "https://gdg-q.com"
+    qr_target_url = f"https://gdg-q.com/p/{uuid}" if uuid else "https://gdg-q.com"
 
     full_name = card_data.get("fullName") or "عضو GDG"
     english_name = card_data.get("englishName") or full_name
@@ -78,16 +78,51 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "organizationName": "GDG Qassim",
         "serialNumber": serial_number,
         "description": theme["role_title"],
+        "logoText": "GDG QASSIM",
         "foregroundColor": theme["fg_rgb"],
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
-        # Store cards are the Apple Wallet layout that supports strip.png on
-        # current iOS releases. A generic pass ignores the strip artwork, which
-        # left members with a flat colour card instead of the Figma ribbon.
-        "storeCard": {
+        "generic": {
+            "primaryFields": [
+                {
+                    "key": "role",
+                    "label": "",
+                    "value": theme["role_title"],
+                }
+            ],
             "secondaryFields": [
-                {"key": "english-name", "label": "Name", "value": english_name},
-                {"key": "arabic-name", "label": "الاسم", "value": full_name},
+                {
+                    "key": "name_en",
+                    "label": "Name",
+                    "value": english_name,
+                },
+                {
+                    "key": "name_ar",
+                    "label": "الاسم",
+                    "value": full_name,
+                },
+            ],
+            "backFields": [
+                {
+                    "key": "email",
+                    "label": "البريد الإلكتروني",
+                    "value": card_data.get("email", ""),
+                },
+                {
+                    "key": "status",
+                    "label": "حالة العضوية",
+                    "value": "خريج" if card_data.get("userStatus") == "graduate" else "طالب مسجل",
+                },
+                {
+                    "key": "about",
+                    "label": "عن النادي",
+                    "value": "Google Developer Groups - Qassim",
+                },
+                {
+                    "key": "website",
+                    "label": "الملف الشخصي",
+                    "value": qr_target_url,
+                },
             ],
         },
         "barcodes": [
@@ -211,7 +246,7 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
     uuid = card_data.get("uuid")
     card_id = f"{issuer_id}.{uuid.replace('-', '_')}" if uuid else f"{issuer_id}.card_{int(time.time())}"
-    qr_target_url = f"https://gdg-q.com/wallet/{uuid}" if uuid else "https://gdg-q.com"
+    qr_target_url = f"https://gdg-q.com/p/{uuid}" if uuid else "https://gdg-q.com"
 
     major = card_data.get("major") or (
         "المرحلة الثانوية" if card_data.get("educationLevel") == "highschool" else "علوم حاسب"
@@ -230,26 +265,68 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     generic_object = {
         "id": card_id,
         "classId": class_id,
-        "cardTitle": {"defaultValue": {"language": "ar", "value": "GDG QASSIM"}},
-        "header": {"defaultValue": {"language": "ar", "value": full_name}},
-        "subheader": {"defaultValue": {"language": "ar", "value": major}},
+        "cardTitle": {
+            "defaultValue": {
+                "language": "ar",
+                "value": "GDG QASSIM",
+            }
+        },
+        "header": {
+            "defaultValue": {
+                "language": "ar",
+                "value": full_name,
+            }
+        },
+        "subheader": {
+            "defaultValue": {
+                "language": "ar",
+                "value": major,
+            }
+        },
         "hexBackgroundColor": theme["badge_color"],
         "logo": {
-            "sourceUri": {"uri": "https://gdg-q.com/logo.png"},
-            "contentDescription": {"defaultValue": {"language": "ar", "value": "GDG Qassim Logo"}},
+            "sourceUri": {
+                "uri": "https://gdg-q.com/logo.png",
+            },
+            "contentDescription": {
+                "defaultValue": {
+                    "language": "ar",
+                    "value": "GDG Qassim Logo",
+                }
+            },
         },
         "textModulesData": [
-            {"id": "institution", "header": "الصرح التعليمي", "body": institution},
-            {"id": "level", "header": "المستوى / المرحلة", "body": level},
+            {
+                "id": "institution",
+                "header": "الصرح التعليمي",
+                "body": institution,
+            },
+            {
+                "id": "level",
+                "header": "المستوى / المرحلة",
+                "body": level,
+            },
         ],
-        "barcode": {"type": "QR_CODE", "value": qr_target_url, "alternateText": uuid[:8].upper() if uuid else "GDGQ"},
+        "barcode": {
+            "type": "QR_CODE",
+            "value": qr_target_url,
+            "alternateText": uuid[:8].upper() if uuid else "GDGQ",
+        },
     }
 
     if phone:
-        generic_object["textModulesData"].append({"id": "phone", "header": "الجوال", "body": f"{country_code} {phone}"})
+        generic_object["textModulesData"].append({
+            "id": "phone",
+            "header": "الجوال",
+            "body": f"{country_code} {phone}",
+        })
 
     if email:
-        generic_object["textModulesData"].append({"id": "email", "header": "البريد الإلكتروني", "body": email})
+        generic_object["textModulesData"].append({
+            "id": "email",
+            "header": "البريد الإلكتروني",
+            "body": email,
+        })
 
     jwt_claims = {
         "iss": service_account_email,
@@ -257,7 +334,9 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
         "typ": "savetoandroidpay",
         "iat": int(time.time()),
         "origins": ["https://gdg-q.com", "http://localhost:3000"],
-        "payload": {"genericObjects": [generic_object]},
+        "payload": {
+            "genericObjects": [generic_object],
+        },
     }
 
     if not private_key_pem:
