@@ -93,7 +93,10 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "foregroundColor": theme["fg_rgb"],
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
-        "generic": {
+        # Store cards are the Apple Wallet layout that supports strip.png on
+        # current iOS releases. A generic pass ignores the strip artwork, which
+        # left members with a flat colour card instead of the Figma ribbon.
+        "storeCard": {
             "headerFields": [
                 {"key": "role", "label": "الصفة", "value": "إداري النادي" if theme["is_admin"] else "عضو النادي"}
             ],
