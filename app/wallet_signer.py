@@ -83,8 +83,10 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
         "storeCard": {
-            "primaryFields": [{"key": "role", "value": theme["role_title"]}],
-            "secondaryFields": [{"key": "member_name", "value": f"{name_label}: {full_name}"}],
+            "secondaryFields": [
+                {"key": "role", "value": theme["role_title"]},
+                {"key": "member_name", "value": f"{name_label}: {full_name}"},
+            ],
             "backFields": [
                 {
                     "key": "uni_id",
