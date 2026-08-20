@@ -10,11 +10,13 @@ from app.DB.schema import Base
 
 config = context.config
 
-if os.getenv("ENV") != "testing":
+if os.getenv("ENV") != "testing" and not os.getenv("DATABASE_URL"):
     load_dotenv(".env.local", override=True)
 
 if database_url := os.getenv("DATABASE_URL"):
-    config.set_main_option("sqlalchemy.url", database_url)
+    # ConfigParser treats '%' as interpolation syntax. Database passwords may
+    # legitimately contain it, so escape it before passing the URL to Alembic.
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
