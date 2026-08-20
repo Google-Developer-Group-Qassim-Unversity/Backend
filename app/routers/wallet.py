@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from app.config import config
 from app.DB.main import SessionLocal
@@ -26,6 +26,7 @@ router = APIRouter()
 # Request & Response Models
 # =============================================================================
 
+
 class SocialLinkItem(BaseModel):
     id: str
     platform: str
@@ -42,6 +43,8 @@ class ProfileVisibility(BaseModel):
 
 class UpdateWalletMePayload(BaseModel):
     custom_name: Optional[str] = Field(default=None, description="Preferred display name on card")
+    email: Optional[EmailStr] = Field(default=None, description="Member contact email")
+    phone_number: Optional[str] = Field(default=None, max_length=20, description="Member contact phone number")
     theme_id: Optional[str] = Field(default=None, description="Theme ID (gdg-blue, gdg-red, gdg-gold-admin)")
     name_language: Optional[str] = Field(default=None, description="Name language label preference: ar or en")
     user_status: Optional[str] = Field(default=None, description="student or graduate")
@@ -57,6 +60,7 @@ class UpdateWalletMePayload(BaseModel):
 # =============================================================================
 # Helpers
 # =============================================================================
+
 
 def _resolve_authenticated_member(session, credentials):
     """
@@ -75,8 +79,7 @@ def _resolve_authenticated_member(session, credentials):
     member = get_member_by_uni_id_or_none(session, str(uni_id))
     if not member:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Member with university ID '{uni_id}' not found in system.",
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with university ID '{uni_id}' not found in system."
         )
 
     return member
@@ -85,6 +88,7 @@ def _resolve_authenticated_member(session, credentials):
 # =============================================================================
 # Endpoints
 # =============================================================================
+
 
 @router.get("/me", summary="Get authenticated member wallet data and profile")
 def get_wallet_me(credentials=Depends(authenticated_guard)):
@@ -102,7 +106,9 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
         effective_name = profile.custom_name or member.name
         effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
         effective_major = profile.major or member.uni_college or "علوم حاسب"
-        effective_level = profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG")
+        effective_level = profile.study_year_or_level or (
+            f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG"
+        )
 
         return {
             "member_id": member.id,
@@ -121,7 +127,9 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
                 "uuid": profile.uuid,
                 "custom_name": profile.custom_name,
                 "theme_id": profile.theme_id,
-                "name_language": profile.name_language.value if hasattr(profile.name_language, "value") else str(profile.name_language),
+                "name_language": profile.name_language.value
+                if hasattr(profile.name_language, "value")
+                else str(profile.name_language),
                 "user_status": profile.user_status or "student",
                 "education_level": profile.education_level or "university",
                 "institution": effective_institution,
@@ -129,12 +137,8 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
                 "study_year_or_level": effective_level,
                 "bio": profile.bio or "",
                 "social_links": profile.social_links or [],
-                "visibility": profile.visibility or {
-                    "showPhone": False,
-                    "showEmail": False,
-                    "showAcademic": True,
-                    "showBio": True,
-                },
+                "visibility": profile.visibility
+                or {"showPhone": False, "showEmail": False, "showAcademic": True, "showBio": True},
                 "created_at": profile.created_at.isoformat() if profile.created_at else None,
                 "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
             },
@@ -159,8 +163,15 @@ def update_wallet_me(payload: UpdateWalletMePayload, credentials=Depends(authent
                 detail="Unauthorized: Gold Leadership Card is restricted to GDG Administrators and Board Members.",
             )
 
-        social_links_dict = [item.model_dump() for item in payload.social_links] if payload.social_links is not None else None
+        social_links_dict = (
+            [item.model_dump() for item in payload.social_links] if payload.social_links is not None else None
+        )
         visibility_dict = payload.visibility.model_dump() if payload.visibility is not None else None
+
+        if payload.email is not None:
+            member.email = str(payload.email)
+        if payload.phone_number is not None:
+            member.phone_number = payload.phone_number.strip() or None
 
         updated_profile = update_member_profile(
             session=session,
@@ -184,11 +195,15 @@ def update_wallet_me(payload: UpdateWalletMePayload, credentials=Depends(authent
         return {
             "success": True,
             "name": effective_name,
+            "email": member.email,
+            "phone_number": member.phone_number,
             "profile": {
                 "uuid": updated_profile.uuid,
                 "custom_name": updated_profile.custom_name,
                 "theme_id": updated_profile.theme_id,
-                "name_language": updated_profile.name_language.value if hasattr(updated_profile.name_language, "value") else str(updated_profile.name_language),
+                "name_language": updated_profile.name_language.value
+                if hasattr(updated_profile.name_language, "value")
+                else str(updated_profile.name_language),
                 "user_status": updated_profile.user_status,
                 "education_level": updated_profile.education_level,
                 "institution": updated_profile.institution,
@@ -231,9 +246,12 @@ def create_apple_wallet_pass(credentials=Depends(authenticated_guard)):
             "major": profile.major or member.uni_college or "علوم حاسب",
             "userStatus": profile.user_status or "student",
             "educationLevel": profile.education_level or "university",
-            "studyYearOrLevel": profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else ""),
+            "studyYearOrLevel": profile.study_year_or_level
+            or (f"المستوى {member.uni_level}" if member.uni_level else ""),
             "themeId": theme_id,
-            "nameLanguage": profile.name_language.value if hasattr(profile.name_language, "value") else str(profile.name_language),
+            "nameLanguage": profile.name_language.value
+            if hasattr(profile.name_language, "value")
+            else str(profile.name_language),
             "isAdmin": is_admin,
         }
 
@@ -278,9 +296,12 @@ def create_google_wallet_pass(credentials=Depends(authenticated_guard)):
             "major": profile.major or member.uni_college or "علوم حاسب",
             "userStatus": profile.user_status or "student",
             "educationLevel": profile.education_level or "university",
-            "studyYearOrLevel": profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else ""),
+            "studyYearOrLevel": profile.study_year_or_level
+            or (f"المستوى {member.uni_level}" if member.uni_level else ""),
             "themeId": theme_id,
-            "nameLanguage": profile.name_language.value if hasattr(profile.name_language, "value") else str(profile.name_language),
+            "nameLanguage": profile.name_language.value
+            if hasattr(profile.name_language, "value")
+            else str(profile.name_language),
             "isAdmin": is_admin,
         }
 
@@ -310,12 +331,16 @@ def get_public_profile(uuid: str):
         effective_name = profile.custom_name or member.name
         effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
         effective_major = profile.major or member.uni_college or "علوم حاسب"
-        effective_level = profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG")
+        effective_level = profile.study_year_or_level or (
+            f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG"
+        )
 
         return {
             "uuid": profile.uuid,
             "name": effective_name,
-            "name_language": profile.name_language.value if hasattr(profile.name_language, "value") else str(profile.name_language),
+            "name_language": profile.name_language.value
+            if hasattr(profile.name_language, "value")
+            else str(profile.name_language),
             "theme_id": profile.theme_id,
             "user_status": profile.user_status or "student",
             "education_level": profile.education_level or "university",
@@ -344,8 +369,4 @@ async def wallet_health():
     """
     has_apple_p12 = bool(os.getenv("APPLE_P12_BASE64")) or bool(os.getenv("APPLE_P12_PASSWORD"))
     has_google_key = bool(os.getenv("GOOGLE_WALLET_PRIVATE_KEY"))
-    return {
-        "status": "healthy",
-        "apple_wallet_configured": has_apple_p12,
-        "google_wallet_configured": has_google_key,
-    }
+    return {"status": "healthy", "apple_wallet_configured": has_apple_p12, "google_wallet_configured": has_google_key}
