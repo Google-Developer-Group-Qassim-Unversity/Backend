@@ -68,8 +68,6 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     qr_target_url = f"https://gdg-q.com/p/{uuid}" if uuid else "https://gdg-q.com"
 
     full_name = card_data.get("fullName") or "عضو GDG"
-    name_language = (card_data.get("nameLanguage") or "ar").lower()
-    name_label = "الاسم" if name_language == "ar" else "Name"
 
     # 1. Build pass.json
     pass_json = {
@@ -84,8 +82,11 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "labelColor": theme["label_rgb"],
         "storeCard": {
             "secondaryFields": [
-                {"key": "role", "value": theme["role_title"]},
-                {"key": "member_name", "value": f"{name_label}: {full_name}"},
+                {
+                    "key": "member_name",
+                    "label": theme["role_title"],
+                    "value": full_name,
+                },
             ],
             "backFields": [
                 {
