@@ -102,13 +102,16 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
 
         is_admin = is_member_admin(member)
         role_names = [r.role.value for r in member.role] if member.role else []
+        visibility = profile.visibility or {
+            "showPhone": False,
+            "showEmail": False,
+            "showAcademic": True,
+            "showBio": True,
+            "academicConfigured": False,
+        }
+        academic_configured = bool(visibility.get("academicConfigured", False))
 
         effective_name = profile.custom_name or member.name
-        effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
-        effective_major = profile.major or member.uni_college or "علوم حاسب"
-        effective_level = profile.study_year_or_level or (
-            f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG"
-        )
 
         return {
             "member_id": member.id,
@@ -130,15 +133,14 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
                 "name_language": profile.name_language.value
                 if hasattr(profile.name_language, "value")
                 else str(profile.name_language),
-                "user_status": profile.user_status or "student",
-                "education_level": profile.education_level or "university",
-                "institution": effective_institution,
-                "major": effective_major,
-                "study_year_or_level": effective_level,
+                "user_status": profile.user_status if academic_configured else "",
+                "education_level": profile.education_level if academic_configured else "",
+                "institution": profile.institution if academic_configured else "",
+                "major": profile.major if academic_configured else "",
+                "study_year_or_level": profile.study_year_or_level if academic_configured else "",
                 "bio": profile.bio or "",
                 "social_links": profile.social_links or [],
-                "visibility": profile.visibility
-                or {"showPhone": False, "showEmail": False, "showAcademic": True, "showBio": True},
+                "visibility": visibility,
                 "created_at": profile.created_at.isoformat() if profile.created_at else None,
                 "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
             },
@@ -323,17 +325,13 @@ def get_public_profile(uuid: str):
         member, profile, is_admin = result
 
         vis = profile.visibility or {}
+        academic_configured = bool(vis.get("academicConfigured", False))
         show_phone = bool(vis.get("showPhone", False))
         show_email = bool(vis.get("showEmail", False))
         show_academic = bool(vis.get("showAcademic", True))
         show_bio = bool(vis.get("showBio", True))
 
         effective_name = profile.custom_name or member.name
-        effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
-        effective_major = profile.major or member.uni_college or "علوم حاسب"
-        effective_level = profile.study_year_or_level or (
-            f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG"
-        )
 
         return {
             "uuid": profile.uuid,
@@ -342,11 +340,11 @@ def get_public_profile(uuid: str):
             if hasattr(profile.name_language, "value")
             else str(profile.name_language),
             "theme_id": profile.theme_id,
-            "user_status": profile.user_status or "student",
-            "education_level": profile.education_level or "university",
-            "institution": effective_institution if show_academic else None,
-            "major": effective_major if show_academic else None,
-            "study_year_or_level": effective_level if show_academic else None,
+            "user_status": profile.user_status if academic_configured else "",
+            "education_level": profile.education_level if academic_configured else "",
+            "institution": profile.institution if show_academic and academic_configured else None,
+            "major": profile.major if show_academic and academic_configured else None,
+            "study_year_or_level": profile.study_year_or_level if show_academic and academic_configured else None,
             "is_admin": is_admin,
             "bio": (profile.bio or "") if show_bio else None,
             "social_links": profile.social_links or [],

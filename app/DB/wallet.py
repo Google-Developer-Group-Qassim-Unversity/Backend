@@ -51,6 +51,7 @@ def get_or_create_member_profile(session: Session, member_id: int) -> MemberProf
         "showEmail": False,
         "showAcademic": True,
         "showBio": True,
+        "academicConfigured": False,
     }
 
     new_profile = MemberProfiles(
@@ -59,11 +60,11 @@ def get_or_create_member_profile(session: Session, member_id: int) -> MemberProf
         custom_name=None,
         theme_id="gdg-blue",
         name_language=MemberProfilesNameLanguage.AR,
-        user_status="student",
-        education_level="university",
-        institution="جامعة القصيم",
-        major="علوم حاسب",
-        study_year_or_level="المستوى 7",
+        user_status=None,
+        education_level=None,
+        institution=None,
+        major=None,
+        study_year_or_level=None,
         bio="",
         social_links=[],
         visibility=default_visibility,
@@ -149,6 +150,11 @@ def update_member_profile(
     if visibility is not None:
         current_vis = dict(profile.visibility or {})
         current_vis.update(visibility)
+        profile.visibility = current_vis
+
+    if user_status in ("student", "graduate"):
+        current_vis = dict(profile.visibility or {})
+        current_vis["academicConfigured"] = True
         profile.visibility = current_vis
 
     profile.updated_at = datetime.now()
