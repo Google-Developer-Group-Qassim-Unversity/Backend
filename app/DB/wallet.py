@@ -56,8 +56,14 @@ def get_or_create_member_profile(session: Session, member_id: int) -> MemberProf
     new_profile = MemberProfiles(
         member_id=member_id,
         uuid=new_uuid,
+        custom_name=None,
         theme_id="gdg-blue",
         name_language=MemberProfilesNameLanguage.AR,
+        user_status="student",
+        education_level="university",
+        institution="جامعة القصيم",
+        major="علوم حاسب",
+        study_year_or_level="المستوى 7",
         bio="",
         social_links=[],
         visibility=default_visibility,
@@ -91,16 +97,25 @@ def get_public_profile_by_uuid(session: Session, profile_uuid: str) -> Optional[
 def update_member_profile(
     session: Session,
     member_id: int,
+    custom_name: Optional[str] = None,
     theme_id: Optional[str] = None,
     name_language: Optional[str] = None,
+    user_status: Optional[str] = None,
+    education_level: Optional[str] = None,
+    institution: Optional[str] = None,
+    major: Optional[str] = None,
+    study_year_or_level: Optional[str] = None,
     bio: Optional[str] = None,
     social_links: Optional[list] = None,
     visibility: Optional[dict] = None,
 ) -> MemberProfiles:
     """
-    Updates the mutable profile fields for a member without modifying core identity fields.
+    Updates the profile and academic fields for a member.
     """
     profile = get_or_create_member_profile(session, member_id)
+
+    if custom_name is not None:
+        profile.custom_name = custom_name.strip() if custom_name else None
 
     if theme_id is not None:
         profile.theme_id = theme_id
@@ -110,6 +125,21 @@ def update_member_profile(
         if lang_str in ("ar", "en"):
             profile.name_language = MemberProfilesNameLanguage.AR if lang_str == "ar" else MemberProfilesNameLanguage.EN
 
+    if user_status is not None:
+        profile.user_status = user_status
+
+    if education_level is not None:
+        profile.education_level = education_level
+
+    if institution is not None:
+        profile.institution = institution
+
+    if major is not None:
+        profile.major = major
+
+    if study_year_or_level is not None:
+        profile.study_year_or_level = study_year_or_level
+
     if bio is not None:
         profile.bio = bio
 
@@ -117,7 +147,6 @@ def update_member_profile(
         profile.social_links = social_links
 
     if visibility is not None:
-        # Merge visibility safely
         current_vis = dict(profile.visibility or {})
         current_vis.update(visibility)
         profile.visibility = current_vis

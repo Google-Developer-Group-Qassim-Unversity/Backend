@@ -41,8 +41,14 @@ class ProfileVisibility(BaseModel):
 
 
 class UpdateWalletMePayload(BaseModel):
+    custom_name: Optional[str] = Field(default=None, description="Preferred display name on card")
     theme_id: Optional[str] = Field(default=None, description="Theme ID (gdg-blue, gdg-red, gdg-gold-admin)")
     name_language: Optional[str] = Field(default=None, description="Name language label preference: ar or en")
+    user_status: Optional[str] = Field(default=None, description="student or graduate")
+    education_level: Optional[str] = Field(default=None, description="university or highschool")
+    institution: Optional[str] = Field(default=None, description="University or school name")
+    major: Optional[str] = Field(default=None, description="Major / field of study")
+    study_year_or_level: Optional[str] = Field(default=None, description="Level e.g. المستوى 7")
     bio: Optional[str] = Field(default=None, description="Short member bio")
     social_links: Optional[List[SocialLinkItem]] = Field(default=None, description="List of social links")
     visibility: Optional[ProfileVisibility] = Field(default=None, description="Visibility settings")
@@ -93,9 +99,16 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
         is_admin = is_member_admin(member)
         role_names = [r.role.value for r in member.role] if member.role else []
 
+        effective_name = profile.custom_name or member.name
+        effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
+        effective_major = profile.major or member.uni_college or "علوم حاسب"
+        effective_level = profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG")
+
         return {
             "member_id": member.id,
-            "name": member.name,
+            "name": effective_name,
+            "official_name": member.name,
+            "custom_name": profile.custom_name,
             "uni_id": member.uni_id,
             "email": member.email,
             "phone_number": member.phone_number,
@@ -106,8 +119,14 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
             "roles": role_names,
             "profile": {
                 "uuid": profile.uuid,
+                "custom_name": profile.custom_name,
                 "theme_id": profile.theme_id,
                 "name_language": profile.name_language.value if hasattr(profile.name_language, "value") else str(profile.name_language),
+                "user_status": profile.user_status or "student",
+                "education_level": profile.education_level or "university",
+                "institution": effective_institution,
+                "major": effective_major,
+                "study_year_or_level": effective_level,
                 "bio": profile.bio or "",
                 "social_links": profile.social_links or [],
                 "visibility": profile.visibility or {
@@ -126,7 +145,7 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
 @router.patch("/me", summary="Update member wallet profile settings")
 def update_wallet_me(payload: UpdateWalletMePayload, credentials=Depends(authenticated_guard)):
     """
-    Updates the authenticated member's mutable profile fields (theme_id, name_language, bio, social_links, visibility).
+    Updates the authenticated member's profile and academic fields (custom_name, theme_id, name_language, user_status, education_level, institution, major, study_year_or_level, bio, social_links, visibility).
     Enforces server-side admin role check if gold card (gdg-gold-admin) is requested.
     """
     with SessionLocal() as session:
@@ -146,20 +165,35 @@ def update_wallet_me(payload: UpdateWalletMePayload, credentials=Depends(authent
         updated_profile = update_member_profile(
             session=session,
             member_id=member.id,
+            custom_name=payload.custom_name,
             theme_id=payload.theme_id,
             name_language=payload.name_language,
+            user_status=payload.user_status,
+            education_level=payload.education_level,
+            institution=payload.institution,
+            major=payload.major,
+            study_year_or_level=payload.study_year_or_level,
             bio=payload.bio,
             social_links=social_links_dict,
             visibility=visibility_dict,
         )
         session.commit()
 
+        effective_name = updated_profile.custom_name or member.name
+
         return {
             "success": True,
+            "name": effective_name,
             "profile": {
                 "uuid": updated_profile.uuid,
+                "custom_name": updated_profile.custom_name,
                 "theme_id": updated_profile.theme_id,
                 "name_language": updated_profile.name_language.value if hasattr(updated_profile.name_language, "value") else str(updated_profile.name_language),
+                "user_status": updated_profile.user_status,
+                "education_level": updated_profile.education_level,
+                "institution": updated_profile.institution,
+                "major": updated_profile.major,
+                "study_year_or_level": updated_profile.study_year_or_level,
                 "bio": updated_profile.bio or "",
                 "social_links": updated_profile.social_links or [],
                 "visibility": updated_profile.visibility,
@@ -185,13 +219,19 @@ def create_apple_wallet_pass(credentials=Depends(authenticated_guard)):
         if theme_id == "gdg-gold-admin" and not is_admin:
             theme_id = "gdg-blue"
 
+        effective_name = profile.custom_name or member.name
+
         card_data = {
             "uuid": profile.uuid,
-            "fullName": member.name,
+            "fullName": effective_name,
             "uniId": member.uni_id,
             "email": member.email or "",
             "phone": member.phone_number or "",
-            "uniCollege": member.uni_college or "جامعة القصيم",
+            "uniCollege": profile.institution or member.uni_college or "جامعة القصيم",
+            "major": profile.major or member.uni_college or "علوم حاسب",
+            "userStatus": profile.user_status or "student",
+            "educationLevel": profile.education_level or "university",
+            "studyYearOrLevel": profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else ""),
             "themeId": theme_id,
             "nameLanguage": profile.name_language.value if hasattr(profile.name_language, "value") else str(profile.name_language),
             "isAdmin": is_admin,
@@ -226,13 +266,19 @@ def create_google_wallet_pass(credentials=Depends(authenticated_guard)):
         if theme_id == "gdg-gold-admin" and not is_admin:
             theme_id = "gdg-blue"
 
+        effective_name = profile.custom_name or member.name
+
         card_data = {
             "uuid": profile.uuid,
-            "fullName": member.name,
+            "fullName": effective_name,
             "uniId": member.uni_id,
             "email": member.email or "",
             "phone": member.phone_number or "",
-            "uniCollege": member.uni_college or "جامعة القصيم",
+            "uniCollege": profile.institution or member.uni_college or "جامعة القصيم",
+            "major": profile.major or member.uni_college or "علوم حاسب",
+            "userStatus": profile.user_status or "student",
+            "educationLevel": profile.education_level or "university",
+            "studyYearOrLevel": profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else ""),
             "themeId": theme_id,
             "nameLanguage": profile.name_language.value if hasattr(profile.name_language, "value") else str(profile.name_language),
             "isAdmin": is_admin,
@@ -261,18 +307,26 @@ def get_public_profile(uuid: str):
         show_academic = bool(vis.get("showAcademic", True))
         show_bio = bool(vis.get("showBio", True))
 
+        effective_name = profile.custom_name or member.name
+        effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
+        effective_major = profile.major or member.uni_college or "علوم حاسب"
+        effective_level = profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG")
+
         return {
             "uuid": profile.uuid,
-            "name": member.name,
+            "name": effective_name,
             "name_language": profile.name_language.value if hasattr(profile.name_language, "value") else str(profile.name_language),
             "theme_id": profile.theme_id,
+            "user_status": profile.user_status or "student",
+            "education_level": profile.education_level or "university",
+            "institution": effective_institution if show_academic else None,
+            "major": effective_major if show_academic else None,
+            "study_year_or_level": effective_level if show_academic else None,
             "is_admin": is_admin,
             "bio": (profile.bio or "") if show_bio else None,
             "social_links": profile.social_links or [],
             "email": member.email if show_email else None,
             "phone": member.phone_number if show_phone else None,
-            "uni_college": member.uni_college if show_academic else None,
-            "uni_level": member.uni_level if show_academic else None,
             "visibility": {
                 "showPhone": show_phone,
                 "showEmail": show_email,
