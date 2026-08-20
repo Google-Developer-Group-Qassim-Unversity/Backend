@@ -22,7 +22,7 @@ THEMES_CONFIG = {
         "bg_hex": "#ffffff",
         "badge_color": "#2563eb",
         "bg_rgb": "rgb(255, 255, 255)",
-        "fg_rgb": "rgb(151, 151, 151)",
+        "fg_rgb": "rgb(0, 0, 0)",
         "label_rgb": "rgb(0, 0, 0)",
     },
     "gdg-red": {
@@ -31,7 +31,7 @@ THEMES_CONFIG = {
         "bg_hex": "#ffffff",
         "badge_color": "#e11d48",
         "bg_rgb": "rgb(255, 255, 255)",
-        "fg_rgb": "rgb(151, 151, 151)",
+        "fg_rgb": "rgb(0, 0, 0)",
         "label_rgb": "rgb(0, 0, 0)",
     },
     "gdg-gold-admin": {
@@ -40,7 +40,7 @@ THEMES_CONFIG = {
         "bg_hex": "#ffffff",
         "badge_color": "#f59e0b",
         "bg_rgb": "rgb(255, 255, 255)",
-        "fg_rgb": "rgb(151, 151, 151)",
+        "fg_rgb": "rgb(0, 0, 0)",
         "label_rgb": "rgb(0, 0, 0)",
     },
 }
@@ -83,20 +83,8 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
         "storeCard": {
-            "primaryFields": [
-                {
-                    "key": "member_name",
-                    "label": name_label,
-                    "value": full_name,
-                }
-            ],
-            "secondaryFields": [
-                {
-                    "key": "role",
-                    "label": "الصفة",
-                    "value": theme["role_title"],
-                }
-            ],
+            "primaryFields": [{"key": "role", "value": theme["role_title"]}],
+            "secondaryFields": [{"key": "member_name", "value": f"{name_label}: {full_name}"}],
             "backFields": [
                 {
                     "key": "uni_id",
