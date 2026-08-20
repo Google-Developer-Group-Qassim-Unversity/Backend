@@ -64,22 +64,34 @@ class UpdateWalletMePayload(BaseModel):
 def _resolve_authenticated_member(session, credentials):
     """
     Safely resolves the authenticated Member from Clerk credentials
-    using uni_id extracted directly by get_uni_id_from_credentials.
+    using uni_id or email fallback.
     """
+    member = None
+    uni_id = None
     try:
         uni_id = get_uni_id_from_credentials(credentials)
+        if uni_id:
+            member = get_member_by_uni_id_or_none(session, str(uni_id))
     except Exception as e:
-        logger.warning(f"Failed to extract uni_id from Clerk credentials: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized: Clerk token missing uni_id student identifier in metadata.",
-        )
+        logger.info(f"uni_id extraction note: {e}")
 
-    member = get_member_by_uni_id_or_none(session, str(uni_id))
+    if not member:
+        try:
+            decoded = credentials.model_dump().get("decoded", {})
+            email = (
+                decoded.get("email")
+                or decoded.get("primary_email_address")
+                or decoded.get("metadata", {}).get("email")
+            )
+            if email:
+                member = get_member_by_email_or_none(session, str(email).strip().lower())
+        except Exception as e:
+            logger.info(f"email fallback note: {e}")
+
     if not member:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Member with university ID '{uni_id}' not found in system.",
+            detail=f"عضو غير مسجل في قاعدة البيانات الأساسية بعد ({uni_id or 'حساب جديد'}).",
         )
 
     return member
