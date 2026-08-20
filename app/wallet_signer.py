@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.serialization.pkcs7 import PKCS7Options, PKC
 logger = logging.getLogger(__name__)
 
 # Base path for static wallet assets
-ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "wallet")
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "gdg.pass")
 
 DEFAULT_THEME = "gdg-blue"
 THEMES_CONFIG = {
@@ -34,7 +34,7 @@ THEMES_CONFIG = {
         "fg_rgb": "rgb(255, 255, 255)",
         "label_rgb": "rgb(255, 210, 210)",
         "badge_color": "#EA4335",
-        "role_title": "عضو مميز",
+        "role_title": "عضوة مجتمع GDG",
     },
     "gdg-gold-admin": {
         "bg_rgb": "rgb(40, 35, 20)",
@@ -146,8 +146,13 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     # Load high-res images for strip, logo, and icon
     for img_name in ["icon.png", "icon@2x.png", "logo.png", "logo@2x.png", "strip.png", "strip@2x.png"]:
         theme_img_path = os.path.join(ASSETS_DIR, f"{theme_id}_{img_name}")
+        specific_strip_path = os.path.join(ASSETS_DIR, f"strip-{theme_id}@2x.png") if "strip" in img_name else None
         default_img_path = os.path.join(ASSETS_DIR, img_name)
-        if os.path.exists(theme_img_path):
+
+        if specific_strip_path and os.path.exists(specific_strip_path):
+            with open(specific_strip_path, "rb") as f:
+                files_to_pack[img_name] = f.read()
+        elif os.path.exists(theme_img_path):
             with open(theme_img_path, "rb") as f:
                 files_to_pack[img_name] = f.read()
         elif os.path.exists(default_img_path):
@@ -252,6 +257,9 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
 
     full_name = card_data.get("fullName") or "عضو GDG"
     email = card_data.get("email", "")
+    uni_college = card_data.get("uniCollege") or card_data.get("institution") or "جامعة القصيم"
+    major = card_data.get("major") or ""
+    level = card_data.get("studyYearOrLevel") or ""
 
     # Define GenericClass inside JWT for self-contained pass creation
     generic_class = {
@@ -288,7 +296,7 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
         "cardTitle": {
             "defaultValue": {
                 "language": "ar",
-                "value": "GDG QASSIM",
+                "value": "Google Developer Groups - Qassim",
             }
         },
         "header": {
@@ -306,7 +314,7 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
         "hexBackgroundColor": theme["badge_color"],
         "logo": {
             "sourceUri": {
-                "uri": "https://gdg-q.com/logo.png",
+                "uri": "https://gdg-q.com/android-chrome-192x192.png",
             },
             "contentDescription": {
                 "defaultValue": {
@@ -315,16 +323,27 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
                 }
             },
         },
+        "heroImage": {
+            "sourceUri": {
+                "uri": f"https://gdg-q.com/wallet-figma/strip-{theme_id}@2x.png",
+            },
+            "contentDescription": {
+                "defaultValue": {
+                    "language": "ar",
+                    "value": f"GDG Qassim {theme['role_title']}",
+                }
+            },
+        },
         "textModulesData": [
             {
                 "id": "uni_id",
                 "header": "الرقم الجامعي",
-                "body": str(card_data.get("uniId") or ""),
+                "body": str(card_data.get("uniId") or "عضو موثق"),
             },
             {
                 "id": "college",
-                "header": "الكلية",
-                "body": card_data.get("uniCollege") or "جامعة القصيم",
+                "header": "الكلية / الجهة",
+                "body": uni_college,
             },
         ],
         "barcode": {
@@ -332,7 +351,28 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
             "value": qr_target_url,
             "alternateText": uuid[:8].upper() if uuid else "GDGQ",
         },
+        "linksModuleData": {
+            "uris": [
+                {
+                    "uri": qr_target_url,
+                    "description": "صفحتك الشخصية المعتمدة",
+                    "id": "profile_link",
+                },
+                {
+                    "uri": "https://gdg-q.com",
+                    "description": "مجتمع GDG Qassim",
+                    "id": "club_site",
+                },
+            ]
+        },
     }
+
+    if major or level:
+        generic_object["textModulesData"].append({
+            "id": "major_level",
+            "header": "التخصص والمرحلة",
+            "body": f"{major} · {level}" if (major and level) else (major or level),
+        })
 
     if email:
         generic_object["textModulesData"].append({

@@ -175,53 +175,89 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
     Returns the authenticated member's core info, role permissions, and MemberProfiles settings.
     """
     with SessionLocal() as session:
-        member = _resolve_authenticated_member(session, credentials)
-        profile = get_or_create_member_profile(session, member.id)
-        session.commit()
+        try:
+            member = _resolve_authenticated_member(session, credentials)
+            profile = get_or_create_member_profile(session, member.id)
+            session.commit()
 
-        is_admin = is_member_admin(member)
-        role_names = [r.role.value for r in member.role] if member.role else []
+            is_admin = is_member_admin(member)
+            role_names = [r.role.value for r in member.role] if member.role else []
 
-        effective_name = profile.custom_name or member.name
-        effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
-        effective_major = profile.major or member.uni_college or "علوم حاسب"
-        effective_level = profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG")
+            effective_name = profile.custom_name or member.name
+            effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
+            effective_major = profile.major or member.uni_college or "علوم حاسب"
+            effective_level = profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG")
 
-        return {
-            "member_id": member.id,
-            "name": effective_name,
-            "official_name": member.name,
-            "custom_name": profile.custom_name,
-            "uni_id": member.uni_id,
-            "email": member.email,
-            "phone_number": member.phone_number,
-            "gender": member.gender.value if hasattr(member.gender, "value") else str(member.gender),
-            "uni_level": member.uni_level,
-            "uni_college": member.uni_college,
-            "is_admin": is_admin,
-            "roles": role_names,
-            "profile": {
-                "uuid": profile.uuid,
+            return {
+                "member_id": member.id,
+                "name": effective_name,
+                "official_name": member.name,
                 "custom_name": profile.custom_name,
-                "theme_id": profile.theme_id,
-                "name_language": profile.name_language.value if hasattr(profile.name_language, "value") else str(profile.name_language),
-                "user_status": profile.user_status or "student",
-                "education_level": profile.education_level or "university",
-                "institution": effective_institution,
-                "major": effective_major,
-                "study_year_or_level": effective_level,
-                "bio": profile.bio or "",
-                "social_links": profile.social_links or [],
-                "visibility": profile.visibility or {
-                    "showPhone": False,
-                    "showEmail": False,
-                    "showAcademic": True,
-                    "showBio": True,
+                "uni_id": member.uni_id,
+                "email": member.email,
+                "phone_number": member.phone_number,
+                "gender": member.gender.value if hasattr(member.gender, "value") else str(member.gender),
+                "uni_level": member.uni_level,
+                "uni_college": member.uni_college,
+                "is_admin": is_admin,
+                "roles": role_names,
+                "profile": {
+                    "uuid": profile.uuid,
+                    "custom_name": profile.custom_name,
+                    "theme_id": profile.theme_id,
+                    "name_language": "ar",
+                    "user_status": profile.user_status or "student",
+                    "education_level": profile.education_level or "university",
+                    "institution": effective_institution,
+                    "major": effective_major,
+                    "study_year_or_level": effective_level,
+                    "bio": profile.bio or "",
+                    "social_links": profile.social_links or [],
+                    "visibility": profile.visibility or {
+                        "showPhone": False,
+                        "showEmail": False,
+                        "showAcademic": True,
+                        "showBio": True,
+                    },
+                    "created_at": profile.created_at.isoformat() if profile.created_at else None,
+                    "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
                 },
-                "created_at": profile.created_at.isoformat() if profile.created_at else None,
-                "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
-            },
-        }
+            }
+        except HTTPException:
+            decoded = credentials.model_dump().get("decoded", {})
+            return {
+                "member_id": None,
+                "name": decoded.get("name") or "",
+                "official_name": "",
+                "custom_name": None,
+                "uni_id": decoded.get("metadata", {}).get("uni_id"),
+                "email": decoded.get("email") or "",
+                "phone_number": None,
+                "gender": None,
+                "uni_level": None,
+                "uni_college": None,
+                "is_admin": False,
+                "roles": [],
+                "profile": {
+                    "uuid": None,
+                    "custom_name": None,
+                    "theme_id": "gdg-blue",
+                    "name_language": "ar",
+                    "user_status": "student",
+                    "education_level": "university",
+                    "institution": "جامعة القصيم",
+                    "major": "علوم حاسب",
+                    "study_year_or_level": "",
+                    "bio": "",
+                    "social_links": [],
+                    "visibility": {
+                        "showPhone": False,
+                        "showEmail": False,
+                        "showAcademic": True,
+                        "showBio": True,
+                    },
+                },
+            }
 
 
 @router.put("/me", summary="Update member wallet profile settings")
