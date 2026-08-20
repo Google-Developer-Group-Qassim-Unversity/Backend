@@ -2,50 +2,48 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import os
 import time
 import zipfile
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from PIL import Image
 
 import jwt
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.serialization import pkcs12, Encoding
-from cryptography.hazmat.primitives.serialization.pkcs7 import PKCS7SignatureBuilder, PKCS7Options
-from cryptography.x509 import load_der_x509_certificate, load_pem_x509_certificate
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.serialization import pkcs12, pkcs7, Encoding
+from cryptography.hazmat.primitives.serialization.pkcs7 import PKCS7Options, PKCS7SignatureBuilder
 
+logger = logging.getLogger(__name__)
 
-THEMES_CONFIG = {
-    "gdg-blue": {
-        "role_title": "عضو نادي قوقل للطلبة المطورين",
-        "is_admin": False,
-        "bg_hex": "#ffffff",
-        "badge_color": "#2563eb",
-        "bg_rgb": "rgb(255, 255, 255)",
-        "fg_rgb": "rgb(0, 0, 0)",
-        "label_rgb": "rgb(0, 0, 0)",
-    },
-    "gdg-red": {
-        "role_title": "عضو نادي قوقل للطلبة المطورين",
-        "is_admin": False,
-        "bg_hex": "#ffffff",
-        "badge_color": "#e11d48",
-        "bg_rgb": "rgb(255, 255, 255)",
-        "fg_rgb": "rgb(0, 0, 0)",
-        "label_rgb": "rgb(0, 0, 0)",
-    },
-    "gdg-gold-admin": {
-        "role_title": "إداري نادي قوقل للطلبة المطورين",
-        "is_admin": True,
-        "bg_hex": "#ffffff",
-        "badge_color": "#f59e0b",
-        "bg_rgb": "rgb(255, 255, 255)",
-        "fg_rgb": "rgb(0, 0, 0)",
-        "label_rgb": "rgb(0, 0, 0)",
-    },
-}
+# Base path for static wallet assets
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "wallet")
 
 DEFAULT_THEME = "gdg-blue"
+THEMES_CONFIG = {
+    "gdg-blue": {
+        "bg_rgb": "rgb(24, 60, 150)",
+        "fg_rgb": "rgb(255, 255, 255)",
+        "label_rgb": "rgb(200, 220, 255)",
+        "badge_color": "#1A73E8",
+        "role_title": "عضو مجتمع GDG",
+    },
+    "gdg-red": {
+        "bg_rgb": "rgb(180, 40, 40)",
+        "fg_rgb": "rgb(255, 255, 255)",
+        "label_rgb": "rgb(255, 210, 210)",
+        "badge_color": "#EA4335",
+        "role_title": "عضو مميز",
+    },
+    "gdg-gold-admin": {
+        "bg_rgb": "rgb(40, 35, 20)",
+        "fg_rgb": "rgb(255, 225, 120)",
+        "label_rgb": "rgb(218, 165, 32)",
+        "badge_color": "#D4AF37",
+        "role_title": "إدارة GDG Qassim",
+    },
+}
 
 
 def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
@@ -100,19 +98,29 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
                     "value": card_data.get("email", ""),
                 },
                 {
-                    "key": "college",
-                    "label": "الكلية",
-                    "value": card_data.get("uniCollege") or "جامعة القصيم",
+                    "key": "institution",
+                    "label": "الكلية / الجهة",
+                    "value": card_data.get("uniCollege", "جامعة القصيم"),
                 },
                 {
-                    "key": "about",
-                    "label": "عن النادي",
-                    "value": "Google Developer Groups - Qassim",
+                    "key": "major",
+                    "label": "التخصص",
+                    "value": card_data.get("major", ""),
                 },
                 {
-                    "key": "website",
-                    "label": "الملف الشخصي",
+                    "key": "level",
+                    "label": "المستوى / المرحلة",
+                    "value": card_data.get("studyYearOrLevel", ""),
+                },
+                {
+                    "key": "public_profile",
+                    "label": "رابط الصفحة الشخصية المعتمدة",
                     "value": qr_target_url,
+                },
+                {
+                    "key": "club_name",
+                    "label": "النادي",
+                    "value": "Google Developer Group on Campus - Qassim University",
                 },
             ],
         },
@@ -124,39 +132,37 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
                 "altText": serial_number,
             }
         ],
+        "barcode": {
+            "format": "PKBarcodeFormatQR",
+            "message": qr_target_url,
+            "messageEncoding": "iso-8859-1",
+            "altText": serial_number,
+        },
     }
 
-    pass_json_bytes = json.dumps(pass_json, ensure_ascii=False, indent=2).encode("utf-8")
+    files_to_pack: Dict[str, bytes] = {}
+    files_to_pack["pass.json"] = json.dumps(pass_json, ensure_ascii=False, indent=2).encode("utf-8")
 
-    # 2. Collect files and calculate sha1 manifest
-    assets_dir = Path(__file__).parent / "assets" / "gdg.pass"
-    files_to_pack: Dict[str, bytes] = {"pass.json": pass_json_bytes}
+    # Load high-res images for strip, logo, and icon
+    for img_name in ["icon.png", "icon@2x.png", "logo.png", "logo@2x.png", "strip.png", "strip@2x.png"]:
+        theme_img_path = os.path.join(ASSETS_DIR, f"{theme_id}_{img_name}")
+        default_img_path = os.path.join(ASSETS_DIR, img_name)
+        if os.path.exists(theme_img_path):
+            with open(theme_img_path, "rb") as f:
+                files_to_pack[img_name] = f.read()
+        elif os.path.exists(default_img_path):
+            with open(default_img_path, "rb") as f:
+                files_to_pack[img_name] = f.read()
 
-    # Base Icons and Logos
-    for img_name in [
-        "icon.png",
-        "icon@2x.png",
-        "icon@3x.png",
-        "logo.png",
-        "logo@2x.png",
-        "logo@3x.png",
-    ]:
-        img_path = assets_dir / img_name
-        if img_path.exists():
-            files_to_pack[img_name] = img_path.read_bytes()
+    # Generate fallback transparent images if any missing
+    for required in ["icon.png", "icon@2x.png", "logo.png", "logo@2x.png"]:
+        if required not in files_to_pack:
+            img = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            files_to_pack[required] = buf.getvalue()
 
-    # Dynamic Theme Strip Artwork (Figma waves and medal)
-    theme_strip_map = {
-        "strip.png": assets_dir / f"strip-{theme_id}.png",
-        "strip@2x.png": assets_dir / f"strip-{theme_id}@2x.png",
-        "strip@3x.png": assets_dir / f"strip-{theme_id}@3x.png",
-    }
-    for target_name, theme_path in theme_strip_map.items():
-        if theme_path.exists():
-            files_to_pack[target_name] = theme_path.read_bytes()
-        elif (assets_dir / target_name).exists():
-            files_to_pack[target_name] = (assets_dir / target_name).read_bytes()
-
+    # 2. Build manifest.json
     manifest: Dict[str, str] = {}
     for filename, content in files_to_pack.items():
         manifest[filename] = hashlib.sha1(content).hexdigest()
@@ -164,39 +170,42 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     manifest_bytes = json.dumps(manifest, indent=2).encode("utf-8")
     files_to_pack["manifest.json"] = manifest_bytes
 
-    # 3. Load certificates from environment or local certificates folder
+    # 3. Load Apple Developer Signing Certificate and Private Key
     p12_base64 = os.getenv("APPLE_P12_BASE64")
-    wwdr_base64 = os.getenv("APPLE_WWDR_BASE64")
+    p12_path = os.getenv("APPLE_P12_PATH", os.path.join(os.path.dirname(__file__), "certificates", "Certificates.p12"))
 
     p12_bytes = None
     if p12_base64:
         p12_bytes = base64.b64decode(p12_base64)
-    else:
-        certs_dir = Path(__file__).parent.parent / "certificates"
-        local_p12 = certs_dir / "apple-wallet-pass-certificate.p12"
-        if local_p12.exists():
-            p12_bytes = local_p12.read_bytes()
+    elif os.path.exists(p12_path):
+        with open(p12_path, "rb") as f:
+            p12_bytes = f.read()
 
     if not p12_bytes:
-        raise ValueError("Apple Wallet certificate (.p12) is not configured in environment or certificates/ folder")
+        raise ValueError("Apple Pass signing certificate (APPLE_P12_BASE64 or Certificates.p12) is missing")
 
-    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(p12_bytes, p12_password)
+    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(
+        p12_bytes,
+        p12_password,
+    )
 
-    if not private_key or not certificate:
-        raise ValueError("Invalid Apple PKCS#12 certificate or private key")
+    wwdr_base64 = os.getenv("APPLE_WWDR_BASE64")
+    wwdr_path = os.getenv("APPLE_WWDR_PATH", os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer"))
 
     wwdr_cert = None
     if wwdr_base64:
         wwdr_bytes = base64.b64decode(wwdr_base64)
         try:
-            wwdr_cert = load_der_x509_certificate(wwdr_bytes)
+            wwdr_cert = x509.load_der_x509_certificate(wwdr_bytes)
         except Exception:
-            wwdr_cert = load_pem_x509_certificate(wwdr_bytes)
-    else:
-        certs_dir = Path(__file__).parent.parent / "certificates"
-        local_wwdr = certs_dir / "AppleWWDRCAG4.cer"
-        if local_wwdr.exists():
-            wwdr_cert = load_der_x509_certificate(local_wwdr.read_bytes())
+            wwdr_cert = x509.load_pem_x509_certificate(wwdr_bytes)
+    elif os.path.exists(wwdr_path):
+        with open(wwdr_path, "rb") as f:
+            wwdr_bytes = f.read()
+            try:
+                wwdr_cert = x509.load_der_x509_certificate(wwdr_bytes)
+            except Exception:
+                wwdr_cert = x509.load_pem_x509_certificate(wwdr_bytes)
 
     if not wwdr_cert:
         raise ValueError("Apple WWDR Certificate (APPLE_WWDR_BASE64 or AppleWWDRCAG4.cer) is missing or invalid")
@@ -227,6 +236,8 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
 def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     """
     Generates a signed Google Wallet Save Link (JWT) using RS256 algorithm.
+    Includes both genericClass and genericObject definitions in the JWT payload
+    to guarantee on-the-fly class creation without pre-existing API registration.
     """
     issuer_id = os.getenv("GOOGLE_WALLET_ISSUER_ID", "BCR2DN6DTK643EAC")
     class_id = os.getenv("GOOGLE_WALLET_CLASS_ID", f"{issuer_id}.gdgq-card")
@@ -241,6 +252,35 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
 
     full_name = card_data.get("fullName") or "عضو GDG"
     email = card_data.get("email", "")
+
+    # Define GenericClass inside JWT for self-contained pass creation
+    generic_class = {
+        "id": class_id,
+        "classTemplateInfo": {
+            "cardTemplateOverride": {
+                "cardRowTemplateInfos": [
+                    {
+                        "twoItems": {
+                            "startItem": {
+                                "firstValue": {
+                                    "fields": [
+                                        {"fieldPath": "object.textModulesData['uni_id']"}
+                                    ]
+                                }
+                            },
+                            "endItem": {
+                                "firstValue": {
+                                    "fields": [
+                                        {"fieldPath": "object.textModulesData['college']"}
+                                    ]
+                                }
+                            },
+                        }
+                    }
+                ]
+            }
+        },
+    }
 
     generic_object = {
         "id": card_id,
@@ -306,8 +346,8 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
         "aud": "google",
         "typ": "savetoandroidpay",
         "iat": int(time.time()),
-        "origins": ["https://gdg-q.com", "http://localhost:3000"],
         "payload": {
+            "genericClasses": [generic_class],
             "genericObjects": [generic_object],
         },
     }
@@ -315,7 +355,7 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     if not private_key_pem:
         return f"https://pay.google.com/gp/v/save/{uuid or 'demo'}"
 
-    # Format key
+    # Format RSA private key
     formatted_key = private_key_pem.strip()
     if formatted_key.startswith('"') and formatted_key.endswith('"'):
         formatted_key = formatted_key[1:-1]
