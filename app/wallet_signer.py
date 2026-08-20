@@ -7,7 +7,6 @@ import os
 import time
 import zipfile
 from typing import Any, Dict, List, Optional
-from PIL import Image
 
 import jwt
 from cryptography import x509
@@ -19,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 # Base path for static wallet assets
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "gdg.pass")
+
+# Minimal 1x1 transparent PNG fallback
+TRANSPARENT_PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
 
 DEFAULT_THEME = "gdg-blue"
 THEMES_CONFIG = {
@@ -162,10 +164,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     # Generate fallback transparent images if any missing
     for required in ["icon.png", "icon@2x.png", "logo.png", "logo@2x.png"]:
         if required not in files_to_pack:
-            img = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            files_to_pack[required] = buf.getvalue()
+            files_to_pack[required] = TRANSPARENT_PNG
 
     # 2. Build manifest.json
     manifest: Dict[str, str] = {}
