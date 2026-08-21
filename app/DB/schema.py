@@ -303,9 +303,6 @@ class Logs(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     action_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
-    )
 
     action: Mapped["Actions"] = relationship("Actions", back_populates="logs")
     event: Mapped[Optional["Events"]] = relationship("Events", back_populates="logs")
