@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Request, status, HTTPException, Backgrou
 from app.DB.main import SessionLocal
 from app.DB import submissions as submission_queries, members as member_queries, forms as form_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.helpers import admin_guard, get_uni_id_from_credentials, authenticated_guard
+from app.helpers import admin_guard, resolve_member, authenticated_guard
 from app.config import config
 from app.routers.logging import (
     LogFile,
@@ -36,8 +36,7 @@ def create_submission(
 ):
     with SessionLocal() as session:
         try:
-            uni_id = get_uni_id_from_credentials(credentials)
-            member_id = member_queries.get_member_by_uni_id(session, uni_id).id
+            member_id = resolve_member(session, credentials).id
             new_submission = submission_queries.create_submission(session, form_id, submission_type, member_id)
             if not new_submission:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission already exists")
@@ -54,11 +53,10 @@ def check_submission_exists(
 ):
     with LogFile("check submission exists"), SessionLocal() as session:
         try:
-            uni_id = get_uni_id_from_credentials(credentials)
-
-            write_log(f"Querying DB for form_id [{form_id}] and uni_id [{uni_id}]")
+            write_log(f"Querying DB for form_id [{form_id}]")
             start = perf_counter()
-            member_id = member_queries.get_member_by_uni_id(session, uni_id).id
+            member_id = resolve_member(session, credentials).id
+            session.commit()
             submission = submission_queries.get_submission_by_form_and_member(session, form_id, member_id)
             end = perf_counter()
             write_log(
@@ -137,34 +135,23 @@ def fetch_schema(google_form_id: str):
         return schema
 
 
-def get_uni_id_question_id(form_id: int) -> str:
-    """
-    Get the Google Forms question ID for the uni_id field by fetching the form schema from Google API.
-    Looks for the question with title "الرقم الجامعي" (University Number).
-    """
-    with SessionLocal() as session:
-        form = form_queries.get_form_by_id(session, form_id)
+# Every event's Google Form is a clone of one master template, so field IDs stay
+# stable across forms. This matches the frontend's PERSONAL_EMAIL_ENTRY_ID
+# (score-leaderboard-app/app/(google-form)/events/[id]/form/page.tsx), which
+# prefills this same question when a member opens the form.
+EMAIL_QUESTION_ID = "310677703"
 
-        if not form:
-            raise ValueError(f"Form not found with id: {form_id}")
 
-        # Fetch the form schema
-        schema = fetch_schema(form.google_form_id)
-
-        # Look through items for the question with title "الرقم الجامعي"
-        items = schema.get("items", [])
-        for item in items:
-            title = item.get("title", "")
-            if title == "الرقم الجامعي":
-                question_item = item.get("questionItem")
-                if question_item:
-                    question = question_item.get("question")
-                    if question:
-                        question_id = question.get("questionId")
-                        if question_id:
-                            return question_id
-
-        raise ValueError(f"Could not find question with title 'الرقم الجامعي' in form {form_id} schema")
+def extract_text_answer(answers: dict, question_id: str) -> str | None:
+    """Extract a stripped text answer for `question_id` from a Google Forms response's `answers` dict."""
+    answer = answers.get(question_id)
+    if not answer:
+        return None
+    answers_list = answer.get("textAnswers", {}).get("answers", [])
+    if not answers_list:
+        return None
+    value = (answers_list[0].get("value") or "").strip()
+    return value or None
 
 
 def fetch_form_responses(google_form_id: str, log_file=None):
@@ -241,61 +228,36 @@ def sync_form_submissions(google_form_id: str, log_file):
                 write_log_to(log_file, "No partial submissions to sync")
                 return
 
-            # Get the question ID for uni_id field
-            try:
-                uni_id_question_id = get_uni_id_question_id(form_id)
-                write_log_to(log_file, f"Found uni_id question ID: {uni_id_question_id}")
-            except Exception as e:
-                write_log_to(log_file, f"ERROR: Failed to get uni_id question ID: {str(e)}")
-                write_log_exception_to(log_file, e)
-                return
-
-            # Create a mapping of uni_id to partial submissions
-            partial_by_uni_id = {}
+            # Create a mapping of email (normalized) to partial submissions
+            partial_by_email = {}
             for submission in partial_submissions:
-                uni_id = submission.uni_id
-                partial_by_uni_id[uni_id] = submission
-                write_log_to(log_file, f"Partial submission: ID={submission.submission_id}, uni_id={uni_id}")
+                email = (submission.email or "").strip().lower()
+                if not email:
+                    write_log_to(log_file, f"Partial submission: ID={submission.submission_id} has no email on file, skipping")
+                    continue
+                partial_by_email[email] = submission
+                write_log_to(log_file, f"Partial submission: ID={submission.submission_id}, email={email}")
 
             # Match Google responses to partial submissions
             matched_count = 0
             unmatched_responses = []
 
             for response in google_responses:
-                # Extract uni_id from response answers
                 response_id = response.get("responseId")
                 answers = response.get("answers", {})
 
-                # Get the uni_id answer from the response
-                uni_id_answer = answers.get(uni_id_question_id)
-
-                if not uni_id_answer:
-                    write_log_to(log_file, f"Response {response_id}: No uni_id answer found")
+                email = extract_text_answer(answers, EMAIL_QUESTION_ID)
+                if not email:
+                    write_log_to(log_file, f"Response {response_id}: No email answer found")
                     unmatched_responses.append(response_id)
                     continue
+                email = email.lower()
 
-                # Extract the actual uni_id value from the answer
-                # Google Forms stores answers in a specific format
-                text_answers = uni_id_answer.get("textAnswers", {})
-                answers_list = text_answers.get("answers", [])
+                write_log_to(log_file, f"Response {response_id}: email={email}")
 
-                if not answers_list:
-                    write_log_to(log_file, f"Response {response_id}: No text answers found")
-                    unmatched_responses.append(response_id)
-                    continue
-
-                uni_id = answers_list[0].get("value", "").strip()
-
-                if not uni_id:
-                    write_log_to(log_file, f"Response {response_id}: Empty uni_id value")
-                    unmatched_responses.append(response_id)
-                    continue
-
-                write_log_to(log_file, f"Response {response_id}: uni_id={uni_id}")
-
-                # Check if this uni_id has a partial submission
-                if uni_id in partial_by_uni_id:
-                    partial_submission = partial_by_uni_id[uni_id]
+                # Check if this email has a partial submission
+                if email in partial_by_email:
+                    partial_submission = partial_by_email[email]
 
                     # Update submission with Google response data
                     updated = submission_queries.update_google_submission(
@@ -309,14 +271,14 @@ def sync_form_submissions(google_form_id: str, log_file):
                     if updated:
                         matched_count += 1
                         write_log_to(
-                            log_file, f"✓ Matched and updated submission ID {partial_submission.id} for uni_id {uni_id}"
+                            log_file, f"✓ Matched and updated submission ID {partial_submission.id} for email {email}"
                         )
                         write_log_to(log_file, f"  - Google response ID: {response_id}")
                     else:
                         write_log_to(log_file, f"✗ Failed to update submission ID {partial_submission.id}")
                 else:
                     write_log_to(
-                        log_file, f"Response {response_id}: No matching partial submission for uni_id {uni_id}"
+                        log_file, f"Response {response_id}: No matching partial submission for email {email}"
                     )
                     unmatched_responses.append(response_id)
 

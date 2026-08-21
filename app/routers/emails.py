@@ -23,7 +23,7 @@ from app.routers.logging import (
     write_log_traceback,
     write_log_title,
 )
-from app.helpers import admin_guard, authenticated_guard, get_effective_date, get_uni_id_from_credentials
+from app.helpers import admin_guard, authenticated_guard, get_effective_date, resolve_member
 from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
 import httpx
 import json
@@ -460,7 +460,7 @@ def send_certificates(
         date_str = format_event_date(event)
         write_log(f"Event date formatted as: [{date_str}]")
 
-        requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
+        requesting_member = resolve_member(session, credentials)
         background_tasks.add_task(send_certificates_by_event_id, event, attendance, date_str, requesting_member.id)
 
         return {
@@ -543,7 +543,7 @@ def send_manual_certificate(
                 )
 
     with LogFile("manual certificates [JOB]"), SessionLocal() as session:
-        requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
+        requesting_member = resolve_member(session, credentials)
         background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id)
 
     return {
@@ -885,8 +885,7 @@ def download_certificate(
     with SessionLocal() as session:
         event = events_queries.get_event_by_id(session, event_id)
 
-        uni_id = get_uni_id_from_credentials(credentials)
-        member = members_queries.get_member_by_uni_id(session, uni_id)
+        member = resolve_member(session, credentials)
 
         attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
         attended_member_ids = {r.Member.id for r in attendance}
@@ -954,7 +953,7 @@ async def send_acceptance_blasts(
     with LogFile("send acceptance blasts"), SessionLocal() as session:
         try:
             write_log_title(f"Sending acceptance blasts for event [{event_id}]")
-            requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
+            requesting_member = resolve_member(session, credentials)
 
             event = events_queries.get_event_by_id(session, event_id)
 

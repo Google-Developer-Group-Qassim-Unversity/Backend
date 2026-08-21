@@ -193,6 +193,7 @@ FAKE_CLERK_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
     scheme="Bearer",
     credentials="fake-token",
     decoded={
+        "sub": "clerk_test_member_sub",
         "metadata": {
             "uni_id": "123456789",
             "fullArabicName": "Test Member",
@@ -209,6 +210,7 @@ FAKE_ADMIN_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
     scheme="Bearer",
     credentials="fake-admin-token",
     decoded={
+        "sub": "clerk_test_admin_sub",
         "metadata": {
             "uni_id": "123456789",
             "fullArabicName": "Test Admin",

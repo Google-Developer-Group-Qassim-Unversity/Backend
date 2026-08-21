@@ -11,7 +11,7 @@ from app.routers.logging import (
 )
 
 # Reuse Google Forms helpers from the existing submissions router
-from app.routers.submissions import fetch_form_responses, get_uni_id_question_id, sync_form_submissions
+from app.routers.submissions import fetch_form_responses, extract_text_answer, EMAIL_QUESTION_ID, sync_form_submissions
 from typing import Annotated
 
 router = APIRouter()
@@ -31,7 +31,7 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
                 "created": 0,
                 "skipped_existing": 0,
                 "skipped_no_member": 0,
-                "skipped_missing_uni_id": 0,
+                "skipped_missing_email": 0,
                 "processed": 0,
                 "total_fetched": 0,
             }
@@ -39,25 +39,10 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
         form_id = fetch_result["form_id"]
         google_responses = fetch_result["responses"] or []
 
-        try:
-            uni_id_question_id = get_uni_id_question_id(form_id)
-            write_log_to(log_file, f"Found uni_id question ID: {uni_id_question_id}")
-        except Exception as e:
-            write_log_to(log_file, f"ERROR: Failed to get uni_id question ID: {str(e)}")
-            write_log_exception_to(log_file, e)
-            return {
-                "created": 0,
-                "skipped_existing": 0,
-                "skipped_no_member": 0,
-                "skipped_missing_uni_id": 0,
-                "processed": 0,
-                "total_fetched": len(google_responses),
-            }
-
         created = 0
         skipped_existing = 0
         skipped_no_member = 0
-        skipped_missing_uni_id = 0
+        skipped_missing_email = 0
         processed = 0
 
         with SessionLocal() as session:
@@ -67,25 +52,14 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
                 response_id = response.get("responseId")
                 answers = response.get("answers", {}) or {}
 
-                uni_id_answer = answers.get(uni_id_question_id)
-                if not uni_id_answer:
-                    skipped_missing_uni_id += 1
+                email = extract_text_answer(answers, EMAIL_QUESTION_ID)
+                if not email:
+                    skipped_missing_email += 1
                     continue
+                email = email.lower()
 
-                text_answers = uni_id_answer.get("textAnswers", {}) or {}
-                answers_list = text_answers.get("answers", []) or []
-                if not answers_list:
-                    skipped_missing_uni_id += 1
-                    continue
-
-                uni_id = (answers_list[0].get("value", "") or "").strip()
-                if not uni_id:
-                    skipped_missing_uni_id += 1
-                    continue
-
-                try:
-                    member = member_queries.get_member_by_uni_id(session, uni_id)
-                except Exception:
+                member = member_queries.get_member_by_email_or_none(session, email)
+                if not member:
                     skipped_no_member += 1
                     continue
 
@@ -115,13 +89,13 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
         write_log_to(log_file, f"created: {created}")
         write_log_to(log_file, f"skipped_existing: {skipped_existing}")
         write_log_to(log_file, f"skipped_no_member: {skipped_no_member}")
-        write_log_to(log_file, f"skipped_missing_uni_id: {skipped_missing_uni_id}")
+        write_log_to(log_file, f"skipped_missing_email: {skipped_missing_email}")
 
         return {
             "created": created,
             "skipped_existing": skipped_existing,
             "skipped_no_member": skipped_no_member,
-            "skipped_missing_uni_id": skipped_missing_uni_id,
+            "skipped_missing_email": skipped_missing_email,
             "processed": processed,
             "total_fetched": len(google_responses),
             "form_id": form_id,

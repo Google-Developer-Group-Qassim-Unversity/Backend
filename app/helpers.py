@@ -1,6 +1,10 @@
 from fastapi import Depends, HTTPException, status
+from sqlalchemy.orm import Session
 from app.config import config
 from app.routers.models import Member_model
+from app.DB.schema import Members
+from app.DB import members as member_queries
+from app.exceptions import MemberNotFound
 from json import dumps
 import jwt
 from datetime import datetime, date, timedelta
@@ -38,6 +42,40 @@ def get_uni_id_from_credentials(credentials):
     # print(dumps(credentials.model_dump(), ensure_ascii=False, indent=4))
     uni_id: str = str(decoded["metadata"]["uni_id"])
     return uni_id
+
+
+def get_clerk_user_id_from_credentials(credentials) -> str:
+    """The Clerk JWT ``sub`` claim - the stable, provider-agnostic user id.
+
+    Unlike ``uni_id`` (only present for password/uni_id signups), this is
+    always present on every Clerk-issued token regardless of sign-in method.
+    """
+    decoded = credentials.model_dump()["decoded"]
+    assert "sub" in decoded, "Decoded credentials missing 'sub'"
+    return str(decoded["sub"])
+
+
+def resolve_member(session: Session, credentials) -> Members:
+    """Resolve the ``Members`` row for the currently authenticated caller.
+
+    Looks up by ``clerk_user_id`` first (works for every member once they've
+    authenticated at least once after this identity model was introduced).
+    Falls back to ``uni_id`` for members who haven't re-authenticated yet,
+    self-healing their ``clerk_user_id`` in the process.
+    """
+    clerk_user_id = get_clerk_user_id_from_credentials(credentials)
+    member = member_queries.get_member_by_clerk_user_id_or_none(session, clerk_user_id)
+    if member:
+        return member
+
+    decoded = credentials.model_dump()["decoded"]
+    uni_id = decoded.get("metadata", {}).get("uni_id")
+    if uni_id:
+        member = member_queries.get_member_by_uni_id_or_none(session, str(uni_id))
+        if member:
+            return member_queries.set_member_clerk_user_id(session, member, clerk_user_id)
+
+    raise MemberNotFound(clerk_user_id)
 
 
 def is_admin(credentials) -> bool:
@@ -130,6 +168,7 @@ def credentials_to_member_model(credentials) -> Member_model:
         email=metadata.get("personalEmail"),
         phone_number=metadata.get("saudiPhone"),
         uni_id=metadata.get("uni_id"),
+        clerk_user_id=str(credentials_dict["decoded"]["sub"]),
         gender=metadata.get("gender").title(),
         uni_level=metadata.get("uniLevel"),
         uni_college=metadata.get("uniCollege"),

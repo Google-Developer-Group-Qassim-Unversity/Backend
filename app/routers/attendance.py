@@ -25,7 +25,7 @@ from app.exceptions import MemberNotFound
 from app.routers.logging import LogFile, write_log_exception, write_log, write_log_title, write_log_traceback
 from app.helpers import (
     validate_attendance_token,
-    credentials_to_member_model,
+    resolve_member,
     is_admin,
     get_effective_date,
     admin_guard,
@@ -88,7 +88,7 @@ def mark_attendance(
                 write_log("HTTP 400:No attendance token provided")
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance token provided!")
 
-            member = member_queries.get_member_by_uni_id(session, credentials_to_member_model(credentials).uni_id)
+            member = resolve_member(session, credentials)
             write_log_title(f"Marking attendance for member [{member.name}] with uni_id [{member.uni_id}]")
 
             event, event_log = get_event_with_attendable_log(session, event_id)
@@ -186,6 +186,8 @@ def backfill_attendance(
 
             for member_data in request.members:
                 try:
+                    if member_data.uni_id is None:
+                        raise MemberNotFound(member_data.name)
                     member = member_queries.get_member_by_uni_id(session, member_data.uni_id)
                     existing_count += 1
                     write_log(f"Found existing member [{member.name}] with uni_id [{member.uni_id}]")
@@ -265,10 +267,10 @@ def get_event_attendance(
         if type == "me":
             if not credentials:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-            uni_id = credentials_to_member_model(credentials).uni_id
-            member = member_queries.get_member_by_uni_id(session, uni_id)
+            member = resolve_member(session, credentials)
+            session.commit()
             attendance = log_queries.get_event_attendance(session, event_id, day)
-            member_attendance = [a for a in attendance if a.Member.uni_id == uni_id]
+            member_attendance = [a for a in attendance if a.Member.id == member.id]
             return EventAttendanceResponse(attendance_count=len(member_attendance), attendance=member_attendance)
 
         raise HTTPException(

@@ -78,24 +78,31 @@ class submission_accept_model(BaseClassModel):
     is_accepted: bool
 
 
+def _validate_optional_uni_id(value: str | None) -> str | None:
+    if value is None:
+        return value
+    if len(str(value)) != 9:
+        raise ValueError("uni_id must be a 9-digit integer")
+    return value
+
+
 class Member_model(BaseClassModel):
     id: int | None = None
     name: str
     email: EmailStr
     phone_number: str | None
-    uni_id: str
+    uni_id: str | None = None
+    clerk_user_id: str | None = None
     gender: MembersGender
-    uni_level: int
-    uni_college: str
+    uni_level: int | None = None
+    uni_college: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     is_authenticated: bool | None = None
 
     @field_validator("uni_id")
     def validate_uni_id(cls, value):
-        if len(str(value)) != 9:
-            raise ValueError("uni_id must be a 9-digit integer")
-        return value
+        return _validate_optional_uni_id(value)
 
     # This validator is needed but We have some fucked up data in the database
     # so i'll will comment it out for now.
@@ -211,18 +218,26 @@ class ManualMemberCreateModel(BaseModel):
     name: str
     email: EmailStr
     phone_number: str | None = None
-    uni_id: str
+    uni_id: str | None = None
     gender: MembersGender
+
+    @field_validator("uni_id")
+    def validate_uni_id(cls, value):
+        return _validate_optional_uni_id(value)
 
 
 class BatchCreateMemberItem(BaseClassModel):
     name: str
     email: EmailStr
     phone_number: str | None = None
-    uni_id: str
+    uni_id: str | None = None
     gender: MembersGender
     uni_level: int | None = None
     uni_college: str | None = None
+
+    @field_validator("uni_id")
+    def validate_uni_id(cls, value):
+        return _validate_optional_uni_id(value)
 
 
 class BatchCreateMembersRequest(BaseModel):

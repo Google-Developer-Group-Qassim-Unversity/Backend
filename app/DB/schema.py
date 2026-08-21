@@ -224,17 +224,22 @@ class Events(Base):
 
 class Members(Base):
     __tablename__ = "members"
-    __table_args__ = (Index("uni_id", "uni_id", unique=True),)
+    __table_args__ = (
+        Index("uni_id", "uni_id", unique=True),
+        Index("ix_members_clerk_user_id", "clerk_user_id", unique=True),
+        Index("ix_members_email", "email", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
-    uni_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    uni_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    clerk_user_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     gender: Mapped[MembersGender] = mapped_column(
         Enum(MembersGender, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
-    uni_level: Mapped[int] = mapped_column(Integer, nullable=False)
-    uni_college: Mapped[str] = mapped_column(
-        VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
+    uni_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    uni_college: Mapped[Optional[str]] = mapped_column(
+        VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=True
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
