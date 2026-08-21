@@ -1,7 +1,7 @@
 """make uni_id nullable, add clerk_user_id to members
 
-Revision ID: c7d8e9f0a1b2
-Revises: f1a2b3c4d5e6
+Revision ID: f8771428c487
+Revises: d8e9f0a1b2c3
 Create Date: 2026-07-28 00:00:00.000000
 
 """
@@ -12,8 +12,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "c7d8e9f0a1b2"
-down_revision: Union[str, Sequence[str], None] = "f1a2b3c4d5e6"
+revision: str = "f8771428c487"
+down_revision: Union[str, Sequence[str], None] = "d8e9f0a1b2c3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -1,7 +1,7 @@
 """add unique constraint on members email
 
 Revision ID: e1f2a3b4c5d6
-Revises: c7d8e9f0a1b2
+Revises: f8771428c487
 Create Date: 2026-07-31 00:00:00.000000
 
 """
@@ -12,7 +12,7 @@ from alembic import op
 
 
 revision: str = "e1f2a3b4c5d6"
-down_revision: Union[str, Sequence[str], None] = "c7d8e9f0a1b2"
+down_revision: Union[str, Sequence[str], None] = "f8771428c487"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
