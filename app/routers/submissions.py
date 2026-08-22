@@ -1,4 +1,5 @@
 import json
+import re
 from time import perf_counter
 from typing import Literal, Annotated
 from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks
@@ -135,23 +136,26 @@ def fetch_schema(google_form_id: str):
         return schema
 
 
-# Every event's Google Form is a clone of one master template, so field IDs stay
-# stable across forms. This matches the frontend's PERSONAL_EMAIL_ENTRY_ID
-# (score-leaderboard-app/app/(google-form)/events/[id]/form/page.tsx), which
-# prefills this same question when a member opens the form.
-EMAIL_QUESTION_ID = "310677703"
+# Question IDs are NOT stable across forms - each form clone gets its own
+# internal IDs, and admins phrase the "personal email" question differently
+# across templates - so identifying the email question by a fixed ID or
+# title ahead of time is unreliable (confirmed empirically: the same ID
+# means a different question, or nothing, on different forms). Scanning
+# every text answer for the one value that's actually shaped like an email
+# is robust regardless of which question held it or how it's labeled.
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def extract_text_answer(answers: dict, question_id: str) -> str | None:
-    """Extract a stripped text answer for `question_id` from a Google Forms response's `answers` dict."""
-    answer = answers.get(question_id)
-    if not answer:
-        return None
-    answers_list = answer.get("textAnswers", {}).get("answers", [])
-    if not answers_list:
-        return None
-    value = (answers_list[0].get("value") or "").strip()
-    return value or None
+def extract_email_answer(answers: dict) -> str | None:
+    """Find the answer in a Google Forms response's `answers` dict that looks like an email address."""
+    for answer in answers.values():
+        answers_list = answer.get("textAnswers", {}).get("answers", [])
+        if not answers_list:
+            continue
+        value = (answers_list[0].get("value") or "").strip()
+        if value and EMAIL_PATTERN.match(value):
+            return value.lower()
+    return None
 
 
 def fetch_form_responses(google_form_id: str, log_file=None):
@@ -246,12 +250,11 @@ def sync_form_submissions(google_form_id: str, log_file):
                 response_id = response.get("responseId")
                 answers = response.get("answers", {})
 
-                email = extract_text_answer(answers, EMAIL_QUESTION_ID)
+                email = extract_email_answer(answers)
                 if not email:
-                    write_log_to(log_file, f"Response {response_id}: No email answer found")
+                    write_log_to(log_file, f"Response {response_id}: No email-shaped answer found")
                     unmatched_responses.append(response_id)
                     continue
-                email = email.lower()
 
                 write_log_to(log_file, f"Response {response_id}: email={email}")
 

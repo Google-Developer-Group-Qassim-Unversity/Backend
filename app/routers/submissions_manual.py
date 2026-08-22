@@ -11,7 +11,7 @@ from app.routers.logging import (
 )
 
 # Reuse Google Forms helpers from the existing submissions router
-from app.routers.submissions import fetch_form_responses, extract_text_answer, EMAIL_QUESTION_ID, sync_form_submissions
+from app.routers.submissions import fetch_form_responses, extract_email_answer, sync_form_submissions
 from typing import Annotated
 
 router = APIRouter()
@@ -52,11 +52,10 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
                 response_id = response.get("responseId")
                 answers = response.get("answers", {}) or {}
 
-                email = extract_text_answer(answers, EMAIL_QUESTION_ID)
+                email = extract_email_answer(answers)
                 if not email:
                     skipped_missing_email += 1
                     continue
-                email = email.lower()
 
                 member = member_queries.get_member_by_email_or_none(session, email)
                 if not member:
