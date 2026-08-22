@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 import zipfile
 from typing import Any, Dict, List, Optional
@@ -81,44 +82,14 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
         "storeCard": {
-            "secondaryFields": [
-                {
-                    "key": "member_name",
-                    "label": theme["role_title"],
-                    "value": full_name,
-                },
-            ],
+            "secondaryFields": [{"key": "member_name", "label": theme["role_title"], "value": full_name}],
             "backFields": [
-                {
-                    "key": "uni_id",
-                    "label": "الرقم الجامعي",
-                    "value": str(card_data.get("uniId") or ""),
-                },
-                {
-                    "key": "email",
-                    "label": "البريد الإلكتروني",
-                    "value": card_data.get("email", ""),
-                },
-                {
-                    "key": "institution",
-                    "label": "الكلية / الجهة",
-                    "value": card_data.get("uniCollege", "جامعة القصيم"),
-                },
-                {
-                    "key": "major",
-                    "label": "التخصص",
-                    "value": card_data.get("major", ""),
-                },
-                {
-                    "key": "level",
-                    "label": "المستوى / المرحلة",
-                    "value": card_data.get("studyYearOrLevel", ""),
-                },
-                {
-                    "key": "public_profile",
-                    "label": "رابط الصفحة الشخصية المعتمدة",
-                    "value": qr_target_url,
-                },
+                {"key": "uni_id", "label": "الرقم الجامعي", "value": str(card_data.get("uniId") or "")},
+                {"key": "email", "label": "البريد الإلكتروني", "value": card_data.get("email", "")},
+                {"key": "institution", "label": "الكلية / الجهة", "value": card_data.get("uniCollege", "جامعة القصيم")},
+                {"key": "major", "label": "التخصص", "value": card_data.get("major", "")},
+                {"key": "level", "label": "المستوى / المرحلة", "value": card_data.get("studyYearOrLevel", "")},
+                {"key": "public_profile", "label": "رابط الصفحة الشخصية المعتمدة", "value": qr_target_url},
                 {
                     "key": "club_name",
                     "label": "النادي",
@@ -188,13 +159,12 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     if not p12_bytes:
         raise ValueError("Apple Pass signing certificate (APPLE_P12_BASE64 or Certificates.p12) is missing")
 
-    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(
-        p12_bytes,
-        p12_password,
-    )
+    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(p12_bytes, p12_password)
 
     wwdr_base64 = os.getenv("APPLE_WWDR_BASE64")
-    wwdr_path = os.getenv("APPLE_WWDR_PATH", os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer"))
+    wwdr_path = os.getenv(
+        "APPLE_WWDR_PATH", os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer")
+    )
 
     wwdr_cert = None
     if wwdr_base64:
@@ -243,10 +213,21 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     Includes both genericClass and genericObject definitions in the JWT payload
     to guarantee on-the-fly class creation without pre-existing API registration.
     """
-    issuer_id = os.getenv("GOOGLE_WALLET_ISSUER_ID", "BCR2DN6DTK643EAC")
-    class_id = os.getenv("GOOGLE_WALLET_CLASS_ID", f"{issuer_id}.gdgq-card")
-    service_account_email = os.getenv("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "gdgq-962@gdgcoc.iam.gserviceaccount.com")
+    issuer_id = os.getenv("GOOGLE_WALLET_ISSUER_ID", "").strip()
+    class_id = os.getenv("GOOGLE_WALLET_CLASS_ID", "").strip() or f"{issuer_id}.gdgq-card"
+    service_account_email = os.getenv("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "").strip()
     private_key_pem = os.getenv("GOOGLE_WALLET_PRIVATE_KEY", "")
+
+    if not re.fullmatch(r"\d+", issuer_id):
+        raise ValueError(
+            "GOOGLE_WALLET_ISSUER_ID must be the numeric Google Wallet Issuer ID, not a Google Pay Merchant ID"
+        )
+    if not re.fullmatch(rf"{re.escape(issuer_id)}\.[A-Za-z0-9._-]+", class_id):
+        raise ValueError("GOOGLE_WALLET_CLASS_ID must use the format ISSUER_ID.class_suffix")
+    if not service_account_email.endswith(".gserviceaccount.com"):
+        raise ValueError("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL is missing or invalid")
+    if not private_key_pem.strip():
+        raise ValueError("GOOGLE_WALLET_PRIVATE_KEY is not configured")
 
     theme_id = card_data.get("themeId", DEFAULT_THEME)
     theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
@@ -269,19 +250,9 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
                     {
                         "twoItems": {
                             "startItem": {
-                                "firstValue": {
-                                    "fields": [
-                                        {"fieldPath": "object.textModulesData['uni_id']"}
-                                    ]
-                                }
+                                "firstValue": {"fields": [{"fieldPath": "object.textModulesData['uni_id']"}]}
                             },
-                            "endItem": {
-                                "firstValue": {
-                                    "fields": [
-                                        {"fieldPath": "object.textModulesData['college']"}
-                                    ]
-                                }
-                            },
+                            "endItem": {"firstValue": {"fields": [{"fieldPath": "object.textModulesData['college']"}]}},
                         }
                     }
                 ]
@@ -292,107 +263,52 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     generic_object = {
         "id": card_id,
         "classId": class_id,
-        "cardTitle": {
-            "defaultValue": {
-                "language": "ar",
-                "value": "Google Developer Groups - Qassim",
-            }
-        },
-        "header": {
-            "defaultValue": {
-                "language": "ar",
-                "value": full_name,
-            }
-        },
-        "subheader": {
-            "defaultValue": {
-                "language": "ar",
-                "value": theme["role_title"],
-            }
-        },
+        "state": "ACTIVE",
+        "cardTitle": {"defaultValue": {"language": "ar", "value": "Google Developer Groups - Qassim"}},
+        "header": {"defaultValue": {"language": "ar", "value": full_name}},
+        "subheader": {"defaultValue": {"language": "ar", "value": theme["role_title"]}},
         "hexBackgroundColor": theme["badge_color"],
         "logo": {
-            "sourceUri": {
-                "uri": "https://gdg-q.com/android-chrome-192x192.png",
-            },
-            "contentDescription": {
-                "defaultValue": {
-                    "language": "ar",
-                    "value": "GDG Qassim Logo",
-                }
-            },
+            "sourceUri": {"uri": "https://gdg-q.com/android-chrome-192x192.png"},
+            "contentDescription": {"defaultValue": {"language": "ar", "value": "GDG Qassim Logo"}},
         },
         "heroImage": {
-            "sourceUri": {
-                "uri": f"https://gdg-q.com/wallet-figma/strip-{theme_id}@2x.png",
-            },
-            "contentDescription": {
-                "defaultValue": {
-                    "language": "ar",
-                    "value": f"GDG Qassim {theme['role_title']}",
-                }
-            },
+            "sourceUri": {"uri": f"https://gdg-q.com/wallet-figma/strip-{theme_id}@2x.png"},
+            "contentDescription": {"defaultValue": {"language": "ar", "value": f"GDG Qassim {theme['role_title']}"}},
         },
         "textModulesData": [
-            {
-                "id": "uni_id",
-                "header": "الرقم الجامعي",
-                "body": str(card_data.get("uniId") or "عضو موثق"),
-            },
-            {
-                "id": "college",
-                "header": "الكلية / الجهة",
-                "body": uni_college,
-            },
+            {"id": "uni_id", "header": "الرقم الجامعي", "body": str(card_data.get("uniId") or "عضو موثق")},
+            {"id": "college", "header": "الكلية / الجهة", "body": uni_college},
         ],
-        "barcode": {
-            "type": "QR_CODE",
-            "value": qr_target_url,
-            "alternateText": uuid[:8].upper() if uuid else "GDGQ",
-        },
+        "barcode": {"type": "QR_CODE", "value": qr_target_url, "alternateText": uuid[:8].upper() if uuid else "GDGQ"},
         "linksModuleData": {
             "uris": [
-                {
-                    "uri": qr_target_url,
-                    "description": "صفحتك الشخصية المعتمدة",
-                    "id": "profile_link",
-                },
-                {
-                    "uri": "https://gdg-q.com",
-                    "description": "مجتمع GDG Qassim",
-                    "id": "club_site",
-                },
+                {"uri": qr_target_url, "description": "صفحتك الشخصية المعتمدة", "id": "profile_link"},
+                {"uri": "https://gdg-q.com", "description": "مجتمع GDG Qassim", "id": "club_site"},
             ]
         },
     }
 
     if major or level:
-        generic_object["textModulesData"].append({
-            "id": "major_level",
-            "header": "التخصص والمرحلة",
-            "body": f"{major} · {level}" if (major and level) else (major or level),
-        })
+        generic_object["textModulesData"].append(
+            {
+                "id": "major_level",
+                "header": "التخصص والمرحلة",
+                "body": f"{major} · {level}" if (major and level) else (major or level),
+            }
+        )
 
     if email:
-        generic_object["textModulesData"].append({
-            "id": "email",
-            "header": "البريد الإلكتروني",
-            "body": email,
-        })
+        generic_object["textModulesData"].append({"id": "email", "header": "البريد الإلكتروني", "body": email})
 
     jwt_claims = {
         "iss": service_account_email,
         "aud": "google",
-        "typ": "savetoandroidpay",
+        "typ": "savetowallet",
         "iat": int(time.time()),
-        "payload": {
-            "genericClasses": [generic_class],
-            "genericObjects": [generic_object],
-        },
+        "origins": ["https://gdg-q.com"],
+        "payload": {"genericClasses": [generic_class], "genericObjects": [generic_object]},
     }
-
-    if not private_key_pem:
-        return f"https://pay.google.com/gp/v/save/{uuid or 'demo'}"
 
     # Format RSA private key
     formatted_key = private_key_pem.strip()
@@ -400,5 +316,8 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
         formatted_key = formatted_key[1:-1]
     formatted_key = formatted_key.replace("\\n", "\n")
 
-    signed_jwt = jwt.encode(jwt_claims, formatted_key, algorithm="RS256")
+    try:
+        signed_jwt = jwt.encode(jwt_claims, formatted_key, algorithm="RS256")
+    except Exception as exc:
+        raise ValueError("GOOGLE_WALLET_PRIVATE_KEY could not sign the Wallet JWT") from exc
     return f"https://pay.google.com/gp/v/save/{signed_jwt}"

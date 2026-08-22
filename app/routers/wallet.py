@@ -1,7 +1,7 @@
 import logging
 import os
 import uuid as uuid_lib
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Body
 from pydantic import BaseModel, Field
 
@@ -26,6 +26,7 @@ router = APIRouter()
 # =============================================================================
 # Request & Response Models
 # =============================================================================
+
 
 class SocialLinkItem(BaseModel):
     id: str
@@ -61,6 +62,7 @@ class UpdateWalletMePayload(BaseModel):
 # Helpers
 # =============================================================================
 
+
 def _resolve_authenticated_member(session, credentials):
     """
     Safely resolves the authenticated Member from Clerk credentials
@@ -79,9 +81,7 @@ def _resolve_authenticated_member(session, credentials):
         try:
             decoded = credentials.model_dump().get("decoded", {})
             email = (
-                decoded.get("email")
-                or decoded.get("primary_email_address")
-                or decoded.get("metadata", {}).get("email")
+                decoded.get("email") or decoded.get("primary_email_address") or decoded.get("metadata", {}).get("email")
             )
             if email:
                 member = get_member_by_email_or_none(session, str(email).strip().lower())
@@ -127,7 +127,10 @@ def _resolve_pass_card_data(request: Request, payload: Optional[Dict[str, Any]] 
                         "uniId": member.uni_id,
                         "email": member.email or card_data.get("email", ""),
                         "phone": member.phone_number or card_data.get("phone", ""),
-                        "uniCollege": profile.institution or member.uni_college or card_data.get("institution") or card_data.get("uniCollege", "جامعة القصيم"),
+                        "uniCollege": profile.institution
+                        or member.uni_college
+                        or card_data.get("institution")
+                        or card_data.get("uniCollege", "جامعة القصيم"),
                         "major": profile.major or member.uni_college or card_data.get("major", "علوم حاسب"),
                         "userStatus": profile.user_status or card_data.get("userStatus", "student"),
                         "educationLevel": profile.education_level or card_data.get("educationLevel", "university"),
@@ -169,6 +172,7 @@ def _resolve_pass_card_data(request: Request, payload: Optional[Dict[str, Any]] 
 # Endpoints
 # =============================================================================
 
+
 @router.get("/me", summary="Get authenticated member wallet data and profile")
 def get_wallet_me(credentials=Depends(authenticated_guard)):
     """
@@ -186,7 +190,9 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
             effective_name = profile.custom_name or member.name
             effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
             effective_major = profile.major or member.uni_college or "علوم حاسب"
-            effective_level = profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG")
+            effective_level = profile.study_year_or_level or (
+                f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG"
+            )
 
             return {
                 "member_id": member.id,
@@ -213,12 +219,8 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
                     "study_year_or_level": effective_level,
                     "bio": profile.bio or "",
                     "social_links": profile.social_links or [],
-                    "visibility": profile.visibility or {
-                        "showPhone": False,
-                        "showEmail": False,
-                        "showAcademic": True,
-                        "showBio": True,
-                    },
+                    "visibility": profile.visibility
+                    or {"showPhone": False, "showEmail": False, "showAcademic": True, "showBio": True},
                     "created_at": profile.created_at.isoformat() if profile.created_at else None,
                     "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
                 },
@@ -250,12 +252,7 @@ def get_wallet_me(credentials=Depends(authenticated_guard)):
                     "study_year_or_level": "",
                     "bio": "",
                     "social_links": [],
-                    "visibility": {
-                        "showPhone": False,
-                        "showEmail": False,
-                        "showAcademic": True,
-                        "showBio": True,
-                    },
+                    "visibility": {"showPhone": False, "showEmail": False, "showAcademic": True, "showBio": True},
                 },
             }
 
@@ -333,7 +330,7 @@ def update_wallet_me(payload: UpdateWalletMePayload, credentials=Depends(authent
 
 
 @router.post("/apple-pass", summary="Generate signed Apple Wallet (.pkpass) for member or guest")
-def create_apple_wallet_pass(request: Request, payload: Optional[Dict[str, Any]] = Body(default=None)):
+def create_apple_wallet_pass(request: Request, payload: Annotated[Optional[Dict[str, Any]], Body()] = None):
     """
     Generates and signs an official Apple Wallet .pkpass file.
     Supports authenticated members (loading DB record) and guest cards without 401 failures.
@@ -353,13 +350,17 @@ def create_apple_wallet_pass(request: Request, payload: Optional[Dict[str, Any]]
 
 
 @router.post("/google-pass", summary="Generate signed Google Wallet save link for member or guest")
-def create_google_wallet_pass(request: Request, payload: Optional[Dict[str, Any]] = Body(default=None)):
+def create_google_wallet_pass(request: Request, payload: Annotated[Optional[Dict[str, Any]], Body()] = None):
     """
     Generates a signed Google Wallet save URL.
     Supports authenticated members and guest cards.
     """
     card_data = _resolve_pass_card_data(request, payload)
-    save_url = generate_google_wallet_pass_url(card_data)
+    try:
+        save_url = generate_google_wallet_pass_url(card_data)
+    except ValueError as exc:
+        logger.error("Google Wallet configuration error: %s", exc)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     return {"saveUrl": save_url}
 
 
@@ -385,12 +386,16 @@ def get_public_profile(uuid: str):
         effective_name = profile.custom_name or member.name
         effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
         effective_major = profile.major or member.uni_college or "علوم حاسب"
-        effective_level = profile.study_year_or_level or (f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG")
+        effective_level = profile.study_year_or_level or (
+            f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG"
+        )
 
         return {
             "uuid": profile.uuid,
             "name": effective_name,
-            "name_language": profile.name_language.value if hasattr(profile.name_language, "value") else str(profile.name_language),
+            "name_language": profile.name_language.value
+            if hasattr(profile.name_language, "value")
+            else str(profile.name_language),
             "theme_id": profile.theme_id,
             "user_status": profile.user_status or "student",
             "education_level": profile.education_level or "university",
@@ -419,8 +424,4 @@ async def wallet_health():
     """
     has_apple_p12 = bool(os.getenv("APPLE_P12_BASE64")) or bool(os.getenv("APPLE_P12_PASSWORD"))
     has_google_key = bool(os.getenv("GOOGLE_WALLET_PRIVATE_KEY"))
-    return {
-        "status": "healthy",
-        "apple_wallet_configured": has_apple_p12,
-        "google_wallet_configured": has_google_key,
-    }
+    return {"status": "healthy", "apple_wallet_configured": has_apple_p12, "google_wallet_configured": has_google_key}
