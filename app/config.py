@@ -131,6 +131,10 @@ class Config:
     def R2_PUBLIC_URL(self) -> str:
         return env_or_except("R2_PUBLIC_URL")
 
+    @property
+    def SENTRY_DSN(self) -> Optional[str]:
+        return os.getenv("SENTRY_DSN")
+
 
 def env_or_except(key: str, default: Optional[str] = None) -> str:
     value = os.getenv(key)
