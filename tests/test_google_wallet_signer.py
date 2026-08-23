@@ -46,6 +46,10 @@ def test_google_wallet_jwt_matches_current_google_contract(monkeypatch: pytest.M
     assert google_object["state"] == "ACTIVE"
     assert google_object["classId"] == "3388000000022212345.gdgq-card"
     assert google_object["barcode"]["type"] == "QR_CODE"
+    assert google_object["hexBackgroundColor"] == "#BFF2FF"
+    assert google_object["subheader"]["defaultValue"]["value"] == "عضو نادي قوقل للطلبة المطورين"
+    assert google_object["heroImage"]["sourceUri"]["uri"].endswith("/wallet-v2/strip-gdg-blue@2x.png")
+    assert "classTemplateInfo" not in claims["payload"]["genericClasses"][0]
 
 
 def test_google_wallet_rejects_google_pay_merchant_id(monkeypatch: pytest.MonkeyPatch) -> None:
