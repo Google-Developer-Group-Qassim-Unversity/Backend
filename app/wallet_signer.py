@@ -26,25 +26,25 @@ TRANSPARENT_PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\
 DEFAULT_THEME = "gdg-blue"
 THEMES_CONFIG = {
     "gdg-blue": {
-        "bg_rgb": "rgb(24, 60, 150)",
-        "fg_rgb": "rgb(255, 255, 255)",
-        "label_rgb": "rgb(200, 220, 255)",
-        "badge_color": "#1A73E8",
-        "role_title": "عضو مجتمع GDG",
+        "bg_rgb": "rgb(191, 242, 255)",
+        "fg_rgb": "rgb(17, 24, 39)",
+        "label_rgb": "rgb(51, 65, 85)",
+        "badge_color": "#BFF2FF",
+        "role_title": "عضو نادي قوقل للطلبة المطورين",
     },
     "gdg-red": {
-        "bg_rgb": "rgb(180, 40, 40)",
-        "fg_rgb": "rgb(255, 255, 255)",
-        "label_rgb": "rgb(255, 210, 210)",
-        "badge_color": "#EA4335",
-        "role_title": "عضوة مجتمع GDG",
+        "bg_rgb": "rgb(255, 217, 220)",
+        "fg_rgb": "rgb(17, 24, 39)",
+        "label_rgb": "rgb(75, 85, 99)",
+        "badge_color": "#FFD9DC",
+        "role_title": "عضو نادي قوقل للطلبة المطورين",
     },
     "gdg-gold-admin": {
-        "bg_rgb": "rgb(40, 35, 20)",
-        "fg_rgb": "rgb(255, 225, 120)",
-        "label_rgb": "rgb(218, 165, 32)",
-        "badge_color": "#D4AF37",
-        "role_title": "إدارة GDG Qassim",
+        "bg_rgb": "rgb(0, 0, 0)",
+        "fg_rgb": "rgb(255, 255, 255)",
+        "label_rgb": "rgb(209, 213, 219)",
+        "badge_color": "#000000",
+        "role_title": "إداري نادي قوقل للطلبة المطورين",
     },
 }
 
@@ -81,6 +81,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "foregroundColor": theme["fg_rgb"],
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
+        "suppressStripShine": True,
         "storeCard": {
             "secondaryFields": [{"key": "member_name", "label": theme["role_title"], "value": full_name}],
             "backFields": [
@@ -116,21 +117,22 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     files_to_pack: Dict[str, bytes] = {}
     files_to_pack["pass.json"] = json.dumps(pass_json, ensure_ascii=False, indent=2).encode("utf-8")
 
-    # Load high-res images for strip, logo, and icon
-    for img_name in ["icon.png", "icon@2x.png", "logo.png", "logo@2x.png", "strip.png", "strip@2x.png"]:
-        theme_img_path = os.path.join(ASSETS_DIR, f"{theme_id}_{img_name}")
-        specific_strip_path = os.path.join(ASSETS_DIR, f"strip-{theme_id}@2x.png") if "strip" in img_name else None
-        default_img_path = os.path.join(ASSETS_DIR, img_name)
+    # Package each image at its real Apple scale. Reusing @2x bytes for every
+    # filename makes Wallet crop and soften the artwork on different devices.
+    for img_name in ["icon.png", "icon@2x.png", "icon@3x.png", "logo.png", "logo@2x.png", "logo@3x.png"]:
+        img_path = os.path.join(ASSETS_DIR, img_name)
+        if os.path.exists(img_path):
+            with open(img_path, "rb") as f:
+                files_to_pack[img_name] = f.read()
 
-        if specific_strip_path and os.path.exists(specific_strip_path):
-            with open(specific_strip_path, "rb") as f:
-                files_to_pack[img_name] = f.read()
-        elif os.path.exists(theme_img_path):
-            with open(theme_img_path, "rb") as f:
-                files_to_pack[img_name] = f.read()
-        elif os.path.exists(default_img_path):
-            with open(default_img_path, "rb") as f:
-                files_to_pack[img_name] = f.read()
+    for suffix in ["", "@2x", "@3x"]:
+        destination_name = f"strip{suffix}.png"
+        themed_strip_path = os.path.join(ASSETS_DIR, f"strip-{theme_id}{suffix}.png")
+        default_strip_path = os.path.join(ASSETS_DIR, destination_name)
+        strip_path = themed_strip_path if os.path.exists(themed_strip_path) else default_strip_path
+        if os.path.exists(strip_path):
+            with open(strip_path, "rb") as f:
+                files_to_pack[destination_name] = f.read()
 
     # Generate fallback transparent images if any missing
     for required in ["icon.png", "icon@2x.png", "logo.png", "logo@2x.png"]:
@@ -241,24 +243,9 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     major = card_data.get("major") or ""
     level = card_data.get("studyYearOrLevel") or ""
 
-    # Define GenericClass inside JWT for self-contained pass creation
-    generic_class = {
-        "id": class_id,
-        "classTemplateInfo": {
-            "cardTemplateOverride": {
-                "cardRowTemplateInfos": [
-                    {
-                        "twoItems": {
-                            "startItem": {
-                                "firstValue": {"fields": [{"fieldPath": "object.textModulesData['uni_id']"}]}
-                            },
-                            "endItem": {"firstValue": {"fields": [{"fieldPath": "object.textModulesData['college']"}]}},
-                        }
-                    }
-                ]
-            }
-        },
-    }
+    # Keep the front clean: Google owns the native field and barcode layout.
+    # Additional profile data remains available in the pass details modules.
+    generic_class = {"id": class_id}
 
     generic_object = {
         "id": card_id,
@@ -273,7 +260,7 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
             "contentDescription": {"defaultValue": {"language": "ar", "value": "GDG Qassim Logo"}},
         },
         "heroImage": {
-            "sourceUri": {"uri": f"https://gdg-q.com/wallet-figma/strip-{theme_id}@2x.png"},
+            "sourceUri": {"uri": f"https://gdg-q.com/wallet-v2/strip-{theme_id}@2x.png"},
             "contentDescription": {"defaultValue": {"language": "ar", "value": f"GDG Qassim {theme['role_title']}"}},
         },
         "textModulesData": [
