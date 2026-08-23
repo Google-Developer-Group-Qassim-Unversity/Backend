@@ -55,7 +55,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     """
     Generates a cryptographically signed Apple Wallet .pkpass binary buffer
     using Python cryptography PKCS#7 detached signature.
-    Uses 'generic' pass type with full-bleed background.png to render the complete Figma card design.
+    Uses 'eventTicket' pass type with full-bleed background.png to render the complete Figma card design.
     """
     theme_id = card_data.get("themeId", DEFAULT_THEME)
     theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
@@ -76,7 +76,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     major = card_data.get("major") or ""
     level = card_data.get("studyYearOrLevel") or ""
 
-    # 1. Build pass.json with full-card generic layout
+    # 1. Build pass.json with full-card eventTicket layout
     pass_json = {
         "formatVersion": 1,
         "passTypeIdentifier": pass_type_id,
@@ -88,7 +88,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
         "suppressStripShine": True,
-        "generic": {
+        "eventTicket": {
             "primaryFields": [
                 {
                     "key": "member_name",
@@ -150,7 +150,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
             with open(img_path, "rb") as f:
                 files_to_pack[img_name] = f.read()
 
-    # Pack full-bleed background for the complete Figma card design
+    # Pack full-bleed background images for the complete Figma card design
     for suffix in ["", "@2x", "@3x"]:
         bg_dest = f"background{suffix}.png"
         themed_bg = os.path.join(ASSETS_DIR, f"background-{theme_id}{suffix}.png")
@@ -159,16 +159,6 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         if os.path.exists(bg_path):
             with open(bg_path, "rb") as f:
                 files_to_pack[bg_dest] = f.read()
-
-    # Also pack strip for backwards-compatible strip display
-    for suffix in ["", "@2x", "@3x"]:
-        destination_name = f"strip{suffix}.png"
-        themed_strip_path = os.path.join(ASSETS_DIR, f"strip-{theme_id}{suffix}.png")
-        default_strip_path = os.path.join(ASSETS_DIR, destination_name)
-        strip_path = themed_strip_path if os.path.exists(themed_strip_path) else default_strip_path
-        if os.path.exists(strip_path):
-            with open(strip_path, "rb") as f:
-                files_to_pack[destination_name] = f.read()
 
     # Generate fallback transparent images if any missing
     for required in ["icon.png", "icon@2x.png", "logo.png", "logo@2x.png"]:
