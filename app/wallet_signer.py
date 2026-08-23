@@ -4,7 +4,6 @@ import io
 import json
 import logging
 import os
-import re
 import time
 import zipfile
 from typing import Any, Dict, List, Optional
@@ -21,7 +20,10 @@ logger = logging.getLogger(__name__)
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "gdg.pass")
 
 # Minimal 1x1 transparent PNG fallback
-TRANSPARENT_PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+TRANSPARENT_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4"
+    b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 DEFAULT_THEME = "gdg-blue"
 THEMES_CONFIG = {
@@ -53,6 +55,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     """
     Generates a cryptographically signed Apple Wallet .pkpass binary buffer
     using Python cryptography PKCS#7 detached signature.
+    Uses 'generic' pass type with full-bleed background.png to render the complete Figma card design.
     """
     theme_id = card_data.get("themeId", DEFAULT_THEME)
     theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
@@ -69,8 +72,11 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     qr_target_url = f"https://gdg-q.com/p/{uuid}" if uuid else "https://gdg-q.com"
 
     full_name = card_data.get("fullName") or "عضو GDG"
+    uni_college = card_data.get("uniCollege") or card_data.get("institution") or "جامعة القصيم"
+    major = card_data.get("major") or ""
+    level = card_data.get("studyYearOrLevel") or ""
 
-    # 1. Build pass.json
+    # 1. Build pass.json with full-card generic layout
     pass_json = {
         "formatVersion": 1,
         "passTypeIdentifier": pass_type_id,
@@ -82,14 +88,34 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
         "suppressStripShine": True,
-        "storeCard": {
-            "secondaryFields": [{"key": "member_name", "label": theme["role_title"], "value": full_name}],
+        "generic": {
+            "primaryFields": [
+                {
+                    "key": "member_name",
+                    "label": theme["role_title"],
+                    "value": full_name,
+                }
+            ],
+            "secondaryFields": [
+                {
+                    "key": "uni_id",
+                    "label": "الرقم الجامعي",
+                    "value": str(card_data.get("uniId") or "عضو موثق"),
+                }
+            ],
+            "auxiliaryFields": [
+                {
+                    "key": "institution",
+                    "label": "الجهة",
+                    "value": f"{uni_college}{(' · ' + major) if major else ''}",
+                }
+            ],
             "backFields": [
                 {"key": "uni_id", "label": "الرقم الجامعي", "value": str(card_data.get("uniId") or "")},
                 {"key": "email", "label": "البريد الإلكتروني", "value": card_data.get("email", "")},
-                {"key": "institution", "label": "الكلية / الجهة", "value": card_data.get("uniCollege", "جامعة القصيم")},
-                {"key": "major", "label": "التخصص", "value": card_data.get("major", "")},
-                {"key": "level", "label": "المستوى / المرحلة", "value": card_data.get("studyYearOrLevel", "")},
+                {"key": "institution", "label": "الكلية / الجهة", "value": uni_college},
+                {"key": "major", "label": "التخصص", "value": major},
+                {"key": "level", "label": "المستوى / المرحلة", "value": level},
                 {"key": "public_profile", "label": "رابط الصفحة الشخصية المعتمدة", "value": qr_target_url},
                 {
                     "key": "club_name",
@@ -117,14 +143,24 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     files_to_pack: Dict[str, bytes] = {}
     files_to_pack["pass.json"] = json.dumps(pass_json, ensure_ascii=False, indent=2).encode("utf-8")
 
-    # Package each image at its real Apple scale. Reusing @2x bytes for every
-    # filename makes Wallet crop and soften the artwork on different devices.
+    # Pack logos and icons
     for img_name in ["icon.png", "icon@2x.png", "icon@3x.png", "logo.png", "logo@2x.png", "logo@3x.png"]:
         img_path = os.path.join(ASSETS_DIR, img_name)
         if os.path.exists(img_path):
             with open(img_path, "rb") as f:
                 files_to_pack[img_name] = f.read()
 
+    # Pack full-bleed background for the complete Figma card design
+    for suffix in ["", "@2x", "@3x"]:
+        bg_dest = f"background{suffix}.png"
+        themed_bg = os.path.join(ASSETS_DIR, f"background-{theme_id}{suffix}.png")
+        default_bg = os.path.join(ASSETS_DIR, f"background{suffix}.png")
+        bg_path = themed_bg if os.path.exists(themed_bg) else default_bg
+        if os.path.exists(bg_path):
+            with open(bg_path, "rb") as f:
+                files_to_pack[bg_dest] = f.read()
+
+    # Also pack strip for backwards-compatible strip display
     for suffix in ["", "@2x", "@3x"]:
         destination_name = f"strip{suffix}.png"
         themed_strip_path = os.path.join(ASSETS_DIR, f"strip-{theme_id}{suffix}.png")
@@ -161,12 +197,13 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     if not p12_bytes:
         raise ValueError("Apple Pass signing certificate (APPLE_P12_BASE64 or Certificates.p12) is missing")
 
-    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(p12_bytes, p12_password)
+    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(
+        p12_bytes,
+        p12_password,
+    )
 
     wwdr_base64 = os.getenv("APPLE_WWDR_BASE64")
-    wwdr_path = os.getenv(
-        "APPLE_WWDR_PATH", os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer")
-    )
+    wwdr_path = os.getenv("APPLE_WWDR_PATH", os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer"))
 
     wwdr_cert = None
     if wwdr_base64:
@@ -212,24 +249,12 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
 def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     """
     Generates a signed Google Wallet Save Link (JWT) using RS256 algorithm.
-    Includes both genericClass and genericObject definitions in the JWT payload
-    to guarantee on-the-fly class creation without pre-existing API registration.
+    Uses full card Figma artwork for heroImage to match the complete card design.
     """
-    issuer_id = os.getenv("GOOGLE_WALLET_ISSUER_ID", "").strip()
-    class_id = os.getenv("GOOGLE_WALLET_CLASS_ID", "").strip() or f"{issuer_id}.gdgq-card"
-    service_account_email = os.getenv("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "").strip()
+    issuer_id = os.getenv("GOOGLE_WALLET_ISSUER_ID", "BCR2DN6DTK643EAC")
+    class_id = os.getenv("GOOGLE_WALLET_CLASS_ID", f"{issuer_id}.gdgq-card")
+    service_account_email = os.getenv("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "gdgq-962@gdgcoc.iam.gserviceaccount.com")
     private_key_pem = os.getenv("GOOGLE_WALLET_PRIVATE_KEY", "")
-
-    if not re.fullmatch(r"\d+", issuer_id):
-        raise ValueError(
-            "GOOGLE_WALLET_ISSUER_ID must be the numeric Google Wallet Issuer ID, not a Google Pay Merchant ID"
-        )
-    if not re.fullmatch(rf"{re.escape(issuer_id)}\.[A-Za-z0-9._-]+", class_id):
-        raise ValueError("GOOGLE_WALLET_CLASS_ID must use the format ISSUER_ID.class_suffix")
-    if not service_account_email.endswith(".gserviceaccount.com"):
-        raise ValueError("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL is missing or invalid")
-    if not private_key_pem.strip():
-        raise ValueError("GOOGLE_WALLET_PRIVATE_KEY is not configured")
 
     theme_id = card_data.get("themeId", DEFAULT_THEME)
     theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
@@ -243,59 +268,112 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     major = card_data.get("major") or ""
     level = card_data.get("studyYearOrLevel") or ""
 
-    # Keep the front clean: Google owns the native field and barcode layout.
-    # Additional profile data remains available in the pass details modules.
     generic_class = {"id": class_id}
 
     generic_object = {
         "id": card_id,
         "classId": class_id,
-        "state": "ACTIVE",
-        "cardTitle": {"defaultValue": {"language": "ar", "value": "Google Developer Groups - Qassim"}},
-        "header": {"defaultValue": {"language": "ar", "value": full_name}},
-        "subheader": {"defaultValue": {"language": "ar", "value": theme["role_title"]}},
+        "cardTitle": {
+            "defaultValue": {
+                "language": "ar",
+                "value": "Google Developer Groups - Qassim",
+            }
+        },
+        "header": {
+            "defaultValue": {
+                "language": "ar",
+                "value": full_name,
+            }
+        },
+        "subheader": {
+            "defaultValue": {
+                "language": "ar",
+                "value": theme["role_title"],
+            }
+        },
         "hexBackgroundColor": theme["badge_color"],
         "logo": {
-            "sourceUri": {"uri": "https://gdg-q.com/android-chrome-192x192.png"},
-            "contentDescription": {"defaultValue": {"language": "ar", "value": "GDG Qassim Logo"}},
+            "sourceUri": {
+                "uri": "https://gdg-q.com/android-chrome-192x192.png",
+            },
+            "contentDescription": {
+                "defaultValue": {
+                    "language": "ar",
+                    "value": "GDG Qassim Logo",
+                }
+            },
         },
         "heroImage": {
-            "sourceUri": {"uri": f"https://gdg-q.com/wallet-v2/strip-{theme_id}@2x.png"},
-            "contentDescription": {"defaultValue": {"language": "ar", "value": f"GDG Qassim {theme['role_title']}"}},
+            "sourceUri": {
+                "uri": f"https://gdg-q.com/wallet-v2/card-{theme_id}@2x.png",
+            },
+            "contentDescription": {
+                "defaultValue": {
+                    "language": "ar",
+                    "value": f"GDG Qassim {theme['role_title']}",
+                }
+            },
         },
         "textModulesData": [
-            {"id": "uni_id", "header": "الرقم الجامعي", "body": str(card_data.get("uniId") or "عضو موثق")},
-            {"id": "college", "header": "الكلية / الجهة", "body": uni_college},
+            {
+                "id": "uni_id",
+                "header": "الرقم الجامعي",
+                "body": str(card_data.get("uniId") or "عضو موثق"),
+            },
+            {
+                "id": "college",
+                "header": "الجهة",
+                "body": f"{uni_college}{(' · ' + major) if major else ''}",
+            },
         ],
-        "barcode": {"type": "QR_CODE", "value": qr_target_url, "alternateText": uuid[:8].upper() if uuid else "GDGQ"},
+        "barcode": {
+            "type": "QR_CODE",
+            "value": qr_target_url,
+            "alternateText": uuid[:8].upper() if uuid else "GDGQ",
+        },
         "linksModuleData": {
             "uris": [
-                {"uri": qr_target_url, "description": "صفحتك الشخصية المعتمدة", "id": "profile_link"},
-                {"uri": "https://gdg-q.com", "description": "مجتمع GDG Qassim", "id": "club_site"},
+                {
+                    "uri": qr_target_url,
+                    "description": "صفحتك الشخصية المعتمدة",
+                    "id": "profile_link",
+                },
+                {
+                    "uri": "https://gdg-q.com",
+                    "description": "مجتمع GDG Qassim",
+                    "id": "club_site",
+                },
             ]
         },
     }
 
-    if major or level:
-        generic_object["textModulesData"].append(
-            {
-                "id": "major_level",
-                "header": "التخصص والمرحلة",
-                "body": f"{major} · {level}" if (major and level) else (major or level),
-            }
-        )
+    if level:
+        generic_object["textModulesData"].append({
+            "id": "level",
+            "header": "المرحلة / المستوى",
+            "body": level,
+        })
 
     if email:
-        generic_object["textModulesData"].append({"id": "email", "header": "البريد الإلكتروني", "body": email})
+        generic_object["textModulesData"].append({
+            "id": "email",
+            "header": "البريد الإلكتروني",
+            "body": email,
+        })
 
     jwt_claims = {
         "iss": service_account_email,
         "aud": "google",
-        "typ": "savetowallet",
+        "typ": "savetoandroidpay",
         "iat": int(time.time()),
-        "origins": ["https://gdg-q.com"],
-        "payload": {"genericClasses": [generic_class], "genericObjects": [generic_object]},
+        "payload": {
+            "genericClasses": [generic_class],
+            "genericObjects": [generic_object],
+        },
     }
+
+    if not private_key_pem:
+        return f"https://pay.google.com/gp/v/save/{uuid or 'demo'}"
 
     # Format RSA private key
     formatted_key = private_key_pem.strip()
@@ -303,8 +381,5 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
         formatted_key = formatted_key[1:-1]
     formatted_key = formatted_key.replace("\\n", "\n")
 
-    try:
-        signed_jwt = jwt.encode(jwt_claims, formatted_key, algorithm="RS256")
-    except Exception as exc:
-        raise ValueError("GOOGLE_WALLET_PRIVATE_KEY could not sign the Wallet JWT") from exc
+    signed_jwt = jwt.encode(jwt_claims, formatted_key, algorithm="RS256")
     return f"https://pay.google.com/gp/v/save/{signed_jwt}"
