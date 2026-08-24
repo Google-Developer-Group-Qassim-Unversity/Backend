@@ -4,15 +4,14 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
-from app.DB.schema import EmailLogs, EmailLogsEmailType, EmailLogsFromAddress, Events, Members
+from app.DB.schema import EmailLogs, EmailLogsEmailType, Events, Members
 from app.exceptions import EventNotFound, MemberNotFound
 
 
-def get_email_address_usage(session: Session, days: int, address: EmailLogsFromAddress) -> int:
-    from_address = EmailLogsFromAddress(address.value)
+def get_email_address_usage(session: Session, days: int, address: str) -> int:
     cutoff = datetime.now() - timedelta(days=days)
     stmt = select(func.coalesce(func.sum(EmailLogs.recipient_count), 0)).where(
-        EmailLogs.from_address == from_address, EmailLogs.sent_at >= cutoff
+        EmailLogs.from_address == address, EmailLogs.sent_at >= cutoff
     )
     result = session.scalar(stmt)
     return int(result or 0)
@@ -50,7 +49,7 @@ def create_email_log(
     session: Session,
     *,
     sent_by: int,
-    from_address: EmailLogsFromAddress,
+    from_address: str,
     email_type: EmailLogsEmailType,
     member_id: Optional[int] = None,
     event_id: Optional[int] = None,
@@ -60,7 +59,7 @@ def create_email_log(
     log = EmailLogs(
         member_id=member_id,
         event_id=event_id,
-        from_address=EmailLogsFromAddress(from_address.value),
+        from_address=from_address,
         sent_at=datetime.now(),
         sent_by=sent_by,
         recipient_count=recipient_count,

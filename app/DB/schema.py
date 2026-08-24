@@ -131,11 +131,6 @@ class OpenEventsLocationType(str, enum.Enum):
     HIDDEN = "hidden"
 
 
-class EmailLogsFromAddress(str, enum.Enum):
-    INFO_KERNELTICS = "info@kerneltics.com"
-    GDG_QASSIM = "gdg.qu1@gmail.com"
-
-
 class EmailLogsEmailType(str, enum.Enum):
     EVENT_CERTIFICATE = "event-certificate"
     MANUAL_CERTIFICATE = "manual-certificate"
@@ -495,9 +490,7 @@ class EmailLogs(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     member_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
-    from_address: Mapped[EmailLogsFromAddress] = mapped_column(
-        Enum(EmailLogsFromAddress, values_callable=lambda cls: [member.value for member in cls]), nullable=False
-    )
+    from_address: Mapped[str] = mapped_column(String(255), nullable=False)
     sent_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
