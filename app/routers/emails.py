@@ -171,6 +171,21 @@ class CustomEmailTestRequest(BaseModel):
     language: CertificateLanguage = CertificateLanguage.ARABIC
 
 
+class DirectEmailRequest(BaseModel):
+    subject: str
+    html_content: str
+    member_id: int | None = None
+    email: EmailStr | None = None
+    name: str | None = None
+    attachments: list[CustomEmailAttachment] = []
+
+    @model_validator(mode="after")
+    def validate_recipient(self) -> "DirectEmailRequest":
+        if self.member_id is None and self.email is None:
+            raise ValueError("Provide either 'member_id' or 'email'")
+        return self
+
+
 class BlastAttachment(BaseModel):
     url: str
     filename: str
@@ -334,6 +349,31 @@ async def call_custom_email_api(
             raise BadGateway(detail=f"Custom email API returned error: {e.response.status_code}")
         except httpx.RequestError:
             raise ServiceUnavailable(detail="Failed to connect to custom email API")
+
+
+async def call_direct_email_api(
+    recipient_email: str, subject: str, html_content: str, attachments: list[CustomEmailAttachment]
+) -> dict:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            response = await client.post(
+                f"{config.CERTIFICATE_API_URL}/emails/direct",
+                json={
+                    "recipient_email": recipient_email,
+                    "subject": subject,
+                    "html_content": html_content,
+                    "attachments": [a.model_dump(mode="json") for a in attachments],
+                },
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.TimeoutException:
+            raise GatewayTimeout(detail="Direct email API request timed out")
+        except httpx.HTTPStatusError as e:
+            raise BadGateway(detail=f"Direct email API returned error: {e.response.status_code}")
+        except httpx.RequestError:
+            raise ServiceUnavailable(detail="Failed to connect to direct email API")
 
 
 def _personalize(text: str, name: str, event_name: str) -> str:
@@ -632,6 +672,61 @@ async def send_custom_email_test(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An error occurred while sending test custom emails",
+            )
+
+
+@router.post("/direct", status_code=status.HTTP_200_OK)
+async def send_direct_email(
+    request: DirectEmailRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+):
+    with LogFile("send direct email"), SessionLocal() as session:
+        try:
+            write_log_title("Sending direct email")
+            requesting_member = resolve_member(session, credentials)
+
+            member_id: int | None = None
+            if request.member_id is not None:
+                member = members_queries.get_member_by_id(session, request.member_id)
+                recipient_email = member.email
+                recipient_name = member.name
+                member_id = request.member_id
+            else:
+                assert request.email is not None
+                recipient_email = request.email
+                recipient_name = request.name
+
+            write_log(f"Sending direct email to [{recipient_name or recipient_email}] at [{recipient_email}]")
+            await call_direct_email_api(recipient_email, request.subject, request.html_content, request.attachments)
+            write_log("Direct email API responded with 200 OK")
+
+            email_queries.create_email_log(
+                session,
+                sent_by=requesting_member.id,
+                from_address=config.SES_FROM_ADDRESS,
+                email_type=EmailLogsEmailType.DIRECT,
+                member_id=member_id,
+                recipient_count=1,
+                data={
+                    "subject": request.subject,
+                    "html_content": request.html_content,
+                    "recipient": {"name": recipient_name, "email": recipient_email},
+                    "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
+                },
+            )
+            session.commit()
+
+            return {"status": "sent", "email": recipient_email}
+
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            write_log_exception(e)
+            write_log_traceback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while sending the direct email",
             )
 
 

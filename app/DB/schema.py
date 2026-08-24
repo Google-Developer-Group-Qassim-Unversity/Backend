@@ -137,6 +137,7 @@ class EmailLogsEmailType(str, enum.Enum):
     EVENT_ANNOUNCEMENT = "event_announcement"
     ACCEPTANCE = "acceptance"
     BLAST = "blast"
+    DIRECT = "direct"
 
 
 class OpenEventsStatus(str, enum.Enum):
