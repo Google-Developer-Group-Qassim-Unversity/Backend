@@ -12,7 +12,7 @@ from enum import Enum
 from urllib.parse import quote
 from app.DB import members as members_queries
 import app.DB.submissions as submissions_queries
-from app.DB.schema import EmailLogsEmailType, Events, MembersGender
+from app.DB.schema import EmailLogsEmailType, EmailLogsFromAddress, EmailProvider, Events, MembersGender
 from pydantic import BaseModel, EmailStr, field_validator, model_validator
 from app.config import config
 from app.routers.logging import (
@@ -87,6 +87,8 @@ class CertificateRequest(BaseModel):
     event: SimpleEvent
     member: SimpleMember
     language: CertificateLanguage
+    provider: EmailProvider = EmailProvider.GOOGLE
+    from_address: EmailLogsFromAddress | None = None
 
 
 class CertificateEventEmailLog(BaseModel):
@@ -141,6 +143,7 @@ class ManualCertificateRequest(BaseModel):
     event_id: int | None = None
     members: list[ManualCertificateMember]
     language: CertificateLanguage
+    provider: EmailProvider = EmailProvider.GOOGLE
 
     @model_validator(mode="after")
     def validate_event(self) -> "ManualCertificateRequest":
@@ -178,6 +181,7 @@ class DirectEmailRequest(BaseModel):
     email: EmailStr | None = None
     name: str | None = None
     attachments: list[CustomEmailAttachment] = []
+    provider: EmailProvider = EmailProvider.GOOGLE
 
     @model_validator(mode="after")
     def validate_recipient(self) -> "DirectEmailRequest":
@@ -212,6 +216,7 @@ class BlastSendRequest(BaseModel):
     order_by: Literal["activity", "alphabetical"]
     guaranteed_recipients: list[BlastGuaranteedRecipient] = []
     attachments: list[BlastAttachment] = []
+    provider: EmailProvider = EmailProvider.GOOGLE
 
 
 class BlastTestRequest(BaseModel):
@@ -220,6 +225,7 @@ class BlastTestRequest(BaseModel):
     preview_text: str | None = None
     test_emails: list[EmailStr]
     attachments: list[BlastAttachment] = []
+    provider: EmailProvider = EmailProvider.GOOGLE
 
 
 class EmailTemplateIn(BaseModel):
@@ -252,12 +258,14 @@ async def read_html_body(request: Request) -> str:
     return html_content
 
 
-async def call_acceptance_api(emails: list[str], subject: str, html_content: str) -> BlaseResponse:
+async def call_acceptance_api(
+    emails: list[str], subject: str, html_content: str, from_address: EmailLogsFromAddress
+) -> BlaseResponse:
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
             response = await client.post(
                 f"{config.CERTIFICATE_API_URL}/blasts",
-                params={"emails": emails, "subject": subject},
+                params={"emails": emails, "subject": subject, "provider": "google", "from_address": from_address.value},
                 content=html_content,
                 headers={"Content-Type": "text/html; charset=utf-8"},
             )
@@ -273,18 +281,33 @@ async def call_acceptance_api(emails: list[str], subject: str, html_content: str
 
 
 async def call_blast_api(
-    emails: list[str], subject: str, html_content: str, preview_text: str | None, attachments: list[BlastAttachment]
+    emails: list[str],
+    subject: str,
+    html_content: str,
+    provider: EmailProvider,
+    from_address: EmailLogsFromAddress | None,
+    preview_text: str | None,
+    attachments: list[BlastAttachment],
 ) -> BlaseResponse:
+    # httpx serializes a None param value as an empty string rather than omitting the key,
+    # which send-certificates' `EmailLogsFromAddress | None` Query rejects as invalid (422) --
+    # so from_address/preview_text are only included when actually set.
+    params: dict[str, object] = {
+        "emails": emails,
+        "subject": subject,
+        "provider": provider.value,
+        "attachments": json.dumps([a.model_dump(mode="json") for a in attachments]),
+    }
+    if from_address is not None:
+        params["from_address"] = from_address.value
+    if preview_text is not None:
+        params["preview_text"] = preview_text
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
             response = await client.post(
                 f"{config.CERTIFICATE_API_URL}/blasts",
-                params={
-                    "emails": emails,
-                    "subject": subject,
-                    "preview_text": preview_text,
-                    "attachments": json.dumps([a.model_dump(mode="json") for a in attachments]),
-                },
+                params=params,
                 content=html_content,
                 headers={"Content-Type": "text/html; charset=utf-8"},
             )
@@ -325,6 +348,8 @@ async def call_custom_email_api(
     event: SimpleEvent,
     member: SimpleMember,
     language: CertificateLanguage,
+    provider: EmailProvider,
+    from_address: EmailLogsFromAddress | None,
 ) -> dict:
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
@@ -338,6 +363,8 @@ async def call_custom_email_api(
                     "member": member.model_dump(mode="json"),
                     "language": language.value,
                     "attachments": [a.model_dump(mode="json") for a in attachments],
+                    "provider": provider.value,
+                    "from_address": from_address.value if from_address else None,
                 },
                 headers={"Content-Type": "application/json"},
             )
@@ -352,7 +379,12 @@ async def call_custom_email_api(
 
 
 async def call_direct_email_api(
-    recipient_email: str, subject: str, html_content: str, attachments: list[CustomEmailAttachment]
+    recipient_email: str,
+    subject: str,
+    html_content: str,
+    attachments: list[CustomEmailAttachment],
+    provider: EmailProvider,
+    from_address: EmailLogsFromAddress | None,
 ) -> dict:
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
@@ -363,6 +395,8 @@ async def call_direct_email_api(
                     "subject": subject,
                     "html_content": html_content,
                     "attachments": [a.model_dump(mode="json") for a in attachments],
+                    "provider": provider.value,
+                    "from_address": from_address.value if from_address else None,
                 },
                 headers={"Content-Type": "application/json"},
             )
@@ -387,6 +421,32 @@ def format_event_date(event: Events) -> str:
     if days == 0:
         return start_effective.strftime("%Y-%m-%d")
     return f"{start_effective.strftime('%Y-%m-%d')} - {end_effective.strftime('%Y-%m-%d')}"
+
+
+def get_from_address() -> EmailLogsFromAddress:
+    """returns the address to be used based on last 24h usage of the club address."""
+    with SessionLocal() as session:
+        club_usage = email_queries.get_email_address_usage(session, 1, EmailLogsFromAddress.GDG_QASSIM.value)
+        if club_usage < config.CLUB_EMAIL_THRESHOLD:
+            return EmailLogsFromAddress.GDG_QASSIM
+        return EmailLogsFromAddress.INFO_KERNELTICS
+
+
+def get_send_capacity(from_address: EmailLogsFromAddress) -> int:
+    """returns how many more emails can be sent today via the given address, measured against its real daily
+    threshold (the same numbers shown on the usage dashboard) -- not `CLUB_EMAIL_THRESHOLD`, which is a
+    conservative early-switch buffer used only by `get_from_address` for many small reactive calls."""
+    with SessionLocal() as session:
+        usage = email_queries.get_email_address_usage(session, 1, from_address.value)
+    threshold = config.EMAIL_THRESHOLDS.get(from_address.value, config.CLUB_EMAIL_THRESHOLD)
+    return max(0, threshold - usage)
+
+
+def get_total_remaining_send_capacity() -> int:
+    """returns the combined remaining daily send capacity across both addresses. Unlike `get_from_address`
+    (which picks a single address per call, for many small independent sends), a blast can split across both
+    addresses within one send, so its ceiling is the sum of what's left on each."""
+    return sum(get_send_capacity(addr) for addr in EmailLogsFromAddress)
 
 
 # endregion
@@ -419,15 +479,20 @@ def send_certificates(
                     member = attendanceRecord.Member
                     simple_member = SimpleMember(name=member.name, email=member.email, gender=member.gender)
                     write_log(f"Sending certificate for member [{member.name}] with email [{member.email}]")
+                    from_address = get_from_address()
                     cert_request = CertificateRequest(
-                        event=simple_event, member=simple_member, language=CertificateLanguage.ARABIC
+                        event=simple_event,
+                        member=simple_member,
+                        language=CertificateLanguage.ARABIC,
+                        provider=EmailProvider.GOOGLE,
+                        from_address=from_address,
                     )
                     response_data = call_certificate_api(cert_request)
                     write_log(f"Certificate API responded with 200 OK")
                     email_queries.create_email_log(
                         session,
                         sent_by=sent_by_id,
-                        from_address=config.SES_FROM_ADDRESS,
+                        from_address=from_address.value,
                         email_type=EmailLogsEmailType.EVENT_CERTIFICATE,
                         member_id=member.id,
                         event_id=event_id,
@@ -502,6 +567,7 @@ def send_manual_certificate(
     def send_manual_certificates_job(request_data: ManualCertificateRequest, sent_by_id: int):
         with LogFile("manual certificates"), SessionLocal() as session:
             try:
+                from_address = get_from_address() if request_data.provider == EmailProvider.GOOGLE else None
                 simple_event, event_id = _resolve_event(request_data, session)
                 write_log(
                     f"Processing manual certificates for event [{simple_event.name}] with [{len(request_data.members)}] recipients"
@@ -513,14 +579,18 @@ def send_manual_certificate(
                         f"Sending certificate for member [{simple_member.name}] with email [{simple_member.email}]"
                     )
                     cert_request = CertificateRequest(
-                        event=simple_event, member=simple_member, language=request_data.language
+                        event=simple_event,
+                        member=simple_member,
+                        language=request_data.language,
+                        provider=request_data.provider,
+                        from_address=from_address,
                     )
                     call_certificate_api(cert_request)
                     write_log(f"Certificate API responded with 200 OK")
                     email_queries.create_email_log(
                         session,
                         sent_by=sent_by_id,
-                        from_address=config.SES_FROM_ADDRESS,
+                        from_address=from_address.value if from_address else config.SES_FROM_ADDRESS,
                         email_type=EmailLogsEmailType.MANUAL_CERTIFICATE,
                         member_id=member_id,
                         event_id=event_id,
@@ -566,6 +636,7 @@ def send_custom_email(
     ):
         with LogFile("custom email"), SessionLocal() as session:
             try:
+                from_address = get_from_address()
                 write_log(
                     f"Processing custom email for event [{simple_event.name}] with [{len(request_data.members)}] recipients"
                 )
@@ -583,12 +654,14 @@ def send_custom_email(
                         simple_event,
                         simple_member,
                         request_data.language,
+                        EmailProvider.GOOGLE,
+                        from_address,
                     )
                     write_log("Custom email API responded with 200 OK")
                     email_queries.create_email_log(
                         session,
                         sent_by=sent_by_id,
-                        from_address=config.SES_FROM_ADDRESS,
+                        from_address=from_address.value,
                         email_type=EmailLogsEmailType.EVENT_ANNOUNCEMENT,
                         member_id=member_id,
                         event_id=event_id,
@@ -643,6 +716,7 @@ async def send_custom_email_test(
             write_log_title(f"Sending custom email test for event [{event_id}]")
             event = events_queries.get_event_by_id(session, event_id)
             simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
+            from_address = get_from_address()
 
             emails: list[str] = []
             for member_item in request.test_recipients:
@@ -658,6 +732,8 @@ async def send_custom_email_test(
                     simple_event,
                     simple_member,
                     request.language,
+                    EmailProvider.GOOGLE,
+                    from_address,
                 )
                 emails.append(simple_member.email)
 
@@ -695,14 +771,23 @@ async def send_direct_email(
                 recipient_email = request.email
                 recipient_name = request.name
 
+            from_address = get_from_address() if request.provider == EmailProvider.GOOGLE else None
+
             write_log(f"Sending direct email to [{recipient_name or recipient_email}] at [{recipient_email}]")
-            await call_direct_email_api(recipient_email, request.subject, request.html_content, request.attachments)
+            await call_direct_email_api(
+                recipient_email,
+                request.subject,
+                request.html_content,
+                request.attachments,
+                request.provider,
+                from_address,
+            )
             write_log("Direct email API responded with 200 OK")
 
             email_queries.create_email_log(
                 session,
                 sent_by=requesting_member.id,
-                from_address=config.SES_FROM_ADDRESS,
+                from_address=from_address.value if from_address else config.SES_FROM_ADDRESS,
                 email_type=EmailLogsEmailType.DIRECT,
                 member_id=member_id,
                 recipient_count=1,
@@ -795,11 +880,14 @@ def get_certificate_event_logs(
 @router.get("/stats", status_code=status.HTTP_200_OK)
 def get_email_stats(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    address: Annotated[
+        EmailLogsFromAddress, Query(description="Email address to check usage for")
+    ] = EmailLogsFromAddress.GDG_QASSIM,
     period: Annotated[int, Query(description="Time period in days to check usage for")] = 1,
 ):
     with SessionLocal() as session:
-        usage = email_queries.get_email_address_usage(session, period, config.SES_FROM_ADDRESS)
-        return {"usage": usage}
+        usage = email_queries.get_email_address_usage(session, period, address.value)
+        return {"usage": usage, "club_threshold": config.CLUB_EMAIL_THRESHOLD}
 
 
 @router.get("/logs", status_code=status.HTTP_200_OK, response_model=list[EmailLogs])
@@ -911,8 +999,18 @@ def get_dashboard_stats(
     period: Annotated[int, Query(description="Time period in days")] = 1,
 ):
     with SessionLocal() as session:
-        usage = email_queries.get_email_address_usage(session, period, config.SES_FROM_ADDRESS)
-        addresses = {config.SES_FROM_ADDRESS: {"usage": usage}}
+        addresses = {}
+        for addr in EmailLogsFromAddress:
+            usage = email_queries.get_email_address_usage(session, period, addr.value)
+            addresses[addr.value] = {
+                "usage": usage,
+                "threshold": config.EMAIL_THRESHOLDS.get(addr.value, config.CLUB_EMAIL_THRESHOLD),
+            }
+
+        # SES is optional/admin-selected and has no daily cap of its own, so it's
+        # reported usage-only -- no "threshold" key, unlike the two Gmail addresses above.
+        ses_usage = email_queries.get_email_address_usage(session, period, config.SES_FROM_ADDRESS)
+        addresses[config.SES_FROM_ADDRESS] = {"usage": ses_usage}
 
         by_type = email_queries.get_email_usage_by_type(session, period)
         total_24h = sum(by_type.values())
@@ -1012,12 +1110,13 @@ async def send_acceptance_blasts(
             write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
             write_log_json({"subject": subject, "email_count": len(emails), "emails": emails})
 
-            response_data = await call_acceptance_api(emails, subject, html_content)
+            from_addr = get_from_address()
+            response_data = await call_acceptance_api(emails, subject, html_content, from_addr)
             write_log("Acceptance API responded successfully")
             email_queries.create_email_log(
                 session,
                 sent_by=requesting_member.id,
-                from_address=config.SES_FROM_ADDRESS,
+                from_address=from_addr.value,
                 email_type=EmailLogsEmailType.ACCEPTANCE,
                 event_id=event.id,
                 recipient_count=len(emails),
@@ -1069,7 +1168,7 @@ async def send_acceptance_test(
             write_log_json({"emails": emails})
             write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
 
-            response_data = await call_acceptance_api(emails, subject, html_content)
+            response_data = await call_acceptance_api(emails, subject, html_content, get_from_address())
             write_log("Acceptance API responded successfully")
 
             return {"sent_count": len(emails), "emails": emails}
@@ -1103,33 +1202,94 @@ async def send_blast(
             try:
                 write_log_title(f"Sending blast to [{len(recipients)}] recipients")
 
-                emails = [r["email"] for r in recipients]
-                # SES itself caps recipients per raw message and chunks accordingly (see
-                # send-certificates' SES_MAX_RECIPIENTS_PER_MESSAGE); this call is one logical
-                # blast regardless of how many SES messages it turns into under the hood.
-                await call_blast_api(
-                    emails, request.subject, request.html_content, request.preview_text, request.attachments
-                )
-                write_log(f"Blast API responded successfully for [{len(emails)}] recipients")
+                if request.provider == EmailProvider.GOOGLE:
+                    gdg_capacity = get_send_capacity(EmailLogsFromAddress.GDG_QASSIM)
+                    info_capacity = get_send_capacity(EmailLogsFromAddress.INFO_KERNELTICS)
 
-                email_queries.create_email_log(
-                    session,
-                    sent_by=sent_by_id,
-                    from_address=config.SES_FROM_ADDRESS,
-                    email_type=EmailLogsEmailType.BLAST,
-                    recipient_count=len(emails),
-                    data={
-                        "subject": request.subject,
-                        "html_content": request.html_content,
-                        "preview_text": request.preview_text,
-                        "order_by": request.order_by,
-                        "requested_count": requested_count,
-                        "guaranteed_recipients": guaranteed_snapshot,
-                        "recipients": recipients,
-                        "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
-                    },
-                )
-                session.commit()
+                    gdg_chunk = recipients[:gdg_capacity]
+                    info_chunk = recipients[gdg_capacity : gdg_capacity + info_capacity]
+                    overflow = recipients[gdg_capacity + info_capacity :]
+                    if overflow:
+                        write_log(
+                            f"[{len(overflow)}] recipients exceed today's combined capacity; "
+                            f"sending them via [{EmailLogsFromAddress.INFO_KERNELTICS.value}] anyway to honor guaranteed delivery"
+                        )
+                        info_chunk = info_chunk + overflow
+
+                    guaranteed_emails = {g["email"] for g in guaranteed_snapshot}
+
+                    for from_addr, chunk in (
+                        (EmailLogsFromAddress.GDG_QASSIM, gdg_chunk),
+                        (EmailLogsFromAddress.INFO_KERNELTICS, info_chunk),
+                    ):
+                        if not chunk:
+                            continue
+                        emails = [r["email"] for r in chunk]
+                        write_log(f"Sending [{len(emails)}] recipients via [{from_addr.value}]")
+
+                        await call_blast_api(
+                            emails,
+                            request.subject,
+                            request.html_content,
+                            EmailProvider.GOOGLE,
+                            from_addr,
+                            request.preview_text,
+                            request.attachments,
+                        )
+                        write_log(f"Blast API responded successfully for [{from_addr.value}]")
+
+                        email_queries.create_email_log(
+                            session,
+                            sent_by=sent_by_id,
+                            from_address=from_addr.value,
+                            email_type=EmailLogsEmailType.BLAST,
+                            recipient_count=len(emails),
+                            data={
+                                "subject": request.subject,
+                                "html_content": request.html_content,
+                                "preview_text": request.preview_text,
+                                "order_by": request.order_by,
+                                "requested_count": requested_count,
+                                "guaranteed_recipients": [r for r in chunk if r["email"] in guaranteed_emails],
+                                "recipients": chunk,
+                                "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
+                            },
+                        )
+                        session.commit()
+                else:
+                    emails = [r["email"] for r in recipients]
+                    # SES itself caps recipients per raw message and chunks accordingly (see
+                    # send-certificates' SES_MAX_RECIPIENTS_PER_MESSAGE); this call is one logical
+                    # blast regardless of how many SES messages it turns into under the hood.
+                    await call_blast_api(
+                        emails,
+                        request.subject,
+                        request.html_content,
+                        EmailProvider.SES,
+                        None,
+                        request.preview_text,
+                        request.attachments,
+                    )
+                    write_log(f"Blast API responded successfully for [{len(emails)}] recipients")
+
+                    email_queries.create_email_log(
+                        session,
+                        sent_by=sent_by_id,
+                        from_address=config.SES_FROM_ADDRESS,
+                        email_type=EmailLogsEmailType.BLAST,
+                        recipient_count=len(emails),
+                        data={
+                            "subject": request.subject,
+                            "html_content": request.html_content,
+                            "preview_text": request.preview_text,
+                            "order_by": request.order_by,
+                            "requested_count": requested_count,
+                            "guaranteed_recipients": guaranteed_snapshot,
+                            "recipients": recipients,
+                            "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
+                        },
+                    )
+                    session.commit()
 
             except Exception as e:
                 session.rollback()
@@ -1158,13 +1318,22 @@ async def send_blast(
 
         write_log(f"Resolved [{len(guaranteed)}] guaranteed recipients")
 
+        if request.provider == EmailProvider.GOOGLE:
+            capped_count = min(request.count, get_total_remaining_send_capacity())
+            if capped_count < request.count:
+                write_log(
+                    f"Capping requested count [{request.count}] down to [{capped_count}] based on remaining send capacity"
+                )
+        else:
+            capped_count = request.count
+
         if request.order_by == "activity":
             pool = members_queries.get_blast_recipients_by_activity(
-                session, limit=request.count, exclude_ids=list(members_by_id.keys())
+                session, limit=capped_count, exclude_ids=list(members_by_id.keys())
             )
         else:
             pool = members_queries.get_blast_recipients_alphabetical(
-                session, limit=request.count, exclude_ids=list(members_by_id.keys())
+                session, limit=capped_count, exclude_ids=list(members_by_id.keys())
             )
         write_log(f"Selected [{len(pool)}] recipients via [{request.order_by}] ordering")
 
@@ -1197,10 +1366,13 @@ async def send_blast_test(
             write_log_title("Sending blast test email")
             write_log(f"Sending test blast to [{len(request.test_emails)}] test emails")
 
+            from_addr = get_from_address() if request.provider == EmailProvider.GOOGLE else None
             await call_blast_api(
                 list(request.test_emails),
                 request.subject,
                 request.html_content,
+                request.provider,
+                from_addr,
                 request.preview_text,
                 request.attachments,
             )
@@ -1220,10 +1392,17 @@ async def send_blast_test(
 
 
 @router.get("/blast/eligible-count", status_code=status.HTTP_200_OK)
-def get_blast_eligible_count(credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
+def get_blast_eligible_count(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    provider: Annotated[
+        EmailProvider, Query(description="Sending provider to compute remaining capacity for")
+    ] = EmailProvider.GOOGLE,
+):
     with SessionLocal() as session:
         eligible_count = members_queries.get_blast_eligible_count(session)
-    return {"eligible_count": eligible_count}
+    if provider == EmailProvider.GOOGLE:
+        return {"eligible_count": eligible_count, "remaining_capacity": get_total_remaining_send_capacity()}
+    return {"eligible_count": eligible_count, "remaining_capacity": None}
 
 
 # endregion

@@ -22,6 +22,10 @@ SEMESTERS = {475: ("2026-06-28", "2026-08-20"), 472: ("2026-01-18", "2026-05-31"
 
 ATTENDANCE_EARLY_HOURS_THRESHOLD = 6
 
+CLUB_EMAIL_THRESHOLD = 500
+
+EMAIL_THRESHOLDS: dict[str, int] = {"info@kerneltics.com": 2000, "gdg.qu1@gmail.com": 500}
+
 
 class Config:
     @property
@@ -57,6 +61,14 @@ class Config:
     @property
     def SES_FROM_ADDRESS(self) -> str:
         return env_or_except("SES_FROM_ADDRESS")
+
+    @property
+    def CLUB_EMAIL_THRESHOLD(self) -> int:
+        return CLUB_EMAIL_THRESHOLD
+
+    @property
+    def EMAIL_THRESHOLDS(self) -> dict[str, int]:
+        return EMAIL_THRESHOLDS
 
     @property
     def ATTENDANCE_EARLY_HOURS_THRESHOLD(self) -> int:

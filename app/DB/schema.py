@@ -131,6 +131,16 @@ class OpenEventsLocationType(str, enum.Enum):
     HIDDEN = "hidden"
 
 
+class EmailLogsFromAddress(str, enum.Enum):
+    INFO_KERNELTICS = "info@kerneltics.com"
+    GDG_QASSIM = "gdg.qu1@gmail.com"
+
+
+class EmailProvider(str, enum.Enum):
+    GOOGLE = "google"
+    SES = "ses"
+
+
 class EmailLogsEmailType(str, enum.Enum):
     EVENT_CERTIFICATE = "event-certificate"
     MANUAL_CERTIFICATE = "manual-certificate"
@@ -342,9 +352,7 @@ class MemberProfiles(Base):
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True, autoincrement=True)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, unique=True)
     uuid: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
-    custom_name: Mapped[Optional[str]] = mapped_column(
-        VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
-    )
+    custom_name: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     theme_id: Mapped[str] = mapped_column(String(50), nullable=False, server_default=text("'gdg-blue'"))
     name_language: Mapped[MemberProfilesNameLanguage] = mapped_column(
         Enum(MemberProfilesNameLanguage, values_callable=lambda cls: [member.value for member in cls]),
@@ -353,12 +361,8 @@ class MemberProfiles(Base):
     )
     user_status: Mapped[Optional[str]] = mapped_column(String(50))
     education_level: Mapped[Optional[str]] = mapped_column(String(50))
-    institution: Mapped[Optional[str]] = mapped_column(
-        VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
-    )
-    major: Mapped[Optional[str]] = mapped_column(
-        VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
-    )
+    institution: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    major: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     study_year_or_level: Mapped[Optional[str]] = mapped_column(
         VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
     )
