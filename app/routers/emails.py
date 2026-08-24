@@ -258,11 +258,7 @@ async def call_acceptance_api(emails: list[str], subject: str, html_content: str
 
 
 async def call_blast_api(
-    emails: list[str],
-    subject: str,
-    html_content: str,
-    preview_text: str | None,
-    attachments: list[BlastAttachment],
+    emails: list[str], subject: str, html_content: str, preview_text: str | None, attachments: list[BlastAttachment]
 ) -> BlaseResponse:
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
@@ -384,9 +380,7 @@ def send_certificates(
                     simple_member = SimpleMember(name=member.name, email=member.email, gender=member.gender)
                     write_log(f"Sending certificate for member [{member.name}] with email [{member.email}]")
                     cert_request = CertificateRequest(
-                        event=simple_event,
-                        member=simple_member,
-                        language=CertificateLanguage.ARABIC,
+                        event=simple_event, member=simple_member, language=CertificateLanguage.ARABIC
                     )
                     response_data = call_certificate_api(cert_request)
                     write_log(f"Certificate API responded with 200 OK")
@@ -479,9 +473,7 @@ def send_manual_certificate(
                         f"Sending certificate for member [{simple_member.name}] with email [{simple_member.email}]"
                     )
                     cert_request = CertificateRequest(
-                        event=simple_event,
-                        member=simple_member,
-                        language=request_data.language,
+                        event=simple_event, member=simple_member, language=request_data.language
                     )
                     call_certificate_api(cert_request)
                     write_log(f"Certificate API responded with 200 OK")
@@ -1021,11 +1013,7 @@ async def send_blast(
                 # send-certificates' SES_MAX_RECIPIENTS_PER_MESSAGE); this call is one logical
                 # blast regardless of how many SES messages it turns into under the hood.
                 await call_blast_api(
-                    emails,
-                    request.subject,
-                    request.html_content,
-                    request.preview_text,
-                    request.attachments,
+                    emails, request.subject, request.html_content, request.preview_text, request.attachments
                 )
                 write_log(f"Blast API responded successfully for [{len(emails)}] recipients")
 
