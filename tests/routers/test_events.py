@@ -246,8 +246,14 @@ def test_get_submissions_empty(admin_client: TestClient):
     assert submissions_response.json() == []
 
 
-def test_get_events_invalid_semester(admin_client: TestClient):
+def test_get_events_unknown_semester(admin_client: TestClient):
     response = admin_client.get("/events?semester=999")
+    assert_not_found(response)
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_get_events_non_numeric_semester(admin_client: TestClient):
+    response = admin_client.get("/events?semester=fall")
     assert_bad_request(response)
     assert "not found" in response.json()["detail"].lower()
 

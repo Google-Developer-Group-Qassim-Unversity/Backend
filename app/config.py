@@ -15,10 +15,7 @@ if os.getenv("ENV") != "testing":
 LOG_DIR_DEV = "logs"
 LOG_DIR_PROD = str(Path.home() / "GDG-Logs")
 
-# Added the new summer semester
-CURRENT_SEMESTER = 475
-PUBLIC_SEMESTERS = [475, 472, 471]
-SEMESTERS = {475: ("2026-06-28", "2026-08-20"), 472: ("2026-01-18", "2026-05-31"), 471: ("2025-08-24", "2026-01-17")}
+# Semesters are no longer configured here - they live in the `semesters` table, see app/DB/semesters.py
 
 ATTENDANCE_EARLY_HOURS_THRESHOLD = 6
 
@@ -73,23 +70,6 @@ class Config:
     @property
     def ATTENDANCE_EARLY_HOURS_THRESHOLD(self) -> int:
         return ATTENDANCE_EARLY_HOURS_THRESHOLD
-
-    @property
-    def CURRENT_SEMESTER(self) -> int:
-        return CURRENT_SEMESTER
-
-    @property
-    def PUBLIC_SEMESTERS(self) -> list[int]:
-        return PUBLIC_SEMESTERS
-
-    @property
-    def SEMESTERS(self) -> dict[int, tuple[str, str]]:
-        return SEMESTERS
-
-    def get_semester_dates(self, semester_id: int) -> tuple[str, str]:
-        if semester_id not in SEMESTERS:
-            raise ValueError(f"Semester {semester_id} not found")
-        return SEMESTERS[semester_id]
 
     @property
     def GOOGLE_CLIENT_ID(self) -> str:

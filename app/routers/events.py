@@ -24,7 +24,6 @@ from app.routers.models import (
     UpdateEventModel,
     UpdateEventStatus_model,
 )
-from app.config import config
 from app.routers.logging import (
     LogFile,
     write_log_exception,
@@ -35,6 +34,7 @@ from app.routers.logging import (
 )
 from app.helpers import admin_guard, authenticated_guard, resolve_member
 from app.leaderboard_cache import reset_leaderboard_cache
+from app.semesters import resolve_semester, semester_date_bounds
 from time import perf_counter
 from typing import Annotated
 from app.exceptions import NotFound
@@ -52,9 +52,11 @@ def get_all_events(semester: Annotated[int | str, Query()] = "all"):
             events = events_queries.get_events(session)
         else:
             try:
-                start_date, end_date = config.get_semester_dates(int(semester))
-            except (ValueError, KeyError):
+                semester_id = int(semester)
+            except ValueError:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Semester '{semester}' not found")
+            resolved = resolve_semester(session, semester_id)
+            start_date, end_date = semester_date_bounds(resolved)
             events = events_queries.get_events_by_semester(session, start_date, end_date)
         end = perf_counter()
         write_log(

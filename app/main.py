@@ -18,15 +18,14 @@ from app.routers import (
     submissions,
     submissions_manual,
     points,
+    semesters,
     health,
     cache,
     wallet,
 )
 
 sentry_sdk.init(
-    dsn=config.SENTRY_DSN,
-    environment="development" if config.is_dev else "production",
-    traces_sample_rate=0.2,
+    dsn=config.SENTRY_DSN, environment="development" if config.is_dev else "production", traces_sample_rate=0.2
 )
 
 app = FastAPI()
@@ -59,6 +58,7 @@ app.include_router(health.router, prefix="/health", tags=["health"])
 app.include_router(members.router, prefix="/members", tags=["members"])
 app.include_router(events.router, prefix="/events", tags=["events"])
 app.include_router(points.router, prefix="/points", tags=["Points"])
+app.include_router(semesters.router, prefix="/semesters", tags=["Semesters"])
 app.include_router(attendance.router, prefix="/attendance", tags=["Attendance"])
 app.include_router(emails.router, prefix="/emails", tags=["emails"])
 app.include_router(departments.router, prefix="/departments", tags=["departments"])
