@@ -19,7 +19,11 @@ if database_url := os.getenv("DATABASE_URL"):
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which switches off every logger
+    # that already exists and is not named in alembic.ini. Harmless when alembic
+    # runs as its own process, but the test suite runs migrations in-process and
+    # it silently disabled the whole app's logging.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

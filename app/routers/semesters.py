@@ -1,3 +1,5 @@
+import logging
+
 """Admin CRUD for semesters.
 
 Semesters used to be a hardcoded dict in ``app/config.py``; they now live in
@@ -15,11 +17,13 @@ from app.DB import semesters as semesters_queries
 from app.exceptions import SemesterNotFound
 from app.helpers import admin_guard, super_admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
-from app.routers.logging import LogFile, write_log, write_log_exception, write_log_title
 from app.routers.models import BaseClassModel
 from app.dependencies import DB
 
 from app.routers.responses import DetailResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/semesters", tags=["Semesters"])
@@ -67,9 +71,9 @@ def _reset_cache_best_effort() -> None:
     """The leaderboard app caches semester-scoped data; nudge it after a change."""
     try:
         reset_leaderboard_cache()
-        write_log("Leaderboard cache reset triggered after semester change")
+        logger.info("Leaderboard cache reset triggered after semester change")
     except Exception as cache_err:
-        write_log_exception(cache_err)
+        logger.error(cache_err)
 
 
 # ============ routes ============
@@ -87,25 +91,24 @@ def get_all_semesters(session: DB):
 )
 def create_semester(payload: CreateSemester_model, session: DB):
     _validate_dates(payload.start_date, payload.end_date)
-    with LogFile("create semester"):
-        write_log_title(f"Creating semester [{payload.id}]")
-        if semesters_queries.get_semester_by_id(session, payload.id):
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Semester {payload.id} already exists")
+    logger.info(f"Creating semester [{payload.id}]")
+    if semesters_queries.get_semester_by_id(session, payload.id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Semester {payload.id} already exists")
 
-        semester = semesters_queries.create_semester(
-            session,
-            semester_id=payload.id,
-            name=payload.name,
-            start_date=payload.start_date,
-            end_date=payload.end_date,
-            is_public=payload.is_public,
-            is_current=payload.is_current,
-        )
-        session.commit()
-        session.refresh(semester)
-        write_log(f"Created semester [{semester.id}] {semester.start_date} → {semester.end_date}")
-        result = Semester_model.model_validate(semester)
-        _reset_cache_best_effort()
+    semester = semesters_queries.create_semester(
+        session,
+        semester_id=payload.id,
+        name=payload.name,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        is_public=payload.is_public,
+        is_current=payload.is_current,
+    )
+    session.commit()
+    session.refresh(semester)
+    logger.info(f"Created semester [{semester.id}] {semester.start_date} → {semester.end_date}")
+    result = Semester_model.model_validate(semester)
+    _reset_cache_best_effort()
 
     return result
 
@@ -118,25 +121,24 @@ def create_semester(payload: CreateSemester_model, session: DB):
 )
 def update_semester(semester_id: int, payload: UpdateSemester_model, session: DB):
     _validate_dates(payload.start_date, payload.end_date)
-    with LogFile("update semester"):
-        write_log_title(f"Updating semester [{semester_id}]")
-        semester = semesters_queries.get_semester_by_id(session, semester_id)
-        if semester is None:
-            raise SemesterNotFound(semester_id)
+    logger.info(f"Updating semester [{semester_id}]")
+    semester = semesters_queries.get_semester_by_id(session, semester_id)
+    if semester is None:
+        raise SemesterNotFound(semester_id)
 
-        semesters_queries.update_semester(
-            session,
-            semester,
-            name=payload.name,
-            start_date=payload.start_date,
-            end_date=payload.end_date,
-            is_public=payload.is_public,
-        )
-        session.commit()
-        session.refresh(semester)
-        write_log(f"Updated semester [{semester_id}] {semester.start_date} → {semester.end_date}")
-        result = Semester_model.model_validate(semester)
-        _reset_cache_best_effort()
+    semesters_queries.update_semester(
+        session,
+        semester,
+        name=payload.name,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        is_public=payload.is_public,
+    )
+    session.commit()
+    session.refresh(semester)
+    logger.info(f"Updated semester [{semester_id}] {semester.start_date} → {semester.end_date}")
+    result = Semester_model.model_validate(semester)
+    _reset_cache_best_effort()
 
     return result
 
@@ -149,17 +151,16 @@ def update_semester(semester_id: int, payload: UpdateSemester_model, session: DB
 )
 def set_current_semester(semester_id: int, session: DB):
     """Make this the default semester for requests that don't name one."""
-    with LogFile("set current semester"):
-        write_log_title(f"Setting semester [{semester_id}] as current")
-        semester = semesters_queries.get_semester_by_id(session, semester_id)
-        if semester is None:
-            raise SemesterNotFound(semester_id)
+    logger.info(f"Setting semester [{semester_id}] as current")
+    semester = semesters_queries.get_semester_by_id(session, semester_id)
+    if semester is None:
+        raise SemesterNotFound(semester_id)
 
-        semesters_queries.set_current_semester(session, semester_id)
-        session.commit()
-        session.refresh(semester)
-        result = Semester_model.model_validate(semester)
-        _reset_cache_best_effort()
+    semesters_queries.set_current_semester(session, semester_id)
+    session.commit()
+    session.refresh(semester)
+    result = Semester_model.model_validate(semester)
+    _reset_cache_best_effort()
 
     return result
 
@@ -171,20 +172,19 @@ def set_current_semester(semester_id: int, session: DB):
     response_model=DetailResponse,
 )
 def delete_semester(semester_id: int, session: DB):
-    with LogFile("delete semester"):
-        write_log_title(f"Deleting semester [{semester_id}]")
-        semester = semesters_queries.get_semester_by_id(session, semester_id)
-        if semester is None:
-            raise SemesterNotFound(semester_id)
-        if semester.is_current:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot delete the current semester. Set another semester as current first.",
-            )
+    logger.info(f"Deleting semester [{semester_id}]")
+    semester = semesters_queries.get_semester_by_id(session, semester_id)
+    if semester is None:
+        raise SemesterNotFound(semester_id)
+    if semester.is_current:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete the current semester. Set another semester as current first.",
+        )
 
-        semesters_queries.delete_semester(session, semester)
-        session.commit()
-        write_log(f"Deleted semester [{semester_id}]")
-        _reset_cache_best_effort()
+    semesters_queries.delete_semester(session, semester)
+    session.commit()
+    logger.info(f"Deleted semester [{semester_id}]")
+    _reset_cache_best_effort()
 
     return {"detail": "Semester deleted successfully"}

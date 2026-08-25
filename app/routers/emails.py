@@ -1,3 +1,5 @@
+import logging
+
 # region imports
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
@@ -15,14 +17,6 @@ import app.DB.submissions as submissions_queries
 from app.DB.schema import EmailLogsEmailType, EmailLogsFromAddress, EmailProvider, Events, MembersGender
 from pydantic import BaseModel, EmailStr, field_validator, model_validator
 from app.config import config
-from app.routers.logging import (
-    LogFile,
-    write_log,
-    write_log_exception,
-    write_log_json,
-    write_log_traceback,
-    write_log_title,
-)
 from app.helpers import CurrentMember, admin_guard, get_effective_date
 from app.routers.responses import MessageResponse
 from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
@@ -78,6 +72,9 @@ class BlastEligibleCountResponse(BaseModel):
 
 
 # endregion
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/emails", tags=["emails"])
@@ -501,23 +498,25 @@ def get_total_remaining_send_capacity() -> int:
 def send_certificates(event_id: int, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB):
     # Background task definition
     def send_certificates_by_event_id(event: Events, attendance: list, date_str: str, sent_by_id: int):
-        with LogFile("send certificates"), db_session() as session:
+        with db_session() as session:
             try:
                 event = events_queries.get_event_by_id(session, event_id)
                 simple_event = SimpleEvent(name=event.name, date=date_str, official=bool(event.is_official))
-                write_log(f"Processing certificate sending for event [{event.name}] with [{len(attendance)}] attendees")
+                logger.info(
+                    f"Processing certificate sending for event [{event.name}] with [{len(attendance)}] attendees"
+                )
 
                 already_sent = email_queries.get_members_who_received_certificate(session, event_id)
                 attendance = [
                     record for record in attendance if record.Member.id not in {member["id"] for member in already_sent}
                 ]
-                write_log(
+                logger.info(
                     f"Filtered out [{len(already_sent)}] attendees who already received certificates, remaining attendees to process: [{len(attendance)}]"
                 )
                 for attendanceRecord in attendance:
                     member = attendanceRecord.Member
                     simple_member = SimpleMember(name=member.name, email=member.email, gender=member.gender)
-                    write_log(f"Sending certificate for member [{member.name}] with email [{member.email}]")
+                    logger.info(f"Sending certificate for member [{member.name}] with email [{member.email}]")
                     from_address = get_from_address()
                     cert_request = CertificateRequest(
                         event=simple_event,
@@ -527,7 +526,7 @@ def send_certificates(event_id: int, requesting_member: CurrentMember, backgroun
                         from_address=from_address,
                     )
                     response_data = call_certificate_api(cert_request)
-                    write_log(f"Certificate API responded with 200 OK")
+                    logger.info(f"Certificate API responded with 200 OK")
                     email_queries.create_email_log(
                         session,
                         sent_by=sent_by_id,
@@ -546,28 +545,24 @@ def send_certificates(event_id: int, requesting_member: CurrentMember, backgroun
             # TODO - These exception don't make sense this is a background task
             # we generally need better job management (job start message, job failed message, job finished message) in the email
             except Exception as e:
-                write_log_exception(e)
-                write_log_traceback()
+                logger.exception(e)
                 raise
 
     # Actual endpoint logic
-    with LogFile("send certificates [JOB]"):
-        write_log_title(f"Sending certificates for event [{event_id}]")
+    logger.info(f"Sending certificates for event [{event_id}]")
 
-        event = events_queries.get_event_by_id(session, event_id)
-        write_log(f"Found event: [{event.name}]")
+    event = events_queries.get_event_by_id(session, event_id)
+    logger.info(f"Found event: [{event.name}]")
 
-        attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
-        write_log(f"Found [{len(attendance)}] attendees who attended all days for event [{event.name}]")
+    attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
+    logger.info(f"Found [{len(attendance)}] attendees who attended all days for event [{event.name}]")
 
-        date_str = format_event_date(event)
-        write_log(f"Event date formatted as: [{date_str}]")
+    date_str = format_event_date(event)
+    logger.info(f"Event date formatted as: [{date_str}]")
 
-        background_tasks.add_task(send_certificates_by_event_id, event, attendance, date_str, requesting_member.id)
+    background_tasks.add_task(send_certificates_by_event_id, event, attendance, date_str, requesting_member.id)
 
-        return {
-            "message": f"Certificate generation initiated for event [{event.name}] with [{len(attendance)}] attendees."
-        }
+    return {"message": f"Certificate generation initiated for event [{event.name}] with [{len(attendance)}] attendees."}
 
 
 def _resolve_event(request: ManualCertificateRequest, session) -> tuple[SimpleEvent, int | None]:
@@ -599,17 +594,17 @@ def send_manual_certificate(
     request: ManualCertificateRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
 ):
     def send_manual_certificates_job(request_data: ManualCertificateRequest, sent_by_id: int):
-        with LogFile("manual certificates"), db_session() as session:
+        with db_session() as session:
             try:
                 from_address = get_from_address() if request_data.provider == EmailProvider.GOOGLE else None
                 simple_event, event_id = _resolve_event(request_data, session)
-                write_log(
+                logger.info(
                     f"Processing manual certificates for event [{simple_event.name}] with [{len(request_data.members)}] recipients"
                 )
 
                 for member_item in request_data.members:
                     simple_member, member_id = _resolve_member(member_item, session)
-                    write_log(
+                    logger.info(
                         f"Sending certificate for member [{simple_member.name}] with email [{simple_member.email}]"
                     )
                     cert_request = CertificateRequest(
@@ -620,7 +615,7 @@ def send_manual_certificate(
                         from_address=from_address,
                     )
                     call_certificate_api(cert_request)
-                    write_log(f"Certificate API responded with 200 OK")
+                    logger.info(f"Certificate API responded with 200 OK")
                     email_queries.create_email_log(
                         session,
                         sent_by=sent_by_id,
@@ -637,12 +632,10 @@ def send_manual_certificate(
                     session.commit()
 
             except Exception as e:
-                write_log_exception(e)
-                write_log_traceback()
+                logger.exception(e)
                 raise
 
-    with LogFile("manual certificates [JOB]"):
-        background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id)
+    background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id)
 
     return {
         "message": f"Manual certificate generation initiated for [{len(request.members)}] recipient(s).",
@@ -666,16 +659,16 @@ def send_custom_email(
     async def send_custom_email_job(
         request_data: CustomEmailRequest, simple_event: SimpleEvent, event_id: int, sent_by_id: int
     ):
-        with LogFile("custom email"), db_session() as session:
+        with db_session() as session:
             try:
                 from_address = get_from_address()
-                write_log(
+                logger.info(
                     f"Processing custom email for event [{simple_event.name}] with [{len(request_data.members)}] recipients"
                 )
 
                 for member_item in request_data.members:
                     simple_member, member_id = _resolve_member(member_item, session)
-                    write_log(f"Sending custom email to [{simple_member.name}] at [{simple_member.email}]")
+                    logger.info(f"Sending custom email to [{simple_member.name}] at [{simple_member.email}]")
                     subject = _personalize(request_data.subject, simple_member.name, simple_event.name)
                     html_content = _personalize(request_data.html_content, simple_member.name, simple_event.name)
                     await call_custom_email_api(
@@ -689,7 +682,7 @@ def send_custom_email(
                         EmailProvider.GOOGLE,
                         from_address,
                     )
-                    write_log("Custom email API responded with 200 OK")
+                    logger.info("Custom email API responded with 200 OK")
                     email_queries.create_email_log(
                         session,
                         sent_by=sent_by_id,
@@ -712,16 +705,14 @@ def send_custom_email(
                     session.commit()
 
             except Exception as e:
-                write_log_exception(e)
-                write_log_traceback()
+                logger.exception(e)
                 raise
 
-    with LogFile("custom email [JOB]"):
-        event = events_queries.get_event_by_id(session, event_id)
-        simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
-        background_tasks.add_task(
-            send_custom_email_job, request.model_copy(deep=True), simple_event, event_id, requesting_member.id
-        )
+    event = events_queries.get_event_by_id(session, event_id)
+    simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
+    background_tasks.add_task(
+        send_custom_email_job, request.model_copy(deep=True), simple_event, event_id, requesting_member.id
+    )
 
     return {
         "message": f"Custom email sending initiated for [{len(request.members)}] recipient(s).",
@@ -736,33 +727,32 @@ def send_custom_email(
     response_model=EmailTestResponse,
 )
 async def send_custom_email_test(event_id: int, request: CustomEmailTestRequest, session: DB):
-    with LogFile("send custom email test"):
-        write_log_title(f"Sending custom email test for event [{event_id}]")
-        event = events_queries.get_event_by_id(session, event_id)
-        simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
-        from_address = get_from_address()
+    logger.info(f"Sending custom email test for event [{event_id}]")
+    event = events_queries.get_event_by_id(session, event_id)
+    simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
+    from_address = get_from_address()
 
-        emails: list[str] = []
-        for member_item in request.test_recipients:
-            simple_member, _ = _resolve_member(member_item, session)
-            subject = _personalize(request.subject, simple_member.name, simple_event.name)
-            html_content = _personalize(request.html_content, simple_member.name, simple_event.name)
-            write_log(f"Sending test custom email to [{simple_member.name}] at [{simple_member.email}]")
-            await call_custom_email_api(
-                simple_member.email,
-                subject,
-                html_content,
-                request.attachments,
-                simple_event,
-                simple_member,
-                request.language,
-                EmailProvider.GOOGLE,
-                from_address,
-            )
-            emails.append(simple_member.email)
+    emails: list[str] = []
+    for member_item in request.test_recipients:
+        simple_member, _ = _resolve_member(member_item, session)
+        subject = _personalize(request.subject, simple_member.name, simple_event.name)
+        html_content = _personalize(request.html_content, simple_member.name, simple_event.name)
+        logger.info(f"Sending test custom email to [{simple_member.name}] at [{simple_member.email}]")
+        await call_custom_email_api(
+            simple_member.email,
+            subject,
+            html_content,
+            request.attachments,
+            simple_event,
+            simple_member,
+            request.language,
+            EmailProvider.GOOGLE,
+            from_address,
+        )
+        emails.append(simple_member.email)
 
-        write_log("Custom email API responded successfully for all test recipients")
-        return {"sent_count": len(emails), "emails": emails}
+    logger.info("Custom email API responded successfully for all test recipients")
+    return {"sent_count": len(emails), "emails": emails}
 
 
 @router.post(
@@ -774,11 +764,11 @@ async def send_direct_email(
     async def send_direct_email_job(
         recipients: list[dict], sent_by_id: int, provider: EmailProvider, from_address: EmailLogsFromAddress | None
     ):
-        with LogFile("send direct email [JOB]"), db_session() as session:
+        with db_session() as session:
             try:
-                write_log_title(f"Sending direct email to [{len(recipients)}] recipients")
+                logger.info(f"Sending direct email to [{len(recipients)}] recipients")
                 for recipient in recipients:
-                    write_log(
+                    logger.info(
                         f"Sending direct email to [{recipient['name'] or recipient['email']}] at [{recipient['email']}]"
                     )
                     await call_direct_email_api(
@@ -789,7 +779,7 @@ async def send_direct_email(
                         provider,
                         from_address,
                     )
-                    write_log("Direct email API responded with 200 OK")
+                    logger.info("Direct email API responded with 200 OK")
 
                     email_queries.create_email_log(
                         session,
@@ -812,36 +802,32 @@ async def send_direct_email(
                 raise
             except Exception as e:
                 session.rollback()
-                write_log_exception(e)
-                write_log_traceback()
+                logger.exception(e)
 
-    with LogFile("send direct email [SETUP]"):
-        write_log_title("Preparing direct email")
+    logger.info("Preparing direct email")
 
-        recipient_member_ids = [r.member_id for r in request.recipients if r.member_id is not None]
-        resolved_members = (
-            members_queries.get_members_by_id(session, recipient_member_ids) if recipient_member_ids else []
-        )
-        members_by_id = {m.id: m for m in resolved_members}
+    recipient_member_ids = [r.member_id for r in request.recipients if r.member_id is not None]
+    resolved_members = members_queries.get_members_by_id(session, recipient_member_ids) if recipient_member_ids else []
+    members_by_id = {m.id: m for m in resolved_members}
 
-        recipients: dict[str, dict] = {}
-        for r in request.recipients:
-            if r.member_id is not None:
-                member = members_by_id.get(r.member_id)
-                if member is None or not member.email:
-                    continue
-                recipients[member.email.lower()] = {"name": member.name, "email": member.email, "member_id": member.id}
-            elif r.email is not None:
-                recipients[r.email.lower()] = {"name": r.name, "email": r.email, "member_id": None}
+    recipients: dict[str, dict] = {}
+    for r in request.recipients:
+        if r.member_id is not None:
+            member = members_by_id.get(r.member_id)
+            if member is None or not member.email:
+                continue
+            recipients[member.email.lower()] = {"name": member.name, "email": member.email, "member_id": member.id}
+        elif r.email is not None:
+            recipients[r.email.lower()] = {"name": r.name, "email": r.email, "member_id": None}
 
-        recipient_list = list(recipients.values())
-        write_log(f"Resolved [{len(recipient_list)}] recipients")
+    recipient_list = list(recipients.values())
+    logger.info(f"Resolved [{len(recipient_list)}] recipients")
 
-        from_address = get_from_address() if request.provider == EmailProvider.GOOGLE else None
+    from_address = get_from_address() if request.provider == EmailProvider.GOOGLE else None
 
-        background_tasks.add_task(
-            send_direct_email_job, recipient_list, requesting_member.id, request.provider, from_address
-        )
+    background_tasks.add_task(
+        send_direct_email_job, recipient_list, requesting_member.id, request.provider, from_address
+    )
 
     return {
         "message": f"Direct email queued for [{len(recipient_list)}] recipient(s).",
@@ -1143,45 +1129,44 @@ async def send_acceptance_blasts(
     requesting_member: CurrentMember,
     session: DB,
 ):
-    with LogFile("send acceptance blasts"):
-        write_log_title(f"Sending acceptance blasts for event [{event_id}]")
+    logger.info(f"Sending acceptance blasts for event [{event_id}]")
 
-        event = events_queries.get_event_by_id(session, event_id)
+    event = events_queries.get_event_by_id(session, event_id)
 
-        html_content = await read_html_body(request)
-        write_log(f"Received HTML body with {len(html_content)} characters")
+    html_content = await read_html_body(request)
+    logger.info(f"Received HTML body with {len(html_content)} characters")
 
-        submissions = submissions_queries.get_accepted_not_invited_by_event(session, event.id)
-        emails = [sub.email for sub in submissions if sub.email]
-        write_log(f"Found [{len(submissions)}] submissions, [{len(emails)}] emails")
+    submissions = submissions_queries.get_accepted_not_invited_by_event(session, event.id)
+    emails = [sub.email for sub in submissions if sub.email]
+    logger.info(f"Found [{len(submissions)}] submissions, [{len(emails)}] emails")
 
-        write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
-        write_log_json({"subject": subject, "email_count": len(emails), "emails": emails})
+    logger.info(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
+    logger.debug("request body: %s", {"subject": subject, "email_count": len(emails), "emails": emails})
 
-        from_addr = get_from_address()
-        response_data = await call_acceptance_api(emails, subject, html_content, from_addr)
-        write_log("Acceptance API responded successfully")
-        email_queries.create_email_log(
-            session,
-            sent_by=requesting_member.id,
-            from_address=from_addr.value,
-            email_type=EmailLogsEmailType.ACCEPTANCE,
-            event_id=event.id,
-            recipient_count=len(emails),
-            data={
-                "subject": subject,
-                "html_content": html_content,
-                "event": {"name": event.name, "date": format_event_date(event), "official": bool(event.is_official)},
-                "member": [{"name": sub.name, "email": sub.email} for sub in submissions],
-            },
-        )
+    from_addr = get_from_address()
+    response_data = await call_acceptance_api(emails, subject, html_content, from_addr)
+    logger.info("Acceptance API responded successfully")
+    email_queries.create_email_log(
+        session,
+        sent_by=requesting_member.id,
+        from_address=from_addr.value,
+        email_type=EmailLogsEmailType.ACCEPTANCE,
+        event_id=event.id,
+        recipient_count=len(emails),
+        data={
+            "subject": subject,
+            "html_content": html_content,
+            "event": {"name": event.name, "date": format_event_date(event), "official": bool(event.is_official)},
+            "member": [{"name": sub.name, "email": sub.email} for sub in submissions],
+        },
+    )
 
-        submission_ids = [sub.submission_id for sub in submissions]
-        submissions_queries.mark_submissions_as_invited(session, submission_ids)
-        session.commit()
-        write_log(f"Marked [{len(submission_ids)}] submissions as invited")
+    submission_ids = [sub.submission_id for sub in submissions]
+    submissions_queries.mark_submissions_as_invited(session, submission_ids)
+    session.commit()
+    logger.info(f"Marked [{len(submission_ids)}] submissions as invited")
 
-        return {"sent_count": len(emails), "emails": emails}
+    return {"sent_count": len(emails), "emails": emails}
 
 
 @router.post(
@@ -1195,20 +1180,19 @@ async def send_acceptance_test(
     subject: Annotated[str, Query(description="Email subject line")],
     emails: Annotated[list[str], Query(description="Email addresses to send to")],
 ):
-    with LogFile("send acceptance test"):
-        write_log_title("Sending acceptance test emails")
+    logger.info("Sending acceptance test emails")
 
-        html_content = await read_html_body(request)
-        write_log(f"Received HTML body with {len(html_content)} characters")
+    html_content = await read_html_body(request)
+    logger.info(f"Received HTML body with {len(html_content)} characters")
 
-        write_log(f"Parsed [{len(emails)}] test emails")
-        write_log_json({"emails": emails})
-        write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
+    logger.info(f"Parsed [{len(emails)}] test emails")
+    logger.debug("request body: %s", {"emails": emails})
+    logger.info(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
 
-        response_data = await call_acceptance_api(emails, subject, html_content, get_from_address())
-        write_log("Acceptance API responded successfully")
+    response_data = await call_acceptance_api(emails, subject, html_content, get_from_address())
+    logger.info("Acceptance API responded successfully")
 
-        return {"sent_count": len(emails), "emails": emails}
+    return {"sent_count": len(emails), "emails": emails}
 
 
 # endregion
@@ -1225,9 +1209,9 @@ async def send_blast(
     async def send_blast_job(
         recipients: list[dict], guaranteed_snapshot: list[dict], requested_count: int, sent_by_id: int
     ):
-        with LogFile("send blast [JOB]"), db_session() as session:
+        with db_session() as session:
             try:
-                write_log_title(f"Sending blast to [{len(recipients)}] recipients")
+                logger.info(f"Sending blast to [{len(recipients)}] recipients")
 
                 if request.provider == EmailProvider.GOOGLE:
                     gdg_capacity = get_send_capacity(EmailLogsFromAddress.GDG_QASSIM)
@@ -1237,7 +1221,7 @@ async def send_blast(
                     info_chunk = recipients[gdg_capacity : gdg_capacity + info_capacity]
                     overflow = recipients[gdg_capacity + info_capacity :]
                     if overflow:
-                        write_log(
+                        logger.info(
                             f"[{len(overflow)}] recipients exceed today's combined capacity; "
                             f"sending them via [{EmailLogsFromAddress.INFO_KERNELTICS.value}] anyway to honor guaranteed delivery"
                         )
@@ -1252,7 +1236,7 @@ async def send_blast(
                         if not chunk:
                             continue
                         emails = [r["email"] for r in chunk]
-                        write_log(f"Sending [{len(emails)}] recipients via [{from_addr.value}]")
+                        logger.info(f"Sending [{len(emails)}] recipients via [{from_addr.value}]")
 
                         await call_blast_api(
                             emails,
@@ -1263,7 +1247,7 @@ async def send_blast(
                             request.preview_text,
                             request.attachments,
                         )
-                        write_log(f"Blast API responded successfully for [{from_addr.value}]")
+                        logger.info(f"Blast API responded successfully for [{from_addr.value}]")
 
                         email_queries.create_email_log(
                             session,
@@ -1297,7 +1281,7 @@ async def send_blast(
                         request.preview_text,
                         request.attachments,
                     )
-                    write_log(f"Blast API responded successfully for [{len(emails)}] recipients")
+                    logger.info(f"Blast API responded successfully for [{len(emails)}] recipients")
 
                     email_queries.create_email_log(
                         session,
@@ -1320,60 +1304,58 @@ async def send_blast(
 
             except Exception as e:
                 session.rollback()
-                write_log_exception(e)
-                write_log_traceback()
+                logger.exception(e)
 
-    with LogFile("send blast [SETUP]"):
-        write_log_title("Preparing blast email")
+    logger.info("Preparing blast email")
 
-        guaranteed_member_ids = [r.member_id for r in request.guaranteed_recipients if r.member_id is not None]
-        resolved_members = (
-            members_queries.get_members_by_id(session, guaranteed_member_ids) if guaranteed_member_ids else []
-        )
-        members_by_id = {m.id: m for m in resolved_members}
+    guaranteed_member_ids = [r.member_id for r in request.guaranteed_recipients if r.member_id is not None]
+    resolved_members = (
+        members_queries.get_members_by_id(session, guaranteed_member_ids) if guaranteed_member_ids else []
+    )
+    members_by_id = {m.id: m for m in resolved_members}
 
-        guaranteed: dict[str, dict] = {}
-        for recipient in request.guaranteed_recipients:
-            if recipient.member_id is not None:
-                member = members_by_id.get(recipient.member_id)
-                if member is None or not member.email:
-                    continue
-                guaranteed[member.email.lower()] = {"name": member.name, "email": member.email}
-            elif recipient.email is not None:
-                guaranteed[recipient.email.lower()] = {"name": recipient.name, "email": recipient.email}
+    guaranteed: dict[str, dict] = {}
+    for recipient in request.guaranteed_recipients:
+        if recipient.member_id is not None:
+            member = members_by_id.get(recipient.member_id)
+            if member is None or not member.email:
+                continue
+            guaranteed[member.email.lower()] = {"name": member.name, "email": member.email}
+        elif recipient.email is not None:
+            guaranteed[recipient.email.lower()] = {"name": recipient.name, "email": recipient.email}
 
-        write_log(f"Resolved [{len(guaranteed)}] guaranteed recipients")
+    logger.info(f"Resolved [{len(guaranteed)}] guaranteed recipients")
 
-        if request.provider == EmailProvider.GOOGLE:
-            capped_count = min(request.count, get_total_remaining_send_capacity())
-            if capped_count < request.count:
-                write_log(
-                    f"Capping requested count [{request.count}] down to [{capped_count}] based on remaining send capacity"
-                )
-        else:
-            capped_count = request.count
-
-        if request.order_by == "activity":
-            pool = members_queries.get_blast_recipients_by_activity(
-                session, limit=capped_count, exclude_ids=list(members_by_id.keys())
+    if request.provider == EmailProvider.GOOGLE:
+        capped_count = min(request.count, get_total_remaining_send_capacity())
+        if capped_count < request.count:
+            logger.info(
+                f"Capping requested count [{request.count}] down to [{capped_count}] based on remaining send capacity"
             )
-        else:
-            pool = members_queries.get_blast_recipients_alphabetical(
-                session, limit=capped_count, exclude_ids=list(members_by_id.keys())
-            )
-        write_log(f"Selected [{len(pool)}] recipients via [{request.order_by}] ordering")
+    else:
+        capped_count = request.count
 
-        all_recipients = dict(guaranteed)
-        for member in pool:
-            if member.email:
-                all_recipients.setdefault(member.email.lower(), {"name": member.name, "email": member.email})
-
-        recipients = list(all_recipients.values())
-        write_log(f"Queuing blast to [{len(recipients)}] total recipients")
-
-        background_tasks.add_task(
-            send_blast_job, recipients, list(guaranteed.values()), request.count, requesting_member.id
+    if request.order_by == "activity":
+        pool = members_queries.get_blast_recipients_by_activity(
+            session, limit=capped_count, exclude_ids=list(members_by_id.keys())
         )
+    else:
+        pool = members_queries.get_blast_recipients_alphabetical(
+            session, limit=capped_count, exclude_ids=list(members_by_id.keys())
+        )
+    logger.info(f"Selected [{len(pool)}] recipients via [{request.order_by}] ordering")
+
+    all_recipients = dict(guaranteed)
+    for member in pool:
+        if member.email:
+            all_recipients.setdefault(member.email.lower(), {"name": member.name, "email": member.email})
+
+    recipients = list(all_recipients.values())
+    logger.info(f"Queuing blast to [{len(recipients)}] total recipients")
+
+    background_tasks.add_task(
+        send_blast_job, recipients, list(guaranteed.values()), request.count, requesting_member.id
+    )
 
     return {
         "message": f"Blast email queued for [{len(recipients)}] recipient(s).",
@@ -1387,23 +1369,22 @@ async def send_blast(
     "/blast/test", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)], response_model=EmailTestResponse
 )
 async def send_blast_test(request: BlastTestRequest):
-    with LogFile("send blast test"):
-        write_log_title("Sending blast test email")
-        write_log(f"Sending test blast to [{len(request.test_emails)}] test emails")
+    logger.info("Sending blast test email")
+    logger.info(f"Sending test blast to [{len(request.test_emails)}] test emails")
 
-        from_addr = get_from_address() if request.provider == EmailProvider.GOOGLE else None
-        await call_blast_api(
-            list(request.test_emails),
-            request.subject,
-            request.html_content,
-            request.provider,
-            from_addr,
-            request.preview_text,
-            request.attachments,
-        )
-        write_log("Blast API responded successfully")
+    from_addr = get_from_address() if request.provider == EmailProvider.GOOGLE else None
+    await call_blast_api(
+        list(request.test_emails),
+        request.subject,
+        request.html_content,
+        request.provider,
+        from_addr,
+        request.preview_text,
+        request.attachments,
+    )
+    logger.info("Blast API responded successfully")
 
-        return {"sent_count": len(request.test_emails), "emails": request.test_emails}
+    return {"sent_count": len(request.test_emails), "emails": request.test_emails}
 
 
 @router.get(

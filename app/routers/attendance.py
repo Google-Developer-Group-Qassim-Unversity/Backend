@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from typing import Literal, Annotated
@@ -22,7 +23,6 @@ from app.routers.models import (
 )
 from app.config import config
 from app.exceptions import DataIntegrityError, MemberNotFound
-from app.routers.logging import LogFile, write_log_exception, write_log, write_log_title
 from app.helpers import (
     CurrentMember,
     validate_attendance_token,
@@ -36,6 +36,9 @@ from datetime import datetime, timedelta
 from app.dependencies import DB
 
 from app.routers.responses import CountsResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/attendance", tags=["Attendance"])
@@ -78,73 +81,69 @@ def mark_attendance(
     session: DB,
     token: Annotated[str | None, Query(description="Optional attendance token for QR code links")] = None,
 ):
-    with LogFile("mark attendance"):
-        # Validate attendance token
-        if token:
-            write_log(f"validating attendance token for event [{event_id}]")
-            try:
-                validate_attendance_token(token, event_id)
-                write_log(f"Token validated successfully for event [{event_id}]")
-            except HTTPException as e:
-                write_log_exception(Exception(f"Token validation failed reason: '{e.detail}'"))
-                raise
-        else:
-            write_log("HTTP 400:No attendance token provided")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance token provided!")
+    if token:
+        logger.info(f"validating attendance token for event [{event_id}]")
+        try:
+            validate_attendance_token(token, event_id)
+            logger.info(f"Token validated successfully for event [{event_id}]")
+        except HTTPException as e:
+            logger.error(Exception(f"Token validation failed reason: '{e.detail}'"))
+            raise
+    else:
+        logger.info("HTTP 400:No attendance token provided")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance token provided!")
 
-        write_log_title(f"Marking attendance for member [{member.name}] with uni_id [{member.uni_id}]")
+    logger.info(f"Marking attendance for member [{member.name}] with uni_id [{member.uni_id}]")
 
-        event, event_log = get_event_with_attendable_log(session, event_id)
-        write_log(f"Attendace for event [{event.name}] for member [{member.name}]")
-        write_log(f"Attendable log found for event [{event_log.id}]")
+    event, event_log = get_event_with_attendable_log(session, event_id)
+    logger.info(f"Attendace for event [{event.name}] for member [{member.name}]")
+    logger.info(f"Attendable log found for event [{event_log.id}]")
 
-        effective_now = get_effective_date(datetime.now(), config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
-        event_start = event.start_datetime.date()
-        event_end = event.end_datetime.date()
-        if effective_now < event_start or effective_now > event_end:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="لا يمكنك تسجيل الحضور خارج فترة الحدث")
+    effective_now = get_effective_date(datetime.now(), config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+    event_start = event.start_datetime.date()
+    event_end = event.end_datetime.date()
+    if effective_now < event_start or effective_now > event_end:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="لا يمكنك تسجيل الحضور خارج فترة الحدث")
 
-        if is_member_marked_for_day(session, member.id, event_log.id, datetime.now()):
-            write_log(f"Member [{member.id}] has already marked attendance for today")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="!انت سجلت حضورك لهذا الحدث اليوم")
+    if is_member_marked_for_day(session, member.id, event_log.id, datetime.now()):
+        logger.info(f"Member [{member.id}] has already marked attendance for today")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="!انت سجلت حضورك لهذا الحدث اليوم")
 
-        # 3. get form registration type
-        form = form_queries.get_form_by_event_id(session, event_id)
-        if not form:
-            write_log_exception(Exception(f"HTTP 500: Form for event [{event_id}] not found!!"))
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        write_log(f"Form found: [{form.id}] of type [{form.form_type}]")
-        form_type = form.form_type
+    # 3. get form registration type
+    form = form_queries.get_form_by_event_id(session, event_id)
+    if not form:
+        logger.error(Exception(f"HTTP 500: Form for event [{event_id}] not found!!"))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    logger.info(f"Form found: [{form.id}] of type [{form.form_type}]")
+    form_type = form.form_type
 
-        if form_type == "none":
-            write_log(
-                f"Form type is none (Doesn't require registeration), creating member log for member [{member.id}] and log [{event_log.id}]"
-            )
-            log_queries.create_member_log(session, member.id, event_log.id)
-            write_log(f"Member marked attendance for event [{event.name}]")
+    if form_type == "none":
+        logger.info(
+            f"Form type is none (Doesn't require registeration), creating member log for member [{member.id}] and log [{event_log.id}]"
+        )
+        log_queries.create_member_log(session, member.id, event_log.id)
+        logger.info(f"Member marked attendance for event [{event.name}]")
 
-        if form_type == "google" or form_type == "registration":
-            write_log(
-                f"Form type is google or registration, checking submissions for member [{member.id}] and form [{form.id}]"
-            )
-            submissions = submission_queries.get_submission_by_form_and_member(session, form.id, member.id)
-            if not submissions:
-                write_log_exception(f"HTTP 400: Member [{member.id}] has not submitted the form [{form.id}]")
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما عبيت فورم الحدث")
-            if submissions.is_accepted == 0:
-                write_log_exception(f"HTTP 400: Member [{member.id}] has not been accepted to the event [{event.name}]")
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما انقبلت في الحدث")
+    if form_type == "google" or form_type == "registration":
+        logger.info(
+            f"Form type is google or registration, checking submissions for member [{member.id}] and form [{form.id}]"
+        )
+        submissions = submission_queries.get_submission_by_form_and_member(session, form.id, member.id)
+        if not submissions:
+            logger.error(f"HTTP 400: Member [{member.id}] has not submitted the form [{form.id}]")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما عبيت فورم الحدث")
+        if submissions.is_accepted == 0:
+            logger.error(f"HTTP 400: Member [{member.id}] has not been accepted to the event [{event.name}]")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما انقبلت في الحدث")
 
-            write_log(
-                f"Member [{member.id}] has submitted the form and been accepted to the event [{event.name}], marking attendance..."
-            )
-            log_queries.create_member_log(session, member.id, event_log.id)
-            write_log(
-                f"Member marked attendance for today the [{datetime.now().date().day}]th for event [{event.name}]"
-            )
+        logger.info(
+            f"Member [{member.id}] has submitted the form and been accepted to the event [{event.name}], marking attendance..."
+        )
+        log_queries.create_member_log(session, member.id, event_log.id)
+        logger.info(f"Member marked attendance for today the [{datetime.now().date().day}]th for event [{event.name}]")
 
-        session.commit()
-        return
+    session.commit()
+    return
 
 
 @router.post(
@@ -155,59 +154,56 @@ def mark_attendance(
 )
 def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, session: DB):
 
-    with LogFile("backfill attendance"):
-        write_log_title(
-            f"Backfill attendance for event [{event_id}], {len(request.members)} members, day [{request.day}]"
+    logger.info(f"Backfill attendance for event [{event_id}], {len(request.members)} members, day [{request.day}]")
+
+    event, event_log = get_event_with_attendable_log(session, event_id)
+
+    event_days = get_event_days(event)
+    if request.day < 1 or request.day > event_days:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Day {request.day} is out of range. Event has {event_days} day(s).",
         )
 
-        event, event_log = get_event_with_attendable_log(session, event_id)
+    target_date = get_target_date_for_day(event, request.day)
 
-        event_days = get_event_days(event)
-        if request.day < 1 or request.day > event_days:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Day {request.day} is out of range. Event has {event_days} day(s).",
-            )
+    created_count = 0
+    existing_count = 0
+    already_attended_count = 0
 
-        target_date = get_target_date_for_day(event, request.day)
-
-        created_count = 0
-        existing_count = 0
-        already_attended_count = 0
-
-        for member_data in request.members:
-            try:
-                if member_data.uni_id is None:
-                    raise MemberNotFound(member_data.name)
-                member = member_queries.get_member_by_uni_id(session, member_data.uni_id)
-                existing_count += 1
-                write_log(f"Found existing member [{member.name}] with uni_id [{member.uni_id}]")
-            except MemberNotFound:
-                new_member = member_queries.create_member(session, member_data)
-                if new_member is None:
-                    write_log_exception(f"Failed to create member with uni_id [{member_data.uni_id}]")
-                    continue
-                created_count += 1
-                member = new_member
-                write_log(f"Created new member [{member.name}] with uni_id [{member.uni_id}]")
-
-            if is_member_marked_for_day(session, member.id, event_log.id, target_date):
-                already_attended_count += 1
-                write_log(f"Member [{member.name}] already has attendance for day [{request.day}], skipping")
+    for member_data in request.members:
+        try:
+            if member_data.uni_id is None:
+                raise MemberNotFound(member_data.name)
+            member = member_queries.get_member_by_uni_id(session, member_data.uni_id)
+            existing_count += 1
+            logger.info(f"Found existing member [{member.name}] with uni_id [{member.uni_id}]")
+        except MemberNotFound:
+            new_member = member_queries.create_member(session, member_data)
+            if new_member is None:
+                logger.error(f"Failed to create member with uni_id [{member_data.uni_id}]")
                 continue
+            created_count += 1
+            member = new_member
+            logger.info(f"Created new member [{member.name}] with uni_id [{member.uni_id}]")
 
-            log_queries.create_member_log(session, member.id, event_log.id, target_date)
-            write_log(f"Backfilled attendance for member [{member.name}] on day [{request.day}]")
+        if is_member_marked_for_day(session, member.id, event_log.id, target_date):
+            already_attended_count += 1
+            logger.info(f"Member [{member.name}] already has attendance for day [{request.day}], skipping")
+            continue
 
-        session.commit()
-        marked_count = (created_count + existing_count) - already_attended_count
-        return BackfillAttendanceResponse(
-            created_count=created_count,
-            existing_count=existing_count,
-            already_attended_count=already_attended_count,
-            marked_count=marked_count,
-            attendance_date=target_date,
-        )
+        log_queries.create_member_log(session, member.id, event_log.id, target_date)
+        logger.info(f"Backfilled attendance for member [{member.name}] on day [{request.day}]")
+
+    session.commit()
+    marked_count = (created_count + existing_count) - already_attended_count
+    return BackfillAttendanceResponse(
+        created_count=created_count,
+        existing_count=existing_count,
+        already_attended_count=already_attended_count,
+        marked_count=marked_count,
+        attendance_date=target_date,
+    )
 
 
 @router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=EventAttendanceResponse)
@@ -267,51 +263,48 @@ def get_event_attendance(
     response_model=CountsResponse,
 )
 def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB):
-    with LogFile("mark attendance manual"):
-        write_log_title(f"Manual attendance for event [{event_id}], members {request.member_ids}")
+    logger.info(f"Manual attendance for event [{event_id}], members {request.member_ids}")
 
-        event, event_log = get_event_with_attendable_log(session, event_id)
+    event, event_log = get_event_with_attendable_log(session, event_id)
 
-        event_days = get_event_days(event)
-        days_to_mark = request.days if request.days else ([request.day] if request.day else [])
-        if not days_to_mark:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Either 'day' or 'days' must be provided"
-            )
+    event_days = get_event_days(event)
+    days_to_mark = request.days if request.days else ([request.day] if request.day else [])
+    if not days_to_mark:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Either 'day' or 'days' must be provided")
 
-        success_count = 0
-        failed_count = 0
+    success_count = 0
+    failed_count = 0
 
-        for member_id in request.member_ids:
-            try:
-                member = member_queries.get_member_by_id(session, member_id)
-            except MemberNotFound:
-                write_log_exception(f"Member with ID [{member_id}] not found, skipping")
-                failed_count += 1
+    for member_id in request.member_ids:
+        try:
+            member = member_queries.get_member_by_id(session, member_id)
+        except MemberNotFound:
+            logger.error(f"Member with ID [{member_id}] not found, skipping")
+            failed_count += 1
+            continue
+
+        member_success = False
+        for day in days_to_mark:
+            logger.info(f"Processing member [{member.name}] for day [{day}]")
+            if day is not None and (day < 1 or day > event_days):
                 continue
 
-            member_success = False
-            for day in days_to_mark:
-                write_log(f"Processing member [{member.name}] for day [{day}]")
-                if day is not None and (day < 1 or day > event_days):
-                    continue
+            target_date = get_target_date_for_day(event, day)
 
-                target_date = get_target_date_for_day(event, day)
+            if is_member_marked_for_day(session, member.id, event_log.id, target_date):
+                continue
 
-                if is_member_marked_for_day(session, member.id, event_log.id, target_date):
-                    continue
+            log_queries.create_member_log(session, member.id, event_log.id, target_date)
+            member_success = True
+            logger.info(f"Manual attendance marked for member [{member.name}] on day [{day or 'today'}]")
 
-                log_queries.create_member_log(session, member.id, event_log.id, target_date)
-                member_success = True
-                write_log(f"Manual attendance marked for member [{member.name}] on day [{day or 'today'}]")
+        if member_success:
+            success_count += 1
+        else:
+            failed_count += 1
 
-            if member_success:
-                success_count += 1
-            else:
-                failed_count += 1
-
-        session.commit()
-        return {"success": success_count, "failed": failed_count}
+    session.commit()
+    return {"success": success_count, "failed": failed_count}
 
 
 @router.delete(
@@ -321,37 +314,36 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
     response_model=CountsResponse,
 )
 def remove_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB):
-    with LogFile("remove attendance manual"):
-        write_log_title(f"Remove attendance for event [{event_id}], members {request.member_ids}")
+    logger.info(f"Remove attendance for event [{event_id}], members {request.member_ids}")
 
-        event, event_log = get_event_with_attendable_log(session, event_id)
+    event, event_log = get_event_with_attendable_log(session, event_id)
 
-        event_days = get_event_days(event)
+    event_days = get_event_days(event)
 
-        if request.day is None or (request.day < 1 or request.day > event_days):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Day {request.day} is out of range. Event has {event_days} day(s).",
-            )
+    if request.day is None or (request.day < 1 or request.day > event_days):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Day {request.day} is out of range. Event has {event_days} day(s).",
+        )
 
-        target_date = get_target_date_for_day(event, request.day)
+    target_date = get_target_date_for_day(event, request.day)
 
-        success_count = 0
-        failed_count = 0
+    success_count = 0
+    failed_count = 0
 
-        for member_id in request.member_ids:
-            try:
-                member = member_queries.get_member_by_id(session, member_id)
-            except MemberNotFound:
-                failed_count += 1
-                continue
+    for member_id in request.member_ids:
+        try:
+            member = member_queries.get_member_by_id(session, member_id)
+        except MemberNotFound:
+            failed_count += 1
+            continue
 
-            deleted = log_queries.delete_member_log(session, member.id, event_log.id, target_date)
-            if deleted:
-                success_count += 1
-                write_log(f"Attendance removed for member [{member.name}] on day [{request.day or 'today'}]")
-            else:
-                failed_count += 1
+        deleted = log_queries.delete_member_log(session, member.id, event_log.id, target_date)
+        if deleted:
+            success_count += 1
+            logger.info(f"Attendance removed for member [{member.name}] on day [{request.day or 'today'}]")
+        else:
+            failed_count += 1
 
-        session.commit()
-        return {"success": success_count, "failed": failed_count}
+    session.commit()
+    return {"success": success_count, "failed": failed_count}

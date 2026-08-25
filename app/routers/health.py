@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, HTTPException, status, Depends
 from app.DB import members as member_queries
 from sqlalchemy import text
@@ -9,6 +10,9 @@ from json import dumps
 from app.dependencies import DB
 
 from app.routers.responses import DbCheckResponse, StatusResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/health", tags=["health"])
@@ -53,10 +57,10 @@ def db_check(session: DB):
         ).all()
         return {"database": "connected"}
     except Exception as e:
-        print(f"Database connection error: {e}")
+        logger.error("Database connection error: %s", e)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection failed")
     finally:
-        print(
+        logger.info(
             f"\n{'=' * 50}\n",
             dumps(
                 {
@@ -92,7 +96,7 @@ def db_check(session: DB):
     description="DEBUGGING ENDPOINT - Prints the current database connection pool status to the console. Useful for diagnosing connection leaks or pool exhaustion issues.",
 )
 def print_pool_status():
-    print(
+    logger.info(
         dumps(
             {
                 "======== Pool Status ========": "",

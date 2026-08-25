@@ -1,3 +1,4 @@
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, func
@@ -5,6 +6,8 @@ from app.DB.schema import Actions, Members, MembersLogs, Logs, Events, Role, Rol
 from app.exceptions import MemberNotFound
 from app.routers.models import Member_model
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 def create_member(session: Session, member: Member_model, is_authenticated: bool = False):
@@ -27,7 +30,7 @@ def create_member(session: Session, member: Member_model, is_authenticated: bool
             session.flush()
         return new_member
     except IntegrityError as e:
-        print(f"IntegrityError in create_member: {str(e)[:50]}...")
+        logger.warning("IntegrityError in create_member: %s", e)
         return None
 
 
@@ -118,7 +121,6 @@ def update_member(session: Session, member: Member_model, is_authenticated: bool
     existing_member = session.scalar(select(Members).where(Members.id == member.id))
     if not existing_member:
         raise MemberNotFound(member.id)
-    print(f"Updating member: {existing_member.name}")
     existing_member.name = member.name
     existing_member.email = member.email
     existing_member.phone_number = member.phone_number
@@ -132,7 +134,7 @@ def update_member(session: Session, member: Member_model, is_authenticated: bool
     existing_member.updated_at = datetime.now()
     existing_member.is_authenticated = is_authenticated
     session.flush()
-    print(f"Updated member: {existing_member.name}")
+    logger.info("Updated member %s", existing_member.id)
     return existing_member
 
 

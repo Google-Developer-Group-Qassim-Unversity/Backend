@@ -1,3 +1,4 @@
+import logging
 import json
 import re
 from time import perf_counter
@@ -8,19 +9,6 @@ from app.DB import submissions as submission_queries, members as member_queries,
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import CurrentMember, admin_guard, resolve_member
 from app.config import config
-from app.routers.logging import (
-    LogFile,
-    write_log,
-    write_log_to,
-    write_log_exception,
-    write_log_exception_to,
-    write_log_json,
-    write_log_json_to,
-    write_log_title,
-    write_log_title_to,
-    write_log_traceback,
-    write_log_traceback_to,
-)
 from app.routers.models import submission_exists_model, submission_accept_model
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -28,6 +16,9 @@ from google.auth.transport.requests import Request as GoogleRequest
 from app.dependencies import DB
 
 from app.routers.responses import StatusResponse, SubmissionResponse, WebhookAckResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/submissions", tags=["Submissions"])
@@ -50,25 +41,24 @@ def create_submission(
 
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
 def check_submission_exists(form_id: int, member: CurrentMember, session: DB):
-    with LogFile("check submission exists"):
-        try:
-            write_log(f"Querying DB for form_id [{form_id}]")
-            start = perf_counter()
-            member_id = member.id
-            session.commit()
-            submission = submission_queries.get_submission_by_form_and_member(session, form_id, member_id)
-            end = perf_counter()
-            write_log(
-                f"got member [{member_id}], found submission [{submission}]  DB took [{(end - start) * 1000:.2f}]ms to execute"
-            )
-            if submission is None:
-                return {"submission_status": False}
-            submission_type = submission.submission_type
-            if submission_type == "partial":
-                return {"submission_status": "partial", "submission_timestamp": submission.submitted_at}
-            return {"submission_status": True, "submission_timestamp": submission.submitted_at}
-        except Exception:
-            raise
+    try:
+        logger.info(f"Querying DB for form_id [{form_id}]")
+        start = perf_counter()
+        member_id = member.id
+        session.commit()
+        submission = submission_queries.get_submission_by_form_and_member(session, form_id, member_id)
+        end = perf_counter()
+        logger.info(
+            f"got member [{member_id}], found submission [{submission}]  DB took [{(end - start) * 1000:.2f}]ms to execute"
+        )
+        if submission is None:
+            return {"submission_status": False}
+        submission_type = submission.submission_type
+        if submission_type == "partial":
+            return {"submission_status": "partial", "submission_timestamp": submission.submitted_at}
+        return {"submission_status": True, "submission_timestamp": submission.submitted_at}
+    except Exception:
+        raise
 
 
 @router.put(
@@ -154,29 +144,29 @@ def extract_email_answer(answers: dict) -> str | None:
     return None
 
 
-def fetch_form_responses(google_form_id: str, log_file=None):
+def fetch_form_responses(google_form_id: str):
     """Fetch all responses from a Google Form and return them"""
     try:
-        write_log_title_to(log_file, f"Fetching responses for form: {google_form_id}")
+        logger.info(f"Fetching responses for form: {google_form_id}")
 
         # Get form details from database to retrieve refresh token
         with db_session() as session:
             form = form_queries.get_form_by_google_form_id(session, google_form_id)
 
             if not form:
-                write_log_to(log_file, f"ERROR: Form not found in database for google_form_id: {google_form_id}")
+                logger.info(f"ERROR: Form not found in database for google_form_id: {google_form_id}")
                 return None
 
             if not form.google_refresh_token:
-                write_log_to(log_file, f"ERROR: No refresh token available for form: {google_form_id}")
+                logger.info(f"ERROR: No refresh token available for form: {google_form_id}")
                 return None
 
-            write_log_to(log_file, f"Found form in database with ID: {form.id}")
+            logger.info(f"Found form in database with ID: {form.id}")
             form_id = form.id
 
             # Get Google credentials
             credentials = get_google_credentials(form.google_refresh_token)
-            write_log_to(log_file, "Successfully authenticated with Google")
+            logger.info("Successfully authenticated with Google")
 
             # Build the Forms API service
             service = build("forms", "v1", credentials=credentials)
@@ -185,47 +175,46 @@ def fetch_form_responses(google_form_id: str, log_file=None):
             result = service.forms().responses().list(formId=google_form_id).execute()
 
             responses = result.get("responses", [])
-            write_log_to(log_file, f"\nTotal responses found: {len(responses)}")
+            logger.info(f"\nTotal responses found: {len(responses)}")
 
             # Log all responses
             for idx, response in enumerate(responses, 1):
-                write_log_to(log_file, f"\n--- Response #{idx} ---")
-                write_log_json_to(log_file, response)
+                logger.info(f"\n--- Response #{idx} ---")
+                logger.debug("request body: %s", response)
 
-            write_log_to(log_file, "\n=== Finished fetching responses ===")
+            logger.info("\n=== Finished fetching responses ===")
 
             return {"form_id": form_id, "google_form_id": google_form_id, "responses": responses}
 
     except Exception as e:
-        write_log_exception_to(log_file, e)
-        write_log_traceback_to(log_file)
+        logger.exception(e)
         return None
 
 
-def sync_form_submissions(google_form_id: str, log_file):
+def sync_form_submissions(google_form_id: str):
     try:
-        write_log_title_to(log_file, f"Running scheduled job: sync for google_form_id: {google_form_id}")
+        logger.info(f"Running scheduled job: sync for google_form_id: {google_form_id}")
 
         # Fetch Google Form responses
-        fetch_result = fetch_form_responses(google_form_id, log_file)
+        fetch_result = fetch_form_responses(google_form_id)
 
         if fetch_result is None:
-            write_log_to(log_file, "Error: Failed to fetch form responses")
+            logger.info("Error: Failed to fetch form responses")
             return
 
         form_id = fetch_result["form_id"]
         google_responses = fetch_result["responses"]
 
-        write_log_to(log_file, f"Form ID: {form_id}")
-        write_log_to(log_file, f"Google responses count: {len(google_responses)}")
+        logger.info(f"Form ID: {form_id}")
+        logger.info(f"Google responses count: {len(google_responses)}")
 
         # Get partial submissions from database
         with db_session() as session:
             partial_submissions = submission_queries.get_partial_submissions_by_form_id(session, form_id)
-            write_log_to(log_file, f"Partial submissions count: {len(partial_submissions)}")
+            logger.info(f"Partial submissions count: {len(partial_submissions)}")
 
             if not partial_submissions:
-                write_log_to(log_file, "No partial submissions to sync")
+                logger.info("No partial submissions to sync")
                 return
 
             # Create a mapping of email (normalized) to partial submissions
@@ -233,12 +222,10 @@ def sync_form_submissions(google_form_id: str, log_file):
             for submission in partial_submissions:
                 email = (submission.email or "").strip().lower()
                 if not email:
-                    write_log_to(
-                        log_file, f"Partial submission: ID={submission.submission_id} has no email on file, skipping"
-                    )
+                    logger.info(f"Partial submission: ID={submission.submission_id} has no email on file, skipping")
                     continue
                 partial_by_email[email] = submission
-                write_log_to(log_file, f"Partial submission: ID={submission.submission_id}, email={email}")
+                logger.info(f"Partial submission: ID={submission.submission_id}, email={email}")
 
             # Match Google responses to partial submissions
             matched_count = 0
@@ -250,11 +237,11 @@ def sync_form_submissions(google_form_id: str, log_file):
 
                 email = extract_email_answer(answers)
                 if not email:
-                    write_log_to(log_file, f"Response {response_id}: No email-shaped answer found")
+                    logger.info(f"Response {response_id}: No email-shaped answer found")
                     unmatched_responses.append(response_id)
                     continue
 
-                write_log_to(log_file, f"Response {response_id}: email={email}")
+                logger.info(f"Response {response_id}: email={email}")
 
                 # Check if this email has a partial submission
                 if email in partial_by_email:
@@ -271,105 +258,97 @@ def sync_form_submissions(google_form_id: str, log_file):
 
                     if updated:
                         matched_count += 1
-                        write_log_to(
-                            log_file, f"✓ Matched and updated submission ID {partial_submission.id} for email {email}"
-                        )
-                        write_log_to(log_file, f"  - Google response ID: {response_id}")
+                        logger.info(f"✓ Matched and updated submission ID {partial_submission.id} for email {email}")
+                        logger.info(f"  - Google response ID: {response_id}")
                     else:
-                        write_log_to(log_file, f"✗ Failed to update submission ID {partial_submission.id}")
+                        logger.info(f"✗ Failed to update submission ID {partial_submission.id}")
                 else:
-                    write_log_to(log_file, f"Response {response_id}: No matching partial submission for email {email}")
+                    logger.info(f"Response {response_id}: No matching partial submission for email {email}")
                     unmatched_responses.append(response_id)
 
             # Commit all updates
             session.commit()
 
             # Summary
-            write_log_to(log_file, "\n=== Sync Summary ===")
-            write_log_to(log_file, f"Total Google responses: {len(google_responses)}")
-            write_log_to(log_file, f"Total partial submissions: {len(partial_submissions)}")
-            write_log_to(log_file, f"Successfully matched: {matched_count}")
-            write_log_to(log_file, f"Unmatched responses: {len(unmatched_responses)}")
+            logger.info("\n=== Sync Summary ===")
+            logger.info(f"Total Google responses: {len(google_responses)}")
+            logger.info(f"Total partial submissions: {len(partial_submissions)}")
+            logger.info(f"Successfully matched: {matched_count}")
+            logger.info(f"Unmatched responses: {len(unmatched_responses)}")
 
             if unmatched_responses:
-                write_log_to(log_file, f"Unmatched response IDs: {unmatched_responses}")
+                logger.info(f"Unmatched response IDs: {unmatched_responses}")
 
-            write_log_to(log_file, "\n=== Sync Complete ===")
+            logger.info("\n=== Sync Complete ===")
 
     except Exception as e:
-        write_log_exception_to(log_file, e)
-        write_log_traceback_to(log_file)
+        logger.exception(e)
 
 
 @router.get("/test-google-forms/{google_form_id}", status_code=status.HTTP_200_OK, response_model=dict)
 def test_fetch_form_responses(google_form_id: str):
-    with LogFile("test google forms fetch") as log:
-        responses = fetch_form_responses(google_form_id, log.file)
-        schema = fetch_schema(google_form_id)
-        print("\n\n=== Responses ===\n")
-        print(json.dumps(responses, indent=4, ensure_ascii=False))
-        print("\n\n=== Schema ===\n")
-        print(json.dumps(schema, indent=4, ensure_ascii=False))
+    responses = fetch_form_responses(google_form_id)
+    schema = fetch_schema(google_form_id)
+    logger.debug("responses: %s", json.dumps(responses, ensure_ascii=False))
+    logger.debug("schema: %s", json.dumps(schema, ensure_ascii=False))
 
-        return schema
+    return schema
 
 
 @router.post("/google/webhook", status_code=status.HTTP_200_OK, response_model=WebhookAckResponse)
 async def google_forms_webhook(request: Request, background_tasks: BackgroundTasks):
-    with LogFile("google forms webhook") as log:
-        try:
-            write_log_title("⚓ Google Forms Webhook Notification ⚓")
+    try:
+        logger.info("⚓ Google Forms Webhook Notification ⚓")
 
-            body = await request.json()
+        body = await request.json()
 
-            # Validate it's a Pub/Sub message
-            if "message" not in body:
-                write_log_json({"status": "ignored", "reason": "not_pubsub_message", "body": body})
-                return {"status": "ignored", "reason": "not_pubsub_message"}
-            if "attributes" not in body["message"]:
-                write_log_json({"status": "ignored", "reason": "missing_attributes"})
-                return {"status": "ignored", "reason": "missing_attributes"}
+        # Validate it's a Pub/Sub message
+        if "message" not in body:
+            logger.debug("request body: %s", {"status": "ignored", "reason": "not_pubsub_message", "body": body})
+            return {"status": "ignored", "reason": "not_pubsub_message"}
+        if "attributes" not in body["message"]:
+            logger.debug("request body: %s", {"status": "ignored", "reason": "missing_attributes"})
+            return {"status": "ignored", "reason": "missing_attributes"}
 
-            write_log(f"Received Pub/Sub message: {body}")
-            message = body["message"]
-            attributes = message["attributes"]
+        logger.info(f"Received Pub/Sub message: {body}")
+        message = body["message"]
+        attributes = message["attributes"]
 
-            # Extract form information from attributes
-            form_id = attributes.get("formId")
-            watch_id = attributes.get("watchId")
-            event_type = attributes.get("eventType")
-            message_id = message.get("messageId") or message.get("message_id")
-            publish_time = message.get("publishTime") or message.get("publish_time")
-            subscription = body.get("subscription")
+        # Extract form information from attributes
+        form_id = attributes.get("formId")
+        watch_id = attributes.get("watchId")
+        event_type = attributes.get("eventType")
+        message_id = message.get("messageId") or message.get("message_id")
+        publish_time = message.get("publishTime") or message.get("publish_time")
+        subscription = body.get("subscription")
 
-            if not form_id:
-                write_log_json({"status": "ignored", "reason": "missing_form_id"})
-                return {"status": "ignored", "reason": "missing_form_id"}
+        if not form_id:
+            logger.debug("request body: %s", {"status": "ignored", "reason": "missing_form_id"})
+            return {"status": "ignored", "reason": "missing_form_id"}
 
-            # Log the notification
-            write_log_json(
-                {
-                    "status": "received",
-                    "form_id": form_id,
-                    "watch_id": watch_id,
-                    "event_type": event_type,
-                    "message_id": message_id,
-                    "publish_time": publish_time,
-                    "subscription": subscription,
-                }
-            )
+        # Log the notification
+        logger.debug(
+            "request body: %s",
+            {
+                "status": "received",
+                "form_id": form_id,
+                "watch_id": watch_id,
+                "event_type": event_type,
+                "message_id": message_id,
+                "publish_time": publish_time,
+                "subscription": subscription,
+            },
+        )
 
-            # Sync form submissions in the background
-            background_tasks.add_task(sync_form_submissions, form_id, log.file)
-            write_log(f"Background task scheduled to sync submissions for form: {form_id}")
+        # Sync form submissions in the background
+        background_tasks.add_task(sync_form_submissions, form_id)
+        logger.info(f"Background task scheduled to sync submissions for form: {form_id}")
 
-            return {"status": "received", "form_id": form_id, "event_type": event_type, "message_id": message_id}
+        return {"status": "received", "form_id": form_id, "event_type": event_type, "message_id": message_id}
 
-        except json.JSONDecodeError as e:
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid JSON: {str(e)}")
-        except KeyError as e:
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Missing required field: {str(e)}")
+    except json.JSONDecodeError as e:
+        logger.exception(e)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid JSON: {str(e)}")
+    except KeyError as e:
+        logger.exception(e)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Missing required field: {str(e)}")

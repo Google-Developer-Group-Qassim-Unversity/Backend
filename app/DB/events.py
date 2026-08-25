@@ -1,3 +1,4 @@
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
@@ -18,6 +19,8 @@ from app.routers.models import Events_model
 from app.config import config
 from app.helpers import get_effective_date
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 
 def get_events(session: Session):
@@ -118,7 +121,7 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         return existing_event
     except IntegrityError as e:
         session.rollback()
-        print(f"IntegrityError in update_event: {str(e)}")
+        logger.warning("IntegrityError in update_event: %s", e)
         return -1
 
 

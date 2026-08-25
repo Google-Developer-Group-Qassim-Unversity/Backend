@@ -410,15 +410,77 @@ accepted.
 **Payoff:** the frontend can now generate a typed client from the OpenAPI schema
 (115 schema components across 79 documented paths).
 
-### Phase 5 — Logging via middleware
+### Phase 5 — Logging via middleware ✅ DONE
 
-1. Replace `app/routers/logging.py` with stdlib `logging` + a `structlog`-style
-   JSON formatter (or plain `logging` with a `RequestIdFilter`).
-2. Add one middleware that assigns a request id, logs method/path/status/duration,
-   and pushes the request id into the Sentry scope.
-3. Remove the 26 `print()` calls and every `with LogFile(...)`.
-4. Keep the file-per-request behaviour only if it's actually used for debugging;
-   if so, implement it as a logging `Handler`, not as a call in each route.
+The per-request file tree is gone. Logs go to stdout, which PM2 captures - the
+app runs as `pm2 start ... --time` on a VPS, so PM2 stamps each line with a
+timestamp and the formatter here deliberately does not add a second one.
+
+What shipped:
+
+1. `app/logging_config.py` - stdout handler, level from `LOG_LEVEL`, and a
+   `RequestContextFilter`. A `Filter` rather than an adapter, so records from
+   SQLAlchemy, httpx and uvicorn get stamped too. uvicorn's own loggers are
+   re-pointed through it so access lines carry the same request id.
+2. `app/middleware.py` - `RequestContextMiddleware` assigns a request id (or
+   honours an inbound `X-Request-ID`), echoes it back on the response, sets it
+   as a Sentry tag, and logs one summary line per request. That line replaced
+   the hand-rolled `perf_counter` timing in `events.py`.
+3. **297 `write_log*` calls rewritten** to `logger.info/debug/error/exception`,
+   **49 `with LogFile(...)` blocks removed**, and `app/routers/logging.py`
+   (139 lines) deleted. All 22 remaining `print()` calls are gone.
+4. The `log_file` parameter threaded through `submissions.py` and
+   `submissions_manual.py` is gone - it existed only because the old ContextVar
+   could not reach a background task, which stdlib logging handles natively.
+   That was also what forced every helper to have a `_to` twin.
+
+Output looks like this, with the PID because four uvicorn workers share one
+stdout stream:
+
+```
+INFO [pid:1996265] [req:-] app.main: Startup complete
+INFO [pid:1996265] [req:6cefc82ee87c] app.middleware: GET /health -> 200 in 3.9ms
+INFO [pid:1996265] [req:user-reported-id] app.middleware: GET /health -> 200 in 0.4ms
+```
+
+**The unadvertised win:** Sentry's `LoggingIntegration` is on by default at
+`level=INFO` / `event_level=ERROR`. Every one of these lines is now a breadcrumb
+attached to any error event. Under `write_log` that was zero, because Sentry
+never saw a file on disk.
+
+**Two bugs found while doing this:**
+
+- `alembic/env.py` called `fileConfig(...)` without `disable_existing_loggers=False`.
+  The default is `True`, which switches off every logger that already exists.
+  Harmless when alembic runs as its own process, but the test suite runs
+  migrations in-process, so the entire app's logging was disabled under pytest.
+  This is why the first version of `test_each_request_logs_one_summary_line`
+  captured nothing.
+- The middleware's first draft reset the request-id ContextVar in a `finally`
+  that ran *before* the summary line was logged, so every summary would have
+  been stamped `req:-`. Caught by reading it back, before it ever ran.
+
+**A note for the other phases:** `ast` column offsets are UTF-8 *byte* offsets,
+and this codebase is full of Arabic strings, arrows and emoji. The first
+migration pass treated them as character offsets and corrupted two files. Any
+future AST-driven rewrite here has to decode.
+
+**Verified:** 397 passed / 34 skipped / 1 xfailed. Route inventory identical
+(100 routes). Ruff 4, unchanged. Pyright **71 → 42** - deleting the untyped
+`logging.py`, whose `_current_log_file.get()` returned `Path | None` into
+functions wanting `Path`, removed 29 errors on its own. Exactly one new pyright
+error appeared, in the new test, and was fixed rather than accepted.
+
+`tests/test_logging.py` covers the filter, idempotent configuration, the
+response header, caller-supplied ids, the one-summary-line-per-request rule, and
+asserts per-file that no `write_log`, `LogFile` or `print(` survives anywhere in
+`app/` - the last one AST-based so the word inside a string does not trip it.
+
+**Companion step, done on the VPS:** `pm2-logrotate` installed and configured
+(`max_size 10M`, `retain 7`, `compress true`, daily). It had never been
+installed: `~/.pm2/logs` had reached 468M with a single 312M `GDG-backend-out.log`
+that was never rotated, on a disk at 81%. Existing archives were compressed
+94% (468M → 31M) and growth is now bounded to roughly 280M worst case.
 
 ### Phase 6 — Settings and injectable clients
 
@@ -453,7 +515,7 @@ accepted.
 | 2. Exception handlers ✅ | −50 except blocks, −34 manual 500s | medium |
 | 3. Auth dependencies ✅ | −59 signature params, auth inventory test | medium |
 | 4. Router config + response models ✅ | typed frontend client | medium |
-| 5. Logging middleware | −139 lines, Sentry context | small |
+| 5. Logging middleware ✅ | −139 lines, Sentry breadcrumbs | small |
 | 6. Settings + clients | testable externals | small |
 | 7. Services + async fix + tests | coverage on 3,600 untested lines | large |
 

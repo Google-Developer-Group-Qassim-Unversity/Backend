@@ -1,3 +1,4 @@
+import logging
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Annotated
@@ -10,6 +11,8 @@ from app.exceptions import MemberNotFound
 from json import dumps
 import jwt
 from datetime import datetime, date, timedelta
+
+logger = logging.getLogger(__name__)
 
 
 def get_effective_date(dt: datetime, threshold: int) -> date:
@@ -111,25 +114,22 @@ def optional_clerk_guard(credentials=Depends(config.CLERK_GUARD_optional)):
 
 
 def admin_guard(credentials=Depends(config.CLERK_GUARD)):
-    print("🔒 User authenticated, checking admin privileges...")
     if not is_admin(credentials):
         metadata = credentials.model_dump().get("decoded", {}).get("metadata", {})
-        print(f"🚫 Access Denied! User Metadata: {metadata}")
+        logger.warning("Access denied, user metadata: %s", metadata)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
     return credentials
 
 
 def admin_points_guard(credentials=Depends(config.CLERK_GUARD)):
-    print("🔒 User authenticated, checking admin_points privileges...")
     if not is_admin_points(credentials):
         metadata = credentials.model_dump().get("decoded", {}).get("metadata", {})
-        print(f"🚫 Access Denied! User Metadata: {metadata}")
+        logger.warning("Access denied, user metadata: %s", metadata)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin Points privileges required")
     return credentials
 
 
 def super_admin_guard(credentials=Depends(config.CLERK_GUARD)):
-    print("🔒 User authenticated, checking super 🦸‍♂ admin privileges...")
     if not is_super_admin(credentials):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin privileges required")
     return credentials
@@ -173,7 +173,7 @@ def credentials_to_member_model(credentials) -> Member_model:
     credentials_dict = credentials.model_dump()
     credentials_str = dumps(credentials.model_dump(), ensure_ascii=False, indent=4)
     if not credentials_dict["decoded"]["metadata"]:
-        print(f"Invalid credentials structure:\n{credentials_str}")
+        logger.error("Invalid credentials structure: %s", credentials_str)
         raise ValueError("Invalid credentials: 'decoded' or 'metadata' missing")
 
     # 2. create Member_model from metadata

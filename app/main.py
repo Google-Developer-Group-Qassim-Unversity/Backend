@@ -8,6 +8,8 @@ from fastapi.responses import RedirectResponse
 from app.config import config
 from app.DB.main import get_engine
 from app.error_handlers import register_exception_handlers
+from app.logging_config import configure_logging
+from app.middleware import RequestContextMiddleware
 from app.routers import (
     attendance,
     emails,
@@ -36,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
     # Touch the settings the app cannot serve a single request without, so a
     # missing one is a failed boot rather than a 500 on whichever endpoint
     # happens to need it first. The rest stay lazy: an instance with no R2 or
@@ -58,6 +61,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
+app.add_middleware(RequestContextMiddleware)
 
 
 register_exception_handlers(app)

@@ -1,3 +1,4 @@
+import logging
 from typing import List
 from fastapi import APIRouter, HTTPException, status, Depends
 
@@ -12,12 +13,14 @@ from app.DB import (
 from app.routers.models import Events_model, BaseClassModel
 from app.helpers import admin_guard
 from datetime import datetime
-from app.routers.logging import LogFile, write_log, write_log_json_to, write_log_title
 from app.DB.schema import EventsLocationType
 from app.dependencies import DB
 from app.exceptions import DataIntegrityError
 
 from app.routers.responses import CustomPointsCreatedResponse, MessageResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/custom", tags=["custom"], dependencies=[Depends(admin_guard)])
@@ -89,463 +92,449 @@ class CustomMemberPointsResponse(BaseClassModel):
 
 @router.post("/departments", status_code=status.HTTP_201_CREATED, response_model=CustomPointsCreatedResponse)
 def give_department_custom_points(body: CustomDepartmentPointsRequest, session: DB):
-    with LogFile("custom_department_points") as log:
-        try:
-            write_log_title("Custom Department Points")
-            # [1] validate events
-            if body.event_id:
-                write_log(f"Validating event with id {body.event_id}")
-                event = events_queries.get_event_by_id(session, body.event_id)
-                if not event:
+    try:
+        logger.info("Custom Department Points")
+        # [1] validate events
+        if body.event_id:
+            logger.info(f"Validating event with id {body.event_id}")
+            event = events_queries.get_event_by_id(session, body.event_id)
+            if not event:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {body.event_id} not found"
+                )
+        else:
+            # an existing event is not provided, create a new one with default values
+            new_event_model = Events_model(
+                name=body.event_name,
+                description=None,
+                location="none",
+                location_type=body.location_type,
+                start_datetime=body.start_datetime,
+                end_datetime=body.end_datetime,
+                status="closed",
+                image_url=None,
+                is_official=0,
+            )
+
+            event = events_queries.create_event(session, new_event_model)
+            if not event:
+                raise DataIntegrityError("Failed to create event")
+
+        # Proccess each point detail and give points to departments per action/points
+        details_len = len(body.point_deatils)
+        for i, point_detail in enumerate(body.point_deatils):
+            # [2] validate action
+            logger.info(f"Processing point detail [{i + 1}/{details_len}]")
+            if point_detail.action_id:
+                logger.info(f"Validating action with id {point_detail.action_id}")
+                action = actions_queries.get_action_by_id(session, point_detail.action_id)
+                if not action:
                     raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {body.event_id} not found"
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Action with id {point_detail.action_id} not found",
                     )
             else:
-                # an existing event is not provided, create a new one with default values
-                new_event_model = Events_model(
-                    name=body.event_name,
-                    description=None,
-                    location="none",
-                    location_type=body.location_type,
-                    start_datetime=body.start_datetime,
-                    end_datetime=body.end_datetime,
-                    status="closed",
-                    image_url=None,
-                    is_official=0,
-                )
-
-                event = events_queries.create_event(session, new_event_model)
-                if not event:
-                    raise DataIntegrityError("Failed to create event")
-
-            # Proccess each point detail and give points to departments per action/points
-            details_len = len(body.point_deatils)
-            for i, point_detail in enumerate(body.point_deatils):
-                # [2] validate action
-                write_log(f"Processing point detail [{i + 1}/{details_len}]")
-                if point_detail.action_id:
-                    write_log(f"Validating action with id {point_detail.action_id}")
-                    action = actions_queries.get_action_by_id(session, point_detail.action_id)
-                    if not action:
-                        raise HTTPException(
-                            status_code=status.HTTP_404_NOT_FOUND,
-                            detail=f"Action with id {point_detail.action_id} not found",
-                        )
-                else:
-                    write_log("No action id provided, checking name")
-                    if point_detail.action_name:
-                        write_log(f"Action name provided creating action with name {point_detail.action_name}")
-                        action = actions_queries.create_action(
-                            session, point_detail.action_name, point_detail.points, "bonus"
-                        )
-                    else:
-                        write_log("No action name provided, inferring from points value")
-                        if point_detail.points > 0:
-                            action = actions_queries.get_bonus_action(session)
-                            write_log(
-                                f"Points are {point_detail.points}, using Bonus action {action.action_name} with id {action.id}"
-                            )
-                        else:
-                            action = actions_queries.get_discount_action(session)
-                            write_log(
-                                f"Points are {point_detail.points}, using Discount action {action.action_name} with id {action.id}"
-                            )
-
-                # [3] using the action and event to give points
-                new_log = log_queries.create_log(session, event.id, action.id)
-                write_log(f"Created log with id {new_log.id} for event {event.name} and action {action.action_name}")
-
-                # [4] creating bonus/discount modification - only for default actions
-                # When action_id is provided: predefined action with its own points
-                # When action_name is provided: new custom action created with points embedded
-                # Only create modification when using default Bonus/Discount (no action_id AND no action_name)
-                if point_detail.action_id is None and point_detail.action_name is None:
-                    mod_type = "bonus" if point_detail.points > 0 else "discount"
-                    mod_value = abs(point_detail.points)
-                    log_queries.create_modification(session, new_log.id, mod_type, mod_value)
-                    write_log(
-                        f"Created modification for log id {new_log.id} with type {mod_type} and value {mod_value}"
+                logger.info("No action id provided, checking name")
+                if point_detail.action_name:
+                    logger.info(f"Action name provided creating action with name {point_detail.action_name}")
+                    action = actions_queries.create_action(
+                        session, point_detail.action_name, point_detail.points, "bonus"
                     )
                 else:
-                    write_log(f"Skipping modification - using action points ({action.points})")
+                    logger.info("No action name provided, inferring from points value")
+                    if point_detail.points > 0:
+                        action = actions_queries.get_bonus_action(session)
+                        logger.info(
+                            f"Points are {point_detail.points}, using Bonus action {action.action_name} with id {action.id}"
+                        )
+                    else:
+                        action = actions_queries.get_discount_action(session)
+                        logger.info(
+                            f"Points are {point_detail.points}, using Discount action {action.action_name} with id {action.id}"
+                        )
 
-                # [5] give points to departments
-                for department_id in point_detail.departments_id:
-                    write_log(f"Giving points to department with id {department_id}")
-                    department_log = log_queries.create_department_log(session, department_id, new_log.id)
+            # [3] using the action and event to give points
+            new_log = log_queries.create_log(session, event.id, action.id)
+            logger.info(f"Created log with id {new_log.id} for event {event.name} and action {action.action_name}")
 
-            session.commit()
-            write_log("Successfully given custom points to departments")
-            return {"event_id": event.id, "message": "Successfully given custom points to departments"}
+            # [4] creating bonus/discount modification - only for default actions
+            # When action_id is provided: predefined action with its own points
+            # When action_name is provided: new custom action created with points embedded
+            # Only create modification when using default Bonus/Discount (no action_id AND no action_name)
+            if point_detail.action_id is None and point_detail.action_name is None:
+                mod_type = "bonus" if point_detail.points > 0 else "discount"
+                mod_value = abs(point_detail.points)
+                log_queries.create_modification(session, new_log.id, mod_type, mod_value)
+                logger.info(f"Created modification for log id {new_log.id} with type {mod_type} and value {mod_value}")
+            else:
+                logger.info(f"Skipping modification - using action points ({action.points})")
 
-        finally:
-            write_log_json_to(log.file, body.model_dump(mode="json"))
-            write_log("Finished processing custom department points request")
+            # [5] give points to departments
+            for department_id in point_detail.departments_id:
+                logger.info(f"Giving points to department with id {department_id}")
+                department_log = log_queries.create_department_log(session, department_id, new_log.id)
+
+        session.commit()
+        logger.info("Successfully given custom points to departments")
+        return {"event_id": event.id, "message": "Successfully given custom points to departments"}
+
+    finally:
+        logger.debug("request body: %s", body.model_dump(mode="json"))
+        logger.info("Finished processing custom department points request")
 
 
 @router.get("/departments/{event_id}", response_model=CustomDepartmentPointsResponse)
 def get_department_custom_points(event_id: int, session: DB):
     """Retrieve all custom department points for a specific event."""
-    with LogFile("get_custom_department_points"):
-        write_log_title(f"Get Custom Department Points for Event {event_id}")
+    logger.info(f"Get Custom Department Points for Event {event_id}")
 
-        # [1] Validate event exists
-        write_log(f"Validating event with id {event_id}")
-        event = events_queries.get_event_by_id(session, event_id)
-        if not event:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {event_id} not found")
+    # [1] Validate event exists
+    logger.info(f"Validating event with id {event_id}")
+    event = events_queries.get_event_by_id(session, event_id)
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {event_id} not found")
 
-        # [2] Get all custom department points for this event
-        write_log(f"Fetching custom department points for event {event_id}")
-        raw_points = log_queries.get_custom_department_points_by_event(session, event_id)
+    # [2] Get all custom department points for this event
+    logger.info(f"Fetching custom department points for event {event_id}")
+    raw_points = log_queries.get_custom_department_points_by_event(session, event_id)
 
-        # [3] Transform the data to match the response model
-        point_details = []
-        for point_data in raw_points:
-            points = point_data["mod_value"] if point_data["mod_type"] == "bonus" else -point_data["mod_value"]
-            point_details.append(
-                {
-                    "log_id": point_data["log_id"],
-                    "departments_id": point_data["department_ids"],
-                    "points": points,
-                    "action_id": point_data["action_id"],
-                    "action_name": point_data["action_name"],
-                }
-            )
-
-        write_log(f"Found {len(point_details)} custom point entries for event {event_id}")
-        response = CustomDepartmentPointsResponse(
-            event_id=event.id,
-            start_datetime=event.start_datetime,
-            end_datetime=event.end_datetime,
-            event_name=event.name,
-            point_details=point_details,
+    # [3] Transform the data to match the response model
+    point_details = []
+    for point_data in raw_points:
+        points = point_data["mod_value"] if point_data["mod_type"] == "bonus" else -point_data["mod_value"]
+        point_details.append(
+            {
+                "log_id": point_data["log_id"],
+                "departments_id": point_data["department_ids"],
+                "points": points,
+                "action_id": point_data["action_id"],
+                "action_name": point_data["action_name"],
+            }
         )
-        write_log("Successfully retrieved custom department points")
-        return response
+
+    logger.info(f"Found {len(point_details)} custom point entries for event {event_id}")
+    response = CustomDepartmentPointsResponse(
+        event_id=event.id,
+        start_datetime=event.start_datetime,
+        end_datetime=event.end_datetime,
+        event_name=event.name,
+        point_details=point_details,
+    )
+    logger.info("Successfully retrieved custom department points")
+    return response
 
 
 @router.put("/departments/{log_id}", response_model=MessageResponse)
 def update_department_custom_points(log_id: int, body: DepartmentPointDetails, session: DB):
     """Update a single custom department point entry by log_id."""
-    with LogFile("update_custom_department_points"):
-        write_log_title(f"Update Custom Department Points for Log {log_id}")
+    logger.info(f"Update Custom Department Points for Log {log_id}")
 
-        # [1] Validate log exists
-        write_log(f"Validating log with id {log_id}")
-        existing_log = log_queries.get_log_by_id(session, log_id)
-        if not existing_log:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
-        write_log(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
+    # [1] Validate log exists
+    logger.info(f"Validating log with id {log_id}")
+    existing_log = log_queries.get_log_by_id(session, log_id)
+    if not existing_log:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
+    logger.info(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
 
-        # [2] Validate or infer action
-        if body.action_id:
-            write_log(f"Validating action with id {body.action_id}")
-            action = actions_queries.get_action_by_id(session, body.action_id)
-            if not action:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail=f"Action with id {body.action_id} not found"
-                )
+    # [2] Validate or infer action
+    if body.action_id:
+        logger.info(f"Validating action with id {body.action_id}")
+        action = actions_queries.get_action_by_id(session, body.action_id)
+        if not action:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Action with id {body.action_id} not found"
+            )
+    else:
+        logger.info("No action id provided, inferring from points value")
+        if body.points > 0:
+            action = actions_queries.get_bonus_action(session)
+            logger.info(f"Points are {body.points}, using Bonus action {action.action_name} with id {action.id}")
         else:
-            write_log("No action id provided, inferring from points value")
-            if body.points > 0:
-                action = actions_queries.get_bonus_action(session)
-                write_log(f"Points are {body.points}, using Bonus action {action.action_name} with id {action.id}")
-            else:
-                action = actions_queries.get_discount_action(session)
-                write_log(f"Points are {body.points}, using Discount action {action.action_name} with id {action.id}")
+            action = actions_queries.get_discount_action(session)
+            logger.info(f"Points are {body.points}, using Discount action {action.action_name} with id {action.id}")
 
-        # [3] Validate all departments exist
-        write_log(f"Validating {len(body.departments_id)} departments")
-        for dept_id in body.departments_id:
-            department = departments_queries.get_department_by_id(session, dept_id)
-            if not department:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {dept_id} not found"
-                )
+    # [3] Validate all departments exist
+    logger.info(f"Validating {len(body.departments_id)} departments")
+    for dept_id in body.departments_id:
+        department = departments_queries.get_department_by_id(session, dept_id)
+        if not department:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {dept_id} not found")
 
-        # [4] Update the log's action if it changed
-        if existing_log.action_id != action.id:
-            write_log(f"Updating log action from {existing_log.action_id} to {action.id}")
-            log_queries.update_log_action_id(session, log_id, action.id)
+    # [4] Update the log's action if it changed
+    if existing_log.action_id != action.id:
+        logger.info(f"Updating log action from {existing_log.action_id} to {action.id}")
+        log_queries.update_log_action_id(session, log_id, action.id)
 
-        # [5] Update the modification - only for default actions (no action_id AND no action_name)
-        # When action_id is provided: predefined action with its own points
-        # When action_name is provided: custom action (created or existing) with points embedded
-        modification = log_queries.get_modification_by_log_id(session, log_id)
-        if body.action_id is None and body.action_name is None:
-            # Default action: need a modification for points
-            mod_type = "bonus" if body.points > 0 else "discount"
-            mod_value = abs(body.points)
-            if modification:
-                write_log(f"Updating modification for log {log_id}: type={mod_type}, value={mod_value}")
-                log_queries.update_modification(session, modification.id, mod_type, mod_value)
-            else:
-                write_log("No modification found, creating new one")
-                log_queries.create_modification(session, log_id, mod_type, mod_value)
+    # [5] Update the modification - only for default actions (no action_id AND no action_name)
+    # When action_id is provided: predefined action with its own points
+    # When action_name is provided: custom action (created or existing) with points embedded
+    modification = log_queries.get_modification_by_log_id(session, log_id)
+    if body.action_id is None and body.action_name is None:
+        # Default action: need a modification for points
+        mod_type = "bonus" if body.points > 0 else "discount"
+        mod_value = abs(body.points)
+        if modification:
+            logger.info(f"Updating modification for log {log_id}: type={mod_type}, value={mod_value}")
+            log_queries.update_modification(session, modification.id, mod_type, mod_value)
         else:
-            # Custom/predefined action: remove any existing modification (action has its own points)
-            if modification:
-                write_log(f"Removing modification for log {log_id} - using action points ({action.points})")
-                log_queries.delete_modification(session, modification.id)
-            else:
-                write_log(f"No modification to remove - using action points ({action.points})")
+            logger.info("No modification found, creating new one")
+            log_queries.create_modification(session, log_id, mod_type, mod_value)
+    else:
+        # Custom/predefined action: remove any existing modification (action has its own points)
+        if modification:
+            logger.info(f"Removing modification for log {log_id} - using action points ({action.points})")
+            log_queries.delete_modification(session, modification.id)
+        else:
+            logger.info(f"No modification to remove - using action points ({action.points})")
 
-        # [6] Update department associations
-        deleted_count = log_queries.delete_department_logs_by_log_id(session, log_id)
-        write_log(f"Deleted {deleted_count} existing department associations")
+    # [6] Update department associations
+    deleted_count = log_queries.delete_department_logs_by_log_id(session, log_id)
+    logger.info(f"Deleted {deleted_count} existing department associations")
 
-        write_log(f"Creating {len(body.departments_id)} new department associations")
-        for dept_id in body.departments_id:
-            log_queries.create_department_log(session, dept_id, log_id)
-            write_log(f"Associated department {dept_id} with log {log_id}")
+    logger.info(f"Creating {len(body.departments_id)} new department associations")
+    for dept_id in body.departments_id:
+        log_queries.create_department_log(session, dept_id, log_id)
+        logger.info(f"Associated department {dept_id} with log {log_id}")
 
-        session.commit()
-        write_log("Successfully updated custom department points")
-        return {"message": "Successfully updated custom department points"}
+    session.commit()
+    logger.info("Successfully updated custom department points")
+    return {"message": "Successfully updated custom department points"}
 
 
 @router.post("/members", status_code=status.HTTP_201_CREATED, response_model=CustomPointsCreatedResponse)
 def give_member_custom_points(body: CustomMemberPointsRequest, session: DB):
-    with LogFile("custom_member_points") as log:
-        try:
-            write_log_title("Custom Member Points")
-            if body.event_id:
-                write_log(f"Validating event with id {body.event_id}")
-                event = events_queries.get_event_by_id(session, body.event_id)
-                if not event:
+    try:
+        logger.info("Custom Member Points")
+        if body.event_id:
+            logger.info(f"Validating event with id {body.event_id}")
+            event = events_queries.get_event_by_id(session, body.event_id)
+            if not event:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {body.event_id} not found"
+                )
+        else:
+            new_event_model = Events_model(
+                name=body.event_name,
+                description=None,
+                location="none",
+                location_type=body.location_type,
+                start_datetime=body.start_datetime,
+                end_datetime=body.end_datetime,
+                status="closed",
+                image_url=None,
+                is_official=0,
+            )
+            event = events_queries.create_event(session, new_event_model)
+            if not event:
+                raise DataIntegrityError("Failed to create event")
+
+        details_len = len(body.point_deatils)
+        for i, point_detail in enumerate(body.point_deatils):
+            logger.info(f"Processing point detail [{i + 1}/{details_len}]")
+            if point_detail.action_id:
+                logger.info(f"Validating action with id {point_detail.action_id}")
+                action = actions_queries.get_action_by_id(session, point_detail.action_id)
+                if not action:
                     raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {body.event_id} not found"
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Action with id {point_detail.action_id} not found",
                     )
             else:
-                new_event_model = Events_model(
-                    name=body.event_name,
-                    description=None,
-                    location="none",
-                    location_type=body.location_type,
-                    start_datetime=body.start_datetime,
-                    end_datetime=body.end_datetime,
-                    status="closed",
-                    image_url=None,
-                    is_official=0,
-                )
-                event = events_queries.create_event(session, new_event_model)
-                if not event:
-                    raise DataIntegrityError("Failed to create event")
-
-            details_len = len(body.point_deatils)
-            for i, point_detail in enumerate(body.point_deatils):
-                write_log(f"Processing point detail [{i + 1}/{details_len}]")
-                if point_detail.action_id:
-                    write_log(f"Validating action with id {point_detail.action_id}")
-                    action = actions_queries.get_action_by_id(session, point_detail.action_id)
-                    if not action:
-                        raise HTTPException(
-                            status_code=status.HTTP_404_NOT_FOUND,
-                            detail=f"Action with id {point_detail.action_id} not found",
-                        )
-                else:
-                    write_log("No action id provided, checking name")
-                    if point_detail.action_name:
-                        write_log(f"Action name provided creating action with name {point_detail.action_name}")
-                        action = actions_queries.create_action(
-                            session, point_detail.action_name, point_detail.points, "bonus"
-                        )
-                    else:
-                        write_log("No action name provided, inferring from points value")
-                        if point_detail.points > 0:
-                            action = actions_queries.get_bonus_action(session)
-                            write_log(
-                                f"Points are {point_detail.points}, using Bonus action {action.action_name} with id {action.id}"
-                            )
-                        else:
-                            action = actions_queries.get_discount_action(session)
-                            write_log(
-                                f"Points are {point_detail.points}, using Discount action {action.action_name} with id {action.id}"
-                            )
-
-                new_log = log_queries.create_log(session, event.id, action.id)
-                write_log(f"Created log with id {new_log.id} for event {event.name} and action {action.action_name}")
-
-                if point_detail.action_id is None and point_detail.action_name is None:
-                    mod_type = "bonus" if point_detail.points > 0 else "discount"
-                    mod_value = abs(point_detail.points)
-                    log_queries.create_modification(session, new_log.id, mod_type, mod_value)
-                    write_log(
-                        f"Created modification for log id {new_log.id} with type {mod_type} and value {mod_value}"
+                logger.info("No action id provided, checking name")
+                if point_detail.action_name:
+                    logger.info(f"Action name provided creating action with name {point_detail.action_name}")
+                    action = actions_queries.create_action(
+                        session, point_detail.action_name, point_detail.points, "bonus"
                     )
                 else:
-                    write_log(f"Skipping modification - using action points ({action.points})")
+                    logger.info("No action name provided, inferring from points value")
+                    if point_detail.points > 0:
+                        action = actions_queries.get_bonus_action(session)
+                        logger.info(
+                            f"Points are {point_detail.points}, using Bonus action {action.action_name} with id {action.id}"
+                        )
+                    else:
+                        action = actions_queries.get_discount_action(session)
+                        logger.info(
+                            f"Points are {point_detail.points}, using Discount action {action.action_name} with id {action.id}"
+                        )
 
-                for member_id in point_detail.member_ids:
-                    write_log(f"Giving points to member with id {member_id}")
-                    log_queries.create_member_log(session, member_id, new_log.id)
+            new_log = log_queries.create_log(session, event.id, action.id)
+            logger.info(f"Created log with id {new_log.id} for event {event.name} and action {action.action_name}")
 
-            session.commit()
-            write_log("Successfully given custom points to members")
-            return {"event_id": event.id, "message": "Successfully given custom points to members"}
+            if point_detail.action_id is None and point_detail.action_name is None:
+                mod_type = "bonus" if point_detail.points > 0 else "discount"
+                mod_value = abs(point_detail.points)
+                log_queries.create_modification(session, new_log.id, mod_type, mod_value)
+                logger.info(f"Created modification for log id {new_log.id} with type {mod_type} and value {mod_value}")
+            else:
+                logger.info(f"Skipping modification - using action points ({action.points})")
 
-        finally:
-            write_log_json_to(log.file, body.model_dump(mode="json"))
-            write_log("Finished processing custom member points request")
+            for member_id in point_detail.member_ids:
+                logger.info(f"Giving points to member with id {member_id}")
+                log_queries.create_member_log(session, member_id, new_log.id)
+
+        session.commit()
+        logger.info("Successfully given custom points to members")
+        return {"event_id": event.id, "message": "Successfully given custom points to members"}
+
+    finally:
+        logger.debug("request body: %s", body.model_dump(mode="json"))
+        logger.info("Finished processing custom member points request")
 
 
 @router.get("/members/{event_id}", response_model=CustomMemberPointsResponse)
 def get_member_custom_points(event_id: int, session: DB):
-    with LogFile("get_custom_member_points"):
-        write_log_title(f"Get Custom Member Points for Event {event_id}")
+    logger.info(f"Get Custom Member Points for Event {event_id}")
 
-        write_log(f"Validating event with id {event_id}")
-        event = events_queries.get_event_by_id(session, event_id)
-        if not event:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {event_id} not found")
+    logger.info(f"Validating event with id {event_id}")
+    event = events_queries.get_event_by_id(session, event_id)
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {event_id} not found")
 
-        write_log(f"Fetching custom member points for event {event_id}")
-        raw_points = log_queries.get_custom_member_points_by_event(session, event_id)
+    logger.info(f"Fetching custom member points for event {event_id}")
+    raw_points = log_queries.get_custom_member_points_by_event(session, event_id)
 
-        point_details = []
-        for point_data in raw_points:
-            points = point_data["mod_value"] if point_data["mod_type"] == "bonus" else -point_data["mod_value"]
-            point_details.append(
-                {
-                    "log_id": point_data["log_id"],
-                    "member_ids": point_data["member_ids"],
-                    "points": points,
-                    "action_id": point_data["action_id"],
-                    "action_name": point_data["action_name"],
-                }
-            )
-
-        write_log(f"Found {len(point_details)} custom point entries for event {event_id}")
-        response = CustomMemberPointsResponse(
-            event_id=event.id,
-            start_datetime=event.start_datetime,
-            end_datetime=event.end_datetime,
-            event_name=event.name,
-            point_details=point_details,
+    point_details = []
+    for point_data in raw_points:
+        points = point_data["mod_value"] if point_data["mod_type"] == "bonus" else -point_data["mod_value"]
+        point_details.append(
+            {
+                "log_id": point_data["log_id"],
+                "member_ids": point_data["member_ids"],
+                "points": points,
+                "action_id": point_data["action_id"],
+                "action_name": point_data["action_name"],
+            }
         )
-        write_log("Successfully retrieved custom member points")
-        return response
+
+    logger.info(f"Found {len(point_details)} custom point entries for event {event_id}")
+    response = CustomMemberPointsResponse(
+        event_id=event.id,
+        start_datetime=event.start_datetime,
+        end_datetime=event.end_datetime,
+        event_name=event.name,
+        point_details=point_details,
+    )
+    logger.info("Successfully retrieved custom member points")
+    return response
 
 
 @router.delete("/departments/{log_id}", response_model=MessageResponse)
 def delete_department_custom_points(log_id: int, session: DB):
-    with LogFile("delete_custom_department_points"):
-        write_log_title(f"Delete Custom Department Points for Log {log_id}")
+    logger.info(f"Delete Custom Department Points for Log {log_id}")
 
-        write_log(f"Validating log with id {log_id}")
-        existing_log = log_queries.get_log_by_id(session, log_id)
-        if not existing_log:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
+    logger.info(f"Validating log with id {log_id}")
+    existing_log = log_queries.get_log_by_id(session, log_id)
+    if not existing_log:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
 
-        write_log(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
+    logger.info(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
 
-        deleted_mod_count = 0
-        modification = log_queries.get_modification_by_log_id(session, log_id)
-        if modification:
-            write_log(f"Deleting modification with id {modification.id}")
-            log_queries.delete_modification(session, modification.id)
-            deleted_mod_count = 1
+    deleted_mod_count = 0
+    modification = log_queries.get_modification_by_log_id(session, log_id)
+    if modification:
+        logger.info(f"Deleting modification with id {modification.id}")
+        log_queries.delete_modification(session, modification.id)
+        deleted_mod_count = 1
 
-        deleted_dept_count = log_queries.delete_department_logs_by_log_id(session, log_id)
-        write_log(f"Deleted {deleted_dept_count} department associations")
+    deleted_dept_count = log_queries.delete_department_logs_by_log_id(session, log_id)
+    logger.info(f"Deleted {deleted_dept_count} department associations")
 
-        log_queries.delete_log(session, log_id)
-        write_log(f"Deleted log {log_id}")
+    log_queries.delete_log(session, log_id)
+    logger.info(f"Deleted log {log_id}")
 
-        session.commit()
-        write_log("Successfully deleted custom department points")
-        return {"message": "Successfully deleted custom department points"}
+    session.commit()
+    logger.info("Successfully deleted custom department points")
+    return {"message": "Successfully deleted custom department points"}
 
 
 @router.delete("/members/{log_id}", response_model=MessageResponse)
 def delete_member_custom_points(log_id: int, session: DB):
-    with LogFile("delete_custom_member_points"):
-        write_log_title(f"Delete Custom Member Points for Log {log_id}")
+    logger.info(f"Delete Custom Member Points for Log {log_id}")
 
-        write_log(f"Validating log with id {log_id}")
-        existing_log = log_queries.get_log_by_id(session, log_id)
-        if not existing_log:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
+    logger.info(f"Validating log with id {log_id}")
+    existing_log = log_queries.get_log_by_id(session, log_id)
+    if not existing_log:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
 
-        write_log(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
+    logger.info(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
 
-        modification = log_queries.get_modification_by_log_id(session, log_id)
-        if modification:
-            write_log(f"Deleting modification with id {modification.id}")
-            log_queries.delete_modification(session, modification.id)
+    modification = log_queries.get_modification_by_log_id(session, log_id)
+    if modification:
+        logger.info(f"Deleting modification with id {modification.id}")
+        log_queries.delete_modification(session, modification.id)
 
-        deleted_member_count = log_queries.delete_member_logs_by_log_id(session, log_id)
-        write_log(f"Deleted {deleted_member_count} member associations")
+    deleted_member_count = log_queries.delete_member_logs_by_log_id(session, log_id)
+    logger.info(f"Deleted {deleted_member_count} member associations")
 
-        log_queries.delete_log(session, log_id)
-        write_log(f"Deleted log {log_id}")
+    log_queries.delete_log(session, log_id)
+    logger.info(f"Deleted log {log_id}")
 
-        session.commit()
-        write_log("Successfully deleted custom member points")
-        return {"message": "Successfully deleted custom member points"}
+    session.commit()
+    logger.info("Successfully deleted custom member points")
+    return {"message": "Successfully deleted custom member points"}
 
 
 @router.put("/members/{log_id}", response_model=MessageResponse)
 def update_member_custom_points(log_id: int, body: MemberPointDetails, session: DB):
-    with LogFile("update_custom_member_points"):
-        write_log_title(f"Update Custom Member Points for Log {log_id}")
+    logger.info(f"Update Custom Member Points for Log {log_id}")
 
-        write_log(f"Validating log with id {log_id}")
-        existing_log = log_queries.get_log_by_id(session, log_id)
-        if not existing_log:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
-        write_log(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
+    logger.info(f"Validating log with id {log_id}")
+    existing_log = log_queries.get_log_by_id(session, log_id)
+    if not existing_log:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
+    logger.info(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
 
-        if body.action_id:
-            write_log(f"Validating action with id {body.action_id}")
-            action = actions_queries.get_action_by_id(session, body.action_id)
-            if not action:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail=f"Action with id {body.action_id} not found"
-                )
+    if body.action_id:
+        logger.info(f"Validating action with id {body.action_id}")
+        action = actions_queries.get_action_by_id(session, body.action_id)
+        if not action:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Action with id {body.action_id} not found"
+            )
+    else:
+        logger.info("No action id provided, inferring from points value")
+        if body.points > 0:
+            action = actions_queries.get_bonus_action(session)
+            logger.info(f"Points are {body.points}, using Bonus action {action.action_name} with id {action.id}")
         else:
-            write_log("No action id provided, inferring from points value")
-            if body.points > 0:
-                action = actions_queries.get_bonus_action(session)
-                write_log(f"Points are {body.points}, using Bonus action {action.action_name} with id {action.id}")
-            else:
-                action = actions_queries.get_discount_action(session)
-                write_log(f"Points are {body.points}, using Discount action {action.action_name} with id {action.id}")
+            action = actions_queries.get_discount_action(session)
+            logger.info(f"Points are {body.points}, using Discount action {action.action_name} with id {action.id}")
 
-        write_log(f"Validating {len(body.member_ids)} members")
-        for mem_id in body.member_ids:
-            members_queries.get_member_by_id(session, mem_id)
+    logger.info(f"Validating {len(body.member_ids)} members")
+    for mem_id in body.member_ids:
+        members_queries.get_member_by_id(session, mem_id)
 
-        if existing_log.action_id != action.id:
-            write_log(f"Updating log action from {existing_log.action_id} to {action.id}")
-            log_queries.update_log_action_id(session, log_id, action.id)
+    if existing_log.action_id != action.id:
+        logger.info(f"Updating log action from {existing_log.action_id} to {action.id}")
+        log_queries.update_log_action_id(session, log_id, action.id)
 
-        modification = log_queries.get_modification_by_log_id(session, log_id)
-        if body.action_id is None and body.action_name is None:
-            mod_type = "bonus" if body.points > 0 else "discount"
-            mod_value = abs(body.points)
-            if modification:
-                write_log(f"Updating modification for log {log_id}: type={mod_type}, value={mod_value}")
-                log_queries.update_modification(session, modification.id, mod_type, mod_value)
-            else:
-                write_log("No modification found, creating new one")
-                log_queries.create_modification(session, log_id, mod_type, mod_value)
+    modification = log_queries.get_modification_by_log_id(session, log_id)
+    if body.action_id is None and body.action_name is None:
+        mod_type = "bonus" if body.points > 0 else "discount"
+        mod_value = abs(body.points)
+        if modification:
+            logger.info(f"Updating modification for log {log_id}: type={mod_type}, value={mod_value}")
+            log_queries.update_modification(session, modification.id, mod_type, mod_value)
         else:
-            if modification:
-                write_log(f"Removing modification for log {log_id} - using action points ({action.points})")
-                log_queries.delete_modification(session, modification.id)
-            else:
-                write_log(f"No modification to remove - using action points ({action.points})")
+            logger.info("No modification found, creating new one")
+            log_queries.create_modification(session, log_id, mod_type, mod_value)
+    else:
+        if modification:
+            logger.info(f"Removing modification for log {log_id} - using action points ({action.points})")
+            log_queries.delete_modification(session, modification.id)
+        else:
+            logger.info(f"No modification to remove - using action points ({action.points})")
 
-        deleted_count = log_queries.delete_member_logs_by_log_id(session, log_id)
-        write_log(f"Deleted {deleted_count} existing member associations")
+    deleted_count = log_queries.delete_member_logs_by_log_id(session, log_id)
+    logger.info(f"Deleted {deleted_count} existing member associations")
 
-        write_log(f"Creating {len(body.member_ids)} new member associations")
-        for mem_id in body.member_ids:
-            log_queries.create_member_log(session, mem_id, log_id)
-            write_log(f"Associated member {mem_id} with log {log_id}")
+    logger.info(f"Creating {len(body.member_ids)} new member associations")
+    for mem_id in body.member_ids:
+        log_queries.create_member_log(session, mem_id, log_id)
+        logger.info(f"Associated member {mem_id} with log {log_id}")
 
-        session.commit()
-        write_log("Successfully updated custom member points")
-        return {"message": "Successfully updated custom member points"}
+    session.commit()
+    logger.info("Successfully updated custom member points")
+    return {"message": "Successfully updated custom member points"}
