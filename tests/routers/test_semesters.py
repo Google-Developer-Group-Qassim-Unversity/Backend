@@ -1,6 +1,13 @@
 from fastapi.testclient import TestClient
 
-from tests.utils import assert_2xx, assert_bad_request, assert_conflict, assert_not_found
+from tests.utils import (
+    assert_2xx,
+    assert_bad_request,
+    assert_conflict,
+    assert_forbidden,
+    assert_not_found,
+    assert_unprocessable,
+)
 
 
 def make_semester(**overrides):
@@ -72,6 +79,14 @@ def test_update_semester_dates(super_admin_client: TestClient):
     assert response.json()["end_date"] == "2026-09-10"
 
 
+def test_update_requires_explicit_visibility(super_admin_client: TestClient):
+    """Omitting is_public must not silently flip a private semester back to public."""
+    response = super_admin_client.put(
+        "/semesters/475", json={"name": "Summer 2026", "start_date": "2026-06-28", "end_date": "2026-08-20"}
+    )
+    assert_unprocessable(response)
+
+
 def test_update_unknown_semester(super_admin_client: TestClient):
     response = super_admin_client.put(
         "/semesters/999", json={"start_date": "2026-06-01", "end_date": "2026-09-10", "is_public": True}
@@ -128,6 +143,33 @@ def test_points_use_the_current_semester_by_default(client: TestClient):
 
 def test_points_reject_unknown_semester(client: TestClient):
     assert_not_found(client.get("/points/members/total?semester=999"))
+
+
+# NOTE: the /points routes depend on `config.CLERK_GUARD_optional` directly rather than on
+# helpers.optional_clerk_guard, which is what conftest overrides - so every /points request
+# below is seen by the app as unauthenticated, whichever client fixture issues it.
+
+
+def test_points_reject_a_private_semester_asked_for_by_id(super_admin_client: TestClient):
+    assert_2xx(
+        super_admin_client.put(
+            "/semesters/471",
+            json={"name": "Fall 2025", "start_date": "2025-08-24", "end_date": "2026-01-17", "is_public": False},
+        )
+    )
+    assert_forbidden(super_admin_client.get("/points/members/total?semester=471"))
+
+
+def test_points_default_falls_back_when_the_current_semester_is_private(super_admin_client: TestClient):
+    """A private current semester must not 403 every default /points request."""
+    assert_2xx(
+        super_admin_client.put(
+            "/semesters/475",
+            json={"name": "Summer 2026", "start_date": "2026-06-28", "end_date": "2026-08-20", "is_public": False},
+        )
+    )
+    assert_2xx(super_admin_client.get("/points/members/total"))
+    assert_2xx(super_admin_client.get("/points/departments/total"))
 
 
 def test_events_filter_uses_db_semester_dates(admin_client: TestClient):

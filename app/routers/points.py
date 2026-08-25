@@ -3,6 +3,7 @@ from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import points as points_queries, semesters as semesters_queries
 from app.DB.main import SessionLocal
 from app.DB.schema import Semesters
+from sqlalchemy.orm import Session
 from app.routers.models import BaseClassModel
 from datetime import date, datetime
 from app.helpers import is_super_admin
@@ -80,6 +81,29 @@ def _validate_semester_access(semester: Semesters, credentials: HTTPAuthorizatio
             )
 
 
+def _resolve_requested_semester(
+    session: Session, semester_id: int | None, credentials: HTTPAuthorizationCredentials | None
+) -> Semesters:
+    """Resolve the semester a request is asking for, or its default, and authorize it.
+
+    An explicit ``?semester`` is honoured as-is. When none is given the default is
+    the current semester - but a public caller must not start getting 403s just
+    because a super admin made the current semester private, so they fall back to
+    the newest public one, matching what ``/points/semesters`` advertises.
+    """
+    if semester_id is not None:
+        semester = resolve_semester(session, semester_id)
+    else:
+        semester = resolve_semester(session, None)
+        if not semester.is_public and not (credentials and is_super_admin(credentials)):
+            public = semesters_queries.get_semesters(session, public_only=True)
+            if public:
+                semester = public[0]
+
+    _validate_semester_access(semester, credentials)
+    return semester
+
+
 # ============ routes ============
 
 
@@ -108,8 +132,7 @@ def get_all_members_points(
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     with SessionLocal() as session:
-        resolved = resolve_semester(session, semester)
-        _validate_semester_access(resolved, credentials)
+        resolved = _resolve_requested_semester(session, semester, credentials)
         start_date, end_date = semester_date_bounds(resolved)
         return points_queries.get_members_points_semester(session, start_date, end_date)
 
@@ -121,8 +144,7 @@ def get_member_points(
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     with SessionLocal() as session:
-        resolved = resolve_semester(session, semester)
-        _validate_semester_access(resolved, credentials)
+        resolved = _resolve_requested_semester(session, semester, credentials)
         start_date, end_date = semester_date_bounds(resolved)
 
         member_points = points_queries.get_members_points_semester(session, start_date, end_date, member_id)
@@ -143,8 +165,7 @@ def get_all_departments_points(
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     with SessionLocal() as session:
-        resolved = resolve_semester(session, semester)
-        _validate_semester_access(resolved, credentials)
+        resolved = _resolve_requested_semester(session, semester, credentials)
         start_date, end_date = semester_date_bounds(resolved)
         departments_points = points_queries.get_departments_points_semester(session, start_date, end_date)
     return Response_department_points_model(
@@ -164,8 +185,7 @@ def get_department_points(
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
     with SessionLocal() as session:
-        resolved = resolve_semester(session, semester)
-        _validate_semester_access(resolved, credentials)
+        resolved = _resolve_requested_semester(session, semester, credentials)
         start_date, end_date = semester_date_bounds(resolved)
 
         department_points = points_queries.get_departments_points_semester(session, start_date, end_date, department_id)

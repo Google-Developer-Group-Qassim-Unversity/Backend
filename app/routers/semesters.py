@@ -46,7 +46,8 @@ class UpdateSemester_model(BaseClassModel):
     name: str | None = None
     start_date: date
     end_date: date
-    is_public: bool = True
+    # No default: omitting this would silently flip a private semester back to public.
+    is_public: bool
 
 
 # ============ helpers ============
