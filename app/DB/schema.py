@@ -364,7 +364,10 @@ class MemberProfiles(Base):
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True, autoincrement=True)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, unique=True)
-    uuid: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    # No index=True here: combined with unique=True SQLAlchemy would emit a single
+    # index named ix_member_profiles_uuid, but the DB has a uq_ unique constraint
+    # plus the explicit idx_ index declared in __table_args__ above.
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     custom_name: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     theme_id: Mapped[str] = mapped_column(String(50), nullable=False, server_default=text("'gdg-blue'"))
     name_language: Mapped[MemberProfilesNameLanguage] = mapped_column(
