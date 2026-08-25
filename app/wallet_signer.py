@@ -9,6 +9,8 @@ import zipfile
 from typing import Any, Dict, List, Optional
 
 import jwt
+
+from app.config import config
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.serialization import pkcs12, pkcs7, Encoding
@@ -60,9 +62,9 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     theme_id = card_data.get("themeId", DEFAULT_THEME)
     theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
 
-    pass_type_id = os.getenv("APPLE_PASS_TYPE_ID", "pass.pass.com.gdg-q.wallet")
-    team_id = os.getenv("APPLE_TEAM_ID", "7NN7W24VXR")
-    p12_password_str = os.getenv("APPLE_P12_PASSWORD")
+    pass_type_id = config.APPLE_PASS_TYPE_ID
+    team_id = config.APPLE_TEAM_ID
+    p12_password_str = config.APPLE_P12_PASSWORD
     if not p12_password_str:
         raise ValueError("APPLE_P12_PASSWORD environment variable is not configured")
     p12_password = p12_password_str.encode("utf-8")
@@ -160,8 +162,8 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     files_to_pack["manifest.json"] = manifest_bytes
 
     # 3. Load Apple Developer Signing Certificate and Private Key
-    p12_base64 = os.getenv("APPLE_P12_BASE64")
-    p12_path = os.getenv("APPLE_P12_PATH", os.path.join(os.path.dirname(__file__), "certificates", "Certificates.p12"))
+    p12_base64 = config.APPLE_P12_BASE64
+    p12_path = config.APPLE_P12_PATH or os.path.join(os.path.dirname(__file__), "certificates", "Certificates.p12")
 
     p12_bytes = None
     if p12_base64:
@@ -175,10 +177,8 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
 
     private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(p12_bytes, p12_password)
 
-    wwdr_base64 = os.getenv("APPLE_WWDR_BASE64")
-    wwdr_path = os.getenv(
-        "APPLE_WWDR_PATH", os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer")
-    )
+    wwdr_base64 = config.APPLE_WWDR_BASE64
+    wwdr_path = config.APPLE_WWDR_PATH or os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer")
 
     wwdr_cert = None
     if wwdr_base64:
@@ -226,10 +226,10 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     Generates a signed Google Wallet Save Link (JWT) using RS256 algorithm.
     Uses full card Figma artwork for heroImage to match the complete card design.
     """
-    issuer_id = os.getenv("GOOGLE_WALLET_ISSUER_ID", "BCR2DN6DTK643EAC").strip()
-    class_id = os.getenv("GOOGLE_WALLET_CLASS_ID", "").strip() or f"{issuer_id}.gdgq-card"
-    service_account_email = os.getenv("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "").strip()
-    private_key_pem = os.getenv("GOOGLE_WALLET_PRIVATE_KEY", "")
+    issuer_id = config.GOOGLE_WALLET_ISSUER_ID.strip()
+    class_id = config.GOOGLE_WALLET_CLASS_ID.strip() or f"{issuer_id}.gdgq-card"
+    service_account_email = config.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL.strip()
+    private_key_pem = config.GOOGLE_WALLET_PRIVATE_KEY
 
     if not service_account_email.endswith(".gserviceaccount.com"):
         raise ValueError("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL is missing or invalid")

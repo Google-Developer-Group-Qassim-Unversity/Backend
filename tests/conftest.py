@@ -54,6 +54,7 @@ for key, value in required_env_vars.items():
 # Safe to import at module level now: the engine is built lazily on first use,
 # so importing the app no longer needs DATABASE_URL.
 import app.DB.main as db_main  # noqa: E402
+from app.config import reload_settings  # noqa: E402
 from app.dependencies import get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.DB.schema import (  # noqa: E402
@@ -64,6 +65,18 @@ from app.DB.schema import (  # noqa: E402
     Members,
     MembersGender,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_settings():
+    """Rebuild Settings for each test.
+
+    get_settings() is lru_cached, so a test that monkeypatches an environment
+    variable would otherwise read whatever the first test cached.
+    """
+    reload_settings()
+    yield
+    reload_settings()
 
 
 @pytest.fixture(scope="session")

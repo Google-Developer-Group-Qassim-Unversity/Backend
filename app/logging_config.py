@@ -10,7 +10,6 @@ interleave into something unreadable.
 """
 
 import logging
-import os
 import sys
 from contextvars import ContextVar
 
@@ -38,7 +37,9 @@ def configure_logging(level: str | None = None) -> None:
     Safe to call more than once; existing root handlers are replaced so a second
     call cannot double every line.
     """
-    resolved = (level or os.getenv("LOG_LEVEL") or "INFO").upper()
+    from app.config import config  # imported here: logging is configured before settings are needed
+
+    resolved = (level or config.LOG_LEVEL).upper()
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter(LOG_FORMAT))

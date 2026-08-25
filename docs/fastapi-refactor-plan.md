@@ -482,14 +482,59 @@ installed: `~/.pm2/logs` had reached 468M with a single 312M `GDG-backend-out.lo
 that was never rotated, on a disk at 81%. Existing archives were compressed
 94% (468M → 31M) and growth is now bounded to roughly 280M worst case.
 
-### Phase 6 — Settings and injectable clients
+### Phase 6 — Settings and injectable clients ✅ DONE
 
-1. Port `config.py` to `pydantic-settings` `BaseSettings`, keeping the same
-   attribute names so nothing else changes. Instantiate once at startup.
-2. Wrap the external clients as dependencies: `get_r2_client`, `get_certificate_client`,
-   `get_leaderboard_client`. Tests then override them instead of patching modules.
-3. Create the `httpx.AsyncClient` once in `lifespan` and inject it, instead of
-   opening a new client per call in 5 places.
+1. **`config.py` is now backed by `pydantic-settings`.** `Settings` declares all
+   28 variables in one place; `Config` stays as a facade so every `config.X` call
+   site is unchanged.
+2. **The 11 stray Wallet variables came in with it.** `wallet_signer.py` and
+   `wallet.py` read them straight from `os.getenv`, ignoring the module whose
+   docstring claims to own all configuration. `grep os.getenv app/` outside
+   `config.py` now returns nothing.
+3. **`app/clients.py`** holds the external clients. `get_r2_client` is a FastAPI
+   dependency (`R2Client`); the shared `httpx.AsyncClient` is opened and closed
+   by the lifespan and reached through `get_http_client()`, because its callers
+   run in `BackgroundTasks` where dependency injection no longer reaches.
+4. **`tests/routers/test_upload.py` rewritten** to use
+   `dependency_overrides[get_r2_client]` instead of
+   `patch("app.routers.upload.get_r2_client")`. Four tests became nine, including
+   one asserting the object actually lands in the bucket - the old tests only
+   checked the returned URL, so a route that built a plausible URL without
+   storing anything would have passed.
+
+**Two deliberate non-changes:**
+
+- **Settings stay lazy, and every field is optional.** Required-at-import would
+  be the obvious `pydantic-settings` shape, but it breaks two things this
+  codebase relies on: an instance without R2 or Wallet credentials must still
+  boot, and the test suite imports `app.main` before the MySQL container exists.
+  `get_settings()` is `lru_cache`d and the accessors raise `MissingSettingError`
+  at point of use, preserving today's behaviour with a better message.
+- **`.env.local` is still loaded by `load_dotenv(override=True)`, not
+  `env_file`.** pydantic-settings gives real environment variables priority over
+  the file; this codebase has always done the opposite. Using `env_file` would
+  have silently flipped that precedence for anyone with both.
+
+**Wallet defaults kept, TODO recorded.** `APPLE_TEAM_ID`, `APPLE_PASS_TYPE_ID`
+and `GOOGLE_WALLET_ISSUER_ID` still fall back to real production identifiers.
+`app/config.py` carries a TODO with why they should go (a deployment that
+forgets them signs passes with production identity rather than failing) and what
+removing them requires.
+
+**A bug avoided:** the first pass at pooling replaced four
+`async with httpx.AsyncClient(timeout=T)` blocks with one shared client at the
+default 60s, which would have cut the two 120s certificate calls short. The
+timeouts now ride on the individual requests; an AST check confirms all four
+original values survived. The two *synchronous* `httpx.Client(timeout=120)`
+blocks were left alone - they belong to `emails.py`'s split in Phase 7.
+
+**Docs:** `docs/ENVIRONMENT_VARIABLES.md` gained a generated reference for all
+28 variables, grouped by subsystem, flagging which are needed at boot and which
+only when a feature runs. It previously documented one.
+`tests/test_settings.py` fails if the table and the model drift apart.
+
+**Verified:** 409 passed / 34 skipped / 1 xfailed (was 397). Route inventory
+identical. Ruff 4 and pyright 42, both unchanged.
 
 ### Phase 7 — Extract services, fix async, add tests
 
@@ -516,7 +561,7 @@ that was never rotated, on a disk at 81%. Existing archives were compressed
 | 3. Auth dependencies ✅ | −59 signature params, auth inventory test | medium |
 | 4. Router config + response models ✅ | typed frontend client | medium |
 | 5. Logging middleware ✅ | −139 lines, Sentry breadcrumbs | small |
-| 6. Settings + clients | testable externals | small |
+| 6. Settings + clients ✅ | testable externals | small |
 | 7. Services + async fix + tests | coverage on 3,600 untested lines | large |
 
 Phases 1–3 are worth doing back to back; they're the ones that make the rest cheap.

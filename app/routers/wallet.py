@@ -515,6 +515,6 @@ async def wallet_health():
     """
     Returns the status of the Wallet signing engine and available credentials.
     """
-    has_apple_p12 = bool(os.getenv("APPLE_P12_BASE64")) or bool(os.getenv("APPLE_P12_PASSWORD"))
-    has_google_key = bool(os.getenv("GOOGLE_WALLET_PRIVATE_KEY"))
+    has_apple_p12 = bool(config.APPLE_P12_BASE64) or bool(config.APPLE_P12_PASSWORD)
+    has_google_key = bool(config.GOOGLE_WALLET_PRIVATE_KEY)
     return {"status": "healthy", "apple_wallet_configured": has_apple_p12, "google_wallet_configured": has_google_key}

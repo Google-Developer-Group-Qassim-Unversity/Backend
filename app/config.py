@@ -1,14 +1,30 @@
-"""
-All environment variables and global configuration should be accessed through this module.
+"""All environment variables and global configuration.
+
+Backed by ``pydantic-settings`` so every variable the app reads is declared in
+one place and typed. ``config`` keeps the attribute names it has always had, so
+call sites did not change.
+
+Two deliberate choices:
+
+- **``.env.local`` is loaded by ``load_dotenv(override=True)``, not by
+  pydantic's ``env_file``.** pydantic-settings gives real environment variables
+  priority over the file; this codebase has always done the opposite. Keeping
+  the explicit call preserves that precedence.
+- **Settings are built lazily and every field is optional.** Values are read
+  when a feature needs them, not at import. An instance with no R2 or Wallet
+  credentials still boots and serves everything else, and the test suite can
+  import the app before the database container exists. Accessors raise a clear
+  error when something genuinely required is missing.
 """
 
-from dotenv import load_dotenv
 import os
 from functools import lru_cache
-from typing import Optional
 from pathlib import Path
+from typing import Optional
+
+from dotenv import load_dotenv
 from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
-from enum import Enum
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 if os.getenv("ENV") != "testing":
     load_dotenv(".env.local", override=True)
@@ -25,11 +41,109 @@ CLUB_EMAIL_THRESHOLD = 500
 EMAIL_THRESHOLDS: dict[str, int] = {"info@kerneltics.com": 2000, "gdg.qu1@gmail.com": 500}
 
 
+class MissingSettingError(RuntimeError):
+    """A feature was used without the environment variable it needs."""
+
+    def __init__(self, name: str):
+        super().__init__(f"⚠️ Environment variable '{name}' is not set.")
+
+
+class Settings(BaseSettings):
+    """Every environment variable the application reads.
+
+    All optional at load time; see the module docstring.
+    """
+
+    model_config = SettingsConfigDict(case_sensitive=True, extra="ignore")
+
+    ENV: str = "Production"
+    LOG_LEVEL: str = "INFO"
+    SENTRY_DSN: Optional[str] = None
+
+    DATABASE_URL: Optional[str] = None
+    CLERK_JWKS_URL: Optional[str] = None
+    JWT_SECRET: Optional[str] = None
+
+    GOOGLE_CLIENT_ID: Optional[str] = None
+    GOOGLE_CLIENT_SECRET: Optional[str] = None
+
+    CERTIFICATE_API_URL: Optional[str] = None
+    MEMBER_APP_URL: Optional[str] = None
+    MEMBER_APP_REVALIDATE_SECRET: Optional[str] = None
+    SES_FROM_ADDRESS: Optional[str] = None
+
+    R2_ACCOUNT_ID: Optional[str] = None
+    R2_ACCESS_KEY_ID: Optional[str] = None
+    R2_SECRET_ACCESS_KEY: Optional[str] = None
+    R2_BUCKET_NAME: Optional[str] = None
+    R2_PUBLIC_URL: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # Wallet
+    #
+    # TODO: remove the hardcoded fallbacks below.
+    #
+    # APPLE_TEAM_ID, APPLE_PASS_TYPE_ID and GOOGLE_WALLET_ISSUER_ID default to
+    # this club's real production identifiers. They were inlined in
+    # app/wallet_signer.py before this module existed and are reproduced here
+    # unchanged so that porting the settings did not also change behaviour.
+    #
+    # Why they should go: a deployment that forgets these variables does not
+    # fail - it silently signs passes with production identity. That is the
+    # wrong failure mode for a signing credential, and it means staging can
+    # issue passes indistinguishable from production ones. They are also
+    # organisation identifiers sitting in a public-ish repository.
+    #
+    # What removing them requires: confirm the values are set in Infisical for
+    # every environment that issues wallet passes (prod at minimum), then drop
+    # the defaults here and let the accessors raise. Wallet passes are exercised
+    # by app/routers/wallet.py and tests/test_google_wallet_signer.py, which
+    # sets its own values via monkeypatch and is unaffected either way.
+    # ------------------------------------------------------------------
+    APPLE_TEAM_ID: str = "7NN7W24VXR"
+    APPLE_PASS_TYPE_ID: str = "pass.pass.com.gdg-q.wallet"
+    APPLE_P12_BASE64: Optional[str] = None
+    APPLE_P12_PASSWORD: Optional[str] = None
+    APPLE_P12_PATH: Optional[str] = None
+    APPLE_WWDR_BASE64: Optional[str] = None
+    APPLE_WWDR_PATH: Optional[str] = None
+    GOOGLE_WALLET_ISSUER_ID: str = "BCR2DN6DTK643EAC"
+    GOOGLE_WALLET_CLASS_ID: str = ""
+    GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL: str = ""
+    GOOGLE_WALLET_PRIVATE_KEY: str = ""
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """The process-wide settings. Built on first use, not at import."""
+    return Settings()
+
+
+def reload_settings() -> None:
+    """Drop the cache so the next read picks up changed environment variables.
+
+    Only useful in tests; nothing in the running app changes its environment.
+    """
+    get_settings.cache_clear()
+
+
+@lru_cache(maxsize=2)
+def _clerk_bearer(auto_error: bool) -> ClerkHTTPBearer:
+    """One bearer per mode, shared process-wide.
+
+    Each ClerkHTTPBearer builds its own JWKS client, so returning a fresh one on
+    every property access meant five of them - one per guard - each fetching and
+    caching Clerk's signing keys separately.
+    """
+    return ClerkHTTPBearer(config=ClerkConfig(jwks_url=env_or_except("CLERK_JWKS_URL")), auto_error=auto_error)
+
+
 class Config:
+    """Facade over :class:`Settings` preserving the original attribute names."""
+
     @property
     def is_dev(self) -> bool:
-        env = env_or_except("ENV", "Production")
-        return env.lower() == "development"
+        return get_settings().ENV.lower() == "development"
 
     @property
     def DATABASE_URL(self) -> str:
@@ -114,27 +228,71 @@ class Config:
 
     @property
     def SENTRY_DSN(self) -> Optional[str]:
-        return os.getenv("SENTRY_DSN")
+        return get_settings().SENTRY_DSN
 
+    @property
+    def LOG_LEVEL(self) -> str:
+        return get_settings().LOG_LEVEL
 
-@lru_cache(maxsize=2)
-def _clerk_bearer(auto_error: bool) -> ClerkHTTPBearer:
-    """One bearer per mode, shared process-wide.
+    # ---- wallet ----
 
-    Each ClerkHTTPBearer builds its own JWKS client, so returning a fresh one on
-    every property access meant five of them - one per guard - each fetching and
-    caching Clerk's signing keys separately.
-    """
-    return ClerkHTTPBearer(config=ClerkConfig(jwks_url=env_or_except("CLERK_JWKS_URL")), auto_error=auto_error)
+    @property
+    def APPLE_TEAM_ID(self) -> str:
+        return get_settings().APPLE_TEAM_ID
+
+    @property
+    def APPLE_PASS_TYPE_ID(self) -> str:
+        return get_settings().APPLE_PASS_TYPE_ID
+
+    @property
+    def APPLE_P12_BASE64(self) -> Optional[str]:
+        return get_settings().APPLE_P12_BASE64
+
+    @property
+    def APPLE_P12_PASSWORD(self) -> Optional[str]:
+        return get_settings().APPLE_P12_PASSWORD
+
+    @property
+    def APPLE_P12_PATH(self) -> Optional[str]:
+        return get_settings().APPLE_P12_PATH
+
+    @property
+    def APPLE_WWDR_BASE64(self) -> Optional[str]:
+        return get_settings().APPLE_WWDR_BASE64
+
+    @property
+    def APPLE_WWDR_PATH(self) -> Optional[str]:
+        return get_settings().APPLE_WWDR_PATH
+
+    @property
+    def GOOGLE_WALLET_ISSUER_ID(self) -> str:
+        return get_settings().GOOGLE_WALLET_ISSUER_ID
+
+    @property
+    def GOOGLE_WALLET_CLASS_ID(self) -> str:
+        return get_settings().GOOGLE_WALLET_CLASS_ID
+
+    @property
+    def GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL(self) -> str:
+        return get_settings().GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL
+
+    @property
+    def GOOGLE_WALLET_PRIVATE_KEY(self) -> str:
+        return get_settings().GOOGLE_WALLET_PRIVATE_KEY
 
 
 def env_or_except(key: str, default: Optional[str] = None) -> str:
-    value = os.getenv(key)
+    """Read a setting, raising if it is unset and no default is given.
+
+    Reads through :class:`Settings` rather than ``os.environ`` so every variable
+    stays declared in one place.
+    """
+    value = getattr(get_settings(), key, None)
     if value is None or value == "":
         if default is not None:
             return default
-        raise ValueError(f"⚠️ Environment variable '{key}' is not set.")
-    return value
+        raise MissingSettingError(key)
+    return str(value)
 
 
 config = Config()

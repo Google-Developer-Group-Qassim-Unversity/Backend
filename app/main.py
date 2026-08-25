@@ -5,6 +5,7 @@ import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from app.clients import close_http_client, open_http_client
 from app.config import config
 from app.DB.main import get_engine
 from app.error_handlers import register_exception_handlers
@@ -45,9 +46,12 @@ async def lifespan(app: FastAPI):
     # Google Wallet credentials should still start and serve everything else.
     config.DATABASE_URL
     config.CLERK_GUARD
+    await open_http_client()
     logger.info("Startup complete")
 
     yield
+
+    await close_http_client()
 
     # get_engine is lru_cached; calling it here when nothing ever built an
     # engine would create one purely to throw it away.

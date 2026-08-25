@@ -4,6 +4,84 @@ This project uses [Infisical](https://infisical.com/) for secrets management, wi
 
 This document explains how environment variables are loaded and managed in this project
 
+## Reference
+
+Every variable the backend reads is declared in `app/config.py` as a field on
+`Settings`. That class is the single source of truth - this table is generated
+from it, so if you add a variable there, add a row here.
+
+Nothing is required at import time. Settings are read when a feature needs them,
+so an instance without R2 or Wallet credentials still boots and serves
+everything else. The two exceptions are checked by the app's `lifespan` and fail
+the boot rather than the first request.
+
+### Core
+
+| Variable | Needed | Default | Notes |
+|---|---|---|---|
+| `ENV` | optional | `Production` | `development` uses the local log dir and tags Sentry as dev |
+| `LOG_LEVEL` | optional | `INFO` | `DEBUG` also logs request bodies, which contain member PII |
+| `SENTRY_DSN` | optional | - | leave unset to disable Sentry |
+| `DATABASE_URL` | **at startup** | - | the app refuses to start without it |
+| `CLERK_JWKS_URL` | **at startup** | - | the app refuses to start without it |
+| `JWT_SECRET` | when the feature runs | - | signs attendance QR tokens |
+
+### Google Forms sync
+
+| Variable | Needed | Default | Notes |
+|---|---|---|---|
+| `GOOGLE_CLIENT_ID` | when the feature runs | - |  |
+| `GOOGLE_CLIENT_SECRET` | when the feature runs | - |  |
+
+### Outbound services
+
+| Variable | Needed | Default | Notes |
+|---|---|---|---|
+| `CERTIFICATE_API_URL` | when the feature runs | - |  |
+| `MEMBER_APP_URL` | when the feature runs | - |  |
+| `MEMBER_APP_REVALIDATE_SECRET` | when the feature runs | - | bearer token for the leaderboard cache reset |
+| `SES_FROM_ADDRESS` | when the feature runs | - |  |
+
+### Cloudflare R2 (uploads)
+
+| Variable | Needed | Default | Notes |
+|---|---|---|---|
+| `R2_ACCOUNT_ID` | when the feature runs | - |  |
+| `R2_ACCESS_KEY_ID` | when the feature runs | - |  |
+| `R2_SECRET_ACCESS_KEY` | when the feature runs | - |  |
+| `R2_BUCKET_NAME` | when the feature runs | - |  |
+| `R2_PUBLIC_URL` | when the feature runs | - |  |
+
+### Apple Wallet
+
+| Variable | Needed | Default | Notes |
+|---|---|---|---|
+| `APPLE_TEAM_ID` | optional | `7NN7W24VXR` | ⚠️ **hardcoded production identifier** - see the TODO in `app/config.py` |
+| `APPLE_PASS_TYPE_ID` | optional | `pass.pass.com.gdg-q.wallet` | ⚠️ **hardcoded production identifier** - see the TODO in `app/config.py` |
+| `APPLE_P12_BASE64` | optional | - | or supply the file at `APPLE_P12_PATH` |
+| `APPLE_P12_PASSWORD` | when the feature runs | - |  |
+| `APPLE_P12_PATH` | optional | - | falls back to `app/certificates/Certificates.p12` |
+| `APPLE_WWDR_BASE64` | optional | - | or supply the file at `APPLE_WWDR_PATH` |
+| `APPLE_WWDR_PATH` | optional | - | falls back to `app/certificates/AppleWWDRCAG4.cer` |
+
+### Google Wallet
+
+| Variable | Needed | Default | Notes |
+|---|---|---|---|
+| `GOOGLE_WALLET_ISSUER_ID` | optional | `BCR2DN6DTK643EAC` | ⚠️ **hardcoded production identifier** - see the TODO in `app/config.py` |
+| `GOOGLE_WALLET_CLASS_ID` | optional | empty | defaults to `<issuer id>.gdgq-card` |
+| `GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL` | when the feature runs | empty |  |
+| `GOOGLE_WALLET_PRIVATE_KEY` | when the feature runs | empty |  |
+
+### A note on the Wallet defaults
+
+`APPLE_TEAM_ID`, `APPLE_PASS_TYPE_ID` and `GOOGLE_WALLET_ISSUER_ID` fall back to
+this club's real production identifiers. That is deliberate for now - it is how
+the code behaved before these variables were centralised - but it means a
+deployment that forgets them signs passes with production identity instead of
+failing. `app/config.py` carries a TODO with the full context and what removing
+them requires.
+
 ## How It Works
 
 ### Priority Order (highest to lowest)
