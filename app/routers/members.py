@@ -28,7 +28,7 @@ from app.routers.logging import (
 from typing import Annotated
 from app.dependencies import DB
 
-router = APIRouter()
+router = APIRouter(prefix="/members", tags=["members"])
 
 
 @router.get(

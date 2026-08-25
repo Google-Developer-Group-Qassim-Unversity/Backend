@@ -13,7 +13,10 @@ from app.routers.models import (
     ReorderActions_model,
 )
 
-router = APIRouter()
+from app.routers.responses import MessageResponse
+
+
+router = APIRouter(prefix="/actions", tags=["actions"])
 
 
 def get_action_by_id(actions, action_id: int):
@@ -117,14 +120,24 @@ def update_action(action_id: int, payload: UpdateAction_model, session: DB):
     return updated_action
 
 
-@router.put("/reorder", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_points_guard)])
+@router.put(
+    "/reorder",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(admin_points_guard)],
+    response_model=MessageResponse,
+)
 def reorder_actions(payload: ReorderActions_model, session: DB):
     actions_queries.update_actions_order(session, payload.action_orders)
     session.commit()
     return {"message": "Actions reordered successfully"}
 
 
-@router.delete("/{action_id:int}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_points_guard)])
+@router.delete(
+    "/{action_id:int}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(admin_points_guard)],
+    response_model=MessageResponse,
+)
 def delete_action(action_id: int, session: DB, replacement_id: Annotated[Optional[int], Query()] = None):
     action = actions_queries.get_action_by_id(session, action_id)
     if not action:

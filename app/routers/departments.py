@@ -4,7 +4,7 @@ from app.DB import departments as departments_queries
 from app.routers.models import Department_model, NotFoundResponse
 from app.dependencies import DB
 
-router = APIRouter()
+router = APIRouter(prefix="/departments", tags=["departments"])
 
 
 @router.get("", status_code=status.HTTP_200_OK, response_model=list[Department_model])

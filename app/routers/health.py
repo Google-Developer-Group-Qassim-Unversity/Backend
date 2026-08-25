@@ -8,11 +8,17 @@ from time import perf_counter
 from json import dumps
 from app.dependencies import DB
 
-router = APIRouter()
+from app.routers.responses import DbCheckResponse, StatusResponse
+
+
+router = APIRouter(prefix="/health", tags=["health"])
 
 
 @router.get(
-    "", status_code=status.HTTP_200_OK, description="Basic health check endpoint to verify that the API is running."
+    "",
+    status_code=status.HTTP_200_OK,
+    description="Basic health check endpoint to verify that the API is running.",
+    response_model=StatusResponse,
 )
 def health_check():
     return {"status": "ok"}
@@ -22,6 +28,7 @@ def health_check():
     "/db",
     status_code=status.HTTP_200_OK,
     description="Check database connectivity and print to the console various debugstatus values, such as connection pool status and MySQL global status/variables as well as query performance metrics.",
+    response_model=DbCheckResponse,
 )
 def db_check(session: DB):
     times = []

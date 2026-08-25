@@ -15,7 +15,10 @@ from app.routers.logging import (
 from app.routers.submissions import fetch_form_responses, extract_email_answer, sync_form_submissions
 from typing import Annotated
 
-router = APIRouter()
+from app.routers.responses import ManualSyncResponse
+
+
+router = APIRouter(prefix="/submissions_manual", tags=["Submissions Manual"])
 
 
 def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
@@ -107,7 +110,12 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
         raise
 
 
-@router.post("/google/{google_form_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+@router.post(
+    "/google/{google_form_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(admin_guard)],
+    response_model=ManualSyncResponse,
+)
 def manual_create_google_submissions(google_form_id: str, limit: Annotated[int, Query(ge=1, le=2000)] = 50):
     """
     Public (no-auth) endpoint to manually sync Google Form responses into DB submissions.

@@ -27,10 +27,13 @@ from googleapiclient.discovery import build
 from google.auth.transport.requests import Request as GoogleRequest
 from app.dependencies import DB
 
-router = APIRouter()
+from app.routers.responses import StatusResponse, SubmissionResponse, WebhookAckResponse
 
 
-@router.post("/{form_id:int}", status_code=status.HTTP_200_OK)
+router = APIRouter(prefix="/submissions", tags=["Submissions"])
+
+
+@router.post("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=SubmissionResponse)
 def create_submission(
     form_id: int,
     submission_type: Literal["none", "partial"],
@@ -68,7 +71,9 @@ def check_submission_exists(form_id: int, member: CurrentMember, session: DB):
             raise
 
 
-@router.put("/accept", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+@router.put(
+    "/accept", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)], response_model=StatusResponse
+)
 def accept_submission(submissions: list[submission_accept_model], session: DB):
     try:
         for submission in submissions:
@@ -296,7 +301,7 @@ def sync_form_submissions(google_form_id: str, log_file):
         write_log_traceback_to(log_file)
 
 
-@router.get("/test-google-forms/{google_form_id}", status_code=status.HTTP_200_OK)
+@router.get("/test-google-forms/{google_form_id}", status_code=status.HTTP_200_OK, response_model=dict)
 def test_fetch_form_responses(google_form_id: str):
     with LogFile("test google forms fetch") as log:
         responses = fetch_form_responses(google_form_id, log.file)
@@ -309,7 +314,7 @@ def test_fetch_form_responses(google_form_id: str):
         return schema
 
 
-@router.post("/google/webhook", status_code=status.HTTP_200_OK)
+@router.post("/google/webhook", status_code=status.HTTP_200_OK, response_model=WebhookAckResponse)
 async def google_forms_webhook(request: Request, background_tasks: BackgroundTasks):
     with LogFile("google forms webhook") as log:
         try:

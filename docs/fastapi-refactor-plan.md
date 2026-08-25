@@ -356,15 +356,59 @@ auth inventory in `tests/test_route_auth.py` was regenerated (and its strictness
 ordering corrected to include `admin_points_guard`, which is narrower than
 `admin_guard`). 255 passed / 1 xfailed, ruff 4, pyright 71.
 
-### Phase 4 — Router configuration and response contracts
+### Phase 4 — Router configuration and response contracts ✅ DONE
 
-1. `APIRouter(prefix="/members", tags=["members"], responses={...})` in each
-   router file; strip the wiring from `main.py` down to `app.include_router(members.router)`.
-2. Add `response_model` to the ~51 endpoints missing it; replace the 53 bare
-   `return {...}` with typed Pydantic models.
-3. Add a `lifespan` that validates settings and disposes the engine on shutdown.
+1. **Every router owns its own `prefix` and `tags`.** `main.py` went from 16
+   lines of `include_router(x.router, prefix=..., tags=[...])` to 16 bare
+   `app.include_router(x.router)` calls. All 100 route paths, tags and status
+   codes verified byte-identical before and after.
+2. **44 endpoints gained a response contract**; coverage went 48/100 → 92/100.
+   Shared envelopes live in the new `app/routers/responses.py`; endpoint-specific
+   shapes sit next to their routers in `emails.py` and `wallet.py`. The two
+   binary endpoints (certificate stream, Apple pkpass) use `response_class`
+   instead, which is why the OpenAPI schema shows exactly two 200s without a
+   content schema.
+3. **`lifespan` added.** It touches `DATABASE_URL` and `CLERK_GUARD` at startup
+   so a missing one is a failed boot rather than a 500 on whichever endpoint
+   needed it first, and disposes the engine on shutdown — guarded by
+   `get_engine.cache_info().currsize`, since `get_engine` is `lru_cache`d and
+   calling it at shutdown would otherwise build an engine just to discard it.
+   Everything else stays lazy: an instance with no R2 or Google Wallet
+   credentials still starts and serves the rest.
 
-**Payoff:** the frontend can generate a typed client from the OpenAPI schema.
+**The hazard in this phase is that `response_model` silently drops keys.** It
+filters the payload to the declared fields; a field the model forgets simply
+disappears, with no error. Several of these endpoints are consumed by the
+leaderboard app, which is not in this repository.
+
+So `tests/test_response_models.py` parses every handler, collects the keys of
+every `return {...}` literal, and asserts the declared model covers them.
+It also asserts every in-schema route declares a shape at all, so a new endpoint
+cannot land without one. Two findings came out of writing it:
+
+- `POST /submissions/{form_id}` returns an ORM row, which the dict scan cannot
+  see. The obvious model to reuse, `Create_Google_Submission_model`, turned out
+  to be dead code that omits `is_invited` — it would have been dropped. It also
+  types the flags as `bool`, where the previous raw-ORM response sent `0`/`1`.
+  A dedicated `SubmissionResponse` keeps them as ints so the payload stays
+  identical, and a separate test checks its fields against the table's columns.
+- `CacheResetResponse.result` was typed `dict[str, Any]` but holds whatever the
+  leaderboard app's `/api/revalidate` returns, so it is `Any`.
+
+**Left without a response model, deliberately** (7 routes): the two SSE streams
+and two binary downloads, which declare a `response_class`; the `/` redirect,
+which is out of schema; and `POST /attendance/{event_id}`,
+`GET /health/print-status` and `POST /submissions_manual/google/run/{id}`, which
+return a null body today. The first of those is called by the member app, so
+giving it a body is a deliberate change, not a refactor.
+
+**Verified:** 100 paths, tags and status codes unchanged; 44 models gained, none
+lost. 298 passed / 34 skipped / 1 xfailed. Ruff 4 and pyright 71, both still at
+baseline — three pyright errors the new test introduced were fixed rather than
+accepted.
+
+**Payoff:** the frontend can now generate a typed client from the OpenAPI schema
+(115 schema components across 79 documented paths).
 
 ### Phase 5 — Logging via middleware
 
@@ -408,7 +452,7 @@ ordering corrected to include `admin_points_guard`, which is narrower than
 | 1. DB dependency ✅ | everything else | large, mechanical |
 | 2. Exception handlers ✅ | −50 except blocks, −34 manual 500s | medium |
 | 3. Auth dependencies ✅ | −59 signature params, auth inventory test | medium |
-| 4. Router config + response models | typed frontend client | medium |
+| 4. Router config + response models ✅ | typed frontend client | medium |
 | 5. Logging middleware | −139 lines, Sentry context | small |
 | 6. Settings + clients | testable externals | small |
 | 7. Services + async fix + tests | coverage on 3,600 untested lines | large |

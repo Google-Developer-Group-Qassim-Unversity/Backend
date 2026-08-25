@@ -22,7 +22,84 @@ from app.dependencies import DB
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+
+class WalletProfile(BaseModel):
+    """The wallet-card half of a member profile.
+
+    `created_at` / `updated_at` are absent from the unregistered-member fallback,
+    so they default to None.
+    """
+
+    uuid: str | None = None
+    custom_name: str | None = None
+    theme_id: str | None = None
+    name_language: str | None = None
+    user_status: str | None = None
+    education_level: str | None = None
+    institution: str | None = None
+    major: str | None = None
+    study_year_or_level: str | None = None
+    bio: str | None = None
+    social_links: list[Any] = []
+    visibility: dict[str, Any] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class WalletMeResponse(BaseModel):
+    member_id: int | None = None
+    name: str
+    official_name: str
+    custom_name: str | None = None
+    uni_id: str | None = None
+    email: str | None = None
+    phone_number: str | None = None
+    gender: str | None = None
+    uni_level: int | None = None
+    uni_college: str | None = None
+    is_admin: bool
+    roles: list[str] = []
+    profile: WalletProfile
+
+
+class WalletUpdateResponse(BaseModel):
+    success: bool
+    name: str
+    email: str | None = None
+    phone_number: str | None = None
+    profile: WalletProfile
+
+
+class GoogleWalletPassResponse(BaseModel):
+    saveUrl: str
+
+
+class PublicProfileResponse(BaseModel):
+    uuid: str
+    name: str
+    name_language: str | None = None
+    theme_id: str | None = None
+    user_status: str | None = None
+    education_level: str | None = None
+    institution: str | None = None
+    major: str | None = None
+    study_year_or_level: str | None = None
+    is_admin: bool
+    bio: str | None = None
+    social_links: list[Any] = []
+    email: str | None = None
+    phone: str | None = None
+    visibility: dict[str, Any] | None = None
+    created_at: str | None = None
+
+
+class WalletHealthResponse(BaseModel):
+    status: str
+    apple_wallet_configured: bool
+    google_wallet_configured: bool
+
+
+router = APIRouter(prefix="/wallet", tags=["wallet"])
 
 
 # =============================================================================
@@ -182,7 +259,7 @@ def _resolve_pass_card_data(request: Request, payload: Optional[Dict[str, Any]] 
 # =============================================================================
 
 
-@router.get("/me", summary="Get authenticated member wallet data and profile")
+@router.get("/me", summary="Get authenticated member wallet data and profile", response_model=WalletMeResponse)
 def get_wallet_me(session: DB, credentials=Depends(authenticated_guard)):
     """
     Returns the authenticated member's core info, role permissions, and MemberProfiles settings.
@@ -265,8 +342,8 @@ def get_wallet_me(session: DB, credentials=Depends(authenticated_guard)):
         }
 
 
-@router.put("/me", summary="Update member wallet profile settings")
-@router.patch("/me", summary="Update member wallet profile settings")
+@router.put("/me", summary="Update member wallet profile settings", response_model=WalletUpdateResponse)
+@router.patch("/me", summary="Update member wallet profile settings", response_model=WalletUpdateResponse)
 def update_wallet_me(payload: UpdateWalletMePayload, session: DB, credentials=Depends(authenticated_guard)):
     """
     Updates the authenticated member's profile and academic fields (custom_name, theme_id, name_language, user_status, education_level, institution, major, study_year_or_level, bio, social_links, visibility).
@@ -336,7 +413,9 @@ def update_wallet_me(payload: UpdateWalletMePayload, session: DB, credentials=De
     }
 
 
-@router.post("/apple-pass", summary="Generate signed Apple Wallet (.pkpass) for member or guest")
+@router.post(
+    "/apple-pass", summary="Generate signed Apple Wallet (.pkpass) for member or guest", response_class=Response
+)
 def create_apple_wallet_pass(request: Request, payload: Annotated[Optional[Dict[str, Any]], Body()] = None):
     """
     Generates and signs an official Apple Wallet .pkpass file.
@@ -356,7 +435,11 @@ def create_apple_wallet_pass(request: Request, payload: Annotated[Optional[Dict[
     )
 
 
-@router.post("/google-pass", summary="Generate signed Google Wallet save link for member or guest")
+@router.post(
+    "/google-pass",
+    summary="Generate signed Google Wallet save link for member or guest",
+    response_model=GoogleWalletPassResponse,
+)
 def create_google_wallet_pass(request: Request, payload: Annotated[Optional[Dict[str, Any]], Body()] = None):
     """
     Generates a signed Google Wallet save URL.
@@ -371,7 +454,11 @@ def create_google_wallet_pass(request: Request, payload: Annotated[Optional[Dict
     return {"saveUrl": save_url}
 
 
-@router.get("/{uuid}", summary="Get public member profile by UUID with strict visibility filtering")
+@router.get(
+    "/{uuid}",
+    summary="Get public member profile by UUID with strict visibility filtering",
+    response_model=PublicProfileResponse,
+)
 def get_public_profile(uuid: str, session: DB):
     """
     Publicly accessible endpoint for /p/{uuid}.
@@ -423,7 +510,7 @@ def get_public_profile(uuid: str, session: DB):
     }
 
 
-@router.get("/health", summary="Check Wallet Pass engine health")
+@router.get("/health", summary="Check Wallet Pass engine health", response_model=WalletHealthResponse)
 async def wallet_health():
     """
     Returns the status of the Wallet signing engine and available credentials.

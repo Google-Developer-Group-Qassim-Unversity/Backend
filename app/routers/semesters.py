@@ -19,7 +19,10 @@ from app.routers.logging import LogFile, write_log, write_log_exception, write_l
 from app.routers.models import BaseClassModel
 from app.dependencies import DB
 
-router = APIRouter()
+from app.routers.responses import DetailResponse
+
+
+router = APIRouter(prefix="/semesters", tags=["Semesters"])
 
 # ============ models ============
 
@@ -161,7 +164,12 @@ def set_current_semester(semester_id: int, session: DB):
     return result
 
 
-@router.delete("/{semester_id:int}", status_code=status.HTTP_200_OK, dependencies=[Depends(super_admin_guard)])
+@router.delete(
+    "/{semester_id:int}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(super_admin_guard)],
+    response_model=DetailResponse,
+)
 def delete_semester(semester_id: int, session: DB):
     with LogFile("delete semester"):
         write_log_title(f"Deleting semester [{semester_id}]")

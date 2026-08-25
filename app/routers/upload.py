@@ -12,7 +12,10 @@ from app.config import config
 from app.helpers import admin_guard
 from app.routers.logging import LogFile, write_log
 
-router = APIRouter(dependencies=[Depends(admin_guard)])
+from app.routers.responses import AttachmentUploadResponse, UploadResponse
+
+
+router = APIRouter(prefix="/upload", tags=["upload"], dependencies=[Depends(admin_guard)])
 
 ALLOWED_ATTACHMENT_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"}
 MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024
@@ -40,7 +43,7 @@ def get_extension(filename: str | None, content_type: str | None) -> str:
     return ""
 
 
-@router.post("/", status_code=201)
+@router.post("/", status_code=201, response_model=UploadResponse)
 async def upload_file(file: Annotated[UploadFile, File()]):
     with LogFile("upload"):
         file_id = str(uuid.uuid4())
@@ -58,7 +61,7 @@ async def upload_file(file: Annotated[UploadFile, File()]):
         return {"url": url}
 
 
-@router.post("/email-attachment", status_code=201)
+@router.post("/email-attachment", status_code=201, response_model=AttachmentUploadResponse)
 async def upload_email_attachment(file: Annotated[UploadFile, File()]):
     with LogFile("upload email attachment"):
         if file.content_type not in ALLOWED_ATTACHMENT_CONTENT_TYPES:

@@ -33,7 +33,10 @@ from typing import Annotated
 from app.exceptions import DataIntegrityError, NotFound
 from app.dependencies import DB
 
-router = APIRouter()
+from app.routers.responses import DetailResponse
+
+
+router = APIRouter(prefix="/events", tags=["events"])
 
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
@@ -291,6 +294,7 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB):
         400: {"description": "Only draft events can be deleted"},
     },
     dependencies=[Depends(admin_guard)],
+    response_model=DetailResponse,
 )
 def delete_event(event_id: int, session: DB):
     with LogFile("delete event"):

@@ -7,7 +7,7 @@ from app.helpers import admin_guard
 from app.exceptions import FormNotFoundById
 from app.dependencies import DB
 
-router = APIRouter()
+router = APIRouter(prefix="/forms", tags=["Forms"])
 
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Form_model])

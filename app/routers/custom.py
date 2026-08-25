@@ -17,7 +17,10 @@ from app.DB.schema import EventsLocationType
 from app.dependencies import DB
 from app.exceptions import DataIntegrityError
 
-router = APIRouter(dependencies=[Depends(admin_guard)])
+from app.routers.responses import CustomPointsCreatedResponse, MessageResponse
+
+
+router = APIRouter(prefix="/custom", tags=["custom"], dependencies=[Depends(admin_guard)])
 
 
 class DepartmentPointDetails(BaseClassModel):
@@ -84,7 +87,7 @@ class CustomMemberPointsResponse(BaseClassModel):
     point_details: List[MemberPointDetailsWithLogId]
 
 
-@router.post("/departments", status_code=status.HTTP_201_CREATED)
+@router.post("/departments", status_code=status.HTTP_201_CREATED, response_model=CustomPointsCreatedResponse)
 def give_department_custom_points(body: CustomDepartmentPointsRequest, session: DB):
     with LogFile("custom_department_points") as log:
         try:
@@ -222,7 +225,7 @@ def get_department_custom_points(event_id: int, session: DB):
         return response
 
 
-@router.put("/departments/{log_id}")
+@router.put("/departments/{log_id}", response_model=MessageResponse)
 def update_department_custom_points(log_id: int, body: DepartmentPointDetails, session: DB):
     """Update a single custom department point entry by log_id."""
     with LogFile("update_custom_department_points"):
@@ -302,7 +305,7 @@ def update_department_custom_points(log_id: int, body: DepartmentPointDetails, s
         return {"message": "Successfully updated custom department points"}
 
 
-@router.post("/members", status_code=status.HTTP_201_CREATED)
+@router.post("/members", status_code=status.HTTP_201_CREATED, response_model=CustomPointsCreatedResponse)
 def give_member_custom_points(body: CustomMemberPointsRequest, session: DB):
     with LogFile("custom_member_points") as log:
         try:
@@ -425,7 +428,7 @@ def get_member_custom_points(event_id: int, session: DB):
         return response
 
 
-@router.delete("/departments/{log_id}")
+@router.delete("/departments/{log_id}", response_model=MessageResponse)
 def delete_department_custom_points(log_id: int, session: DB):
     with LogFile("delete_custom_department_points"):
         write_log_title(f"Delete Custom Department Points for Log {log_id}")
@@ -455,7 +458,7 @@ def delete_department_custom_points(log_id: int, session: DB):
         return {"message": "Successfully deleted custom department points"}
 
 
-@router.delete("/members/{log_id}")
+@router.delete("/members/{log_id}", response_model=MessageResponse)
 def delete_member_custom_points(log_id: int, session: DB):
     with LogFile("delete_custom_member_points"):
         write_log_title(f"Delete Custom Member Points for Log {log_id}")
@@ -483,7 +486,7 @@ def delete_member_custom_points(log_id: int, session: DB):
         return {"message": "Successfully deleted custom member points"}
 
 
-@router.put("/members/{log_id}")
+@router.put("/members/{log_id}", response_model=MessageResponse)
 def update_member_custom_points(log_id: int, body: MemberPointDetails, session: DB):
     with LogFile("update_custom_member_points"):
         write_log_title(f"Update Custom Member Points for Log {log_id}")

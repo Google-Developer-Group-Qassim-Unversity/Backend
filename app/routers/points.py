@@ -12,7 +12,7 @@ from app.semesters import resolve_semester, semester_date_bounds
 from typing import Annotated
 from app.dependencies import DB
 
-router = APIRouter()
+router = APIRouter(prefix="/points", tags=["Points"])
 
 # ============ models ============
 

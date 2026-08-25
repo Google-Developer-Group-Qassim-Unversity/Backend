@@ -35,7 +35,10 @@ from app.helpers import (
 from datetime import datetime, timedelta
 from app.dependencies import DB
 
-router = APIRouter()
+from app.routers.responses import CountsResponse
+
+
+router = APIRouter(prefix="/attendance", tags=["Attendance"])
 
 
 def get_event_with_attendable_log(session: Session, event_id: int) -> tuple[Events, Logs]:
@@ -257,7 +260,12 @@ def get_event_attendance(
     )
 
 
-@router.post("/{event_id}/manual", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+@router.post(
+    "/{event_id}/manual",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(admin_guard)],
+    response_model=CountsResponse,
+)
 def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB):
     with LogFile("mark attendance manual"):
         write_log_title(f"Manual attendance for event [{event_id}], members {request.member_ids}")
@@ -306,7 +314,12 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
         return {"success": success_count, "failed": failed_count}
 
 
-@router.delete("/{event_id}/manual", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+@router.delete(
+    "/{event_id}/manual",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(admin_guard)],
+    response_model=CountsResponse,
+)
 def remove_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB):
     with LogFile("remove attendance manual"):
         write_log_title(f"Remove attendance for event [{event_id}], members {request.member_ids}")
