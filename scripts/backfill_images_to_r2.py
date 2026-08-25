@@ -12,7 +12,7 @@ from botocore.config import Config
 import httpx
 from sqlalchemy import select, update
 
-from app.DB.main import SessionLocal
+from app.DB.main import db_session
 from app.DB.schema import Events
 from app.config import config
 
@@ -45,7 +45,7 @@ def upload_to_r2(client, key: str, content: bytes, content_type: str | None) -> 
 
 def main(dry_run: bool):
     r2_client = get_r2_client()
-    with SessionLocal() as session:
+    with db_session() as session:
         events = session.scalars(select(Events).where(Events.image_url.isnot(None))).all()
 
         migrated = 0

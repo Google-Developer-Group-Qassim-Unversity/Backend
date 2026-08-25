@@ -11,15 +11,15 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.DB import semesters as semesters_queries
-from app.DB.main import SessionLocal
+
 from app.exceptions import SemesterNotFound
 from app.helpers import admin_guard, super_admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.logging import LogFile, write_log, write_log_exception, write_log_title
 from app.routers.models import BaseClassModel
+from app.dependencies import DB
 
 router = APIRouter()
-
 
 # ============ models ============
 
@@ -73,15 +73,14 @@ def _reset_cache_best_effort() -> None:
 
 
 @router.get("", status_code=status.HTTP_200_OK, response_model=list[Semester_model])
-def get_all_semesters(credentials=Depends(admin_guard)):
-    with SessionLocal() as session:
-        return semesters_queries.get_semesters(session)
+def get_all_semesters(session: DB, credentials=Depends(admin_guard)):
+    return semesters_queries.get_semesters(session)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=Semester_model)
-def create_semester(payload: CreateSemester_model, credentials=Depends(super_admin_guard)):
+def create_semester(payload: CreateSemester_model, session: DB, credentials=Depends(super_admin_guard)):
     _validate_dates(payload.start_date, payload.end_date)
-    with LogFile("create semester"), SessionLocal() as session:
+    with LogFile("create semester"):
         write_log_title(f"Creating semester [{payload.id}]")
         if semesters_queries.get_semester_by_id(session, payload.id):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Semester {payload.id} already exists")
@@ -105,9 +104,11 @@ def create_semester(payload: CreateSemester_model, credentials=Depends(super_adm
 
 
 @router.put("/{semester_id:int}", status_code=status.HTTP_200_OK, response_model=Semester_model)
-def update_semester(semester_id: int, payload: UpdateSemester_model, credentials=Depends(super_admin_guard)):
+def update_semester(
+    semester_id: int, payload: UpdateSemester_model, session: DB, credentials=Depends(super_admin_guard)
+):
     _validate_dates(payload.start_date, payload.end_date)
-    with LogFile("update semester"), SessionLocal() as session:
+    with LogFile("update semester"):
         write_log_title(f"Updating semester [{semester_id}]")
         semester = semesters_queries.get_semester_by_id(session, semester_id)
         if semester is None:
@@ -131,9 +132,9 @@ def update_semester(semester_id: int, payload: UpdateSemester_model, credentials
 
 
 @router.put("/{semester_id:int}/current", status_code=status.HTTP_200_OK, response_model=Semester_model)
-def set_current_semester(semester_id: int, credentials=Depends(super_admin_guard)):
+def set_current_semester(semester_id: int, session: DB, credentials=Depends(super_admin_guard)):
     """Make this the default semester for requests that don't name one."""
-    with LogFile("set current semester"), SessionLocal() as session:
+    with LogFile("set current semester"):
         write_log_title(f"Setting semester [{semester_id}] as current")
         semester = semesters_queries.get_semester_by_id(session, semester_id)
         if semester is None:
@@ -149,8 +150,8 @@ def set_current_semester(semester_id: int, credentials=Depends(super_admin_guard
 
 
 @router.delete("/{semester_id:int}", status_code=status.HTTP_200_OK)
-def delete_semester(semester_id: int, credentials=Depends(super_admin_guard)):
-    with LogFile("delete semester"), SessionLocal() as session:
+def delete_semester(semester_id: int, session: DB, credentials=Depends(super_admin_guard)):
+    with LogFile("delete semester"):
         write_log_title(f"Deleting semester [{semester_id}]")
         semester = semesters_queries.get_semester_by_id(session, semester_id)
         if semester is None:

@@ -5,13 +5,13 @@ from pathlib import Path
 script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(script_dir.parent))
 
-from app.DB.main import SessionLocal
+from app.DB.main import db_session
 from app.DB.schema import Events
 from sqlalchemy import select
 
 
 def main(dry_run: bool):
-    with SessionLocal() as session:
+    with db_session() as session:
         events = session.scalars(select(Events)).all()
         updated = 0
         skipped = 0

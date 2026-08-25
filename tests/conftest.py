@@ -8,7 +8,9 @@ Fixture chain (scope):
         |
     seed_core_data (session) ─── seeds the DB
         |
-        ├── db_session (function) ─── per-test session with rollback (depends on client)
+    db_bind (function) ─── one connection + outer transaction, rolled back after each test
+        |
+        ├── db_session (function) ─── session for direct DB access in tests
         |
         └── client (function) ─── FastAPI TestClient (no auth overrides → 403 on guarded endpoints)
                 |
@@ -28,16 +30,14 @@ from testcontainers.mysql import MySqlContainer
 from sqlalchemy import create_engine
 from alembic.config import Config
 from alembic import command
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from fastapi.testclient import TestClient
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi_clerk_auth import HTTPAuthorizationCredentials as ClerkHTTPAuthorizationCredentials
-# A bunch more import are done insdie fixtures to avoid the problimatic pattern in the code which evaluates sessions and envirnoment varibles at import time,
-# so we have to delay importing those modules until after the environment variables are set and the database is ready, otherwise we will get errors about missing env vars
 
-# Set environment variables BEFORE importing app
-# These must be set before any app modules are imported
+# Clerk still builds its JWKS client at import time (see Phase 3 of the refactor plan),
+# so these must be set before any app module is imported.
 required_env_vars = {
     "ENV": "testing",
     "CLERK_JWKS_URL": "https://test.clerk.dev/.well-known/jwks.json",
@@ -51,6 +51,20 @@ required_env_vars = {
 
 for key, value in required_env_vars.items():
     os.environ[key] = value  # Always set, override any existing
+
+# Safe to import at module level now: the engine is built lazily on first use,
+# so importing the app no longer needs DATABASE_URL.
+import app.DB.main as db_main  # noqa: E402
+from app.dependencies import get_db  # noqa: E402
+from app.main import app  # noqa: E402
+from app.DB.schema import (  # noqa: E402
+    Actions,
+    ActionsActionType,
+    Departments,
+    DepartmentsType,
+    Members,
+    MembersGender,
+)
 
 
 @pytest.fixture(scope="session")
@@ -117,8 +131,6 @@ def engine(database_url):
 
 @pytest.fixture(scope="session")
 def seed_core_data(engine):
-    from app.DB.schema import Actions, Departments, Members, ActionsActionType, DepartmentsType, MembersGender
-
     # CAUTION: Don't update default unless you know what you're doing
     # a lot of tests assume these default values and changing them might break the tests
     with Session(engine) as session:
@@ -163,30 +175,46 @@ def seed_core_data(engine):
 
 
 @pytest.fixture(scope="function")
-def client(engine, seed_core_data) -> Generator:
-    """
-    Provide a FastAPI test client with transaction rollback.
+def db_bind(engine, seed_core_data) -> Generator:
+    """Own the per-test connection and outer transaction.
 
-    Reconfigures SessionLocal **in-place** so every module that imported it
-    (via ``from app.DB.main import SessionLocal``) will create sessions bound
-    to a single test-scoped connection.  After the test the transaction is
-    rolled back, undoing every INSERT/UPDATE/DELETE the routes committed.
+    Sessions built from the yielded factory join that transaction using
+    savepoints, so a route calling ``session.commit()`` behaves normally while
+    every write is still undone by the rollback at the end of the test.
     """
-    import app.DB.main as db_main
-    from app.main import app
-
     connection = engine.connect()
     transaction = connection.begin()
+    factory = sessionmaker(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
 
-    original_bind = db_main.SessionLocal.kw["bind"]
-    db_main.SessionLocal.configure(bind=connection)
+    # Background tasks and scripts call ``db_session()``, which builds its own
+    # session from the real engine. Point it at the test connection too.
+    original_sessionmaker = db_main.get_sessionmaker
+    db_main.get_sessionmaker = lambda: factory
 
-    yield TestClient(app)
+    yield factory
 
-    db_main.SessionLocal.configure(bind=original_bind)
+    db_main.get_sessionmaker = original_sessionmaker
     if transaction.is_active:
         transaction.rollback()
     connection.close()
+
+
+@pytest.fixture(scope="function")
+def client(db_bind) -> Generator:
+    """FastAPI test client whose routes use the test-scoped session."""
+
+    def override_get_db() -> Generator:
+        session = db_bind()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    yield TestClient(app)
+
+    app.dependency_overrides.pop(get_db, None)
 
 
 FAKE_CLERK_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
@@ -227,18 +255,17 @@ FAKE_ADMIN_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
 
 @pytest.fixture(scope="function")
 def clerk_client(client) -> Generator:
-    from app.main import app
     from app.helpers import authenticated_guard, optional_clerk_guard
 
     app.dependency_overrides[authenticated_guard] = lambda: FAKE_CLERK_CREDENTIALS
     app.dependency_overrides[optional_clerk_guard] = lambda: FAKE_CLERK_CREDENTIALS
     yield client
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(authenticated_guard, None)
+    app.dependency_overrides.pop(optional_clerk_guard, None)
 
 
 @pytest.fixture(scope="function")
 def super_admin_client(clerk_client) -> Generator:
-    from app.main import app
     from app.helpers import super_admin_guard
 
     def override_super_admin_guard():
@@ -246,12 +273,11 @@ def super_admin_client(clerk_client) -> Generator:
 
     app.dependency_overrides[super_admin_guard] = override_super_admin_guard
     yield clerk_client
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(super_admin_guard, None)
 
 
 @pytest.fixture(scope="function")
 def admin_client(clerk_client) -> Generator:
-    from app.main import app
     from app.helpers import admin_guard, optional_clerk_guard
 
     def override_admin_guard():
@@ -260,20 +286,19 @@ def admin_client(clerk_client) -> Generator:
     app.dependency_overrides[admin_guard] = override_admin_guard
     app.dependency_overrides[optional_clerk_guard] = lambda: FAKE_ADMIN_CREDENTIALS
     yield clerk_client
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(admin_guard, None)
+    app.dependency_overrides.pop(optional_clerk_guard, None)
 
 
 @pytest.fixture(scope="function")
-def db_session(client):
+def db_session(db_bind):
     """
     Provide a SQLAlchemy session bound to the test transaction.
 
     Use this fixture when tests need direct DB access (e.g., inserting test data).
-    All changes will be rolled back after the test via the client fixture's transaction.
+    All changes will be rolled back after the test via db_bind's transaction.
     """
-    from app.DB.main import SessionLocal
-
-    session = SessionLocal()
+    session = db_bind()
     try:
         yield session
     finally:
@@ -289,7 +314,6 @@ class SeedRefs:
 
     def __init__(self, session):
         from sqlalchemy import select
-        from app.DB.schema import Actions, ActionsActionType, Departments, Members
 
         self.dept_action = session.scalar(select(Actions).where(Actions.action_type == ActionsActionType.DEPARTMENT))
         self.member_action = session.scalar(select(Actions).where(Actions.action_type == ActionsActionType.MEMBER))

@@ -28,7 +28,7 @@ sys.path.insert(0, str(script_dir))
 from sqlalchemy import select
 
 from _clerk_backfill_common import build_email_to_user_ids, clerk_secret_key, derive_uni_email, fetch_all_clerk_users
-from app.DB.main import SessionLocal
+from app.DB.main import db_session
 from app.DB.schema import Members
 
 
@@ -40,7 +40,7 @@ def main(apply: bool):
     email_map = build_email_to_user_ids(users)
     print(f"Fetched {len(users)} Clerk users.")
 
-    with SessionLocal() as session:
+    with db_session() as session:
         members = session.scalars(
             select(Members).where(Members.is_authenticated == 1, Members.clerk_user_id.is_(None))
         ).all()

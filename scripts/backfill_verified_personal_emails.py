@@ -42,7 +42,7 @@ from _clerk_backfill_common import (
     derive_uni_email,
     fetch_all_clerk_users,
 )
-from app.DB.main import SessionLocal
+from app.DB.main import db_session
 from app.DB.schema import Members
 
 CREATE_DELAY_SECONDS = 0.3
@@ -56,7 +56,7 @@ def main(apply: bool):
     email_map = build_email_to_user_ids(users)
     print(f"Fetched {len(users)} Clerk users.")
 
-    with SessionLocal() as session:
+    with db_session() as session:
         members = session.scalars(
             select(Members).where(
                 Members.is_authenticated == 1,

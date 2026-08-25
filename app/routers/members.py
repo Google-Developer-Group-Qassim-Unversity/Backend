@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, status, Depends
 from app.DB import members as member_queries
 from app.DB.schema import RoleType
-from app.DB.main import SessionLocal
+
 from app.routers.models import (
     Member_model,
     NotFoundResponse,
@@ -26,7 +26,7 @@ from app.routers.logging import (
     write_log_traceback,
 )
 from typing import Annotated
-
+from app.dependencies import DB
 
 router = APIRouter()
 
@@ -37,10 +37,9 @@ router = APIRouter()
     response_model=Member_model,
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
-def get_current_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]):
-    with SessionLocal() as session:
-        member = resolve_member(session, credentials)
-        session.commit()
+def get_current_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)], session: DB):
+    member = resolve_member(session, credentials)
+    session.commit()
     return member
 
 
@@ -51,9 +50,11 @@ def get_current_member(credentials: Annotated[HTTPAuthorizationCredentials, Depe
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
 def update_current_member(
-    updates: MemberUpdateModel, credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]
+    updates: MemberUpdateModel,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)],
+    session: DB,
 ):
-    with LogFile("update current member"), SessionLocal() as session:
+    with LogFile("update current member"):
         try:
             member = resolve_member(session, credentials)
             write_log_title(f"Updating member with id {member.id}")
@@ -81,9 +82,8 @@ def update_current_member(
 
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Member_model])
-def get_all_members(credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
-    with SessionLocal() as session:
-        members = member_queries.get_members(session)
+def get_all_members(credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB):
+    members = member_queries.get_members(session)
     return members
 
 
@@ -96,8 +96,9 @@ def get_all_members(credentials: Annotated[HTTPAuthorizationCredentials, Depends
 def create_member_manual(
     member_data: ManualMemberCreateModel,
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)],
+    session: DB,
 ):
-    with LogFile("create member manual"), SessionLocal() as session:
+    with LogFile("create member manual"):
         try:
             write_log_title(f"Manually creating member with uni_id {member_data.uni_id}")
             if member_data.uni_id is not None:
@@ -143,9 +144,11 @@ def create_member_manual(
 
 @router.post("/batch", status_code=status.HTTP_200_OK, response_model=BatchCreateMembersResponse)
 def batch_create_members(
-    request: BatchCreateMembersRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)]
+    request: BatchCreateMembersRequest,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)],
+    session: DB,
 ):
-    with LogFile("batch create members"), SessionLocal() as session:
+    with LogFile("batch create members"):
         created_count = 0
         existing_count = 0
         failed_count = 0
@@ -222,9 +225,10 @@ def batch_create_members(
     response_model=Member_model,
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
-def get_member_by_uni_id(uni_id: str, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
-    with SessionLocal() as session:
-        member = member_queries.get_member_by_uni_id(session, uni_id)
+def get_member_by_uni_id(
+    uni_id: str, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
+):
+    member = member_queries.get_member_by_uni_id(session, uni_id)
     return member
 
 
@@ -234,15 +238,16 @@ def get_member_by_uni_id(uni_id: str, credentials: Annotated[HTTPAuthorizationCr
     response_model=Member_model,
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
 )
-def get_member_by_id(member_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
-    with SessionLocal() as session:
-        member = member_queries.get_member_by_id(session, member_id)
+def get_member_by_id(
+    member_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
+):
+    member = member_queries.get_member_by_id(session, member_id)
     return member
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=CreatedMemberModel)
-def create_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]):
-    with LogFile("create member") as log, SessionLocal() as session:
+def create_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)], session: DB):
+    with LogFile("create member") as log:
         member: Member_model | None = None
         try:
             member = credentials_to_member_model(credentials)
@@ -284,17 +289,19 @@ def create_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(a
 
 
 @router.get("/roles", status_code=status.HTTP_200_OK, response_model=list[MemberWithRole_model])
-def get_member_roles(credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)]):
-    with SessionLocal() as session:
-        roles = member_queries.get_member_roles(session)
+def get_member_roles(credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)], session: DB):
+    roles = member_queries.get_member_roles(session)
     return roles
 
 
 @router.post("/roles", status_code=status.HTTP_200_OK, response_model=MemberWithRole_model)
 def update_member_roles(
-    member_id: int, new_role: RoleType, credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)]
+    member_id: int,
+    new_role: RoleType,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)],
+    session: DB,
 ):
-    with LogFile("update member role"), SessionLocal() as session:
+    with LogFile("update member role"):
         try:
             write_log_title(f"Updating role for member_id {member_id} to {new_role.value}")
             updated_member = member_queries.update_member_role(session, member_id, new_role=new_role)

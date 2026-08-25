@@ -1,7 +1,7 @@
 from fastapi import APIRouter, status, HTTPException, Query, Depends
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import points as points_queries, semesters as semesters_queries
-from app.DB.main import SessionLocal
+
 from app.DB.schema import Semesters
 from sqlalchemy.orm import Session
 from app.routers.models import BaseClassModel
@@ -10,6 +10,7 @@ from app.helpers import is_super_admin
 from app.config import config
 from app.semesters import resolve_semester, semester_date_bounds
 from typing import Annotated
+from app.dependencies import DB
 
 router = APIRouter()
 
@@ -108,66 +109,61 @@ def _resolve_requested_semester(
 
 
 @router.get("/semesters", status_code=status.HTTP_200_OK, response_model=Semesters_model)
-def get_semesters():
+def get_semesters(session: DB):
     """The publicly visible semesters, plus which one is the default."""
-    with SessionLocal() as session:
-        public = semesters_queries.get_semesters(session, public_only=True)
-        current = semesters_queries.get_current_semester(session)
-        # A private current semester must not leak here - fall back to the newest public one
-        # so callers always get a usable default rather than null.
-        if current is not None and current.is_public:
-            current_id = current.id
-        else:
-            current_id = public[0].id if public else None
-        return Semesters_model(
-            current_semester=current_id,
-            semesters=[semester.id for semester in public],
-            details=[Semester_summary_model.model_validate(semester) for semester in public],
-        )
+    public = semesters_queries.get_semesters(session, public_only=True)
+    current = semesters_queries.get_current_semester(session)
+    # A private current semester must not leak here - fall back to the newest public one
+    # so callers always get a usable default rather than null.
+    if current is not None and current.is_public:
+        current_id = current.id
+    else:
+        current_id = public[0].id if public else None
+    return Semesters_model(
+        current_semester=current_id,
+        semesters=[semester.id for semester in public],
+        details=[Semester_summary_model.model_validate(semester) for semester in public],
+    )
 
 
 @router.get("/members/total", status_code=status.HTTP_200_OK, response_model=list[Member_points_model])
 def get_all_members_points(
+    session: DB,
     semester: Annotated[int | None, Query()] = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
-    with SessionLocal() as session:
-        resolved = _resolve_requested_semester(session, semester, credentials)
-        start_date, end_date = semester_date_bounds(resolved)
-        return points_queries.get_members_points_semester(session, start_date, end_date)
+    resolved = _resolve_requested_semester(session, semester, credentials)
+    start_date, end_date = semester_date_bounds(resolved)
+    return points_queries.get_members_points_semester(session, start_date, end_date)
 
 
 @router.get("/members/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_event_history_model)
 def get_member_points(
     member_id: int,
+    session: DB,
     semester: Annotated[int | None, Query()] = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
-    with SessionLocal() as session:
-        resolved = _resolve_requested_semester(session, semester, credentials)
-        start_date, end_date = semester_date_bounds(resolved)
+    resolved = _resolve_requested_semester(session, semester, credentials)
+    start_date, end_date = semester_date_bounds(resolved)
 
-        member_points = points_queries.get_members_points_semester(session, start_date, end_date, member_id)
-        if member_points is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} does not exist"
-            )
-        member_points_history = points_queries.get_member_points_history_semester(
-            session, member_id, start_date, end_date
-        )
+    member_points = points_queries.get_members_points_semester(session, start_date, end_date, member_id)
+    if member_points is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} does not exist")
+    member_points_history = points_queries.get_member_points_history_semester(session, member_id, start_date, end_date)
 
     return Member_event_history_model(member=member_points, events=member_points_history)
 
 
 @router.get("/departments/total", status_code=status.HTTP_200_OK, response_model=Response_department_points_model)
 def get_all_departments_points(
+    session: DB,
     semester: Annotated[int | None, Query()] = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
-    with SessionLocal() as session:
-        resolved = _resolve_requested_semester(session, semester, credentials)
-        start_date, end_date = semester_date_bounds(resolved)
-        departments_points = points_queries.get_departments_points_semester(session, start_date, end_date)
+    resolved = _resolve_requested_semester(session, semester, credentials)
+    start_date, end_date = semester_date_bounds(resolved)
+    departments_points = points_queries.get_departments_points_semester(session, start_date, end_date)
     return Response_department_points_model(
         administrative=[
             department for department in departments_points if department["department_type"] == "administrative"
@@ -181,20 +177,20 @@ def get_all_departments_points(
 )
 def get_department_points(
     department_id: int,
+    session: DB,
     semester: Annotated[int | None, Query()] = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
-    with SessionLocal() as session:
-        resolved = _resolve_requested_semester(session, semester, credentials)
-        start_date, end_date = semester_date_bounds(resolved)
+    resolved = _resolve_requested_semester(session, semester, credentials)
+    start_date, end_date = semester_date_bounds(resolved)
 
-        department_points = points_queries.get_departments_points_semester(session, start_date, end_date, department_id)
-        if department_points is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {department_id} does not exist"
-            )
-        department_points_history = points_queries.get_department_points_history_semester(
-            session, department_id, start_date, end_date
+    department_points = points_queries.get_departments_points_semester(session, start_date, end_date, department_id)
+    if department_points is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {department_id} does not exist"
         )
+    department_points_history = points_queries.get_department_points_history_semester(
+        session, department_id, start_date, end_date
+    )
 
     return Department_points_history_model(department=department_points, events=department_points_history)

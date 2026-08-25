@@ -7,7 +7,7 @@ from app.DB import (
     submissions as submission_queries,
     logs as log_queries,
 )
-from app.DB.main import SessionLocal
+
 from app.routers.models import (
     Events_model,
     ConflictResponse,
@@ -38,13 +38,14 @@ from app.semesters import resolve_semester, semester_date_bounds
 from time import perf_counter
 from typing import Annotated
 from app.exceptions import NotFound
+from app.dependencies import DB
 
 router = APIRouter()
 
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
-def get_all_events(semester: Annotated[int | str, Query()] = "all"):
-    with LogFile("get all events"), SessionLocal() as session:
+def get_all_events(session: DB, semester: Annotated[int | str, Query()] = "all"):
+    with LogFile("get all events"):
         write_log_title("Fetching all events")
         start = perf_counter()
         write_log("Querying events from database")
@@ -66,24 +67,22 @@ def get_all_events(semester: Annotated[int | str, Query()] = "all"):
 
 
 @router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model)
-def get_event_by_id(event_id: int):
-    with SessionLocal() as session:
-        event = events_queries.get_event_by_id(session, event_id)
-        session.flush()
+def get_event_by_id(event_id: int, session: DB):
+    event = events_queries.get_event_by_id(session, event_id)
+    session.flush()
     return event
 
 
 @router.get("/{event_id:int}/form", status_code=status.HTTP_200_OK, response_model=Form_model)
-def get_event_form(event_id: int):
-    with SessionLocal() as session:
-        form = form_queries.get_form_by_event_id(session, event_id)
+def get_event_form(event_id: int, session: DB):
+    form = form_queries.get_form_by_event_id(session, event_id)
     return form
 
 
 @router.get("/open", status_code=status.HTTP_200_OK, response_model=list[Open_Events_model])
-def get_registrable_events():
+def get_registrable_events(session: DB):
     """returns events + their associated form"""
-    with LogFile("get open events"), SessionLocal() as session:
+    with LogFile("get open events"):
         start = perf_counter()
         write_log("Querying open events from database")
         open_events = events_queries.get_open_events(session)
@@ -93,10 +92,9 @@ def get_registrable_events():
 
 
 @router.get("/me", status_code=status.HTTP_200_OK, response_model=MemberEvents_model)
-def get_my_events(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]):
-    with SessionLocal() as session:
-        member = resolve_member(session, credentials)
-        attended_raw, participated_raw = events_queries.get_member_events(session, member.id)
+def get_my_events(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)], session: DB):
+    member = resolve_member(session, credentials)
+    attended_raw, participated_raw = events_queries.get_member_events(session, member.id)
     return MemberEvents_model(
         attended=[EventWithAttendance_model(**e) for e in attended_raw],
         participated=[Events_model(**e) for e in participated_raw],
@@ -104,13 +102,14 @@ def get_my_events(credentials: Annotated[HTTPAuthorizationCredentials, Depends(a
 
 
 @router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=EventDetailsModel)
-def get_event_details(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
+def get_event_details(
+    event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
+):
     """return an event + its associated actions, this is needed by the frontend to populate the update event form with the current event data and associated actions"""
-    with SessionLocal() as session:
-        event = events_queries.get_event_by_id(session, event_id)
-        actions = events_queries.get_actions_by_event_id(session, event_id)
-        if not event or not actions:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    event = events_queries.get_event_by_id(session, event_id)
+    actions = events_queries.get_actions_by_event_id(session, event_id)
+    if not event or not actions:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     return {"event": event, "actions": actions}
 
 
@@ -120,8 +119,8 @@ def get_event_details(event_id: int, credentials: Annotated[HTTPAuthorizationCre
     response_model=Events_model,
     responses={409: {"model": ConflictResponse, "description": "Event already exists"}},
 )
-def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)):
-    with LogFile("create event") as log, SessionLocal() as session:
+def create_event(event_data: createEvent_model, session: DB, credentials=Depends(admin_guard)):
+    with LogFile("create event") as log:
         try:
             write_log_title("Creating New Event and Associated Form")
             # 1. create event
@@ -183,8 +182,8 @@ def create_event(event_data: createEvent_model, credentials=Depends(admin_guard)
         500: {"model": InternalServerErrorResponse, "description": "Internal server error"},
     },
 )
-def update_event(event_id: int, event_data: UpdateEventModel, credentials=Depends(admin_guard)):
-    with LogFile("update event") as log, SessionLocal() as session:
+def update_event(event_id: int, event_data: UpdateEventModel, session: DB, credentials=Depends(admin_guard)):
+    with LogFile("update event") as log:
         try:
             write_log_title(f"Updating Event [{event_id}]")
 
@@ -320,8 +319,8 @@ def update_event(event_id: int, event_data: UpdateEventModel, credentials=Depend
         400: {"description": "Only draft events can be deleted"},
     },
 )
-def delete_event(event_id: int, credentials=Depends(admin_guard)):
-    with LogFile("delete event"), SessionLocal() as session:
+def delete_event(event_id: int, session: DB, credentials=Depends(admin_guard)):
+    with LogFile("delete event"):
         try:
             write_log_title(f"Deleting Event [{event_id}]")
 
@@ -358,15 +357,16 @@ def delete_event(event_id: int, credentials=Depends(admin_guard)):
     response_model=Events_model,
     responses={404: {"model": NotFoundResponse, "description": "Event not found"}},
 )
-def update_event_status(event_id: int, status_data: UpdateEventStatus_model, credentials=Depends(admin_guard)):
-    with SessionLocal() as session:
-        event = events_queries.get_event_by_id(session, event_id)
-        if not event:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-        old_status = event.status
-        event.status = status_data.status
-        session.commit()
-        session.refresh(event)
+def update_event_status(
+    event_id: int, status_data: UpdateEventStatus_model, session: DB, credentials=Depends(admin_guard)
+):
+    event = events_queries.get_event_by_id(session, event_id)
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    old_status = event.status
+    event.status = status_data.status
+    session.commit()
+    session.refresh(event)
 
     # Best-effort: reset the leaderboard cache when entering or leaving the "open" status,
     # since the leaderboard's open-events view is gated on status = 'open'.
@@ -381,40 +381,41 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, cre
 
 # TODO: move to submissions router.
 @router.get("/submissions/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Get_Submission_model])
-def get_submissions_by_event(event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]):
-    with SessionLocal() as session:
-        try:
-            submissions_data = submission_queries.get_submissions_by_event_id(session, event_id)
+def get_submissions_by_event(
+    event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
+):
+    try:
+        submissions_data = submission_queries.get_submissions_by_event_id(session, event_id)
 
-            # Transform to Submission_model objects
-            submissions = []
-            for row in submissions_data:
-                member = Member_model(
-                    id=row.id,
-                    name=row.name,
-                    email=row.email,
-                    phone_number=row.phone_number,
-                    uni_id=row.uni_id,
-                    gender=row.gender,
-                    uni_level=row.uni_level,
-                    uni_college=row.uni_college,
-                )
+        # Transform to Submission_model objects
+        submissions = []
+        for row in submissions_data:
+            member = Member_model(
+                id=row.id,
+                name=row.name,
+                email=row.email,
+                phone_number=row.phone_number,
+                uni_id=row.uni_id,
+                gender=row.gender,
+                uni_level=row.uni_level,
+                uni_college=row.uni_college,
+            )
 
-                submission = Get_Submission_model(
-                    member=member,
-                    submission_id=row.submission_id,
-                    submitted_at=row.submitted_at,
-                    form_type=row.form_type,
-                    submission_type=row.submission_type,
-                    is_accepted=bool(row.is_accepted),
-                    is_invited=bool(row.is_invited),
-                    google_submission_value=row.google_submission_value,
-                    event_id=row.event_id,
-                    form_id=row.form_id,
-                    google_form_id=row.google_form_id,
-                )
-                submissions.append(submission)
+            submission = Get_Submission_model(
+                member=member,
+                submission_id=row.submission_id,
+                submitted_at=row.submitted_at,
+                form_type=row.form_type,
+                submission_type=row.submission_type,
+                is_accepted=bool(row.is_accepted),
+                is_invited=bool(row.is_invited),
+                google_submission_value=row.google_submission_value,
+                event_id=row.event_id,
+                form_id=row.form_id,
+                google_form_id=row.google_form_id,
+            )
+            submissions.append(submission)
 
-            return submissions
-        except Exception:
-            raise
+        return submissions
+    except Exception:
+        raise

@@ -35,7 +35,7 @@ script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(script_dir.parent))
 
 from sqlalchemy import func, select
-from app.DB.main import SessionLocal
+from app.DB.main import db_session
 from app.DB.schema import EmailLogs, EmailTemplates, Members, MembersLogs, Role, Submissions
 
 
@@ -163,7 +163,7 @@ def merge_group(session, members: list[Members], report: list[str]) -> dict:
 
 
 def main(apply: bool):
-    with SessionLocal() as session:
+    with db_session() as session:
         groups = find_duplicate_groups(session)
         report: list[str] = []
         totals = defaultdict(int)

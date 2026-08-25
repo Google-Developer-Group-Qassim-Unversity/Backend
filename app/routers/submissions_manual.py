@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query, status
 
-from app.DB.main import SessionLocal
+from app.DB.main import db_session
 from app.DB import submissions as submission_queries, members as member_queries
 from app.routers.logging import (
     LogFile,
@@ -45,7 +45,7 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
         skipped_missing_email = 0
         processed = 0
 
-        with SessionLocal() as session:
+        with db_session() as session:
             for response in google_responses[:limit]:
                 processed += 1
 

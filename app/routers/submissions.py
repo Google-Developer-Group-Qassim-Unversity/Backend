@@ -3,7 +3,7 @@ import re
 from time import perf_counter
 from typing import Literal, Annotated
 from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks
-from app.DB.main import SessionLocal
+from app.DB.main import db_session
 from app.DB import submissions as submission_queries, members as member_queries, forms as form_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import admin_guard, resolve_member, authenticated_guard
@@ -25,6 +25,7 @@ from app.routers.models import submission_exists_model, submission_accept_model
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request as GoogleRequest
+from app.dependencies import DB
 
 router = APIRouter()
 
@@ -34,25 +35,25 @@ def create_submission(
     form_id: int,
     submission_type: Literal["none", "partial"],
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(config.CLERK_GUARD)],
+    session: DB,
 ):
-    with SessionLocal() as session:
-        try:
-            member_id = resolve_member(session, credentials).id
-            new_submission = submission_queries.create_submission(session, form_id, submission_type, member_id)
-            if not new_submission:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission already exists")
-            session.commit()
-            return new_submission
-        except Exception:
-            session.rollback()
-            raise
+    try:
+        member_id = resolve_member(session, credentials).id
+        new_submission = submission_queries.create_submission(session, form_id, submission_type, member_id)
+        if not new_submission:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission already exists")
+        session.commit()
+        return new_submission
+    except Exception:
+        session.rollback()
+        raise
 
 
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
 def check_submission_exists(
-    form_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]
+    form_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)], session: DB
 ):
-    with LogFile("check submission exists"), SessionLocal() as session:
+    with LogFile("check submission exists"):
         try:
             write_log(f"Querying DB for form_id [{form_id}]")
             start = perf_counter()
@@ -77,19 +78,19 @@ def check_submission_exists(
 def accept_submission(
     submissions: list[submission_accept_model],
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    session: DB,
 ):
-    with SessionLocal() as session:
-        try:
-            for submission in submissions:
-                submission = submission_queries.update_is_accepted(
-                    session, submission.submission_id, submission.is_accepted
-                )
-                if submission is None:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission not found")
-            session.commit()
-            return {"status": "success"}
-        except Exception:
-            raise
+    try:
+        for submission in submissions:
+            submission = submission_queries.update_is_accepted(
+                session, submission.submission_id, submission.is_accepted
+            )
+            if submission is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission not found")
+        session.commit()
+        return {"status": "success"}
+    except Exception:
+        raise
 
 
 # ====================== Google Forms API ======================
@@ -115,7 +116,7 @@ def get_google_credentials(refresh_token: str):
 
 def fetch_schema(google_form_id: str):
     """Fetch the form schema from Google Forms API"""
-    with SessionLocal() as session:
+    with db_session() as session:
         form = form_queries.get_form_by_google_form_id(session, google_form_id)
 
         if not form:
@@ -164,7 +165,7 @@ def fetch_form_responses(google_form_id: str, log_file=None):
         write_log_title_to(log_file, f"Fetching responses for form: {google_form_id}")
 
         # Get form details from database to retrieve refresh token
-        with SessionLocal() as session:
+        with db_session() as session:
             form = form_queries.get_form_by_google_form_id(session, google_form_id)
 
             if not form:
@@ -224,7 +225,7 @@ def sync_form_submissions(google_form_id: str, log_file):
         write_log_to(log_file, f"Google responses count: {len(google_responses)}")
 
         # Get partial submissions from database
-        with SessionLocal() as session:
+        with db_session() as session:
             partial_submissions = submission_queries.get_partial_submissions_by_form_id(session, form_id)
             write_log_to(log_file, f"Partial submissions count: {len(partial_submissions)}")
 
