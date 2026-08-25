@@ -89,26 +89,12 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "labelColor": theme["label_rgb"],
         "suppressStripShine": True,
         "eventTicket": {
-            "primaryFields": [
-                {
-                    "key": "member_name",
-                    "label": theme["role_title"],
-                    "value": full_name,
-                }
-            ],
+            "primaryFields": [{"key": "member_name", "label": theme["role_title"], "value": full_name}],
             "secondaryFields": [
-                {
-                    "key": "uni_id",
-                    "label": "الرقم الجامعي",
-                    "value": str(card_data.get("uniId") or "عضو موثق"),
-                }
+                {"key": "uni_id", "label": "الرقم الجامعي", "value": str(card_data.get("uniId") or "عضو موثق")}
             ],
             "auxiliaryFields": [
-                {
-                    "key": "institution",
-                    "label": "الجهة",
-                    "value": f"{uni_college}{(' · ' + major) if major else ''}",
-                }
+                {"key": "institution", "label": "الجهة", "value": f"{uni_college}{(' · ' + major) if major else ''}"}
             ],
             "backFields": [
                 {"key": "uni_id", "label": "الرقم الجامعي", "value": str(card_data.get("uniId") or "")},
@@ -187,13 +173,12 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     if not p12_bytes:
         raise ValueError("Apple Pass signing certificate (APPLE_P12_BASE64 or Certificates.p12) is missing")
 
-    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(
-        p12_bytes,
-        p12_password,
-    )
+    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(p12_bytes, p12_password)
 
     wwdr_base64 = os.getenv("APPLE_WWDR_BASE64")
-    wwdr_path = os.getenv("APPLE_WWDR_PATH", os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer"))
+    wwdr_path = os.getenv(
+        "APPLE_WWDR_PATH", os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer")
+    )
 
     wwdr_cert = None
     if wwdr_base64:
@@ -241,10 +226,15 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     Generates a signed Google Wallet Save Link (JWT) using RS256 algorithm.
     Uses full card Figma artwork for heroImage to match the complete card design.
     """
-    issuer_id = os.getenv("GOOGLE_WALLET_ISSUER_ID", "BCR2DN6DTK643EAC")
-    class_id = os.getenv("GOOGLE_WALLET_CLASS_ID", f"{issuer_id}.gdgq-card")
-    service_account_email = os.getenv("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "gdgq-962@gdgcoc.iam.gserviceaccount.com")
+    issuer_id = os.getenv("GOOGLE_WALLET_ISSUER_ID", "BCR2DN6DTK643EAC").strip()
+    class_id = os.getenv("GOOGLE_WALLET_CLASS_ID", "").strip() or f"{issuer_id}.gdgq-card"
+    service_account_email = os.getenv("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL", "").strip()
     private_key_pem = os.getenv("GOOGLE_WALLET_PRIVATE_KEY", "")
+
+    if not service_account_email.endswith(".gserviceaccount.com"):
+        raise ValueError("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL is missing or invalid")
+    if not private_key_pem.strip():
+        raise ValueError("GOOGLE_WALLET_PRIVATE_KEY is not configured")
 
     theme_id = card_data.get("themeId", DEFAULT_THEME)
     theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
@@ -263,107 +253,46 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     generic_object = {
         "id": card_id,
         "classId": class_id,
-        "cardTitle": {
-            "defaultValue": {
-                "language": "ar",
-                "value": "Google Developer Groups - Qassim",
-            }
-        },
-        "header": {
-            "defaultValue": {
-                "language": "ar",
-                "value": full_name,
-            }
-        },
-        "subheader": {
-            "defaultValue": {
-                "language": "ar",
-                "value": theme["role_title"],
-            }
-        },
+        "state": "ACTIVE",
+        "cardTitle": {"defaultValue": {"language": "ar", "value": "Google Developer Groups - Qassim"}},
+        "header": {"defaultValue": {"language": "ar", "value": full_name}},
+        "subheader": {"defaultValue": {"language": "ar", "value": theme["role_title"]}},
         "hexBackgroundColor": theme["badge_color"],
         "logo": {
-            "sourceUri": {
-                "uri": "https://gdg-q.com/android-chrome-192x192.png",
-            },
-            "contentDescription": {
-                "defaultValue": {
-                    "language": "ar",
-                    "value": "GDG Qassim Logo",
-                }
-            },
+            "sourceUri": {"uri": "https://gdg-q.com/android-chrome-192x192.png"},
+            "contentDescription": {"defaultValue": {"language": "ar", "value": "GDG Qassim Logo"}},
         },
         "heroImage": {
-            "sourceUri": {
-                "uri": f"https://gdg-q.com/wallet-v2/card-{theme_id}@2x.png",
-            },
-            "contentDescription": {
-                "defaultValue": {
-                    "language": "ar",
-                    "value": f"GDG Qassim {theme['role_title']}",
-                }
-            },
+            "sourceUri": {"uri": f"https://gdg-q.com/wallet-v2/card-{theme_id}@2x.png"},
+            "contentDescription": {"defaultValue": {"language": "ar", "value": f"GDG Qassim {theme['role_title']}"}},
         },
         "textModulesData": [
-            {
-                "id": "uni_id",
-                "header": "الرقم الجامعي",
-                "body": str(card_data.get("uniId") or "عضو موثق"),
-            },
-            {
-                "id": "college",
-                "header": "الجهة",
-                "body": f"{uni_college}{(' · ' + major) if major else ''}",
-            },
+            {"id": "uni_id", "header": "الرقم الجامعي", "body": str(card_data.get("uniId") or "عضو موثق")},
+            {"id": "college", "header": "الجهة", "body": f"{uni_college}{(' · ' + major) if major else ''}"},
         ],
-        "barcode": {
-            "type": "QR_CODE",
-            "value": qr_target_url,
-            "alternateText": uuid[:8].upper() if uuid else "GDGQ",
-        },
+        "barcode": {"type": "QR_CODE", "value": qr_target_url, "alternateText": uuid[:8].upper() if uuid else "GDGQ"},
         "linksModuleData": {
             "uris": [
-                {
-                    "uri": qr_target_url,
-                    "description": "صفحتك الشخصية المعتمدة",
-                    "id": "profile_link",
-                },
-                {
-                    "uri": "https://gdg-q.com",
-                    "description": "مجتمع GDG Qassim",
-                    "id": "club_site",
-                },
+                {"uri": qr_target_url, "description": "صفحتك الشخصية المعتمدة", "id": "profile_link"},
+                {"uri": "https://gdg-q.com", "description": "مجتمع GDG Qassim", "id": "club_site"},
             ]
         },
     }
 
     if level:
-        generic_object["textModulesData"].append({
-            "id": "level",
-            "header": "المرحلة / المستوى",
-            "body": level,
-        })
+        generic_object["textModulesData"].append({"id": "level", "header": "المرحلة / المستوى", "body": level})
 
     if email:
-        generic_object["textModulesData"].append({
-            "id": "email",
-            "header": "البريد الإلكتروني",
-            "body": email,
-        })
+        generic_object["textModulesData"].append({"id": "email", "header": "البريد الإلكتروني", "body": email})
 
     jwt_claims = {
         "iss": service_account_email,
         "aud": "google",
-        "typ": "savetoandroidpay",
+        "typ": "savetowallet",
         "iat": int(time.time()),
-        "payload": {
-            "genericClasses": [generic_class],
-            "genericObjects": [generic_object],
-        },
+        "origins": ["https://gdg-q.com"],
+        "payload": {"genericClasses": [generic_class], "genericObjects": [generic_object]},
     }
-
-    if not private_key_pem:
-        return f"https://pay.google.com/gp/v/save/{uuid or 'demo'}"
 
     # Format RSA private key
     formatted_key = private_key_pem.strip()

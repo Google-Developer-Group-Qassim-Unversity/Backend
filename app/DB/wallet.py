@@ -11,20 +11,14 @@ from app.DB.schema import MemberProfiles, MemberProfilesNameLanguage, Members, R
 def get_member_by_uni_id_or_none(session: Session, uni_id: str) -> Optional[Members]:
     """Finds a member by uni_id, with roles and profile preloaded."""
     stmt = (
-        select(Members)
-        .options(joinedload(Members.role), joinedload(Members.profile))
-        .where(Members.uni_id == uni_id)
+        select(Members).options(joinedload(Members.role), joinedload(Members.profile)).where(Members.uni_id == uni_id)
     )
     return session.scalars(stmt).first()
 
 
 def get_member_by_email_or_none(session: Session, email: str) -> Optional[Members]:
     """Finds a member by email fallback, with roles and profile preloaded."""
-    stmt = (
-        select(Members)
-        .options(joinedload(Members.role), joinedload(Members.profile))
-        .where(Members.email == email)
-    )
+    stmt = select(Members).options(joinedload(Members.role), joinedload(Members.profile)).where(Members.email == email)
     return session.scalars(stmt).first()
 
 

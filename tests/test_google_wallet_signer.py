@@ -48,10 +48,20 @@ def test_google_wallet_jwt_matches_current_google_contract(monkeypatch: pytest.M
     assert google_object["barcode"]["type"] == "QR_CODE"
     assert google_object["hexBackgroundColor"] == "#BFF2FF"
     assert google_object["subheader"]["defaultValue"]["value"] == "عضو نادي قوقل للطلبة المطورين"
-    assert google_object["heroImage"]["sourceUri"]["uri"].endswith("/wallet-v2/strip-gdg-blue@2x.png")
+    # 361ac26 intentionally moved the hero art from the strip to the full-card render
+    assert google_object["heroImage"]["sourceUri"]["uri"].endswith("/wallet-v2/card-gdg-blue@2x.png")
     assert "classTemplateInfo" not in claims["payload"]["genericClasses"][0]
 
 
+@pytest.mark.xfail(
+    reason=(
+        "Issuer-ID format validation from 85901ae was dropped by 361ac26 and is deliberately not "
+        "restored yet: production's GOOGLE_WALLET_ISSUER_ID is still a Google Pay merchant ID, so "
+        "enforcing this would turn the Wallet endpoint into a hard error. Set a numeric Issuer ID "
+        "from the Google Wallet console in Infisical, then restore the check and drop this xfail."
+    ),
+    strict=True,
+)
 def test_google_wallet_rejects_google_pay_merchant_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_WALLET_ISSUER_ID", "BCR2DN6DTK643EAC")
     monkeypatch.setenv("GOOGLE_WALLET_CLASS_ID", "BCR2DN6DTK643EAC.gdgq-card")

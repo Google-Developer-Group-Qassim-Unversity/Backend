@@ -72,8 +72,7 @@ def test_create_member_already_exists(clerk_client: TestClient, db_session):
 
 def test_create_member_manual_success(super_admin_client: TestClient):
     response = super_admin_client.post(
-        "/members/manual",
-        json={"name": "Manual Member", "email": "manual@example.com", "gender": "Male"},
+        "/members/manual", json={"name": "Manual Member", "email": "manual@example.com", "gender": "Male"}
     )
     assert_2xx(response)
     body = response.json()
@@ -83,8 +82,7 @@ def test_create_member_manual_success(super_admin_client: TestClient):
 
 def test_create_member_manual_email_conflict(super_admin_client: TestClient, seed_refs):
     response = super_admin_client.post(
-        "/members/manual",
-        json={"name": "Duplicate Email", "email": seed_refs.ahmed.email, "gender": "Male"},
+        "/members/manual", json={"name": "Duplicate Email", "email": seed_refs.ahmed.email, "gender": "Male"}
     )
     assert response.status_code == 409
     assert "email" in response.json()["detail"].lower()

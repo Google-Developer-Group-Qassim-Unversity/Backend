@@ -72,3 +72,16 @@ class MemberNotFound(NotFound):
 class EmailTemplateNotFound(NotFound):
     def __init__(self, id: str | int):
         super().__init__("Email template", id)
+
+
+class SemesterNotFound(NotFound):
+    def __init__(self, id: str | int):
+        super().__init__("Semester", id)
+
+
+class NoSemestersDefined(KnownHttpException):
+    def __init__(self):
+        super().__init__(
+            status_code=409,
+            detail="No semesters are defined. Add one from the admin app before using semester-scoped endpoints.",
+        )

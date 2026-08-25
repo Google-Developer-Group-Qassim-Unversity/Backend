@@ -202,7 +202,7 @@ FAKE_CLERK_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
             "uniLevel": 4,
             "uniCollege": "Engineering",
             "personalEmail": "test@example.com",
-        }
+        },
     },
 )
 
@@ -220,7 +220,7 @@ FAKE_ADMIN_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
             "uniCollege": "Engineering",
             "personalEmail": "admin@example.com",
             "is_admin": True,
-        }
+        },
     },
 )
 

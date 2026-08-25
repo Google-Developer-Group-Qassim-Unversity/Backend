@@ -94,7 +94,9 @@ def main(apply: bool):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Backfill members.clerk_user_id by matching derived uni email in Clerk")
+    parser = argparse.ArgumentParser(
+        description="Backfill members.clerk_user_id by matching derived uni email in Clerk"
+    )
     parser.add_argument("--apply", action="store_true", help="Commit the backfill instead of just printing the plan")
     args = parser.parse_args()
     main(args.apply)

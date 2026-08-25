@@ -237,7 +237,9 @@ def sync_form_submissions(google_form_id: str, log_file):
             for submission in partial_submissions:
                 email = (submission.email or "").strip().lower()
                 if not email:
-                    write_log_to(log_file, f"Partial submission: ID={submission.submission_id} has no email on file, skipping")
+                    write_log_to(
+                        log_file, f"Partial submission: ID={submission.submission_id} has no email on file, skipping"
+                    )
                     continue
                 partial_by_email[email] = submission
                 write_log_to(log_file, f"Partial submission: ID={submission.submission_id}, email={email}")
@@ -280,9 +282,7 @@ def sync_form_submissions(google_form_id: str, log_file):
                     else:
                         write_log_to(log_file, f"✗ Failed to update submission ID {partial_submission.id}")
                 else:
-                    write_log_to(
-                        log_file, f"Response {response_id}: No matching partial submission for email {email}"
-                    )
+                    write_log_to(log_file, f"Response {response_id}: No matching partial submission for email {email}")
                     unmatched_responses.append(response_id)
 
             # Commit all updates

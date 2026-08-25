@@ -2,7 +2,20 @@ from typing import Optional
 import datetime
 import enum
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKeyConstraint, Index, Integer, JSON, String, Table, Text, text
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Table,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.mysql import INTEGER, LONGTEXT, TEXT, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -351,7 +364,10 @@ class MemberProfiles(Base):
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True, autoincrement=True)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, unique=True)
-    uuid: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    # No index=True here: combined with unique=True SQLAlchemy would emit a single
+    # index named ix_member_profiles_uuid, but the DB has a uq_ unique constraint
+    # plus the explicit idx_ index declared in __table_args__ above.
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     custom_name: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     theme_id: Mapped[str] = mapped_column(String(50), nullable=False, server_default=text("'gdg-blue'"))
     name_language: Mapped[MemberProfilesNameLanguage] = mapped_column(
@@ -539,6 +555,31 @@ class EmailTemplates(Base):
     )
 
     creator: Mapped["Members"] = relationship("Members", foreign_keys=[created_by], passive_deletes=True)
+
+
+class Semesters(Base):
+    """An academic semester and the date range its events/points are counted in.
+
+    ``id`` is the university's term code (e.g. 475) and is chosen by the admin,
+    not auto-generated. Exactly one row is expected to have ``is_current`` set;
+    it is the semester used when a request doesn't name one. ``is_public`` rows
+    are readable by anyone, the rest require super admin credentials.
+    """
+
+    __tablename__ = "semesters"
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True, autoincrement=False)
+    name: Mapped[Optional[str]] = mapped_column(VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    start_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    is_current: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    is_public: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    )
 
 
 # =============================================================================

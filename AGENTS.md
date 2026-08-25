@@ -45,6 +45,7 @@ uv run alembic revision -m "desc"              # new empty migration (write manu
 
 - **`app/main.py`** – FastAPI app, CORS, router registration, static file mount for uploads
 - **`app/config.py`** – all env vars accessed through `config` singleton; `ENV=testing` skips dotenv loading
+- **`app/semesters.py`** – semester resolution. Semesters live in the `semesters` DB table (admin-editable via `/semesters`), *not* in config — never reintroduce a hardcoded semester dict, and never use the current semester as a route default (it must be resolved per request)
 - **`app/DB/schema.py`** – SQLAlchemy ORM models (source of truth for DB schema). Alembic uses `Base.metadata` from here
 - **`app/DB/main.py`** – `SessionLocal` and `engine` creation
 - **`app/routers/`** – API route handlers, one file per domain (events, members, points, etc.)

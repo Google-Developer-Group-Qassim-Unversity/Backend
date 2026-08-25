@@ -1,11 +1,14 @@
 from fastapi import APIRouter, status, HTTPException, Query, Depends
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.DB import points as points_queries
+from app.DB import points as points_queries, semesters as semesters_queries
 from app.DB.main import SessionLocal
+from app.DB.schema import Semesters
+from sqlalchemy.orm import Session
 from app.routers.models import BaseClassModel
-from datetime import datetime
+from datetime import date, datetime
 from app.helpers import is_super_admin
 from app.config import config
+from app.semesters import resolve_semester, semester_date_bounds
 from typing import Annotated
 
 router = APIRouter()
@@ -52,21 +55,53 @@ class Department_points_history_model(BaseClassModel):
     events: list[Event_model]
 
 
+class Semester_summary_model(BaseClassModel):
+    id: int
+    name: str | None = None
+    start_date: date
+    end_date: date
+    is_current: bool
+
+
 class Semesters_model(BaseClassModel):
-    current_semester: int
+    current_semester: int | None
     semesters: list[int]
+    details: list[Semester_summary_model]
 
 
 # ============ helpers ============
 
 
-def _validate_semester_access(semester: int, credentials: HTTPAuthorizationCredentials | None):
-    if semester not in config.PUBLIC_SEMESTERS:
+def _validate_semester_access(semester: Semesters, credentials: HTTPAuthorizationCredentials | None):
+    if not semester.is_public:
         if not credentials or not is_super_admin(credentials):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Semester {semester} is not publicly accessible. Super admin credentials required.",
+                detail=f"Semester {semester.id} is not publicly accessible. Super admin credentials required.",
             )
+
+
+def _resolve_requested_semester(
+    session: Session, semester_id: int | None, credentials: HTTPAuthorizationCredentials | None
+) -> Semesters:
+    """Resolve the semester a request is asking for, or its default, and authorize it.
+
+    An explicit ``?semester`` is honoured as-is. When none is given the default is
+    the current semester - but a public caller must not start getting 403s just
+    because a super admin made the current semester private, so they fall back to
+    the newest public one, matching what ``/points/semesters`` advertises.
+    """
+    if semester_id is not None:
+        semester = resolve_semester(session, semester_id)
+    else:
+        semester = resolve_semester(session, None)
+        if not semester.is_public and not (credentials and is_super_admin(credentials)):
+            public = semesters_queries.get_semesters(session, public_only=True)
+            if public:
+                semester = public[0]
+
+    _validate_semester_access(semester, credentials)
+    return semester
 
 
 # ============ routes ============
@@ -74,30 +109,44 @@ def _validate_semester_access(semester: int, credentials: HTTPAuthorizationCrede
 
 @router.get("/semesters", status_code=status.HTTP_200_OK, response_model=Semesters_model)
 def get_semesters():
-    return Semesters_model(current_semester=config.CURRENT_SEMESTER, semesters=config.PUBLIC_SEMESTERS)
+    """The publicly visible semesters, plus which one is the default."""
+    with SessionLocal() as session:
+        public = semesters_queries.get_semesters(session, public_only=True)
+        current = semesters_queries.get_current_semester(session)
+        # A private current semester must not leak here - fall back to the newest public one
+        # so callers always get a usable default rather than null.
+        if current is not None and current.is_public:
+            current_id = current.id
+        else:
+            current_id = public[0].id if public else None
+        return Semesters_model(
+            current_semester=current_id,
+            semesters=[semester.id for semester in public],
+            details=[Semester_summary_model.model_validate(semester) for semester in public],
+        )
 
 
 @router.get("/members/total", status_code=status.HTTP_200_OK, response_model=list[Member_points_model])
 def get_all_members_points(
-    semester: Annotated[int, Query()] = config.CURRENT_SEMESTER,
+    semester: Annotated[int | None, Query()] = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
-    _validate_semester_access(semester, credentials)
-    start_date, end_date = config.get_semester_dates(semester)
     with SessionLocal() as session:
+        resolved = _resolve_requested_semester(session, semester, credentials)
+        start_date, end_date = semester_date_bounds(resolved)
         return points_queries.get_members_points_semester(session, start_date, end_date)
 
 
 @router.get("/members/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_event_history_model)
 def get_member_points(
     member_id: int,
-    semester: Annotated[int, Query()] = config.CURRENT_SEMESTER,
+    semester: Annotated[int | None, Query()] = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
-    _validate_semester_access(semester, credentials)
-    start_date, end_date = config.get_semester_dates(semester)
-
     with SessionLocal() as session:
+        resolved = _resolve_requested_semester(session, semester, credentials)
+        start_date, end_date = semester_date_bounds(resolved)
+
         member_points = points_queries.get_members_points_semester(session, start_date, end_date, member_id)
         if member_points is None:
             raise HTTPException(
@@ -112,13 +161,12 @@ def get_member_points(
 
 @router.get("/departments/total", status_code=status.HTTP_200_OK, response_model=Response_department_points_model)
 def get_all_departments_points(
-    semester: Annotated[int, Query()] = config.CURRENT_SEMESTER,
+    semester: Annotated[int | None, Query()] = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
-    _validate_semester_access(semester, credentials)
-    start_date, end_date = config.get_semester_dates(semester)
-
     with SessionLocal() as session:
+        resolved = _resolve_requested_semester(session, semester, credentials)
+        start_date, end_date = semester_date_bounds(resolved)
         departments_points = points_queries.get_departments_points_semester(session, start_date, end_date)
     return Response_department_points_model(
         administrative=[
@@ -133,13 +181,13 @@ def get_all_departments_points(
 )
 def get_department_points(
     department_id: int,
-    semester: Annotated[int, Query()] = config.CURRENT_SEMESTER,
+    semester: Annotated[int | None, Query()] = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
 ):
-    _validate_semester_access(semester, credentials)
-    start_date, end_date = config.get_semester_dates(semester)
-
     with SessionLocal() as session:
+        resolved = _resolve_requested_semester(session, semester, credentials)
+        start_date, end_date = semester_date_bounds(resolved)
+
         department_points = points_queries.get_departments_points_semester(session, start_date, end_date, department_id)
         if department_points is None:
             raise HTTPException(
