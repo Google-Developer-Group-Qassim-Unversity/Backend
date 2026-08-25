@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.config import config
 from app.DB.main import db_session
+from app.DB.members import get_member_by_clerk_user_id_or_none
 from app.DB.wallet import (
     get_member_by_uni_id_or_none,
     get_member_by_email_or_none,
@@ -15,7 +16,7 @@ from app.DB.wallet import (
     is_member_admin,
     update_member_profile,
 )
-from app.helpers import authenticated_guard, get_uni_id_from_credentials
+from app.helpers import authenticated_guard, get_clerk_user_id_from_credentials, get_uni_id_from_credentials
 from app.wallet_signer import generate_apple_pkpass, generate_google_wallet_pass_url
 from app.dependencies import DB
 
@@ -66,14 +67,21 @@ class UpdateWalletMePayload(BaseModel):
 
 def _resolve_authenticated_member(session, credentials):
     """
-    Safely resolves the authenticated Member from Clerk credentials
-    using uni_id or email fallback.
+    Safely resolves the authenticated Member from Clerk credentials, trying
+    clerk_user_id first and falling back to uni_id then email.
     """
     member = None
     uni_id = None
     try:
+        # `sub` is on every Clerk token; uni_id only exists for uni_id/password
+        # signups, so trying it first avoids a needless miss for everyone else.
+        member = get_member_by_clerk_user_id_or_none(session, get_clerk_user_id_from_credentials(credentials))
+    except Exception as e:
+        logger.info(f"clerk_user_id extraction note: {e}")
+
+    try:
         uni_id = get_uni_id_from_credentials(credentials)
-        if uni_id:
+        if not member and uni_id:
             member = get_member_by_uni_id_or_none(session, str(uni_id))
     except Exception as e:
         logger.info(f"uni_id extraction note: {e}")

@@ -7,6 +7,10 @@ the existing tests could not catch it, because they override the guards.
 
 If a route's auth changes, this test fails and the diff shows exactly which
 route and in which direction. Update the mapping deliberately, never reflexively.
+
+The six endpoints that previously had no auth at all - the `/actions` writes and
+both `/submissions_manual/google/*` routes - are now guarded. `/actions` reads
+stay public: the leaderboard app consumes them.
 """
 
 import pytest
@@ -15,11 +19,17 @@ from fastapi.routing import APIRoute
 from app.main import app
 
 GUARD_NAMES = {"admin_guard", "authenticated_guard", "super_admin_guard", "admin_points_guard", "optional_clerk_guard"}
-STRICTNESS = {"super_admin_guard": 3, "admin_guard": 2, "authenticated_guard": 1, "optional_clerk_guard": 0}
+STRICTNESS = {
+    "super_admin_guard": 4,
+    "admin_points_guard": 3,
+    "admin_guard": 2,
+    "authenticated_guard": 1,
+    "optional_clerk_guard": 0,
+}
 
 # route -> the strictest guard it enforces, or None when the route is public
 EXPECTED_AUTH: dict[str, str | None] = {
-    'DELETE /actions/{action_id:int}': None,  # FIXME: unauthenticated write endpoint (pre-existing)
+    'DELETE /actions/{action_id:int}': 'admin_points_guard',
     'DELETE /attendance/{event_id}/manual': 'admin_guard',
     'DELETE /custom/departments/{log_id}': 'admin_guard',
     'DELETE /custom/members/{log_id}': 'admin_guard',
@@ -75,7 +85,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     'GET /wallet/{uuid}': None,
     'PATCH /members/me': 'authenticated_guard',
     'PATCH /wallet/me': 'authenticated_guard',
-    'POST /actions': None,  # FIXME: unauthenticated write endpoint (pre-existing)
+    'POST /actions': 'admin_points_guard',
     'POST /attendance/{event_id:int}': 'authenticated_guard',
     'POST /attendance/{event_id}/backfill': 'admin_guard',
     'POST /attendance/{event_id}/manual': 'admin_guard',
@@ -101,14 +111,14 @@ EXPECTED_AUTH: dict[str, str | None] = {
     'POST /semesters': 'super_admin_guard',
     'POST /submissions/google/webhook': None,
     'POST /submissions/{form_id:int}': None,
-    'POST /submissions_manual/google/run/{google_form_id}': None,  # FIXME: unauthenticated write endpoint (pre-existing)
-    'POST /submissions_manual/google/{google_form_id}': None,  # FIXME: unauthenticated write endpoint (pre-existing)
+    'POST /submissions_manual/google/run/{google_form_id}': 'admin_guard',
+    'POST /submissions_manual/google/{google_form_id}': 'admin_guard',
     'POST /upload/': 'admin_guard',
     'POST /upload/email-attachment': 'admin_guard',
     'POST /wallet/apple-pass': None,
     'POST /wallet/google-pass': None,
-    'PUT /actions/reorder': None,  # FIXME: unauthenticated write endpoint (pre-existing)
-    'PUT /actions/{action_id:int}': None,  # FIXME: unauthenticated write endpoint (pre-existing)
+    'PUT /actions/reorder': 'admin_points_guard',
+    'PUT /actions/{action_id:int}': 'admin_points_guard',
     'PUT /custom/departments/{log_id}': 'admin_guard',
     'PUT /custom/members/{log_id}': 'admin_guard',
     'PUT /emails/blast/templates/{template_id:int}': 'admin_guard',

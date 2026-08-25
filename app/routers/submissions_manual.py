@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Query, status
+from fastapi import Depends, APIRouter, Query, status
 
 from app.DB.main import db_session
+from app.helpers import admin_guard
 from app.DB import submissions as submission_queries, members as member_queries
 from app.routers.logging import (
     LogFile,
@@ -106,7 +107,7 @@ def sync_manual_form_submissions(google_form_id: str, limit: int, log_file):
         raise
 
 
-@router.post("/google/{google_form_id}", status_code=status.HTTP_200_OK)
+@router.post("/google/{google_form_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
 def manual_create_google_submissions(google_form_id: str, limit: Annotated[int, Query(ge=1, le=2000)] = 50):
     """
     Public (no-auth) endpoint to manually sync Google Form responses into DB submissions.
@@ -116,7 +117,7 @@ def manual_create_google_submissions(google_form_id: str, limit: Annotated[int, 
         return sync_manual_form_submissions(google_form_id, limit, log.file)
 
 
-@router.post("/google/run/{google_form_id}", status_code=status.HTTP_200_OK)
+@router.post("/google/run/{google_form_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
 def manual_run_google_form_submissions(google_form_id: str):
     with LogFile("manual google submissions sync") as log:
         return sync_form_submissions(google_form_id, log.file)

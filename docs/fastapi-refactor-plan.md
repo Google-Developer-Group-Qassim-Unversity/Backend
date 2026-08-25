@@ -310,17 +310,51 @@ guards, and none got stricter either. 255 passed / 1 xfailed (was 153/1, plus
 101 auth-inventory tests and the parametrised cases). Ruff 4 and pyright 71,
 both unchanged. No newly unused imports.
 
-**Flagged, not changed** (pre-existing, outside this phase):
+### Phase 3b — Close the auth gaps Phase 3 surfaced ✅ DONE
 
-- `POST /actions`, `PUT /actions/reorder`, `PUT|DELETE /actions/{id}` and both
-  `POST /submissions_manual/google/*` endpoints have **no auth at all**. They
-  are marked `# FIXME` in the auth inventory test so they are visible rather
-  than blessed by silence.
-- `send_custom_email`, `send_blast` and `create_email_template` resolve the
-  caller with `get_member_by_uni_id(get_uni_id_from_credentials(...))` instead
-  of `resolve_member`. That fails for any member without a `uni_id` (Clerk
-  signups that are not uni_id/password). Converting them is a behaviour change,
-  so it belongs in its own commit.
+Both items flagged at the end of Phase 3, fixed in their own commit.
+
+**Six unauthenticated write endpoints, now guarded:**
+
+| Endpoint | Guard | Why |
+|---|---|---|
+| `POST /actions` | `admin_points_guard` | the frontend gates `/points` to `["admin_points", "super_admin"]` |
+| `PUT /actions/reorder` | `admin_points_guard` | same |
+| `PUT /actions/{id}` | `admin_points_guard` | same |
+| `DELETE /actions/{id}` | `admin_points_guard` | same |
+| `POST /submissions_manual/google/{id}` | `admin_guard` | admin-triggered Forms backfill |
+| `POST /submissions_manual/google/run/{id}` | `admin_guard` | same |
+
+`admin_points_guard` had been defined in `helpers.py` and used by nothing.
+`is_admin_points or is_super_admin` is exactly the frontend's
+`["admin_points", "super_admin"]`, so backend and frontend now agree.
+
+`GET /actions` and `GET /actions/all` stay public - the leaderboard app reads them.
+
+**Frontend:** no call-site change was needed. `app/points/manage/page.tsx`
+already passed `getToken` to all five mutations, so the token was being sent and
+the backend simply never checked it. What did change is `lib/api.ts`, where
+`getToken` on those mutations went from `getToken?: GetTokenFn` to
+`getToken: GetTokenFn` - forgetting it is now a compile error rather than a
+runtime 403. (`deleteAction`'s `replacementId` became
+`number | null | undefined` so a required parameter does not follow an optional
+one.) `tsc --noEmit` passes; eslint has the same 4 pre-existing warnings.
+
+**Caller resolution:** `send_custom_email`, `send_blast` and
+`create_email_template` used
+`get_member_by_uni_id(get_uni_id_from_credentials(...))`, which fails for any
+member without a `uni_id`. All three now take `requesting_member: CurrentMember`,
+with `dependencies=[Depends(admin_guard)]` moved onto the decorator so the admin
+gate survives - the exact trap Phase 3 fell into.
+
+`wallet.py`'s `_resolve_authenticated_member` had the same weakness behind a
+uni_id → email fallback chain. It now tries `clerk_user_id` first, additively;
+both existing fallbacks are untouched.
+
+**Verified:** no route lost a guard; 9 gained one. Public routes 32 → 26. The
+auth inventory in `tests/test_route_auth.py` was regenerated (and its strictness
+ordering corrected to include `admin_points_guard`, which is narrower than
+`admin_guard`). 255 passed / 1 xfailed, ruff 4, pyright 71.
 
 ### Phase 4 — Router configuration and response contracts
 

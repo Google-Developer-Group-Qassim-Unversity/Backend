@@ -1,8 +1,9 @@
 from typing import Optional, Annotated
-from fastapi import APIRouter, status, HTTPException, Query
+from fastapi import APIRouter, Depends, status, HTTPException, Query
 from app.DB import actions as actions_queries
 
 from app.dependencies import DB
+from app.helpers import admin_points_guard
 from app.routers.models import (
     Categorized_action,
     CreateAction_model,
@@ -80,7 +81,9 @@ def get_all_actions(session: DB):
     ]
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=Action_model)
+@router.post(
+    "", status_code=status.HTTP_201_CREATED, response_model=Action_model, dependencies=[Depends(admin_points_guard)]
+)
 def create_action(payload: CreateAction_model, session: DB):
     new_action = actions_queries.create_action(
         session, name=payload.action_name, points=payload.points, type=payload.action_type
@@ -91,7 +94,12 @@ def create_action(payload: CreateAction_model, session: DB):
     return new_action
 
 
-@router.put("/{action_id:int}", status_code=status.HTTP_200_OK, response_model=Action_model)
+@router.put(
+    "/{action_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=Action_model,
+    dependencies=[Depends(admin_points_guard)],
+)
 def update_action(action_id: int, payload: UpdateAction_model, session: DB):
     updated_action = actions_queries.update_action(
         session,
@@ -109,14 +117,14 @@ def update_action(action_id: int, payload: UpdateAction_model, session: DB):
     return updated_action
 
 
-@router.put("/reorder", status_code=status.HTTP_200_OK)
+@router.put("/reorder", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_points_guard)])
 def reorder_actions(payload: ReorderActions_model, session: DB):
     actions_queries.update_actions_order(session, payload.action_orders)
     session.commit()
     return {"message": "Actions reordered successfully"}
 
 
-@router.delete("/{action_id:int}", status_code=status.HTTP_200_OK)
+@router.delete("/{action_id:int}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_points_guard)])
 def delete_action(action_id: int, session: DB, replacement_id: Annotated[Optional[int], Query()] = None):
     action = actions_queries.get_action_by_id(session, action_id)
     if not action:

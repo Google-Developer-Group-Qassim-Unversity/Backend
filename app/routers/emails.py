@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Request, status, 
 from fastapi.responses import StreamingResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 import time
-from fastapi_clerk_auth import HTTPAuthorizationCredentials
+
 from app.DB import events as events_queries, logs as log_queries
 from app.DB import emails as email_queries
 from app.DB import email_templates as email_template_queries
@@ -23,7 +23,7 @@ from app.routers.logging import (
     write_log_traceback,
     write_log_title,
 )
-from app.helpers import CurrentMember, admin_guard, get_effective_date, get_uni_id_from_credentials
+from app.helpers import CurrentMember, admin_guard, get_effective_date
 from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
 import httpx
 import json
@@ -593,11 +593,11 @@ def send_manual_certificate(
     }
 
 
-@router.post("/custom/{event_id:int}", status_code=status.HTTP_200_OK)
+@router.post("/custom/{event_id:int}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
 def send_custom_email(
     event_id: int,
     request: CustomEmailRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    requesting_member: CurrentMember,
     background_tasks: BackgroundTasks,
     session: DB,
 ):
@@ -657,7 +657,6 @@ def send_custom_email(
     with LogFile("custom email [JOB]"):
         event = events_queries.get_event_by_id(session, event_id)
         simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
-        requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
         background_tasks.add_task(
             send_custom_email_job, request.model_copy(deep=True), simple_event, event_id, requesting_member.id
         )
@@ -1135,12 +1134,9 @@ async def send_acceptance_test(
 # region ============== Blast API Endpoints ==============
 
 
-@router.post("/blast", status_code=status.HTTP_200_OK)
+@router.post("/blast", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
 async def send_blast(
-    request: BlastSendRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    background_tasks: BackgroundTasks,
-    session: DB,
+    request: BlastSendRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
 ):
     async def send_blast_job(
         recipients: list[dict], guaranteed_snapshot: list[dict], requested_count: int, sent_by_id: int
@@ -1245,7 +1241,6 @@ async def send_blast(
 
     with LogFile("send blast [SETUP]"):
         write_log_title("Preparing blast email")
-        requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
 
         guaranteed_member_ids = [r.member_id for r in request.guaranteed_recipients if r.member_id is not None]
         resolved_members = (
@@ -1349,11 +1344,8 @@ def list_email_templates(session: DB):
     return [EmailTemplateOut.model_validate(t, from_attributes=True) for t in templates]
 
 
-@router.post("/blast/templates", status_code=status.HTTP_201_CREATED)
-def create_email_template(
-    request: EmailTemplateIn, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
-    requesting_member = members_queries.get_member_by_uni_id(session, get_uni_id_from_credentials(credentials))
+@router.post("/blast/templates", status_code=status.HTTP_201_CREATED, dependencies=[Depends(admin_guard)])
+def create_email_template(request: EmailTemplateIn, requesting_member: CurrentMember, session: DB):
     template = email_template_queries.create_template(
         session,
         name=request.name,
