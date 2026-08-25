@@ -295,7 +295,11 @@ async def call_blast_api(
     if preview_text is not None:
         params["preview_text"] = preview_text
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    # Gmail SMTP sends a blast as a single BCC message but still issues one RCPT TO per
+    # recipient over the same connection (~0.2s each observed in prod), so large batches
+    # take proportionally longer than a flat timeout can account for.
+    timeout = max(60.0, len(emails) * 0.5 + 60.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             response = await client.post(
                 f"{config.CERTIFICATE_API_URL}/blasts",
