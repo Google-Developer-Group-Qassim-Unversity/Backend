@@ -23,13 +23,7 @@ from app.routers.logging import (
     write_log_traceback,
     write_log_title,
 )
-from app.helpers import (
-    admin_guard,
-    authenticated_guard,
-    get_effective_date,
-    get_uni_id_from_credentials,
-    resolve_member,
-)
+from app.helpers import CurrentMember, admin_guard, get_effective_date, get_uni_id_from_credentials
 from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
 import httpx
 import json
@@ -451,13 +445,8 @@ def get_total_remaining_send_capacity() -> int:
 # region ============== API Endpoints ==============
 
 
-@router.post("/{event_id:int}", status_code=status.HTTP_200_OK)
-def send_certificates(
-    event_id: int,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    background_tasks: BackgroundTasks,
-    session: DB,
-):
+@router.post("/{event_id:int}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+def send_certificates(event_id: int, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB):
     # Background task definition
     def send_certificates_by_event_id(event: Events, attendance: list, date_str: str, sent_by_id: int):
         with LogFile("send certificates"), db_session() as session:
@@ -522,7 +511,6 @@ def send_certificates(
         date_str = format_event_date(event)
         write_log(f"Event date formatted as: [{date_str}]")
 
-        requesting_member = resolve_member(session, credentials)
         background_tasks.add_task(send_certificates_by_event_id, event, attendance, date_str, requesting_member.id)
 
         return {
@@ -549,12 +537,9 @@ def _resolve_member(member_item: ManualCertificateMember, session) -> tuple[Simp
     return member_item.member, None
 
 
-@router.post("/manual-certificate", status_code=status.HTTP_200_OK)
+@router.post("/manual-certificate", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
 def send_manual_certificate(
-    request: ManualCertificateRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    background_tasks: BackgroundTasks,
-    session: DB,
+    request: ManualCertificateRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
 ):
     def send_manual_certificates_job(request_data: ManualCertificateRequest, sent_by_id: int):
         with LogFile("manual certificates"), db_session() as session:
@@ -600,7 +585,6 @@ def send_manual_certificate(
                 raise
 
     with LogFile("manual certificates [JOB]"):
-        requesting_member = resolve_member(session, credentials)
         background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id)
 
     return {
@@ -684,13 +668,8 @@ def send_custom_email(
     }
 
 
-@router.post("/custom/{event_id:int}/test", status_code=status.HTTP_200_OK)
-async def send_custom_email_test(
-    event_id: int,
-    request: CustomEmailTestRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-):
+@router.post("/custom/{event_id:int}/test", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+async def send_custom_email_test(event_id: int, request: CustomEmailTestRequest, session: DB):
     with LogFile("send custom email test"):
         write_log_title(f"Sending custom email test for event [{event_id}]")
         event = events_queries.get_event_by_id(session, event_id)
@@ -720,12 +699,9 @@ async def send_custom_email_test(
         return {"sent_count": len(emails), "emails": emails}
 
 
-@router.post("/direct", status_code=status.HTTP_200_OK)
+@router.post("/direct", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
 async def send_direct_email(
-    request: DirectEmailRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    background_tasks: BackgroundTasks,
-    session: DB,
+    request: DirectEmailRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
 ):
     async def send_direct_email_job(
         recipients: list[dict], sent_by_id: int, provider: EmailProvider, from_address: EmailLogsFromAddress | None
@@ -773,7 +749,6 @@ async def send_direct_email(
 
     with LogFile("send direct email [SETUP]"):
         write_log_title("Preparing direct email")
-        requesting_member = resolve_member(session, credentials)
 
         recipient_member_ids = [r.member_id for r in request.recipients if r.member_id is not None]
         resolved_members = (
@@ -806,10 +781,12 @@ async def send_direct_email(
     }
 
 
-@router.get("/certificate-event/eligible-count/{event_id:int}", status_code=status.HTTP_200_OK)
-def get_certificate_eligible_count(
-    event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
+@router.get(
+    "/certificate-event/eligible-count/{event_id:int}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(admin_guard)],
+)
+def get_certificate_eligible_count(event_id: int, session: DB):
     event = events_queries.get_event_by_id(session, event_id)
     attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
     already_sent = email_queries.get_members_who_received_certificate(session, event_id)
@@ -826,13 +803,12 @@ def get_certificate_eligible_count(
 
 
 @router.get(
-    "/certificate-event/logs/stream/{event_id:int}", status_code=status.HTTP_200_OK, response_class=EventSourceResponse
+    "/certificate-event/logs/stream/{event_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_class=EventSourceResponse,
+    dependencies=[Depends(admin_guard)],
 )
-def get_certificate_event_logs(
-    event_id: int,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    last_event_id: Annotated[int | None, Header()] = None,
-):
+def get_certificate_event_logs(event_id: int, last_event_id: Annotated[int | None, Header()] = None):
     last_id = 0
 
     def get_logs_batch(after_id: int, batch_size: int = 10):
@@ -867,9 +843,8 @@ def get_certificate_event_logs(
         time.sleep(1)  # Wait before checking for new logs
 
 
-@router.get("/stats", status_code=status.HTTP_200_OK)
+@router.get("/stats", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
 def get_email_stats(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
     session: DB,
     address: Annotated[
         EmailLogsFromAddress, Query(description="Email address to check usage for")
@@ -880,9 +855,10 @@ def get_email_stats(
     return {"usage": usage, "club_threshold": config.CLUB_EMAIL_THRESHOLD}
 
 
-@router.get("/logs", status_code=status.HTTP_200_OK, response_model=list[EmailLogs])
+@router.get(
+    "/logs", status_code=status.HTTP_200_OK, response_model=list[EmailLogs], dependencies=[Depends(admin_guard)]
+)
 def get_email_logs(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
     session: DB,
     offset: Annotated[int, Query(description="Number of logs to skip for pagination")] = 0,
     limit: Annotated[int, Query(description="Maximum number of logs to return")] = 100,
@@ -891,25 +867,35 @@ def get_email_logs(
     return logs
 
 
-@router.get("/logs/event/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[EmailLogs])
-def get_email_logs_by_event_id(
-    event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
+@router.get(
+    "/logs/event/{event_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=list[EmailLogs],
+    dependencies=[Depends(admin_guard)],
+)
+def get_email_logs_by_event_id(event_id: int, session: DB):
     logs = email_queries.get_email_logs_by_event_id(session, event_id)
     return logs
 
 
-@router.get("/logs/member/{member_id:int}", status_code=status.HTTP_200_OK, response_model=list[EmailLogs])
-def get_email_logs_by_member_id(
-    member_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
+@router.get(
+    "/logs/member/{member_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=list[EmailLogs],
+    dependencies=[Depends(admin_guard)],
+)
+def get_email_logs_by_member_id(member_id: int, session: DB):
     logs = email_queries.get_email_logs_by_member_id(session, member_id)
     return logs
 
 
-@router.get("/logs/enriched", status_code=status.HTTP_200_OK, response_model=list[EnrichedEmailLog])
+@router.get(
+    "/logs/enriched",
+    status_code=status.HTTP_200_OK,
+    response_model=list[EnrichedEmailLog],
+    dependencies=[Depends(admin_guard)],
+)
 def get_enriched_email_logs(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
     session: DB,
     email_type: Annotated[Optional[EmailLogsEmailType], Query(description="Filter by email type")] = None,
     event_id: Annotated[Optional[int], Query(description="Filter by event ID")] = None,
@@ -932,9 +918,13 @@ def get_enriched_email_logs(
     return [EnrichedEmailLog.model_validate(dict(r)) for r in rows]
 
 
-@router.get("/logs/enriched/stream", status_code=status.HTTP_200_OK, response_class=EventSourceResponse)
+@router.get(
+    "/logs/enriched/stream",
+    status_code=status.HTTP_200_OK,
+    response_class=EventSourceResponse,
+    dependencies=[Depends(admin_guard)],
+)
 def stream_enriched_email_logs(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
     last_event_id: Annotated[int | None, Header()] = None,
     email_type: Annotated[Optional[EmailLogsEmailType], Query(description="Filter by email type")] = None,
     event_id: Annotated[Optional[int], Query(description="Filter by event ID")] = None,
@@ -981,12 +971,13 @@ def stream_enriched_email_logs(
         time.sleep(1.5)
 
 
-@router.get("/stats/dashboard", status_code=status.HTTP_200_OK, response_model=DashboardStats)
-def get_dashboard_stats(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-    period: Annotated[int, Query(description="Time period in days")] = 1,
-):
+@router.get(
+    "/stats/dashboard",
+    status_code=status.HTTP_200_OK,
+    response_model=DashboardStats,
+    dependencies=[Depends(admin_guard)],
+)
+def get_dashboard_stats(session: DB, period: Annotated[int, Query(description="Time period in days")] = 1):
     addresses = {}
     for addr in EmailLogsFromAddress:
         usage = email_queries.get_email_address_usage(session, period, addr.value)
@@ -1009,14 +1000,12 @@ def get_dashboard_stats(
 @router.post("/download-certificate/{event_id:int}", status_code=status.HTTP_200_OK)
 def download_certificate(
     event_id: int,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)],
+    member: CurrentMember,
     session: DB,
     lang: Annotated[CertificateLanguage, Query(description="Certificate language")] = CertificateLanguage.ARABIC,
     format: Annotated[CertificateFormat, Query(description="Certificate format")] = CertificateFormat.PDF,
 ):
     event = events_queries.get_event_by_id(session, event_id)
-
-    member = resolve_member(session, credentials)
 
     attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
     attended_member_ids = {r.Member.id for r in attendance}
@@ -1070,17 +1059,16 @@ def download_certificate(
 # region ============== Acceptance API Endpoints ==============
 
 
-@router.post("/acceptance/blasts/{event_id:int}", status_code=status.HTTP_200_OK)
+@router.post("/acceptance/blasts/{event_id:int}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
 async def send_acceptance_blasts(
     event_id: int,
     request: Request,
     subject: Annotated[str, Query(description="Email subject line")],
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    requesting_member: CurrentMember,
     session: DB,
 ):
     with LogFile("send acceptance blasts"):
         write_log_title(f"Sending acceptance blasts for event [{event_id}]")
-        requesting_member = resolve_member(session, credentials)
 
         event = events_queries.get_event_by_id(session, event_id)
 
@@ -1120,12 +1108,11 @@ async def send_acceptance_blasts(
         return {"sent_count": len(emails), "emails": emails}
 
 
-@router.post("/acceptance/test", status_code=status.HTTP_200_OK)
+@router.post("/acceptance/test", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
 async def send_acceptance_test(
     request: Request,
     subject: Annotated[str, Query(description="Email subject line")],
     emails: Annotated[list[str], Query(description="Email addresses to send to")],
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
 ):
     with LogFile("send acceptance test"):
         write_log_title("Sending acceptance test emails")
@@ -1317,10 +1304,8 @@ async def send_blast(
     }
 
 
-@router.post("/blast/test", status_code=status.HTTP_200_OK)
-async def send_blast_test(
-    request: BlastTestRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
-):
+@router.post("/blast/test", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+async def send_blast_test(request: BlastTestRequest):
     with LogFile("send blast test"):
         write_log_title("Sending blast test email")
         write_log(f"Sending test blast to [{len(request.test_emails)}] test emails")
@@ -1340,9 +1325,8 @@ async def send_blast_test(
         return {"sent_count": len(request.test_emails), "emails": request.test_emails}
 
 
-@router.get("/blast/eligible-count", status_code=status.HTTP_200_OK)
+@router.get("/blast/eligible-count", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
 def get_blast_eligible_count(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
     session: DB,
     provider: Annotated[
         EmailProvider, Query(description="Sending provider to compute remaining capacity for")
@@ -1359,8 +1343,8 @@ def get_blast_eligible_count(
 # region ============== Email Template Endpoints ==============
 
 
-@router.get("/blast/templates", status_code=status.HTTP_200_OK)
-def list_email_templates(credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB):
+@router.get("/blast/templates", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+def list_email_templates(session: DB):
     templates = email_template_queries.list_templates(session)
     return [EmailTemplateOut.model_validate(t, from_attributes=True) for t in templates]
 
@@ -1382,13 +1366,8 @@ def create_email_template(
     return EmailTemplateOut.model_validate(template, from_attributes=True)
 
 
-@router.put("/blast/templates/{template_id:int}", status_code=status.HTTP_200_OK)
-def update_email_template(
-    template_id: int,
-    request: EmailTemplateIn,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-):
+@router.put("/blast/templates/{template_id:int}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+def update_email_template(template_id: int, request: EmailTemplateIn, session: DB):
     template = email_template_queries.update_template(
         session,
         template_id,
@@ -1401,10 +1380,10 @@ def update_email_template(
     return EmailTemplateOut.model_validate(template, from_attributes=True)
 
 
-@router.delete("/blast/templates/{template_id:int}", status_code=status.HTTP_200_OK)
-def delete_email_template(
-    template_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
+@router.delete(
+    "/blast/templates/{template_id:int}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)]
+)
+def delete_email_template(template_id: int, session: DB):
     email_template_queries.delete_template(session, template_id)
     session.commit()
     return {"message": f"Template [{template_id}] deleted."}

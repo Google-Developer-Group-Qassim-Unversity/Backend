@@ -72,13 +72,17 @@ def _reset_cache_best_effort() -> None:
 # ============ routes ============
 
 
-@router.get("", status_code=status.HTTP_200_OK, response_model=list[Semester_model])
-def get_all_semesters(session: DB, credentials=Depends(admin_guard)):
+@router.get(
+    "", status_code=status.HTTP_200_OK, response_model=list[Semester_model], dependencies=[Depends(admin_guard)]
+)
+def get_all_semesters(session: DB):
     return semesters_queries.get_semesters(session)
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=Semester_model)
-def create_semester(payload: CreateSemester_model, session: DB, credentials=Depends(super_admin_guard)):
+@router.post(
+    "", status_code=status.HTTP_201_CREATED, response_model=Semester_model, dependencies=[Depends(super_admin_guard)]
+)
+def create_semester(payload: CreateSemester_model, session: DB):
     _validate_dates(payload.start_date, payload.end_date)
     with LogFile("create semester"):
         write_log_title(f"Creating semester [{payload.id}]")
@@ -103,10 +107,13 @@ def create_semester(payload: CreateSemester_model, session: DB, credentials=Depe
     return result
 
 
-@router.put("/{semester_id:int}", status_code=status.HTTP_200_OK, response_model=Semester_model)
-def update_semester(
-    semester_id: int, payload: UpdateSemester_model, session: DB, credentials=Depends(super_admin_guard)
-):
+@router.put(
+    "/{semester_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=Semester_model,
+    dependencies=[Depends(super_admin_guard)],
+)
+def update_semester(semester_id: int, payload: UpdateSemester_model, session: DB):
     _validate_dates(payload.start_date, payload.end_date)
     with LogFile("update semester"):
         write_log_title(f"Updating semester [{semester_id}]")
@@ -131,8 +138,13 @@ def update_semester(
     return result
 
 
-@router.put("/{semester_id:int}/current", status_code=status.HTTP_200_OK, response_model=Semester_model)
-def set_current_semester(semester_id: int, session: DB, credentials=Depends(super_admin_guard)):
+@router.put(
+    "/{semester_id:int}/current",
+    status_code=status.HTTP_200_OK,
+    response_model=Semester_model,
+    dependencies=[Depends(super_admin_guard)],
+)
+def set_current_semester(semester_id: int, session: DB):
     """Make this the default semester for requests that don't name one."""
     with LogFile("set current semester"):
         write_log_title(f"Setting semester [{semester_id}] as current")
@@ -149,8 +161,8 @@ def set_current_semester(semester_id: int, session: DB, credentials=Depends(supe
     return result
 
 
-@router.delete("/{semester_id:int}", status_code=status.HTTP_200_OK)
-def delete_semester(semester_id: int, session: DB, credentials=Depends(super_admin_guard)):
+@router.delete("/{semester_id:int}", status_code=status.HTTP_200_OK, dependencies=[Depends(super_admin_guard)])
+def delete_semester(semester_id: int, session: DB):
     with LogFile("delete semester"):
         write_log_title(f"Deleting semester [{semester_id}]")
         semester = semesters_queries.get_semester_by_id(session, semester_id)

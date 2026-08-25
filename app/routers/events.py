@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from fastapi_clerk_auth import HTTPAuthorizationCredentials
+
 from app.DB import (
     events as events_queries,
     forms as form_queries,
@@ -25,7 +25,7 @@ from app.routers.models import (
     UpdateEventStatus_model,
 )
 from app.routers.logging import LogFile, write_log_exception, write_log, write_log_json_to, write_log_title
-from app.helpers import admin_guard, authenticated_guard, resolve_member
+from app.helpers import CurrentMember, admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.semesters import resolve_semester, semester_date_bounds
 from time import perf_counter
@@ -85,8 +85,7 @@ def get_registrable_events(session: DB):
 
 
 @router.get("/me", status_code=status.HTTP_200_OK, response_model=MemberEvents_model)
-def get_my_events(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)], session: DB):
-    member = resolve_member(session, credentials)
+def get_my_events(member: CurrentMember, session: DB):
     attended_raw, participated_raw = events_queries.get_member_events(session, member.id)
     return MemberEvents_model(
         attended=[EventWithAttendance_model(**e) for e in attended_raw],
@@ -94,10 +93,13 @@ def get_my_events(credentials: Annotated[HTTPAuthorizationCredentials, Depends(a
     )
 
 
-@router.get("/{event_id:int}/details", status_code=status.HTTP_200_OK, response_model=EventDetailsModel)
-def get_event_details(
-    event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
+@router.get(
+    "/{event_id:int}/details",
+    status_code=status.HTTP_200_OK,
+    response_model=EventDetailsModel,
+    dependencies=[Depends(admin_guard)],
+)
+def get_event_details(event_id: int, session: DB):
     """return an event + its associated actions, this is needed by the frontend to populate the update event form with the current event data and associated actions"""
     event = events_queries.get_event_by_id(session, event_id)
     actions = events_queries.get_actions_by_event_id(session, event_id)
@@ -111,8 +113,9 @@ def get_event_details(
     status_code=status.HTTP_201_CREATED,
     response_model=Events_model,
     responses={409: {"model": ConflictResponse, "description": "Event already exists"}},
+    dependencies=[Depends(admin_guard)],
 )
-def create_event(event_data: createEvent_model, session: DB, credentials=Depends(admin_guard)):
+def create_event(event_data: createEvent_model, session: DB):
     with LogFile("create event") as log:
         try:
             write_log_title("Creating New Event and Associated Form")
@@ -163,8 +166,9 @@ def create_event(event_data: createEvent_model, session: DB, credentials=Depends
         409: {"model": ConflictResponse, "description": "Event already exists"},
         500: {"model": InternalServerErrorResponse, "description": "Internal server error"},
     },
+    dependencies=[Depends(admin_guard)],
 )
-def update_event(event_id: int, event_data: UpdateEventModel, session: DB, credentials=Depends(admin_guard)):
+def update_event(event_id: int, event_data: UpdateEventModel, session: DB):
     with LogFile("update event") as log:
         try:
             write_log_title(f"Updating Event [{event_id}]")
@@ -286,8 +290,9 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB, crede
         404: {"model": NotFoundResponse, "description": "Event not found"},
         400: {"description": "Only draft events can be deleted"},
     },
+    dependencies=[Depends(admin_guard)],
 )
-def delete_event(event_id: int, session: DB, credentials=Depends(admin_guard)):
+def delete_event(event_id: int, session: DB):
     with LogFile("delete event"):
         write_log_title(f"Deleting Event [{event_id}]")
 
@@ -312,10 +317,9 @@ def delete_event(event_id: int, session: DB, credentials=Depends(admin_guard)):
     status_code=status.HTTP_200_OK,
     response_model=Events_model,
     responses={404: {"model": NotFoundResponse, "description": "Event not found"}},
+    dependencies=[Depends(admin_guard)],
 )
-def update_event_status(
-    event_id: int, status_data: UpdateEventStatus_model, session: DB, credentials=Depends(admin_guard)
-):
+def update_event_status(event_id: int, status_data: UpdateEventStatus_model, session: DB):
     event = events_queries.get_event_by_id(session, event_id)
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
@@ -336,10 +340,13 @@ def update_event_status(
 
 
 # TODO: move to submissions router.
-@router.get("/submissions/{event_id:int}", status_code=status.HTTP_200_OK, response_model=list[Get_Submission_model])
-def get_submissions_by_event(
-    event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
+@router.get(
+    "/submissions/{event_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=list[Get_Submission_model],
+    dependencies=[Depends(admin_guard)],
+)
+def get_submissions_by_event(event_id: int, session: DB):
     try:
         submissions_data = submission_queries.get_submissions_by_event_id(session, event_id)
 

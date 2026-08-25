@@ -37,8 +37,9 @@ def get_form_by_id(form_id: int, session: DB):
         404: {"model": NotFoundResponse, "description": "Form not found"},
         409: {"model": NotFoundResponse, "description": "Form with event_id already exists"},
     },
+    dependencies=[Depends(admin_guard)],
 )
-def update_form(form_id: int, form: Form_model, session: DB, credentials=Depends(admin_guard)):
+def update_form(form_id: int, form: Form_model, session: DB):
     with LogFile("update form") as log:
         try:
             write_log_title(f"Updating Form {form_id}")

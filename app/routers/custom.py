@@ -1,6 +1,6 @@
-from typing import List, Annotated
+from typing import List
 from fastapi import APIRouter, HTTPException, status, Depends
-from fastapi.security import HTTPAuthorizationCredentials
+
 from app.DB import (
     events as events_queries,
     departments as departments_queries,
@@ -17,7 +17,7 @@ from app.DB.schema import EventsLocationType
 from app.dependencies import DB
 from app.exceptions import DataIntegrityError
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(admin_guard)])
 
 
 class DepartmentPointDetails(BaseClassModel):
@@ -85,11 +85,7 @@ class CustomMemberPointsResponse(BaseClassModel):
 
 
 @router.post("/departments", status_code=status.HTTP_201_CREATED)
-def give_department_custom_points(
-    body: CustomDepartmentPointsRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-):
+def give_department_custom_points(body: CustomDepartmentPointsRequest, session: DB):
     with LogFile("custom_department_points") as log:
         try:
             write_log_title("Custom Department Points")
@@ -185,9 +181,7 @@ def give_department_custom_points(
 
 
 @router.get("/departments/{event_id}", response_model=CustomDepartmentPointsResponse)
-def get_department_custom_points(
-    event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
+def get_department_custom_points(event_id: int, session: DB):
     """Retrieve all custom department points for a specific event."""
     with LogFile("get_custom_department_points"):
         write_log_title(f"Get Custom Department Points for Event {event_id}")
@@ -229,12 +223,7 @@ def get_department_custom_points(
 
 
 @router.put("/departments/{log_id}")
-def update_department_custom_points(
-    log_id: int,
-    body: DepartmentPointDetails,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-):
+def update_department_custom_points(log_id: int, body: DepartmentPointDetails, session: DB):
     """Update a single custom department point entry by log_id."""
     with LogFile("update_custom_department_points"):
         write_log_title(f"Update Custom Department Points for Log {log_id}")
@@ -314,11 +303,7 @@ def update_department_custom_points(
 
 
 @router.post("/members", status_code=status.HTTP_201_CREATED)
-def give_member_custom_points(
-    body: CustomMemberPointsRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-):
+def give_member_custom_points(body: CustomMemberPointsRequest, session: DB):
     with LogFile("custom_member_points") as log:
         try:
             write_log_title("Custom Member Points")
@@ -403,9 +388,7 @@ def give_member_custom_points(
 
 
 @router.get("/members/{event_id}", response_model=CustomMemberPointsResponse)
-def get_member_custom_points(
-    event_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
+def get_member_custom_points(event_id: int, session: DB):
     with LogFile("get_custom_member_points"):
         write_log_title(f"Get Custom Member Points for Event {event_id}")
 
@@ -443,9 +426,7 @@ def get_member_custom_points(
 
 
 @router.delete("/departments/{log_id}")
-def delete_department_custom_points(
-    log_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
+def delete_department_custom_points(log_id: int, session: DB):
     with LogFile("delete_custom_department_points"):
         write_log_title(f"Delete Custom Department Points for Log {log_id}")
 
@@ -475,9 +456,7 @@ def delete_department_custom_points(
 
 
 @router.delete("/members/{log_id}")
-def delete_member_custom_points(
-    log_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)], session: DB
-):
+def delete_member_custom_points(log_id: int, session: DB):
     with LogFile("delete_custom_member_points"):
         write_log_title(f"Delete Custom Member Points for Log {log_id}")
 
@@ -505,12 +484,7 @@ def delete_member_custom_points(
 
 
 @router.put("/members/{log_id}")
-def update_member_custom_points(
-    log_id: int,
-    body: MemberPointDetails,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-):
+def update_member_custom_points(log_id: int, body: MemberPointDetails, session: DB):
     with LogFile("update_custom_member_points"):
         write_log_title(f"Update Custom Member Points for Log {log_id}")
 

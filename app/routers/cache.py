@@ -5,7 +5,7 @@ from app.helpers import admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.logging import LogFile, write_log, write_log_exception, write_log_title
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(admin_guard)])
 
 
 @router.post(
@@ -13,7 +13,7 @@ router = APIRouter()
     status_code=status.HTTP_200_OK,
     description="Trigger a full data-cache reset on the leaderboard (member) app.",
 )
-def reset_cache(credentials=Depends(admin_guard)):
+def reset_cache():
     with LogFile("reset cache") as log:
         try:
             write_log_title("Resetting leaderboard app data cache")

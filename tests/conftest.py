@@ -33,7 +33,6 @@ from alembic import command
 from sqlalchemy.orm import Session, sessionmaker
 
 from fastapi.testclient import TestClient
-from fastapi.security import HTTPAuthorizationCredentials
 from fastapi_clerk_auth import HTTPAuthorizationCredentials as ClerkHTTPAuthorizationCredentials
 
 # Clerk still builds its JWKS client at import time (see Phase 3 of the refactor plan),
@@ -253,6 +252,25 @@ FAKE_ADMIN_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
 )
 
 
+FAKE_SUPER_ADMIN_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
+    scheme="Bearer",
+    credentials="fake-super-admin-token",
+    decoded={
+        "sub": "clerk_test_super_admin_sub",
+        "metadata": {
+            "uni_id": "123456789",
+            "fullArabicName": "Test Super Admin",
+            "saudiPhone": "0501234567",
+            "gender": "Male",
+            "uniLevel": 4,
+            "uniCollege": "Engineering",
+            "personalEmail": "superadmin@example.com",
+            "is_super_admin": True,
+        },
+    },
+)
+
+
 @pytest.fixture(scope="function")
 def clerk_client(client) -> Generator:
     from app.helpers import authenticated_guard, optional_clerk_guard
@@ -268,10 +286,7 @@ def clerk_client(client) -> Generator:
 def super_admin_client(clerk_client) -> Generator:
     from app.helpers import super_admin_guard
 
-    def override_super_admin_guard():
-        return HTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-token")
-
-    app.dependency_overrides[super_admin_guard] = override_super_admin_guard
+    app.dependency_overrides[super_admin_guard] = lambda: FAKE_SUPER_ADMIN_CREDENTIALS
     yield clerk_client
     app.dependency_overrides.pop(super_admin_guard, None)
 
@@ -280,10 +295,7 @@ def super_admin_client(clerk_client) -> Generator:
 def admin_client(clerk_client) -> Generator:
     from app.helpers import admin_guard, optional_clerk_guard
 
-    def override_admin_guard():
-        return HTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-token")
-
-    app.dependency_overrides[admin_guard] = override_admin_guard
+    app.dependency_overrides[admin_guard] = lambda: FAKE_ADMIN_CREDENTIALS
     app.dependency_overrides[optional_clerk_guard] = lambda: FAKE_ADMIN_CREDENTIALS
     yield clerk_client
     app.dependency_overrides.pop(admin_guard, None)

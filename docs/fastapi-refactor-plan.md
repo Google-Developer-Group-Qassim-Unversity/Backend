@@ -265,22 +265,62 @@ Ruff 4 errors and pyright 71 errors, both unchanged from baseline. No newly
 unused imports (the 7 the strip orphaned were removed; the 33 pre-existing ones
 were left alone). `ruff --select F821` clean.
 
-### Phase 3 — Auth as dependencies, not parameters
+### Phase 3 — Auth as dependencies, not parameters ✅ DONE
 
-**Goal:** remove `credentials` from 50 signatures; make `resolve_member` a dependency.
+**Goal:** remove `credentials` from the signatures that never read it; make
+`resolve_member` a dependency.
 
-1. Fix `config.CLERK_GUARD` — build one `ClerkHTTPBearer` at module scope
-   (or `@lru_cache`), not per property access.
-2. Move the gate to the decorator for the 50 routes that ignore the credential:
-   ```python
-   @router.get("/", dependencies=[Depends(admin_guard)])
-   def get_all_members(db: DB): ...
-   ```
-   For whole routers that are admin-only, hoist to `APIRouter(dependencies=[...])`.
-3. Add `CurrentMember = Annotated[Members, Depends(get_current_member)]` where
-   `get_current_member` composes `authenticated_guard` + `resolve_member`.
-   The 22 routes that need the member take `member: CurrentMember`.
-4. Simplify the conftest fixtures accordingly.
+What shipped:
+
+1. `config.CLERK_GUARD` now returns a cached singleton via `_clerk_bearer()`.
+   It was a `@property` building a fresh `ClerkHTTPBearer` on every access, and
+   the five guards each read it once at import - five bearers, five JWKS clients
+   fetching Clerk's signing keys separately. Now two (one per `auto_error` mode).
+   A side effect: `admin_guard` and `authenticated_guard` finally share one
+   bearer object, so FastAPI's per-request dependency cache verifies the token
+   once instead of twice when both are present.
+2. **50 gate-only guards moved** from parameters into `dependencies=[...]` on
+   the route decorator. Routes still declaring `credentials`: 71 → 12.
+3. **3 routers hoisted** to `APIRouter(dependencies=[Depends(admin_guard)])` -
+   `cache.py`, `custom.py` and `upload.py`, where every route is admin-only.
+   `emails.py` is 23 admin + 1 authenticated, so it keeps per-route decorators.
+4. **10 routes take `member: CurrentMember`**, backed by `get_current_member` in
+   `app/helpers.py` composing `authenticated_guard` + `resolve_member`. The
+   parameter is named after the local variable it replaced, so bodies read the
+   same.
+5. conftest's admin/super-admin overrides now return real Clerk-shaped
+   credentials (a new `FAKE_SUPER_ADMIN_CREDENTIALS` alongside the others)
+   rather than a bare `HTTPAuthorizationCredentials` with no `decoded` payload,
+   which would have broken any test of the routes that still read the token.
+
+**A security regression was caught here, not by the tests.** Swapping an
+`admin_guard` parameter for `CurrentMember` silently downgraded four `/emails`
+routes to `authenticated_guard` — any signed-in member could have triggered
+certificate and blast sends. The suite stayed green throughout, because the
+fixtures override the guards. It was caught by diffing each route's *resolved
+dependency tree* against the pre-phase baseline, and fixed by putting
+`dependencies=[Depends(admin_guard)]` back on those four decorators.
+
+That check is now a permanent test: **`tests/test_route_auth.py`** pins the
+strictest guard for all 100 routes, so any future change to a route's auth fails
+loudly and shows the direction of the change.
+
+**Verified:** every one of the 100 routes enforces a superset of its pre-phase
+guards, and none got stricter either. 255 passed / 1 xfailed (was 153/1, plus
+101 auth-inventory tests and the parametrised cases). Ruff 4 and pyright 71,
+both unchanged. No newly unused imports.
+
+**Flagged, not changed** (pre-existing, outside this phase):
+
+- `POST /actions`, `PUT /actions/reorder`, `PUT|DELETE /actions/{id}` and both
+  `POST /submissions_manual/google/*` endpoints have **no auth at all**. They
+  are marked `# FIXME` in the auth inventory test so they are visible rather
+  than blessed by silence.
+- `send_custom_email`, `send_blast` and `create_email_template` resolve the
+  caller with `get_member_by_uni_id(get_uni_id_from_credentials(...))` instead
+  of `resolve_member`. That fails for any member without a `uni_id` (Clerk
+  signups that are not uni_id/password). Converting them is a behaviour change,
+  so it belongs in its own commit.
 
 ### Phase 4 — Router configuration and response contracts
 
@@ -333,7 +373,7 @@ were left alone). `ruff --select F821` clean.
 |---|---|---|
 | 1. DB dependency ✅ | everything else | large, mechanical |
 | 2. Exception handlers ✅ | −50 except blocks, −34 manual 500s | medium |
-| 3. Auth dependencies | −50 signature params | medium |
+| 3. Auth dependencies ✅ | −59 signature params, auth inventory test | medium |
 | 4. Router config + response models | typed frontend client | medium |
 | 5. Logging middleware | −139 lines, Sentry context | small |
 | 6. Settings + clients | testable externals | small |

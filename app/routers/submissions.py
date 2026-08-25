@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request, status, HTTPException, Backgrou
 from app.DB.main import db_session
 from app.DB import submissions as submission_queries, members as member_queries, forms as form_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.helpers import admin_guard, resolve_member, authenticated_guard
+from app.helpers import CurrentMember, admin_guard, resolve_member
 from app.config import config
 from app.routers.logging import (
     LogFile,
@@ -46,14 +46,12 @@ def create_submission(
 
 
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
-def check_submission_exists(
-    form_id: int, credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)], session: DB
-):
+def check_submission_exists(form_id: int, member: CurrentMember, session: DB):
     with LogFile("check submission exists"):
         try:
             write_log(f"Querying DB for form_id [{form_id}]")
             start = perf_counter()
-            member_id = resolve_member(session, credentials).id
+            member_id = member.id
             session.commit()
             submission = submission_queries.get_submission_by_form_and_member(session, form_id, member_id)
             end = perf_counter()
@@ -70,12 +68,8 @@ def check_submission_exists(
             raise
 
 
-@router.put("/accept", status_code=status.HTTP_200_OK)
-def accept_submission(
-    submissions: list[submission_accept_model],
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-):
+@router.put("/accept", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+def accept_submission(submissions: list[submission_accept_model], session: DB):
     try:
         for submission in submissions:
             submission = submission_queries.update_is_accepted(

@@ -24,12 +24,12 @@ from app.config import config
 from app.exceptions import DataIntegrityError, MemberNotFound
 from app.routers.logging import LogFile, write_log_exception, write_log, write_log_title
 from app.helpers import (
+    CurrentMember,
     validate_attendance_token,
     resolve_member,
     is_admin,
     get_effective_date,
     admin_guard,
-    authenticated_guard,
     optional_clerk_guard,
 )
 from datetime import datetime, timedelta
@@ -71,7 +71,7 @@ def get_target_date_for_day(event: Events, day: int | None) -> datetime:
 @router.post("/{event_id:int}", status_code=status.HTTP_200_OK)
 def mark_attendance(
     event_id: int,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)],
+    member: CurrentMember,
     session: DB,
     token: Annotated[str | None, Query(description="Optional attendance token for QR code links")] = None,
 ):
@@ -89,7 +89,6 @@ def mark_attendance(
             write_log("HTTP 400:No attendance token provided")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance token provided!")
 
-        member = resolve_member(session, credentials)
         write_log_title(f"Marking attendance for member [{member.name}] with uni_id [{member.uni_id}]")
 
         event, event_log = get_event_with_attendable_log(session, event_id)
@@ -145,13 +144,13 @@ def mark_attendance(
         return
 
 
-@router.post("/{event_id}/backfill", status_code=status.HTTP_200_OK, response_model=BackfillAttendanceResponse)
-def backfill_attendance(
-    event_id: int,
-    request: BackfillAttendanceRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-):
+@router.post(
+    "/{event_id}/backfill",
+    status_code=status.HTTP_200_OK,
+    response_model=BackfillAttendanceResponse,
+    dependencies=[Depends(admin_guard)],
+)
+def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, session: DB):
 
     with LogFile("backfill attendance"):
         write_log_title(
@@ -258,13 +257,8 @@ def get_event_attendance(
     )
 
 
-@router.post("/{event_id}/manual", status_code=status.HTTP_200_OK)
-def mark_attendance_manual(
-    event_id: int,
-    request: ManualAttendanceRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-):
+@router.post("/{event_id}/manual", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB):
     with LogFile("mark attendance manual"):
         write_log_title(f"Manual attendance for event [{event_id}], members {request.member_ids}")
 
@@ -312,13 +306,8 @@ def mark_attendance_manual(
         return {"success": success_count, "failed": failed_count}
 
 
-@router.delete("/{event_id}/manual", status_code=status.HTTP_200_OK)
-def remove_attendance_manual(
-    event_id: int,
-    request: ManualAttendanceRequest,
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
-    session: DB,
-):
+@router.delete("/{event_id}/manual", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)])
+def remove_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB):
     with LogFile("remove attendance manual"):
         write_log_title(f"Remove attendance for event [{event_id}], members {request.member_ids}")
 

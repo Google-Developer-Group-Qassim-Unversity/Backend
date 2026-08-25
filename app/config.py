@@ -4,6 +4,7 @@ All environment variables and global configuration should be accessed through th
 
 from dotenv import load_dotenv
 import os
+from functools import lru_cache
 from typing import Optional
 from pathlib import Path
 from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer
@@ -36,15 +37,11 @@ class Config:
 
     @property
     def CLERK_GUARD(self):
-        jwks_url = env_or_except("CLERK_JWKS_URL")
-        clerk_config = ClerkConfig(jwks_url=jwks_url)
-        return ClerkHTTPBearer(config=clerk_config)
+        return _clerk_bearer(auto_error=True)
 
     @property
     def CLERK_GUARD_optional(self):
-        jwks_url = env_or_except("CLERK_JWKS_URL")
-        clerk_config = ClerkConfig(jwks_url=jwks_url)
-        return ClerkHTTPBearer(config=clerk_config, auto_error=False)
+        return _clerk_bearer(auto_error=False)
 
     @property
     def LOG_DIR(self) -> str:
@@ -118,6 +115,17 @@ class Config:
     @property
     def SENTRY_DSN(self) -> Optional[str]:
         return os.getenv("SENTRY_DSN")
+
+
+@lru_cache(maxsize=2)
+def _clerk_bearer(auto_error: bool) -> ClerkHTTPBearer:
+    """One bearer per mode, shared process-wide.
+
+    Each ClerkHTTPBearer builds its own JWKS client, so returning a fresh one on
+    every property access meant five of them - one per guard - each fetching and
+    caching Clerk's signing keys separately.
+    """
+    return ClerkHTTPBearer(config=ClerkConfig(jwks_url=env_or_except("CLERK_JWKS_URL")), auto_error=auto_error)
 
 
 def env_or_except(key: str, default: Optional[str] = None) -> str:
