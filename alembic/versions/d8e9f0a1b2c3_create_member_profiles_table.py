@@ -50,11 +50,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
-            ["member_id"],
-            ["members.id"],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name="fk_member_profiles_member",
+            ["member_id"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_member_profiles_member"
         ),
         sa.UniqueConstraint("member_id", name="uq_member_profiles_member_id"),
         sa.UniqueConstraint("uuid", name="uq_member_profiles_uuid"),

@@ -24,19 +24,11 @@ NEW_VALUES = OLD_VALUES + ("direct",)
 
 def upgrade() -> None:
     op.alter_column(
-        "email_logs",
-        "email_type",
-        existing_type=sa.Enum(*OLD_VALUES),
-        type_=sa.Enum(*NEW_VALUES),
-        nullable=False,
+        "email_logs", "email_type", existing_type=sa.Enum(*OLD_VALUES), type_=sa.Enum(*NEW_VALUES), nullable=False
     )
 
 
 def downgrade() -> None:
     op.alter_column(
-        "email_logs",
-        "email_type",
-        existing_type=sa.Enum(*NEW_VALUES),
-        type_=sa.Enum(*OLD_VALUES),
-        nullable=False,
+        "email_logs", "email_type", existing_type=sa.Enum(*NEW_VALUES), type_=sa.Enum(*OLD_VALUES), nullable=False
     )

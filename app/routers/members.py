@@ -16,13 +16,7 @@ from app.routers.models import (
     BatchCreateMemberItem,
 )
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.helpers import (
-    admin_guard,
-    authenticated_guard,
-    credentials_to_member_model,
-    resolve_member,
-    super_admin_guard,
-)
+from app.helpers import admin_guard, authenticated_guard, credentials_to_member_model, resolve_member, super_admin_guard
 from app.routers.logging import (
     LogFile,
     write_log,
@@ -67,8 +61,7 @@ def update_current_member(
                 existing_by_email = member_queries.get_member_by_email_or_none(session, updates.email)
                 if existing_by_email and existing_by_email.id != member.id:
                     raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"Member with email {updates.email} already exists",
+                        status_code=status.HTTP_409_CONFLICT, detail=f"Member with email {updates.email} already exists"
                     )
             updated_member = member_queries.update_member_by_id(
                 session, member.id, updates.model_dump(exclude_none=True)
@@ -117,8 +110,7 @@ def create_member_manual(
             existing_by_email = member_queries.get_member_by_email_or_none(session, member_data.email)
             if existing_by_email:
                 raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Member with email {member_data.email} already exists",
+                    status_code=status.HTTP_409_CONFLICT, detail=f"Member with email {member_data.email} already exists"
                 )
             member = Member_model(
                 name=member_data.name,
