@@ -1,10 +1,9 @@
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
-from starlette.requests import Request
+from fastapi.responses import RedirectResponse
 from app.config import config
+from app.error_handlers import register_exception_handlers
 from app.routers import (
     attendance,
     emails,
@@ -35,18 +34,7 @@ app.add_middleware(
 )
 
 
-@app.exception_handler(OperationalError)
-def database_operational_error_handler(request: Request, exc: OperationalError):
-    print(f"OperationalError: {str(exc)}...")  # Log the error message for debugging
-    sentry_sdk.capture_exception(exc)
-    return JSONResponse(status_code=503, content={"detail": "Database temporarily unavailable. Please retry shortly."})
-
-
-@app.exception_handler(SQLAlchemyTimeoutError)
-def database_timeout_error_handler(request: Request, exc: SQLAlchemyTimeoutError):
-    print(f"TimeoutError: {str(exc)}...")  # Log the error message for debugging
-    sentry_sdk.capture_exception(exc)
-    return JSONResponse(status_code=503, content={"detail": "Database is under heavy load. Please retry shortly."})
+register_exception_handlers(app)
 
 
 @app.get("/", include_in_schema=False)

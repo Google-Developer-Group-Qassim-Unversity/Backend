@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Query, status
 
 from app.DB.main import db_session
 from app.DB import submissions as submission_queries, members as member_queries
@@ -113,20 +113,10 @@ def manual_create_google_submissions(google_form_id: str, limit: Annotated[int, 
     Processes only the first `limit` responses as returned by the Google API.
     """
     with LogFile("manual google submissions sync") as log:
-        try:
-            return sync_manual_form_submissions(google_form_id, limit, log.file)
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while syncing submissions"
-            )
+        return sync_manual_form_submissions(google_form_id, limit, log.file)
 
 
 @router.post("/google/run/{google_form_id}", status_code=status.HTTP_200_OK)
 def manual_run_google_form_submissions(google_form_id: str):
     with LogFile("manual google submissions sync") as log:
-        try:
-            return sync_form_submissions(google_form_id, log.file)
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while syncing submissions"
-            )
+        return sync_form_submissions(google_form_id, log.file)

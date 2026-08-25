@@ -24,20 +24,13 @@ from app.routers.models import (
     UpdateEventModel,
     UpdateEventStatus_model,
 )
-from app.routers.logging import (
-    LogFile,
-    write_log_exception,
-    write_log,
-    write_log_json_to,
-    write_log_title,
-    write_log_traceback,
-)
+from app.routers.logging import LogFile, write_log_exception, write_log, write_log_json_to, write_log_title
 from app.helpers import admin_guard, authenticated_guard, resolve_member
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.semesters import resolve_semester, semester_date_bounds
 from time import perf_counter
 from typing import Annotated
-from app.exceptions import NotFound
+from app.exceptions import DataIntegrityError, NotFound
 from app.dependencies import DB
 
 router = APIRouter()
@@ -157,17 +150,6 @@ def create_event(event_data: createEvent_model, session: DB, credentials=Depends
                 write_log_exception(cache_err)
 
             return new_event
-        except Exception as e:
-            session.rollback()
-            write_log_exception(e)
-            write_log_traceback()
-            if isinstance(e, HTTPException):
-                raise
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="An error occurred while creating the event",
-                )
         finally:
             write_log_json_to(log.file, event_data.model_dump(mode="json"))
 
@@ -207,9 +189,7 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB, crede
                 logs = log_queries.get_logs_by_event_id(session, event_id)
                 if not logs or len(logs) < 2:
                     write_log_exception(f"HTTP 500: Event [{event_id}] does not have expected logs")
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Event logs not found"
-                    )
+                    raise DataIntegrityError("Event logs not found")
                 write_log(f"Found [{len(logs)}] logs for event [{event_id}]")
 
                 # 3. Identify department log and member log
@@ -228,9 +208,7 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB, crede
                     write_log_exception(
                         f"HTTP 500: Could not identify department and member logs for event [{event_id}]"
                     )
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not identify logs"
-                    )
+                    raise DataIntegrityError("Could not identify logs")
 
                 # 4. Actions list: first = department action, second = member action
                 department_action = event_data.actions[0]
@@ -297,16 +275,6 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB, crede
             write_log(f"Event [{event_id}] updated successfully")
             return updated_event
 
-        except HTTPException:
-            session.rollback()
-            raise
-        except Exception as e:
-            session.rollback()
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while updating the event"
-            )
         finally:
             write_log_json_to(log.file, event_data.model_dump(mode="json"))
 
@@ -321,34 +289,22 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB, crede
 )
 def delete_event(event_id: int, session: DB, credentials=Depends(admin_guard)):
     with LogFile("delete event"):
-        try:
-            write_log_title(f"Deleting Event [{event_id}]")
+        write_log_title(f"Deleting Event [{event_id}]")
 
-            event = events_queries.get_event_by_id(session, event_id)
-            if not event:
-                write_log_exception(f"HTTP 404: Event [{event_id}] not found")
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+        event = events_queries.get_event_by_id(session, event_id)
+        if not event:
+            write_log_exception(f"HTTP 404: Event [{event_id}] not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
-            if event.status != "draft":
-                write_log_exception(f"HTTP 400: Cannot delete event [{event_id}] with status [{event.status}]")
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only draft events can be deleted")
+        if event.status != "draft":
+            write_log_exception(f"HTTP 400: Cannot delete event [{event_id}] with status [{event.status}]")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only draft events can be deleted")
 
-            event_name = event.name
-            events_queries.delete_event(session, event_id)
-            session.commit()
-            write_log(f"Event [{event_id}]: {event_name} deleted successfully")
-            return {"detail": "Event deleted successfully"}
-
-        except HTTPException:
-            session.rollback()
-            raise
-        except Exception as e:
-            session.rollback()
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while deleting the event"
-            )
+        event_name = event.name
+        events_queries.delete_event(session, event_id)
+        session.commit()
+        write_log(f"Event [{event_id}]: {event_name} deleted successfully")
+        return {"detail": "Event deleted successfully"}
 
 
 @router.put(

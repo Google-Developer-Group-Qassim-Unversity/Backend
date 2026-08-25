@@ -37,16 +37,12 @@ def create_submission(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(config.CLERK_GUARD)],
     session: DB,
 ):
-    try:
-        member_id = resolve_member(session, credentials).id
-        new_submission = submission_queries.create_submission(session, form_id, submission_type, member_id)
-        if not new_submission:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission already exists")
-        session.commit()
-        return new_submission
-    except Exception:
-        session.rollback()
-        raise
+    member_id = resolve_member(session, credentials).id
+    new_submission = submission_queries.create_submission(session, form_id, submission_type, member_id)
+    if not new_submission:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission already exists")
+    session.commit()
+    return new_submission
 
 
 @router.get("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=submission_exists_model)
@@ -378,10 +374,3 @@ async def google_forms_webhook(request: Request, background_tasks: BackgroundTas
             write_log_exception(e)
             write_log_traceback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Missing required field: {str(e)}")
-        except Exception as e:
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while processing the webhook",
-            )

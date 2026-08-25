@@ -504,17 +504,10 @@ def send_certificates(
 
             # TODO - These exception don't make sense this is a background task
             # we generally need better job management (job start message, job failed message, job finished message) in the email
-            except HTTPException:
-                session.rollback()
-                raise
             except Exception as e:
-                session.rollback()
                 write_log_exception(e)
                 write_log_traceback()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="An error occurred while sending certificates",
-                )
+                raise
 
     # Actual endpoint logic
     with LogFile("send certificates [JOB]"):
@@ -601,17 +594,10 @@ def send_manual_certificate(
                     )
                     session.commit()
 
-            except HTTPException:
-                session.rollback()
-                raise
             except Exception as e:
-                session.rollback()
                 write_log_exception(e)
                 write_log_traceback()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="An error occurred while sending manual certificates",
-                )
+                raise
 
     with LogFile("manual certificates [JOB]"):
         requesting_member = resolve_member(session, credentials)
@@ -679,17 +665,10 @@ def send_custom_email(
                     )
                     session.commit()
 
-            except HTTPException:
-                session.rollback()
-                raise
             except Exception as e:
-                session.rollback()
                 write_log_exception(e)
                 write_log_traceback()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="An error occurred while sending custom emails",
-                )
+                raise
 
     with LogFile("custom email [JOB]"):
         event = events_queries.get_event_by_id(session, event_id)
@@ -713,43 +692,32 @@ async def send_custom_email_test(
     session: DB,
 ):
     with LogFile("send custom email test"):
-        try:
-            write_log_title(f"Sending custom email test for event [{event_id}]")
-            event = events_queries.get_event_by_id(session, event_id)
-            simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
-            from_address = get_from_address()
+        write_log_title(f"Sending custom email test for event [{event_id}]")
+        event = events_queries.get_event_by_id(session, event_id)
+        simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
+        from_address = get_from_address()
 
-            emails: list[str] = []
-            for member_item in request.test_recipients:
-                simple_member, _ = _resolve_member(member_item, session)
-                subject = _personalize(request.subject, simple_member.name, simple_event.name)
-                html_content = _personalize(request.html_content, simple_member.name, simple_event.name)
-                write_log(f"Sending test custom email to [{simple_member.name}] at [{simple_member.email}]")
-                await call_custom_email_api(
-                    simple_member.email,
-                    subject,
-                    html_content,
-                    request.attachments,
-                    simple_event,
-                    simple_member,
-                    request.language,
-                    EmailProvider.GOOGLE,
-                    from_address,
-                )
-                emails.append(simple_member.email)
-
-            write_log("Custom email API responded successfully for all test recipients")
-            return {"sent_count": len(emails), "emails": emails}
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while sending test custom emails",
+        emails: list[str] = []
+        for member_item in request.test_recipients:
+            simple_member, _ = _resolve_member(member_item, session)
+            subject = _personalize(request.subject, simple_member.name, simple_event.name)
+            html_content = _personalize(request.html_content, simple_member.name, simple_event.name)
+            write_log(f"Sending test custom email to [{simple_member.name}] at [{simple_member.email}]")
+            await call_custom_email_api(
+                simple_member.email,
+                subject,
+                html_content,
+                request.attachments,
+                simple_event,
+                simple_member,
+                request.language,
+                EmailProvider.GOOGLE,
+                from_address,
             )
+            emails.append(simple_member.email)
+
+        write_log("Custom email API responded successfully for all test recipients")
+        return {"sent_count": len(emails), "emails": emails}
 
 
 @router.post("/direct", status_code=status.HTTP_200_OK)
@@ -1111,60 +1079,45 @@ async def send_acceptance_blasts(
     session: DB,
 ):
     with LogFile("send acceptance blasts"):
-        try:
-            write_log_title(f"Sending acceptance blasts for event [{event_id}]")
-            requesting_member = resolve_member(session, credentials)
+        write_log_title(f"Sending acceptance blasts for event [{event_id}]")
+        requesting_member = resolve_member(session, credentials)
 
-            event = events_queries.get_event_by_id(session, event_id)
+        event = events_queries.get_event_by_id(session, event_id)
 
-            html_content = await read_html_body(request)
-            write_log(f"Received HTML body with {len(html_content)} characters")
+        html_content = await read_html_body(request)
+        write_log(f"Received HTML body with {len(html_content)} characters")
 
-            submissions = submissions_queries.get_accepted_not_invited_by_event(session, event.id)
-            emails = [sub.email for sub in submissions if sub.email]
-            write_log(f"Found [{len(submissions)}] submissions, [{len(emails)}] emails")
+        submissions = submissions_queries.get_accepted_not_invited_by_event(session, event.id)
+        emails = [sub.email for sub in submissions if sub.email]
+        write_log(f"Found [{len(submissions)}] submissions, [{len(emails)}] emails")
 
-            write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
-            write_log_json({"subject": subject, "email_count": len(emails), "emails": emails})
+        write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
+        write_log_json({"subject": subject, "email_count": len(emails), "emails": emails})
 
-            from_addr = get_from_address()
-            response_data = await call_acceptance_api(emails, subject, html_content, from_addr)
-            write_log("Acceptance API responded successfully")
-            email_queries.create_email_log(
-                session,
-                sent_by=requesting_member.id,
-                from_address=from_addr.value,
-                email_type=EmailLogsEmailType.ACCEPTANCE,
-                event_id=event.id,
-                recipient_count=len(emails),
-                data={
-                    "subject": subject,
-                    "html_content": html_content,
-                    "event": {
-                        "name": event.name,
-                        "date": format_event_date(event),
-                        "official": bool(event.is_official),
-                    },
-                    "member": [{"name": sub.name, "email": sub.email} for sub in submissions],
-                },
-            )
+        from_addr = get_from_address()
+        response_data = await call_acceptance_api(emails, subject, html_content, from_addr)
+        write_log("Acceptance API responded successfully")
+        email_queries.create_email_log(
+            session,
+            sent_by=requesting_member.id,
+            from_address=from_addr.value,
+            email_type=EmailLogsEmailType.ACCEPTANCE,
+            event_id=event.id,
+            recipient_count=len(emails),
+            data={
+                "subject": subject,
+                "html_content": html_content,
+                "event": {"name": event.name, "date": format_event_date(event), "official": bool(event.is_official)},
+                "member": [{"name": sub.name, "email": sub.email} for sub in submissions],
+            },
+        )
 
-            submission_ids = [sub.submission_id for sub in submissions]
-            submissions_queries.mark_submissions_as_invited(session, submission_ids)
-            session.commit()
-            write_log(f"Marked [{len(submission_ids)}] submissions as invited")
+        submission_ids = [sub.submission_id for sub in submissions]
+        submissions_queries.mark_submissions_as_invited(session, submission_ids)
+        session.commit()
+        write_log(f"Marked [{len(submission_ids)}] submissions as invited")
 
-            return {"sent_count": len(emails), "emails": emails}
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while sending acceptance emails",
-            )
+        return {"sent_count": len(emails), "emails": emails}
 
 
 @router.post("/acceptance/test", status_code=status.HTTP_200_OK)
@@ -1175,30 +1128,19 @@ async def send_acceptance_test(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
 ):
     with LogFile("send acceptance test"):
-        try:
-            write_log_title("Sending acceptance test emails")
+        write_log_title("Sending acceptance test emails")
 
-            html_content = await read_html_body(request)
-            write_log(f"Received HTML body with {len(html_content)} characters")
+        html_content = await read_html_body(request)
+        write_log(f"Received HTML body with {len(html_content)} characters")
 
-            write_log(f"Parsed [{len(emails)}] test emails")
-            write_log_json({"emails": emails})
-            write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
+        write_log(f"Parsed [{len(emails)}] test emails")
+        write_log_json({"emails": emails})
+        write_log(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
 
-            response_data = await call_acceptance_api(emails, subject, html_content, get_from_address())
-            write_log("Acceptance API responded successfully")
+        response_data = await call_acceptance_api(emails, subject, html_content, get_from_address())
+        write_log("Acceptance API responded successfully")
 
-            return {"sent_count": len(emails), "emails": emails}
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while sending test acceptance emails",
-            )
+        return {"sent_count": len(emails), "emails": emails}
 
 
 # endregion
@@ -1380,33 +1322,22 @@ async def send_blast_test(
     request: BlastTestRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
 ):
     with LogFile("send blast test"):
-        try:
-            write_log_title("Sending blast test email")
-            write_log(f"Sending test blast to [{len(request.test_emails)}] test emails")
+        write_log_title("Sending blast test email")
+        write_log(f"Sending test blast to [{len(request.test_emails)}] test emails")
 
-            from_addr = get_from_address() if request.provider == EmailProvider.GOOGLE else None
-            await call_blast_api(
-                list(request.test_emails),
-                request.subject,
-                request.html_content,
-                request.provider,
-                from_addr,
-                request.preview_text,
-                request.attachments,
-            )
-            write_log("Blast API responded successfully")
+        from_addr = get_from_address() if request.provider == EmailProvider.GOOGLE else None
+        await call_blast_api(
+            list(request.test_emails),
+            request.subject,
+            request.html_content,
+            request.provider,
+            from_addr,
+            request.preview_text,
+            request.attachments,
+        )
+        write_log("Blast API responded successfully")
 
-            return {"sent_count": len(request.test_emails), "emails": request.test_emails}
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while sending the blast test email",
-            )
+        return {"sent_count": len(request.test_emails), "emails": request.test_emails}
 
 
 @router.get("/blast/eligible-count", status_code=status.HTTP_200_OK)

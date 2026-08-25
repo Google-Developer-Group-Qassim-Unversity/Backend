@@ -55,30 +55,18 @@ def update_current_member(
     session: DB,
 ):
     with LogFile("update current member"):
-        try:
-            member = resolve_member(session, credentials)
-            write_log_title(f"Updating member with id {member.id}")
-            if updates.email is not None:
-                existing_by_email = member_queries.get_member_by_email_or_none(session, updates.email)
-                if existing_by_email and existing_by_email.id != member.id:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT, detail=f"Member with email {updates.email} already exists"
-                    )
-            updated_member = member_queries.update_member_by_id(
-                session, member.id, updates.model_dump(exclude_none=True)
-            )
-            write_log(f"Member with id {member.id} updated successfully")
-            session.commit()
-            return updated_member
-        except HTTPException:
-            raise
-        except Exception as e:
-            session.rollback()
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while updating member"
-            )
+        member = resolve_member(session, credentials)
+        write_log_title(f"Updating member with id {member.id}")
+        if updates.email is not None:
+            existing_by_email = member_queries.get_member_by_email_or_none(session, updates.email)
+            if existing_by_email and existing_by_email.id != member.id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=f"Member with email {updates.email} already exists"
+                )
+        updated_member = member_queries.update_member_by_id(session, member.id, updates.model_dump(exclude_none=True))
+        write_log(f"Member with id {member.id} updated successfully")
+        session.commit()
+        return updated_member
 
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Member_model])
@@ -99,47 +87,36 @@ def create_member_manual(
     session: DB,
 ):
     with LogFile("create member manual"):
-        try:
-            write_log_title(f"Manually creating member with uni_id {member_data.uni_id}")
-            if member_data.uni_id is not None:
-                existing = member_queries.get_member_by_uni_id_or_none(session, member_data.uni_id)
-                if existing:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"Member with uni_id {member_data.uni_id} already exists",
-                    )
-            existing_by_email = member_queries.get_member_by_email_or_none(session, member_data.email)
-            if existing_by_email:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail=f"Member with email {member_data.email} already exists"
-                )
-            member = Member_model(
-                name=member_data.name,
-                email=member_data.email,
-                phone_number=member_data.phone_number or "",
-                uni_id=member_data.uni_id,
-                gender=member_data.gender,
-                uni_level=0,
-                uni_college="UNKNOWN",
-            )
-            new_member = member_queries.create_member(session, member, is_authenticated=False)
-            if new_member is None:
+        write_log_title(f"Manually creating member with uni_id {member_data.uni_id}")
+        if member_data.uni_id is not None:
+            existing = member_queries.get_member_by_uni_id_or_none(session, member_data.uni_id)
+            if existing:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Member with uni_id {member_data.uni_id} already exists",
                 )
-            write_log(f"Member with uni_id {member_data.uni_id} created successfully with ID {new_member.id}")
-            session.commit()
-            return {"member": new_member, "already_exists": False}
-        except HTTPException:
-            raise
-        except Exception as e:
-            session.rollback()
-            write_log_exception(e)
-            write_log_traceback()
+        existing_by_email = member_queries.get_member_by_email_or_none(session, member_data.email)
+        if existing_by_email:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while creating the member"
+                status_code=status.HTTP_409_CONFLICT, detail=f"Member with email {member_data.email} already exists"
             )
+        member = Member_model(
+            name=member_data.name,
+            email=member_data.email,
+            phone_number=member_data.phone_number or "",
+            uni_id=member_data.uni_id,
+            gender=member_data.gender,
+            uni_level=0,
+            uni_college="UNKNOWN",
+        )
+        new_member = member_queries.create_member(session, member, is_authenticated=False)
+        if new_member is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=f"Member with uni_id {member_data.uni_id} already exists"
+            )
+        write_log(f"Member with uni_id {member_data.uni_id} created successfully with ID {new_member.id}")
+        session.commit()
+        return {"member": new_member, "already_exists": False}
 
 
 @router.post("/batch", status_code=status.HTTP_200_OK, response_model=BatchCreateMembersResponse)
@@ -200,16 +177,7 @@ def batch_create_members(
                 write_log_traceback()
                 continue
 
-        try:
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while committing batch member creation",
-            )
+        session.commit()
 
         return BatchCreateMembersResponse(
             created_count=created_count,
@@ -270,16 +238,6 @@ def create_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(a
                 )
             session.commit()
             return {"member": new_member, "already_exists": already_exist}
-        except HTTPException:
-            session.rollback()
-            raise
-        except Exception as e:
-            session.rollback()
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred while creating the member"
-            )
         finally:
             if new_member is not None and member is not None:
                 write_log_json_to(log.file, member.model_dump())
@@ -302,18 +260,7 @@ def update_member_roles(
     session: DB,
 ):
     with LogFile("update member role"):
-        try:
-            write_log_title(f"Updating role for member_id {member_id} to {new_role.value}")
-            updated_member = member_queries.update_member_role(session, member_id, new_role=new_role)
-            session.commit()
-            return updated_member
-        except HTTPException:
-            raise
-        except Exception as e:
-            session.rollback()
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while updating the member's role",
-            )
+        write_log_title(f"Updating role for member_id {member_id} to {new_role.value}")
+        updated_member = member_queries.update_member_role(session, member_id, new_role=new_role)
+        session.commit()
+        return updated_member

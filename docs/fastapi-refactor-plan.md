@@ -212,18 +212,58 @@ captures a request-scoped session.
 correct and explicit); the `session.rollback()` calls inside `except` blocks are
 now redundant with `get_db` and get deleted along with those blocks.
 
-### Phase 2 — Exception handlers
+### Phase 2 — Exception handlers ✅ DONE
 
-**Goal:** delete all 40 `except Exception` blocks and 36 manual 500s.
+**Goal:** delete the per-route `except Exception` → `HTTPException(500)` boilerplate.
 
-1. Register handlers in `main.py` for `KnownHttpException` (already exists,
-   just unused), `IntegrityError` → 409, `SQLAlchemyError` → 500, and a catch-all
-   `Exception` handler that logs + reports to Sentry + returns a generic 500.
-2. Delete the per-route try/except. Rollback is Phase 1's job now.
-3. Let `NotFound` / `Conflict` / `MemberNotFound` propagate from the DB layer
-   instead of being caught and rewrapped.
+What shipped:
 
-**Done when:** no router file contains `except Exception`.
+1. `app/error_handlers.py` with `register_exception_handlers(app)`, covering
+   `KnownHttpException`, `OperationalError`, SQLAlchemy `TimeoutError`,
+   `IntegrityError` → 409, `SQLAlchemyError` → 500, and a catch-all `Exception`.
+   `main.py` calls it and no longer defines handlers inline.
+2. **43 handlers removed** across 7 routers and **21 `try` blocks unwrapped**
+   entirely. The 19 `except HTTPException: raise` / `session.rollback(); raise`
+   guards existed only to let intentional errors escape the `except Exception`
+   below them, so they went too.
+3. **3 background-task handlers rewritten** to log and re-raise rather than
+   construct an `HTTPException` that nothing will ever receive (the code's own
+   `TODO` flagged this). Proper job management is still Phase 7.
+4. Two 500 wrappers in `upload.py` that returned `f"File upload failed: {str(e)}"`
+   are gone — the raw exception message no longer reaches the client.
+5. Six "this should never happen" 500s now raise the `DataIntegrityError` the
+   codebase already defined for exactly that case.
+6. New `tests/test_error_handlers.py` — 9 tests, one per handler, including
+   assertions that the driver's message and the original exception text do not
+   leak into the response body.
+
+Router `except` blocks went from 100 to 50; hand-written 500s from 36 to 2
+(both in `error_handlers.py`); `session.rollback()` in routers from ~40 to 4.
+
+**What deliberately stayed:**
+
+- The four remaining `session.rollback()` calls are in background-task closures
+  that *swallow* the exception. Since nothing propagates, `db_session()` never
+  rolls back for them — the explicit call is load-bearing. Phase 7 territory.
+- `httpx` handlers mapping upstream failures to `GatewayTimeout` / `BadGateway` /
+  `ServiceUnavailable`. Those carry real meaning.
+- Deliberate swallows, e.g. per-row failure counting in `batch_create_members`
+  and the best-effort cache reset.
+
+**Two behaviour changes worth knowing:**
+
+- Unexpected errors now reach the client as `{"detail": "Internal server error"}`
+  rather than a route-specific message like "An error occurred while updating
+  member". No test or frontend code depended on those strings.
+- Starlette re-raises after the catch-all handler runs, so in tests using
+  `TestClient(raise_server_exceptions=True)` an unexpected error now surfaces as
+  the real exception instead of a silent 500. That is an improvement: the stack
+  trace is the actual failure, not a generic wrapper.
+
+**Verified:** 153 passed / 1 xfailed (was 144/1 — the 9 new handler tests).
+Ruff 4 errors and pyright 71 errors, both unchanged from baseline. No newly
+unused imports (the 7 the strip orphaned were removed; the 33 pre-existing ones
+were left alone). `ruff --select F821` clean.
 
 ### Phase 3 — Auth as dependencies, not parameters
 
@@ -292,7 +332,7 @@ now redundant with `get_db` and get deleted along with those blocks.
 | Phase | Unlocks | Rough size |
 |---|---|---|
 | 1. DB dependency ✅ | everything else | large, mechanical |
-| 2. Exception handlers | −40 try/except blocks | medium |
+| 2. Exception handlers ✅ | −50 except blocks, −34 manual 500s | medium |
 | 3. Auth dependencies | −50 signature params | medium |
 | 4. Router config + response models | typed frontend client | medium |
 | 5. Logging middleware | −139 lines, Sentry context | small |

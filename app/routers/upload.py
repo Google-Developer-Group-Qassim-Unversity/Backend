@@ -10,7 +10,7 @@ from fastapi_clerk_auth import HTTPAuthorizationCredentials
 
 from app.config import config
 from app.helpers import admin_guard
-from app.routers.logging import LogFile, write_log, write_log_exception, write_log_traceback
+from app.routers.logging import LogFile, write_log
 
 router = APIRouter()
 
@@ -51,14 +51,9 @@ async def upload_file(
 
         write_log(f"Uploading file: {file.filename} -> {key}")
 
-        try:
-            client = get_r2_client()
-            content = await file.read()
-            client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
-        except Exception as e:
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+        client = get_r2_client()
+        content = await file.read()
+        client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
 
         url = f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}"
         write_log(f"Upload successful: {url}")
@@ -89,13 +84,8 @@ async def upload_email_attachment(
 
         write_log(f"Uploading email attachment: {file.filename} -> {key}")
 
-        try:
-            client = get_r2_client()
-            client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
-        except Exception as e:
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+        client = get_r2_client()
+        client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
 
         url = f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}"
         write_log(f"Upload successful: {url}")
