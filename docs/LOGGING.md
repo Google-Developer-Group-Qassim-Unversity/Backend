@@ -3,25 +3,63 @@
 Where to look when something is broken. Written for whoever (or whatever) is
 holding the pager.
 
+The app runs on a VPS under PM2 as **`GDG-backend`** on port **7501**, four
+uvicorn workers.
+
+## Getting onto the VPS
+
+Connection details are in Infisical, environment `prod`, path `/VPS`:
+
+| Key | What it is |
+|---|---|
+| `VPS_HOST` | host to connect to |
+| `VPS_USER` | user to connect as |
+| `GITHUB_SSH_PRIVATE_KEY` | the deploy key GitHub Actions uses; it is authorised for interactive SSH too |
+
+If you already have a working SSH alias for this box, use it. If you don't,
+paste this helper - it pulls host, user and key from Infisical and loads the key
+into a throwaway `ssh-agent`, so **nothing is written to disk**:
+
+```bash
+vps() {
+  infisical run --env=prod --path=/VPS --silent -- sh -c '
+    eval "$(ssh-agent -s)" >/dev/null
+    printf "%s\n" "$GITHUB_SSH_PRIVATE_KEY" | ssh-add - 2>/dev/null
+    ssh -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
+      "export PATH=\"\$(dirname \$(ls \$HOME/.nvm/versions/node/*/bin/pm2 2>/dev/null | tail -1)):\$PATH\"; $1"
+    status=$?
+    ssh-agent -k >/dev/null 2>&1
+    exit $status
+  ' _ "$*"
+}
+```
+
+Two things that helper handles, and that will bite you if you SSH in by hand:
+
+- **`pm2` is not on the default PATH.** It lives under nvm, and a
+  non-interactive `ssh host 'pm2 ...'` gets `pm2: command not found`. There are
+  two node versions installed, so the helper locates the `pm2` binary rather
+  than hardcoding a version.
+- The key is loaded into an agent and the agent is killed afterwards, so the
+  private key never touches the filesystem.
+
+Every command below assumes `vps`. Substitute your own alias if you have one.
+
 ## Triage in three commands
 
 ```bash
-ssh oracle2
-pm2 logs GDG-backend --lines 200
+vps 'pm2 logs GDG-backend --lines 200 --nostream'
 ```
 
 ```bash
-# errors only, most recent first
-ssh oracle2 'tail -500 ~/.pm2/logs/GDG-backend-error.log'
+# errors only
+vps 'tail -500 ~/.pm2/logs/GDG-backend-error.log'
 ```
 
 ```bash
 # everything one request did, by its id
-ssh oracle2 'grep "req:6cefc82ee87c" ~/.pm2/logs/GDG-backend-*.log'
+vps 'grep "req:6cefc82ee87c" ~/.pm2/logs/GDG-backend-*.log'
 ```
-
-`oracle2` is the SSH alias for the production VPS. The app runs there under PM2
-as **`GDG-backend`** on port **7501**, four uvicorn workers.
 
 ## Reading a log line
 
@@ -46,7 +84,7 @@ Every response carries an `X-Request-ID` header. A user reporting a failure can
 be asked for it, or you can pull it from the browser's network tab, then:
 
 ```bash
-ssh oracle2 'grep "req:<id>" ~/.pm2/logs/GDG-backend-out.log'
+vps 'grep "req:<id>" ~/.pm2/logs/GDG-backend-out.log'
 ```
 
 Callers may also **send** `X-Request-ID` and the app will adopt it, so a client
@@ -108,8 +146,8 @@ Rotated files are `~/.pm2/logs/GDG-backend-out__<timestamp>.log.gz`. Worst-case
 footprint is bounded at roughly 280M across the four active streams.
 
 ```bash
-ssh oracle2 'pm2 conf pm2-logrotate'     # current settings
-ssh oracle2 'ls -lh ~/.pm2/logs/'        # live files and archives
+vps 'pm2 conf pm2-logrotate'     # current settings
+vps 'ls -lh ~/.pm2/logs/'        # live files and archives
 ```
 
 To read a rotated file: `zcat ~/.pm2/logs/GDG-backend-out__*.log.gz | grep ...`
@@ -157,10 +195,10 @@ under `~/GDG-Logs` - 48,491 of them, 454M in total, now a 9MB archive. That tree
 
 ```bash
 # what's in there
-ssh oracle2 'tar -tzf ~/GDG-Logs-archive.tar.gz | head'
+vps 'tar -tzf ~/GDG-Logs-archive.tar.gz | head'
 
 # read one endpoint's logs without unpacking it (--wildcards is required)
-ssh oracle2 'tar -xzOf ~/GDG-Logs-archive.tar.gz --wildcards "GDG-Logs/send certificates/*/messages.log"' | head
+vps 'tar -xzOf ~/GDG-Logs-archive.tar.gz --wildcards "GDG-Logs/send certificates/*/messages.log"' | head
 ```
 
 Those files have raw ANSI escape codes in them, so pipe through `cat -v` if the
