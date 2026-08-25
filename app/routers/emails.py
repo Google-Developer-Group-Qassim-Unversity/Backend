@@ -174,22 +174,6 @@ class CustomEmailTestRequest(BaseModel):
     language: CertificateLanguage = CertificateLanguage.ARABIC
 
 
-class DirectEmailRequest(BaseModel):
-    subject: str
-    html_content: str
-    member_id: int | None = None
-    email: EmailStr | None = None
-    name: str | None = None
-    attachments: list[CustomEmailAttachment] = []
-    provider: EmailProvider = EmailProvider.GOOGLE
-
-    @model_validator(mode="after")
-    def validate_recipient(self) -> "DirectEmailRequest":
-        if self.member_id is None and self.email is None:
-            raise ValueError("Provide either 'member_id' or 'email'")
-        return self
-
-
 class BlastAttachment(BaseModel):
     url: str
     filename: str
@@ -206,6 +190,14 @@ class BlastGuaranteedRecipient(BaseModel):
         if self.member_id is None and self.email is None:
             raise ValueError("Provide either 'member_id' or 'email'")
         return self
+
+
+class DirectEmailRequest(BaseModel):
+    subject: str
+    html_content: str
+    recipients: list[BlastGuaranteedRecipient]
+    attachments: list[CustomEmailAttachment] = []
+    provider: EmailProvider = EmailProvider.GOOGLE
 
 
 class BlastSendRequest(BaseModel):
@@ -753,66 +745,87 @@ async def send_custom_email_test(
 
 @router.post("/direct", status_code=status.HTTP_200_OK)
 async def send_direct_email(
-    request: DirectEmailRequest, credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)]
+    request: DirectEmailRequest,
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(admin_guard)],
+    background_tasks: BackgroundTasks,
 ):
-    with LogFile("send direct email"), SessionLocal() as session:
-        try:
-            write_log_title("Sending direct email")
-            requesting_member = resolve_member(session, credentials)
+    async def send_direct_email_job(
+        recipients: list[dict], sent_by_id: int, provider: EmailProvider, from_address: EmailLogsFromAddress | None
+    ):
+        with LogFile("send direct email [JOB]"), SessionLocal() as session:
+            try:
+                write_log_title(f"Sending direct email to [{len(recipients)}] recipients")
+                for recipient in recipients:
+                    write_log(
+                        f"Sending direct email to [{recipient['name'] or recipient['email']}] at [{recipient['email']}]"
+                    )
+                    await call_direct_email_api(
+                        recipient["email"],
+                        request.subject,
+                        request.html_content,
+                        request.attachments,
+                        provider,
+                        from_address,
+                    )
+                    write_log("Direct email API responded with 200 OK")
 
-            member_id: int | None = None
-            if request.member_id is not None:
-                member = members_queries.get_member_by_id(session, request.member_id)
-                recipient_email = member.email
-                recipient_name = member.name
-                member_id = request.member_id
-            else:
-                assert request.email is not None
-                recipient_email = request.email
-                recipient_name = request.name
+                    email_queries.create_email_log(
+                        session,
+                        sent_by=sent_by_id,
+                        from_address=from_address.value if from_address else config.SES_FROM_ADDRESS,
+                        email_type=EmailLogsEmailType.DIRECT,
+                        member_id=recipient["member_id"],
+                        recipient_count=1,
+                        data={
+                            "subject": request.subject,
+                            "html_content": request.html_content,
+                            "recipient": {"name": recipient["name"], "email": recipient["email"]},
+                            "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
+                        },
+                    )
+                    session.commit()
 
-            from_address = get_from_address() if request.provider == EmailProvider.GOOGLE else None
+            except HTTPException:
+                session.rollback()
+                raise
+            except Exception as e:
+                session.rollback()
+                write_log_exception(e)
+                write_log_traceback()
 
-            write_log(f"Sending direct email to [{recipient_name or recipient_email}] at [{recipient_email}]")
-            await call_direct_email_api(
-                recipient_email,
-                request.subject,
-                request.html_content,
-                request.attachments,
-                request.provider,
-                from_address,
-            )
-            write_log("Direct email API responded with 200 OK")
+    with LogFile("send direct email [SETUP]"), SessionLocal() as session:
+        write_log_title("Preparing direct email")
+        requesting_member = resolve_member(session, credentials)
 
-            email_queries.create_email_log(
-                session,
-                sent_by=requesting_member.id,
-                from_address=from_address.value if from_address else config.SES_FROM_ADDRESS,
-                email_type=EmailLogsEmailType.DIRECT,
-                member_id=member_id,
-                recipient_count=1,
-                data={
-                    "subject": request.subject,
-                    "html_content": request.html_content,
-                    "recipient": {"name": recipient_name, "email": recipient_email},
-                    "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
-                },
-            )
-            session.commit()
+        recipient_member_ids = [r.member_id for r in request.recipients if r.member_id is not None]
+        resolved_members = (
+            members_queries.get_members_by_id(session, recipient_member_ids) if recipient_member_ids else []
+        )
+        members_by_id = {m.id: m for m in resolved_members}
 
-            return {"status": "sent", "email": recipient_email}
+        recipients: dict[str, dict] = {}
+        for r in request.recipients:
+            if r.member_id is not None:
+                member = members_by_id.get(r.member_id)
+                if member is None or not member.email:
+                    continue
+                recipients[member.email.lower()] = {"name": member.name, "email": member.email, "member_id": member.id}
+            elif r.email is not None:
+                recipients[r.email.lower()] = {"name": r.name, "email": r.email, "member_id": None}
 
-        except HTTPException:
-            session.rollback()
-            raise
-        except Exception as e:
-            session.rollback()
-            write_log_exception(e)
-            write_log_traceback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An error occurred while sending the direct email",
-            )
+        recipient_list = list(recipients.values())
+        write_log(f"Resolved [{len(recipient_list)}] recipients")
+
+        from_address = get_from_address() if request.provider == EmailProvider.GOOGLE else None
+
+        background_tasks.add_task(
+            send_direct_email_job, recipient_list, requesting_member.id, request.provider, from_address
+        )
+
+    return {
+        "message": f"Direct email queued for [{len(recipient_list)}] recipient(s).",
+        "recipient_count": len(recipient_list),
+    }
 
 
 @router.get("/certificate-event/eligible-count/{event_id:int}", status_code=status.HTTP_200_OK)
