@@ -1,5 +1,4 @@
 import logging
-import os
 import uuid as uuid_lib
 from typing import Annotated, Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Body

@@ -28,7 +28,6 @@ from app.routers.email_models import (
     CertificateFormat,
     CertificateGenerationRequest,
     CertificateLanguage,
-    CertificateRequest,
     CustomEmailRequest,
     CustomEmailTestRequest,
     DashboardStats,
@@ -40,7 +39,6 @@ from app.routers.email_models import (
     EmailTemplateOut,
     EmailTestResponse,
     EnrichedEmailLog,
-    ManualCertificateMember,
     ManualCertificateRequest,
     SimpleEvent,
     SimpleMember,
@@ -49,16 +47,17 @@ from app.services.email_capacity import (
     _personalize,
     format_event_date,
     get_from_address,
-    get_send_capacity,
     get_total_remaining_send_capacity,
 )
-from app.services.email_gateway import (
-    call_acceptance_api,
-    call_blast_api,
-    call_certificate_api,
-    call_custom_email_api,
-    call_direct_email_api,
+from app.services.email_recipients import _resolve_member
+from app.services.email_jobs import (
+    send_blast_job,
+    send_certificates_by_event_id,
+    send_custom_email_job,
+    send_direct_email_job,
+    send_manual_certificates_job,
 )
+from app.services.email_gateway import call_acceptance_api, call_blast_api, call_custom_email_api
 
 from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
 from collections.abc import Sequence
@@ -107,56 +106,6 @@ async def read_html_body(request: Request) -> str:
 )
 def send_certificates(event_id: int, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB):
     # Background task definition
-    def send_certificates_by_event_id(event: Events, attendance: list, date_str: str, sent_by_id: int):
-        with db_session() as session:
-            try:
-                event = events_queries.get_event_by_id(session, event_id)
-                simple_event = SimpleEvent(name=event.name, date=date_str, official=bool(event.is_official))
-                logger.info(
-                    f"Processing certificate sending for event [{event.name}] with [{len(attendance)}] attendees"
-                )
-
-                already_sent = email_queries.get_members_who_received_certificate(session, event_id)
-                attendance = [
-                    record for record in attendance if record.Member.id not in {member["id"] for member in already_sent}
-                ]
-                logger.info(
-                    f"Filtered out [{len(already_sent)}] attendees who already received certificates, remaining attendees to process: [{len(attendance)}]"
-                )
-                for attendanceRecord in attendance:
-                    member = attendanceRecord.Member
-                    simple_member = SimpleMember(name=member.name, email=member.email, gender=member.gender)
-                    logger.info(f"Sending certificate for member [{member.name}] with email [{member.email}]")
-                    from_address = get_from_address()
-                    cert_request = CertificateRequest(
-                        event=simple_event,
-                        member=simple_member,
-                        language=CertificateLanguage.ARABIC,
-                        provider=EmailProvider.GOOGLE,
-                        from_address=from_address,
-                    )
-                    response_data = call_certificate_api(cert_request)
-                    logger.info(f"Certificate API responded with 200 OK")
-                    email_queries.create_email_log(
-                        session,
-                        sent_by=sent_by_id,
-                        from_address=from_address.value,
-                        email_type=EmailLogsEmailType.EVENT_CERTIFICATE,
-                        member_id=member.id,
-                        event_id=event_id,
-                        recipient_count=1,
-                        data={
-                            "member": simple_member.model_dump(mode="json"),
-                            "event": simple_event.model_dump(mode="json"),
-                        },
-                    )
-                    session.commit()
-
-            # TODO - These exception don't make sense this is a background task
-            # we generally need better job management (job start message, job failed message, job finished message) in the email
-            except Exception as e:
-                logger.exception(e)
-                raise
 
     # Actual endpoint logic
     logger.info(f"Sending certificates for event [{event_id}]")
@@ -170,28 +119,11 @@ def send_certificates(event_id: int, requesting_member: CurrentMember, backgroun
     date_str = format_event_date(event)
     logger.info(f"Event date formatted as: [{date_str}]")
 
-    background_tasks.add_task(send_certificates_by_event_id, event, attendance, date_str, requesting_member.id)
+    background_tasks.add_task(
+        send_certificates_by_event_id, event, attendance, date_str, requesting_member.id, event_id
+    )
 
     return {"message": f"Certificate generation initiated for event [{event.name}] with [{len(attendance)}] attendees."}
-
-
-def _resolve_event(request: ManualCertificateRequest, session) -> tuple[SimpleEvent, int | None]:
-    if request.event_id:
-        event = events_queries.get_event_by_id(session, request.event_id)
-        return (
-            SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official)),
-            request.event_id,
-        )
-    assert request.event is not None
-    return request.event, None
-
-
-def _resolve_member(member_item: ManualCertificateMember, session) -> tuple[SimpleMember, int | None]:
-    if member_item.member_id:
-        member = members_queries.get_member_by_id(session, member_item.member_id)
-        return (SimpleMember(name=member.name, email=member.email, gender=member.gender), member_item.member_id)
-    assert member_item.member is not None
-    return member_item.member, None
 
 
 @router.post(
@@ -203,47 +135,6 @@ def _resolve_member(member_item: ManualCertificateMember, session) -> tuple[Simp
 def send_manual_certificate(
     request: ManualCertificateRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
 ):
-    def send_manual_certificates_job(request_data: ManualCertificateRequest, sent_by_id: int):
-        with db_session() as session:
-            try:
-                from_address = get_from_address() if request_data.provider == EmailProvider.GOOGLE else None
-                simple_event, event_id = _resolve_event(request_data, session)
-                logger.info(
-                    f"Processing manual certificates for event [{simple_event.name}] with [{len(request_data.members)}] recipients"
-                )
-
-                for member_item in request_data.members:
-                    simple_member, member_id = _resolve_member(member_item, session)
-                    logger.info(
-                        f"Sending certificate for member [{simple_member.name}] with email [{simple_member.email}]"
-                    )
-                    cert_request = CertificateRequest(
-                        event=simple_event,
-                        member=simple_member,
-                        language=request_data.language,
-                        provider=request_data.provider,
-                        from_address=from_address,
-                    )
-                    call_certificate_api(cert_request)
-                    logger.info(f"Certificate API responded with 200 OK")
-                    email_queries.create_email_log(
-                        session,
-                        sent_by=sent_by_id,
-                        from_address=from_address.value if from_address else config.SES_FROM_ADDRESS,
-                        email_type=EmailLogsEmailType.MANUAL_CERTIFICATE,
-                        member_id=member_id,
-                        event_id=event_id,
-                        recipient_count=1,
-                        data={
-                            "member": simple_member.model_dump(mode="json"),
-                            "event": simple_event.model_dump(mode="json"),
-                        },
-                    )
-                    session.commit()
-
-            except Exception as e:
-                logger.exception(e)
-                raise
 
     background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id)
 
@@ -266,57 +157,6 @@ def send_custom_email(
     background_tasks: BackgroundTasks,
     session: DB,
 ):
-    async def send_custom_email_job(
-        request_data: CustomEmailRequest, simple_event: SimpleEvent, event_id: int, sent_by_id: int
-    ):
-        with db_session() as session:
-            try:
-                from_address = get_from_address()
-                logger.info(
-                    f"Processing custom email for event [{simple_event.name}] with [{len(request_data.members)}] recipients"
-                )
-
-                for member_item in request_data.members:
-                    simple_member, member_id = _resolve_member(member_item, session)
-                    logger.info(f"Sending custom email to [{simple_member.name}] at [{simple_member.email}]")
-                    subject = _personalize(request_data.subject, simple_member.name, simple_event.name)
-                    html_content = _personalize(request_data.html_content, simple_member.name, simple_event.name)
-                    await call_custom_email_api(
-                        simple_member.email,
-                        subject,
-                        html_content,
-                        request_data.attachments,
-                        simple_event,
-                        simple_member,
-                        request_data.language,
-                        EmailProvider.GOOGLE,
-                        from_address,
-                    )
-                    logger.info("Custom email API responded with 200 OK")
-                    email_queries.create_email_log(
-                        session,
-                        sent_by=sent_by_id,
-                        from_address=from_address.value,
-                        email_type=EmailLogsEmailType.EVENT_ANNOUNCEMENT,
-                        member_id=member_id,
-                        event_id=event_id,
-                        recipient_count=1,
-                        data={
-                            "subject": request_data.subject,
-                            "html_content": request_data.html_content,
-                            "member": simple_member.model_dump(mode="json"),
-                            "certificate_attached": True,
-                            "attachments": [
-                                {"filename": a.filename, "content_type": a.content_type}
-                                for a in request_data.attachments
-                            ],
-                        },
-                    )
-                    session.commit()
-
-            except Exception as e:
-                logger.exception(e)
-                raise
 
     event = events_queries.get_event_by_id(session, event_id)
     simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
@@ -384,48 +224,6 @@ async def send_custom_email_test(event_id: int, request: CustomEmailTestRequest,
 def send_direct_email(
     request: DirectEmailRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
 ):
-    async def send_direct_email_job(
-        recipients: list[dict], sent_by_id: int, provider: EmailProvider, from_address: EmailLogsFromAddress | None
-    ):
-        with db_session() as session:
-            try:
-                logger.info(f"Sending direct email to [{len(recipients)}] recipients")
-                for recipient in recipients:
-                    logger.info(
-                        f"Sending direct email to [{recipient['name'] or recipient['email']}] at [{recipient['email']}]"
-                    )
-                    await call_direct_email_api(
-                        recipient["email"],
-                        request.subject,
-                        request.html_content,
-                        request.attachments,
-                        provider,
-                        from_address,
-                    )
-                    logger.info("Direct email API responded with 200 OK")
-
-                    email_queries.create_email_log(
-                        session,
-                        sent_by=sent_by_id,
-                        from_address=from_address.value if from_address else config.SES_FROM_ADDRESS,
-                        email_type=EmailLogsEmailType.DIRECT,
-                        member_id=recipient["member_id"],
-                        recipient_count=1,
-                        data={
-                            "subject": request.subject,
-                            "html_content": request.html_content,
-                            "recipient": {"name": recipient["name"], "email": recipient["email"]},
-                            "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
-                        },
-                    )
-                    session.commit()
-
-            except HTTPException:
-                session.rollback()
-                raise
-            except Exception as e:
-                session.rollback()
-                logger.exception(e)
 
     logger.info("Preparing direct email")
 
@@ -449,7 +247,7 @@ def send_direct_email(
     from_address = get_from_address() if request.provider == EmailProvider.GOOGLE else None
 
     background_tasks.add_task(
-        send_direct_email_job, recipient_list, requesting_member.id, request.provider, from_address
+        send_direct_email_job, recipient_list, requesting_member.id, request.provider, from_address, request
     )
 
     return {
@@ -833,105 +631,6 @@ async def send_acceptance_test(
 def send_blast(
     request: BlastSendRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
 ):
-    async def send_blast_job(
-        recipients: list[dict], guaranteed_snapshot: list[dict], requested_count: int, sent_by_id: int
-    ):
-        with db_session() as session:
-            try:
-                logger.info(f"Sending blast to [{len(recipients)}] recipients")
-
-                if request.provider == EmailProvider.GOOGLE:
-                    gdg_capacity = get_send_capacity(EmailLogsFromAddress.GDG_QASSIM)
-                    info_capacity = get_send_capacity(EmailLogsFromAddress.INFO_KERNELTICS)
-
-                    gdg_chunk = recipients[:gdg_capacity]
-                    info_chunk = recipients[gdg_capacity : gdg_capacity + info_capacity]
-                    overflow = recipients[gdg_capacity + info_capacity :]
-                    if overflow:
-                        logger.info(
-                            f"[{len(overflow)}] recipients exceed today's combined capacity; "
-                            f"sending them via [{EmailLogsFromAddress.INFO_KERNELTICS.value}] anyway to honor guaranteed delivery"
-                        )
-                        info_chunk = info_chunk + overflow
-
-                    guaranteed_emails = {g["email"] for g in guaranteed_snapshot}
-
-                    for from_addr, chunk in (
-                        (EmailLogsFromAddress.GDG_QASSIM, gdg_chunk),
-                        (EmailLogsFromAddress.INFO_KERNELTICS, info_chunk),
-                    ):
-                        if not chunk:
-                            continue
-                        emails = [r["email"] for r in chunk]
-                        logger.info(f"Sending [{len(emails)}] recipients via [{from_addr.value}]")
-
-                        await call_blast_api(
-                            emails,
-                            request.subject,
-                            request.html_content,
-                            EmailProvider.GOOGLE,
-                            from_addr,
-                            request.preview_text,
-                            request.attachments,
-                        )
-                        logger.info(f"Blast API responded successfully for [{from_addr.value}]")
-
-                        email_queries.create_email_log(
-                            session,
-                            sent_by=sent_by_id,
-                            from_address=from_addr.value,
-                            email_type=EmailLogsEmailType.BLAST,
-                            recipient_count=len(emails),
-                            data={
-                                "subject": request.subject,
-                                "html_content": request.html_content,
-                                "preview_text": request.preview_text,
-                                "order_by": request.order_by,
-                                "requested_count": requested_count,
-                                "guaranteed_recipients": [r for r in chunk if r["email"] in guaranteed_emails],
-                                "recipients": chunk,
-                                "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
-                            },
-                        )
-                        session.commit()
-                else:
-                    emails = [r["email"] for r in recipients]
-                    # SES itself caps recipients per raw message and chunks accordingly (see
-                    # send-certificates' SES_MAX_RECIPIENTS_PER_MESSAGE); this call is one logical
-                    # blast regardless of how many SES messages it turns into under the hood.
-                    await call_blast_api(
-                        emails,
-                        request.subject,
-                        request.html_content,
-                        EmailProvider.SES,
-                        None,
-                        request.preview_text,
-                        request.attachments,
-                    )
-                    logger.info(f"Blast API responded successfully for [{len(emails)}] recipients")
-
-                    email_queries.create_email_log(
-                        session,
-                        sent_by=sent_by_id,
-                        from_address=config.SES_FROM_ADDRESS,
-                        email_type=EmailLogsEmailType.BLAST,
-                        recipient_count=len(emails),
-                        data={
-                            "subject": request.subject,
-                            "html_content": request.html_content,
-                            "preview_text": request.preview_text,
-                            "order_by": request.order_by,
-                            "requested_count": requested_count,
-                            "guaranteed_recipients": guaranteed_snapshot,
-                            "recipients": recipients,
-                            "attachments": [{"filename": a.filename, "url": a.url} for a in request.attachments],
-                        },
-                    )
-                    session.commit()
-
-            except Exception as e:
-                session.rollback()
-                logger.exception(e)
 
     logger.info("Preparing blast email")
 
@@ -981,7 +680,7 @@ def send_blast(
     logger.info(f"Queuing blast to [{len(recipients)}] total recipients")
 
     background_tasks.add_task(
-        send_blast_job, recipients, list(guaranteed.values()), request.count, requesting_member.id
+        send_blast_job, recipients, list(guaranteed.values()), request.count, requesting_member.id, request
     )
 
     return {
