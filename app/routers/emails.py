@@ -11,68 +11,63 @@ from app.DB import events as events_queries, logs as log_queries
 from app.DB import emails as email_queries
 from app.DB import email_templates as email_template_queries
 from app.DB.main import db_session
-from enum import Enum
 from urllib.parse import quote
 from app.DB import members as members_queries
 import app.DB.submissions as submissions_queries
-from app.DB.schema import EmailLogsEmailType, EmailLogsFromAddress, EmailProvider, Events, MembersGender
-from pydantic import BaseModel, EmailStr, field_validator, model_validator
-from app.clients import get_http_client
+from app.DB.schema import EmailLogsEmailType, EmailLogsFromAddress, EmailProvider, Events
 from app.config import config
-from app.helpers import CurrentMember, admin_guard, get_effective_date
+from app.helpers import CurrentMember, admin_guard
 from app.routers.responses import MessageResponse
+from app.routers.email_models import (
+    BlastEligibleCountResponse,
+    BlastQueuedResponse,
+    BlastSendRequest,
+    BlastTestRequest,
+    CertificateEligibleCountResponse,
+    CertificateEventEmailLog,
+    CertificateFormat,
+    CertificateGenerationRequest,
+    CertificateLanguage,
+    CertificateRequest,
+    CustomEmailRequest,
+    CustomEmailTestRequest,
+    DashboardStats,
+    DirectEmailRequest,
+    EmailJobResponse,
+    EmailLogs,
+    EmailStatsResponse,
+    EmailTemplateIn,
+    EmailTemplateOut,
+    EmailTestResponse,
+    EnrichedEmailLog,
+    ManualCertificateMember,
+    ManualCertificateRequest,
+    SimpleEvent,
+    SimpleMember,
+)
+from app.services.email_capacity import (
+    _personalize,
+    format_event_date,
+    get_from_address,
+    get_send_capacity,
+    get_total_remaining_send_capacity,
+)
+from app.services.email_gateway import (
+    call_acceptance_api,
+    call_blast_api,
+    call_certificate_api,
+    call_custom_email_api,
+    call_direct_email_api,
+)
+
 from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
 from collections.abc import Sequence
 
 import httpx
 import json
 from datetime import datetime
-from typing import Annotated, Literal, Optional, Any
+from typing import Annotated, Optional, Any
 from app.dependencies import DB
-
-
-class EmailJobResponse(BaseModel):
-    """Acknowledgement that a send was queued onto a background task."""
-
-    message: str
-    recipient_count: int
-
-
-class EmailTestResponse(BaseModel):
-    """Result of a test send - the addresses it actually went to."""
-
-    sent_count: int
-    emails: list[str]
-
-
-class CertificateEligibleMember(BaseModel):
-    id: int
-    name: str
-    email: str
-    gender: MembersGender
-
-
-class CertificateEligibleCountResponse(BaseModel):
-    eligible_count: int
-    eligible_members: list[CertificateEligibleMember]
-    sent_count: int
-
-
-class EmailStatsResponse(BaseModel):
-    usage: dict[str, int]
-    club_threshold: int
-
-
-class BlastQueuedResponse(BaseModel):
-    message: str
-    recipient_count: int
-    guaranteed_count: int
-    algorithmic_count: int
-
-
-class BlastEligibleCountResponse(BaseModel):
-    eligible_count: int
-    remaining_capacity: int | None = None
 
 
 # endregion
@@ -87,200 +82,6 @@ router = APIRouter(prefix="/emails", tags=["emails"])
 # region ============== Data Models ==============
 
 
-class CertificateLanguage(str, Enum):
-    ARABIC = "ar"
-    ENGLISH = "en"
-
-
-class CertificateFormat(str, Enum):
-    PNG = "png"
-    PDF = "pdf"
-
-
-class SimpleMember(BaseModel):
-    name: str
-    email: EmailStr
-    gender: MembersGender
-
-
-class SimpleEvent(BaseModel):
-    name: str
-    date: str
-    official: bool
-
-
-class CertificateGenerationRequest(BaseModel):
-    language: CertificateLanguage
-    format: CertificateFormat
-    event: SimpleEvent
-    member: SimpleMember
-
-
-class EmailLogs(BaseModel):
-    id: int
-    member_id: int | None
-    event_id: int | None
-    from_address: str
-    sent_at: str
-    recipient_count: int
-    email_type: EmailLogsEmailType
-
-
-class CertificateRequest(BaseModel):
-    event: SimpleEvent
-    member: SimpleMember
-    language: CertificateLanguage
-    provider: EmailProvider = EmailProvider.GOOGLE
-    from_address: EmailLogsFromAddress | None = None
-
-
-class CertificateEventEmailLog(BaseModel):
-    id: int
-    member_name: str
-    member_email: str
-    sent_at: datetime
-    from_address: str
-
-
-class EnrichedEmailLog(BaseModel):
-    id: int
-    email_type: EmailLogsEmailType
-    from_address: str
-    sent_at: datetime
-    sent_by: int
-    recipient_count: int
-    data: Optional[dict] = None
-    member_id: Optional[int] = None
-    event_id: Optional[int] = None
-    member_name: Optional[str] = None
-    member_email: Optional[str] = None
-    event_name: Optional[str] = None
-    event_is_official: Optional[int] = None
-    sender_name: Optional[str] = None
-
-
-class DashboardStats(BaseModel):
-    addresses: dict[str, dict[str, int]]
-    by_type: dict[str, int]
-    total_24h: int
-
-
-class BlaseResponse(BaseModel):
-    status: Literal["sent"]
-    recipients: int
-
-
-class ManualCertificateMember(BaseModel):
-    member_id: int | None = None
-    member: SimpleMember | None = None
-
-    @model_validator(mode="after")
-    def validate_member(self) -> "ManualCertificateMember":
-        if (self.member is None) == (self.member_id is None):
-            raise ValueError("Provide exactly one of 'member' or 'member_id'")
-        return self
-
-
-class ManualCertificateRequest(BaseModel):
-    event: SimpleEvent | None = None
-    event_id: int | None = None
-    members: list[ManualCertificateMember]
-    language: CertificateLanguage
-    provider: EmailProvider = EmailProvider.GOOGLE
-
-    @model_validator(mode="after")
-    def validate_event(self) -> "ManualCertificateRequest":
-        if (self.event is None) == (self.event_id is None):
-            raise ValueError("Provide exactly one of 'event' or 'event_id'")
-        return self
-
-
-class CustomEmailAttachment(BaseModel):
-    url: str
-    filename: str
-    content_type: str | None = None
-
-
-class CustomEmailRequest(BaseModel):
-    subject: str
-    html_content: str
-    members: list[ManualCertificateMember]
-    attachments: list[CustomEmailAttachment] = []
-    language: CertificateLanguage = CertificateLanguage.ARABIC
-
-
-class CustomEmailTestRequest(BaseModel):
-    subject: str
-    html_content: str
-    test_recipients: list[ManualCertificateMember]
-    attachments: list[CustomEmailAttachment] = []
-    language: CertificateLanguage = CertificateLanguage.ARABIC
-
-
-class BlastAttachment(BaseModel):
-    url: str
-    filename: str
-    content_type: str | None = None
-
-
-class BlastGuaranteedRecipient(BaseModel):
-    member_id: int | None = None
-    email: EmailStr | None = None
-    name: str | None = None
-
-    @model_validator(mode="after")
-    def validate_recipient(self) -> "BlastGuaranteedRecipient":
-        if self.member_id is None and self.email is None:
-            raise ValueError("Provide either 'member_id' or 'email'")
-        return self
-
-
-class DirectEmailRequest(BaseModel):
-    subject: str
-    html_content: str
-    recipients: list[BlastGuaranteedRecipient]
-    attachments: list[CustomEmailAttachment] = []
-    provider: EmailProvider = EmailProvider.GOOGLE
-
-
-class BlastSendRequest(BaseModel):
-    subject: str
-    html_content: str
-    preview_text: str | None = None
-    count: int
-    order_by: Literal["activity", "alphabetical"]
-    guaranteed_recipients: list[BlastGuaranteedRecipient] = []
-    attachments: list[BlastAttachment] = []
-    provider: EmailProvider = EmailProvider.GOOGLE
-
-
-class BlastTestRequest(BaseModel):
-    subject: str
-    html_content: str
-    preview_text: str | None = None
-    test_emails: list[EmailStr]
-    attachments: list[BlastAttachment] = []
-    provider: EmailProvider = EmailProvider.GOOGLE
-
-
-class EmailTemplateIn(BaseModel):
-    name: str
-    subject: str
-    html_content: str
-    preview_text: str | None = None
-
-
-class EmailTemplateOut(BaseModel):
-    id: int
-    name: str
-    subject: str
-    html_content: str
-    preview_text: str | None
-    created_by: int
-    created_at: datetime
-    updated_at: datetime
-
-
 # endregion
 
 # region ============== Helper Functions ==============
@@ -291,205 +92,6 @@ async def read_html_body(request: Request) -> str:
     if not html_content or not html_content.strip():
         raise EmptyBody()
     return html_content
-
-
-async def call_acceptance_api(
-    emails: list[str], subject: str, html_content: str, from_address: EmailLogsFromAddress
-) -> BlaseResponse:
-    client = get_http_client()
-    try:
-        response = await client.post(
-            f"{config.CERTIFICATE_API_URL}/blasts",
-            params={"emails": emails, "subject": subject, "provider": "google", "from_address": from_address.value},
-            content=html_content,
-            headers={"Content-Type": "text/html; charset=utf-8"},
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        response_data = BlaseResponse.model_validate(response.json())
-        return response_data
-    except httpx.TimeoutException:
-        raise GatewayTimeout(detail="Acceptance API request timed out")
-    except httpx.HTTPStatusError as e:
-        raise BadGateway(detail=f"Acceptance API returned error: {e.response.status_code}")
-    except httpx.RequestError:
-        raise ServiceUnavailable(detail="Failed to connect to acceptance API")
-
-
-async def call_blast_api(
-    emails: list[str],
-    subject: str,
-    html_content: str,
-    provider: EmailProvider,
-    from_address: EmailLogsFromAddress | None,
-    preview_text: str | None,
-    attachments: list[BlastAttachment],
-) -> BlaseResponse:
-    # httpx serializes a None param value as an empty string rather than omitting the key,
-    # which send-certificates' `EmailLogsFromAddress | None` Query rejects as invalid (422) --
-    # so from_address/preview_text are only included when actually set.
-    params: dict[str, object] = {
-        "emails": emails,
-        "subject": subject,
-        "provider": provider.value,
-        "attachments": json.dumps([a.model_dump(mode="json") for a in attachments]),
-    }
-    if from_address is not None:
-        params["from_address"] = from_address.value
-    if preview_text is not None:
-        params["preview_text"] = preview_text
-
-    # Gmail SMTP sends a blast as a single BCC message but still issues one RCPT TO per
-    # recipient over the same connection (~0.2s each observed in prod), so large batches
-    # take proportionally longer than a flat timeout can account for.
-    timeout = max(60.0, len(emails) * 0.5 + 60.0)
-    client = get_http_client()
-    try:
-        response = await client.post(
-            f"{config.CERTIFICATE_API_URL}/blasts",
-            params=params,
-            content=html_content,
-            headers={"Content-Type": "text/html; charset=utf-8"},
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        response_data = BlaseResponse.model_validate(response.json())
-        return response_data
-    except httpx.TimeoutException:
-        raise GatewayTimeout(detail="Blast API request timed out")
-    except httpx.HTTPStatusError as e:
-        raise BadGateway(detail=f"Blast API returned error: {e.response.status_code}")
-    except httpx.RequestError:
-        raise ServiceUnavailable(detail="Failed to connect to blast API")
-
-
-def call_certificate_api(cert_request: CertificateRequest) -> dict:
-    with httpx.Client(timeout=120.0) as client:
-        try:
-            response = client.post(
-                f"{config.CERTIFICATE_API_URL}/emails/certificate",
-                json=cert_request.model_dump(mode="json"),
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
-            return response.json()
-        except httpx.TimeoutException:
-            raise GatewayTimeout(detail="Certificate API request timed out")
-        except httpx.HTTPStatusError as e:
-            raise BadGateway(detail=f"Certificate API returned error: {e.response.status_code}")
-        except httpx.RequestError:
-            raise ServiceUnavailable(detail="Failed to connect to certificate API")
-
-
-async def call_custom_email_api(
-    recipient_email: str,
-    subject: str,
-    html_content: str,
-    attachments: list[CustomEmailAttachment],
-    event: SimpleEvent,
-    member: SimpleMember,
-    language: CertificateLanguage,
-    provider: EmailProvider,
-    from_address: EmailLogsFromAddress | None,
-) -> dict:
-    client = get_http_client()
-    try:
-        response = await client.post(
-            f"{config.CERTIFICATE_API_URL}/emails/custom",
-            json={
-                "recipient_email": recipient_email,
-                "subject": subject,
-                "html_content": html_content,
-                "event": event.model_dump(mode="json"),
-                "member": member.model_dump(mode="json"),
-                "language": language.value,
-                "attachments": [a.model_dump(mode="json") for a in attachments],
-                "provider": provider.value,
-                "from_address": from_address.value if from_address else None,
-            },
-            headers={"Content-Type": "application/json"},
-            timeout=120.0,
-        )
-        response.raise_for_status()
-        return response.json()
-    except httpx.TimeoutException:
-        raise GatewayTimeout(detail="Custom email API request timed out")
-    except httpx.HTTPStatusError as e:
-        raise BadGateway(detail=f"Custom email API returned error: {e.response.status_code}")
-    except httpx.RequestError:
-        raise ServiceUnavailable(detail="Failed to connect to custom email API")
-
-
-async def call_direct_email_api(
-    recipient_email: str,
-    subject: str,
-    html_content: str,
-    attachments: list[CustomEmailAttachment],
-    provider: EmailProvider,
-    from_address: EmailLogsFromAddress | None,
-) -> dict:
-    client = get_http_client()
-    try:
-        response = await client.post(
-            f"{config.CERTIFICATE_API_URL}/emails/direct",
-            json={
-                "recipient_email": recipient_email,
-                "subject": subject,
-                "html_content": html_content,
-                "attachments": [a.model_dump(mode="json") for a in attachments],
-                "provider": provider.value,
-                "from_address": from_address.value if from_address else None,
-            },
-            headers={"Content-Type": "application/json"},
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        return response.json()
-    except httpx.TimeoutException:
-        raise GatewayTimeout(detail="Direct email API request timed out")
-    except httpx.HTTPStatusError as e:
-        raise BadGateway(detail=f"Direct email API returned error: {e.response.status_code}")
-    except httpx.RequestError:
-        raise ServiceUnavailable(detail="Failed to connect to direct email API")
-
-
-def _personalize(text: str, name: str, event_name: str) -> str:
-    return text.replace("[Name]", name).replace("[Event Name]", event_name)
-
-
-def format_event_date(event: Events) -> str:
-    start_effective = get_effective_date(event.start_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
-    end_effective = get_effective_date(event.end_datetime, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
-    days = (end_effective - start_effective).days
-    if days == 0:
-        return start_effective.strftime("%Y-%m-%d")
-    return f"{start_effective.strftime('%Y-%m-%d')} - {end_effective.strftime('%Y-%m-%d')}"
-
-
-def get_from_address() -> EmailLogsFromAddress:
-    """returns the address to be used based on last 24h usage of the club address."""
-    with db_session() as session:
-        club_usage = email_queries.get_email_address_usage(session, 1, EmailLogsFromAddress.GDG_QASSIM.value)
-        if club_usage < config.CLUB_EMAIL_THRESHOLD:
-            return EmailLogsFromAddress.GDG_QASSIM
-        return EmailLogsFromAddress.INFO_KERNELTICS
-
-
-def get_send_capacity(from_address: EmailLogsFromAddress) -> int:
-    """returns how many more emails can be sent today via the given address, measured against its real daily
-    threshold (the same numbers shown on the usage dashboard) -- not `CLUB_EMAIL_THRESHOLD`, which is a
-    conservative early-switch buffer used only by `get_from_address` for many small reactive calls."""
-    with db_session() as session:
-        usage = email_queries.get_email_address_usage(session, 1, from_address.value)
-    threshold = config.EMAIL_THRESHOLDS.get(from_address.value, config.CLUB_EMAIL_THRESHOLD)
-    return max(0, threshold - usage)
-
-
-def get_total_remaining_send_capacity() -> int:
-    """returns the combined remaining daily send capacity across both addresses. Unlike `get_from_address`
-    (which picks a single address per call, for many small independent sends), a blast can split across both
-    addresses within one send, so its ceiling is the sum of what's left on each."""
-    return sum(get_send_capacity(addr) for addr in EmailLogsFromAddress)
 
 
 # endregion
