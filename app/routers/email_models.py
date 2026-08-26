@@ -9,14 +9,26 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, model_validator
 
-from app.DB.schema import EmailLogsEmailType, EmailLogsFromAddress, EmailProvider, MembersGender
+from app.DB.schema import (
+    EmailJobsStatus,
+    EmailJobsType,
+    EmailLogsEmailType,
+    EmailLogsFromAddress,
+    EmailProvider,
+    MembersGender,
+)
 
 
 class EmailJobResponse(BaseModel):
-    """Acknowledgement that a send was queued onto a background task."""
+    """Acknowledgement that a send was queued onto a background task.
+
+    `job_id` identifies the row in email_jobs that records how it went; poll
+    GET /emails/jobs/{job_id} for the outcome.
+    """
 
     message: str
     recipient_count: int
+    job_id: Optional[int] = None
 
 
 class EmailTestResponse(BaseModel):
@@ -49,6 +61,7 @@ class BlastQueuedResponse(BaseModel):
     recipient_count: int
     guaranteed_count: int
     algorithmic_count: int
+    job_id: Optional[int] = None
 
 
 class BlastEligibleCountResponse(BaseModel):
@@ -248,3 +261,22 @@ class EmailTemplateOut(BaseModel):
     created_by: int
     created_at: datetime
     updated_at: datetime
+
+
+class EmailJobModel(BaseModel):
+    """One background send, and how it ended."""
+
+    id: int
+    job_type: EmailJobsType
+    status: EmailJobsStatus
+    created_by: int
+    event_id: Optional[int] = None
+    total: int
+    succeeded: int
+    failed: int
+    error: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}

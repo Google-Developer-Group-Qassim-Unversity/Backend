@@ -547,8 +547,22 @@ identical. Ruff 4 and pyright 42, both unchanged.
 3. Same for `upload.py` — blocking `boto3` in `async def`.
 4. Now that everything is injectable, write route tests for the ten untested
    routers, starting with `emails.py` and `wallet.py`.
-5. Replace `BackgroundTasks` for the certificate/blast jobs with a real job
-   record (a `jobs` table with status, or a task queue) so failures are visible.
+5. ✅ **Done.** `email_jobs` table + `app/services/job_tracker.py`. Each send
+   creates a row before scheduling, the job marks it running, records each
+   recipient, and closes it out as `succeeded` / `partial` / `failed`. The five
+   send endpoints return their `job_id`, and `GET /emails/jobs[/unfinished|/{id}]`
+   expose the records.
+
+   The bigger fix was in the loops. Each had no inner handler, so one bad
+   address aborted the run and the outer `except Exception: logger.exception()`
+   swallowed it - a blast to 400 that failed on number 50 silently skipped the
+   other 350. `tracker.recipient(...)` records the failure and continues.
+
+   Verified against a real database rather than with tests, at the user's
+   request: all recipients succeeding gives `succeeded`; one failing gives
+   `partial` with the other two still sent; all failing gives `failed`; and a
+   run that dies before sending anything is recorded `failed` with the error,
+   not left `queued`.
 
 ---
 

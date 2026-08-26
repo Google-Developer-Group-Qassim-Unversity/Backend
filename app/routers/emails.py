@@ -19,6 +19,7 @@ from app.config import config
 from app.helpers import CurrentMember, admin_guard
 from app.routers.responses import MessageResponse
 from app.routers.email_models import (
+    EmailJobModel,
     BlastEligibleCountResponse,
     BlastQueuedResponse,
     BlastSendRequest,
@@ -49,6 +50,8 @@ from app.services.email_capacity import (
     get_from_address,
     get_total_remaining_send_capacity,
 )
+from app.DB import email_jobs as job_queries
+from app.DB.schema import EmailJobsStatus, EmailJobsType
 from app.services.email_recipients import _resolve_member
 from app.services.email_jobs import (
     send_blast_job,
@@ -59,7 +62,7 @@ from app.services.email_jobs import (
 )
 from app.services.email_gateway import call_acceptance_api, call_blast_api, call_custom_email_api
 
-from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
+from app.exceptions import NotFound, EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
 from collections.abc import Sequence
 
 import httpx
@@ -102,7 +105,7 @@ async def read_html_body(request: Request) -> str:
     "/{event_id:int}",
     status_code=status.HTTP_200_OK,
     dependencies=[Depends(admin_guard)],
-    response_model=MessageResponse,
+    response_model=EmailJobResponse,
 )
 def send_certificates(event_id: int, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB):
     # Background task definition
@@ -119,11 +122,17 @@ def send_certificates(event_id: int, requesting_member: CurrentMember, backgroun
     date_str = format_event_date(event)
     logger.info(f"Event date formatted as: [{date_str}]")
 
+    job = job_queries.create_job(
+        session, EmailJobsType.EVENT_CERTIFICATE, requesting_member.id, total=len(attendance), event_id=event_id
+    )
     background_tasks.add_task(
-        send_certificates_by_event_id, event, attendance, date_str, requesting_member.id, event_id
+        send_certificates_by_event_id, event, attendance, date_str, requesting_member.id, event_id, job.id
     )
 
-    return {"message": f"Certificate generation initiated for event [{event.name}] with [{len(attendance)}] attendees."}
+    return {
+        "message": f"Certificate generation initiated for event [{event.name}] with [{len(attendance)}] attendees.",
+        "job_id": job.id,
+    }
 
 
 @router.post(
@@ -136,11 +145,15 @@ def send_manual_certificate(
     request: ManualCertificateRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
 ):
 
-    background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id)
+    job = job_queries.create_job(
+        session, EmailJobsType.MANUAL_CERTIFICATE, requesting_member.id, total=len(request.members)
+    )
+    background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id, job.id)
 
     return {
         "message": f"Manual certificate generation initiated for [{len(request.members)}] recipient(s).",
         "recipient_count": len(request.members),
+        "job_id": job.id,
     }
 
 
@@ -160,13 +173,17 @@ def send_custom_email(
 
     event = events_queries.get_event_by_id(session, event_id)
     simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
+    job = job_queries.create_job(
+        session, EmailJobsType.CUSTOM_EMAIL, requesting_member.id, total=len(request.members), event_id=event_id
+    )
     background_tasks.add_task(
-        send_custom_email_job, request.model_copy(deep=True), simple_event, event_id, requesting_member.id
+        send_custom_email_job, request.model_copy(deep=True), simple_event, event_id, requesting_member.id, job.id
     )
 
     return {
         "message": f"Custom email sending initiated for [{len(request.members)}] recipient(s).",
         "recipient_count": len(request.members),
+        "job_id": job.id,
     }
 
 
@@ -246,13 +263,15 @@ def send_direct_email(
 
     from_address = get_from_address() if request.provider == EmailProvider.GOOGLE else None
 
+    job = job_queries.create_job(session, EmailJobsType.DIRECT_EMAIL, requesting_member.id, total=len(recipient_list))
     background_tasks.add_task(
-        send_direct_email_job, recipient_list, requesting_member.id, request.provider, from_address, request
+        send_direct_email_job, recipient_list, requesting_member.id, request.provider, from_address, request, job.id
     )
 
     return {
         "message": f"Direct email queued for [{len(recipient_list)}] recipient(s).",
         "recipient_count": len(recipient_list),
+        "job_id": job.id,
     }
 
 
@@ -679,8 +698,9 @@ def send_blast(
     recipients = list(all_recipients.values())
     logger.info(f"Queuing blast to [{len(recipients)}] total recipients")
 
+    job = job_queries.create_job(session, EmailJobsType.BLAST, requesting_member.id, total=len(recipients))
     background_tasks.add_task(
-        send_blast_job, recipients, list(guaranteed.values()), request.count, requesting_member.id, request
+        send_blast_job, recipients, list(guaranteed.values()), request.count, requesting_member.id, request, job.id
     )
 
     return {
@@ -688,6 +708,7 @@ def send_blast(
         "recipient_count": len(recipients),
         "guaranteed_count": len(guaranteed),
         "algorithmic_count": len(pool),
+        "job_id": job.id,
     }
 
 
@@ -795,6 +816,52 @@ def delete_email_template(template_id: int, session: DB):
     email_template_queries.delete_template(session, template_id)
     session.commit()
     return {"message": f"Template [{template_id}] deleted."}
+
+
+# endregion
+
+
+# region ============== Job Records ==============
+
+
+@router.get(
+    "/jobs",
+    status_code=status.HTTP_200_OK,
+    response_model=list[EmailJobModel],
+    dependencies=[Depends(admin_guard)],
+    description="Recent background email sends and how they ended.",
+)
+def list_email_jobs(
+    session: DB,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    status_filter: Annotated[Optional[EmailJobsStatus], Query(alias="status")] = None,
+):
+    return job_queries.get_jobs(session, limit=limit, status=status_filter)
+
+
+@router.get(
+    "/jobs/unfinished",
+    status_code=status.HTTP_200_OK,
+    response_model=list[EmailJobModel],
+    dependencies=[Depends(admin_guard)],
+    description="Jobs still queued or running. A worker restart strands these, since nothing resumes a BackgroundTask.",
+)
+def list_unfinished_email_jobs(session: DB):
+    return job_queries.get_unfinished(session)
+
+
+@router.get(
+    "/jobs/{job_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=EmailJobModel,
+    dependencies=[Depends(admin_guard)],
+    responses={404: {"description": "Job not found"}},
+)
+def get_email_job(job_id: int, session: DB):
+    job = job_queries.get_job(session, job_id)
+    if job is None:
+        raise NotFound("Email job", job_id)
+    return job
 
 
 # endregion

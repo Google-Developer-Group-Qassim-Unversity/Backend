@@ -113,6 +113,22 @@ class SubmissionsSubmissionType(str, enum.Enum):
     GOOGLE = "google"
 
 
+class EmailJobsStatus(str, enum.Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class EmailJobsType(str, enum.Enum):
+    EVENT_CERTIFICATE = "event-certificate"
+    MANUAL_CERTIFICATE = "manual-certificate"
+    CUSTOM_EMAIL = "custom-email"
+    DIRECT_EMAIL = "direct-email"
+    BLAST = "blast"
+
+
 class FormsSubmissionsFormType(str, enum.Enum):
     NONE = "none"
     REGISTRATION = "registration"
@@ -525,6 +541,51 @@ class EmailLogs(Base):
     member: Mapped[Optional["Members"]] = relationship("Members", back_populates="email_logs", foreign_keys=[member_id])
     event: Mapped[Optional["Events"]] = relationship("Events", back_populates="email_logs")
     sender: Mapped["Members"] = relationship("Members", foreign_keys=[sent_by], passive_deletes=True)
+
+
+class EmailJobs(Base):
+    """One row per background email send.
+
+    These jobs run after the response is sent, so a failure has nowhere to go:
+    the caller already has its 200. This table is where a job's outcome lives,
+    and what GET /emails/jobs reads.
+    """
+
+    __tablename__ = "email_jobs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["created_by"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_email_jobs_created_by"
+        ),
+        ForeignKeyConstraint(
+            ["event_id"], ["events.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_email_jobs_event"
+        ),
+        Index("fk_email_jobs_created_by", "created_by"),
+        Index("fk_email_jobs_event", "event_id"),
+        Index("ix_email_jobs_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    job_type: Mapped[EmailJobsType] = mapped_column(
+        Enum(EmailJobsType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    )
+    status: Mapped[EmailJobsStatus] = mapped_column(
+        Enum(EmailJobsStatus, values_callable=lambda cls: [member.value for member in cls]),
+        nullable=False,
+        server_default=text("'queued'"),
+    )
+    created_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    total: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, server_default=text("'0'"))
+    succeeded: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, server_default=text("'0'"))
+    failed: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, server_default=text("'0'"))
+    error: Mapped[Optional[str]] = mapped_column(TEXT)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    started_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    finished_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+
+    creator: Mapped["Members"] = relationship("Members", foreign_keys=[created_by], passive_deletes=True)
 
 
 class EmailTemplates(Base):

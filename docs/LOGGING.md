@@ -152,6 +152,40 @@ vps 'ls -lh ~/.pm2/logs/'        # live files and archives
 
 To read a rotated file: `zcat ~/.pm2/logs/GDG-backend-out__*.log.gz | grep ...`
 
+
+## "A blast went out and someone didn't get it"
+
+Background email sends record themselves in the `email_jobs` table. Start there
+rather than in the logs:
+
+```bash
+GET /emails/jobs                 # recent sends, newest first
+GET /emails/jobs?status=failed   # or partial
+GET /emails/jobs/{id}            # one send
+GET /emails/jobs/unfinished      # still queued or running
+```
+
+Each send endpoint returns the `job_id` it created, so a caller can follow its
+own send.
+
+| Status | Meaning |
+|---|---|
+| `queued` | row created, background task not started |
+| `running` | started, not finished |
+| `succeeded` | every recipient went out |
+| `partial` | some recipients failed; `error` holds the last one |
+| `failed` | every recipient failed, or the run died before sending |
+
+`total` is the count planned when the request came in. A certificate job filters
+out members who already have one, so `succeeded` can legitimately be lower than
+`total` with nothing wrong - status is derived from failures, not from the
+difference.
+
+**Anything stuck in `queued` or `running` is stranded.** These are Starlette
+`BackgroundTasks`; nothing resumes them after a worker restart or a deploy.
+`/emails/jobs/unfinished` is how you find them, and they have to be re-sent by
+hand.
+
 ## Gotchas
 
 **`fileConfig` disables loggers.** `logging.config.fileConfig` defaults to
