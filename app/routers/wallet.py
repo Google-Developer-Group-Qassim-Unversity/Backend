@@ -511,7 +511,7 @@ def get_public_profile(uuid: str, session: DB):
 
 
 @router.get("/health", summary="Check Wallet Pass engine health", response_model=WalletHealthResponse)
-async def wallet_health():
+def wallet_health():
     """
     Returns the status of the Wallet signing engine and available credentials.
     """

@@ -2,6 +2,7 @@ import logging
 
 # region imports
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status, BackgroundTasks, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 import time
@@ -21,10 +22,12 @@ from app.config import config
 from app.helpers import CurrentMember, admin_guard, get_effective_date
 from app.routers.responses import MessageResponse
 from app.exceptions import EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
+from collections.abc import Sequence
+
 import httpx
 import json
 from datetime import datetime
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal, Optional, Any
 from app.dependencies import DB
 
 
@@ -733,15 +736,28 @@ def send_custom_email(
 )
 async def send_custom_email_test(event_id: int, request: CustomEmailTestRequest, session: DB):
     logger.info(f"Sending custom email test for event [{event_id}]")
-    event = events_queries.get_event_by_id(session, event_id)
-    simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
-    from_address = get_from_address()
+
+    def prepare() -> tuple[SimpleEvent, EmailLogsFromAddress, list[tuple[SimpleMember, str, str]]]:
+        """All the synchronous database work, in one hop off the event loop."""
+        event = events_queries.get_event_by_id(session, event_id)
+        simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
+        from_address = get_from_address()
+        prepared = []
+        for member_item in request.test_recipients:
+            simple_member, _ = _resolve_member(member_item, session)
+            prepared.append(
+                (
+                    simple_member,
+                    _personalize(request.subject, simple_member.name, simple_event.name),
+                    _personalize(request.html_content, simple_member.name, simple_event.name),
+                )
+            )
+        return simple_event, from_address, prepared
+
+    simple_event, from_address, prepared = await run_in_threadpool(prepare)
 
     emails: list[str] = []
-    for member_item in request.test_recipients:
-        simple_member, _ = _resolve_member(member_item, session)
-        subject = _personalize(request.subject, simple_member.name, simple_event.name)
-        html_content = _personalize(request.html_content, simple_member.name, simple_event.name)
+    for simple_member, subject, html_content in prepared:
         logger.info(f"Sending test custom email to [{simple_member.name}] at [{simple_member.email}]")
         await call_custom_email_api(
             simple_member.email,
@@ -763,7 +779,7 @@ async def send_custom_email_test(event_id: int, request: CustomEmailTestRequest,
 @router.post(
     "/direct", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)], response_model=EmailJobResponse
 )
-async def send_direct_email(
+def send_direct_email(
     request: DirectEmailRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
 ):
     async def send_direct_email_job(
@@ -1136,40 +1152,43 @@ async def send_acceptance_blasts(
 ):
     logger.info(f"Sending acceptance blasts for event [{event_id}]")
 
-    event = events_queries.get_event_by_id(session, event_id)
-
     html_content = await read_html_body(request)
     logger.info(f"Received HTML body with {len(html_content)} characters")
 
-    submissions = submissions_queries.get_accepted_not_invited_by_event(session, event.id)
-    emails = [sub.email for sub in submissions if sub.email]
+    def load() -> tuple[Events, Sequence[Any], list[str], EmailLogsFromAddress]:
+        event = events_queries.get_event_by_id(session, event_id)
+        submissions = submissions_queries.get_accepted_not_invited_by_event(session, event.id)
+        # get_from_address opens its own session, so it belongs in this phase too
+        return event, submissions, [sub.email for sub in submissions if sub.email], get_from_address()
+
+    event, submissions, emails, from_addr = await run_in_threadpool(load)
     logger.info(f"Found [{len(submissions)}] submissions, [{len(emails)}] emails")
 
     logger.info(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
     logger.debug("request body: %s", {"subject": subject, "email_count": len(emails), "emails": emails})
-
-    from_addr = get_from_address()
     response_data = await call_acceptance_api(emails, subject, html_content, from_addr)
     logger.info("Acceptance API responded successfully")
-    email_queries.create_email_log(
-        session,
-        sent_by=requesting_member.id,
-        from_address=from_addr.value,
-        email_type=EmailLogsEmailType.ACCEPTANCE,
-        event_id=event.id,
-        recipient_count=len(emails),
-        data={
-            "subject": subject,
-            "html_content": html_content,
-            "event": {"name": event.name, "date": format_event_date(event), "official": bool(event.is_official)},
-            "member": [{"name": sub.name, "email": sub.email} for sub in submissions],
-        },
-    )
 
-    submission_ids = [sub.submission_id for sub in submissions]
-    submissions_queries.mark_submissions_as_invited(session, submission_ids)
-    session.commit()
-    logger.info(f"Marked [{len(submission_ids)}] submissions as invited")
+    def record() -> None:
+        email_queries.create_email_log(
+            session,
+            sent_by=requesting_member.id,
+            from_address=from_addr.value,
+            email_type=EmailLogsEmailType.ACCEPTANCE,
+            event_id=event.id,
+            recipient_count=len(emails),
+            data={
+                "subject": subject,
+                "html_content": html_content,
+                "event": {"name": event.name, "date": format_event_date(event), "official": bool(event.is_official)},
+                "member": [{"name": sub.name, "email": sub.email} for sub in submissions],
+            },
+        )
+        submissions_queries.mark_submissions_as_invited(session, [sub.submission_id for sub in submissions])
+        session.commit()
+
+    await run_in_threadpool(record)
+    logger.info(f"Marked [{len(submissions)}] submissions as invited")
 
     return {"sent_count": len(emails), "emails": emails}
 
@@ -1194,7 +1213,8 @@ async def send_acceptance_test(
     logger.debug("request body: %s", {"emails": emails})
     logger.info(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
 
-    response_data = await call_acceptance_api(emails, subject, html_content, get_from_address())
+    from_addr = await run_in_threadpool(get_from_address)
+    response_data = await call_acceptance_api(emails, subject, html_content, from_addr)
     logger.info("Acceptance API responded successfully")
 
     return {"sent_count": len(emails), "emails": emails}
@@ -1208,7 +1228,7 @@ async def send_acceptance_test(
 @router.post(
     "/blast", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)], response_model=BlastQueuedResponse
 )
-async def send_blast(
+def send_blast(
     request: BlastSendRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
 ):
     async def send_blast_job(
@@ -1377,7 +1397,7 @@ async def send_blast_test(request: BlastTestRequest):
     logger.info("Sending blast test email")
     logger.info(f"Sending test blast to [{len(request.test_emails)}] test emails")
 
-    from_addr = get_from_address() if request.provider == EmailProvider.GOOGLE else None
+    from_addr = await run_in_threadpool(get_from_address) if request.provider == EmailProvider.GOOGLE else None
     await call_blast_api(
         list(request.test_emails),
         request.subject,

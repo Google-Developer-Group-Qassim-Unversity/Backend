@@ -5,6 +5,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 
 
 from app.clients import R2Client
@@ -44,7 +45,11 @@ async def upload_file(file: Annotated[UploadFile, File()], client: R2Client):
     logger.info(f"Uploading file: {file.filename} -> {key}")
 
     content = await file.read()
-    client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
+    # boto3 is synchronous; without the threadpool this blocks the event loop
+    # for the whole upload, stalling every other request on this worker
+    await run_in_threadpool(
+        client.put_object, Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type
+    )
 
     url = f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}"
     logger.info(f"Upload successful: {url}")
@@ -70,7 +75,11 @@ async def upload_email_attachment(file: Annotated[UploadFile, File()], client: R
 
     logger.info(f"Uploading email attachment: {file.filename} -> {key}")
 
-    client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
+    # boto3 is synchronous; without the threadpool this blocks the event loop
+    # for the whole upload, stalling every other request on this worker
+    await run_in_threadpool(
+        client.put_object, Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type
+    )
 
     url = f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}"
     logger.info(f"Upload successful: {url}")
