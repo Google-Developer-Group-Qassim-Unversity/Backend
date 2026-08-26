@@ -2,7 +2,7 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, func
-from app.DB.schema import Actions, Members, MembersLogs, Logs, Events, Role, RoleType
+from app.DB.schema import Members, MembersLogs, Role, RoleType
 from app.exceptions import MemberNotFound
 from app.routers.models import Member_model
 from datetime import datetime

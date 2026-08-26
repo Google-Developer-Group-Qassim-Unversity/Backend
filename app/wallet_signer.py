@@ -6,14 +6,14 @@ import logging
 import os
 import time
 import zipfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import jwt
 
 from app.config import config
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.serialization import pkcs12, pkcs7, Encoding
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.serialization import pkcs12, Encoding
 from cryptography.hazmat.primitives.serialization.pkcs7 import PKCS7Options, PKCS7SignatureBuilder
 
 logger = logging.getLogger(__name__)

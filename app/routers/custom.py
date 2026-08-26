@@ -172,7 +172,7 @@ def give_department_custom_points(body: CustomDepartmentPointsRequest, session: 
             # [5] give points to departments
             for department_id in point_detail.departments_id:
                 logger.info(f"Giving points to department with id {department_id}")
-                department_log = log_queries.create_department_log(session, department_id, new_log.id)
+                log_queries.create_department_log(session, department_id, new_log.id)
 
         session.commit()
         logger.info("Successfully given custom points to departments")
@@ -431,12 +431,10 @@ def delete_department_custom_points(log_id: int, session: DB):
 
     logger.info(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
 
-    deleted_mod_count = 0
     modification = log_queries.get_modification_by_log_id(session, log_id)
     if modification:
         logger.info(f"Deleting modification with id {modification.id}")
         log_queries.delete_modification(session, modification.id)
-        deleted_mod_count = 1
 
     deleted_dept_count = log_queries.delete_department_logs_by_log_id(session, log_id)
     logger.info(f"Deleted {deleted_dept_count} department associations")

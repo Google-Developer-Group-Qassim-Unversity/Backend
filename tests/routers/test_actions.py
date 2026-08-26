@@ -95,8 +95,7 @@ def test_reorder_persists_the_new_order(admin_points_client: TestClient):
     second = create(admin_points_client, action_name="second")
 
     response = admin_points_client.put(
-        "/actions/reorder",
-        json={"action_orders": [{"id": first["id"], "order": 5}, {"id": second["id"], "order": 2}]},
+        "/actions/reorder", json={"action_orders": [{"id": first["id"], "order": 5}, {"id": second["id"], "order": 2}]}
     )
 
     assert_2xx(response)
@@ -161,9 +160,7 @@ def test_used_action_can_be_deleted_with_a_replacement(
     moved = before[seed_refs.dept_action.id]
     assert moved > 0
 
-    response = admin_points_client.delete(
-        f"/actions/{seed_refs.dept_action.id}?replacement_id={replacement['id']}"
-    )
+    response = admin_points_client.delete(f"/actions/{seed_refs.dept_action.id}?replacement_id={replacement['id']}")
 
     assert_2xx(response)
     after = {a["id"]: a["usage_count"] for a in admin_points_client.get("/actions/all").json()}

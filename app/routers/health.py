@@ -1,9 +1,7 @@
 import logging
-from fastapi import APIRouter, HTTPException, status, Depends
-from app.DB import members as member_queries
+from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import text
 from app.DB.main import get_engine
-from app.routers.models import Member_model
 import os
 from time import perf_counter
 from json import dumps

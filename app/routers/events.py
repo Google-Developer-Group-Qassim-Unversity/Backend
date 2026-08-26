@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from app.DB import (
     events as events_queries,
     forms as form_queries,
-    members as member_queries,
     submissions as submission_queries,
     logs as log_queries,
 )
@@ -30,7 +29,7 @@ from app.leaderboard_cache import reset_leaderboard_cache
 from app.semesters import resolve_semester, semester_date_bounds
 from time import perf_counter
 from typing import Annotated
-from app.exceptions import DataIntegrityError, NotFound
+from app.exceptions import DataIntegrityError
 from app.dependencies import DB
 
 from app.routers.responses import DetailResponse
@@ -132,7 +131,9 @@ def create_event(event_data: createEvent_model, session: DB):
 
         # 3. create logs for event
         department_log = log_queries.create_log(session, new_event.id, event_data.department_action_id)
-        member_log = log_queries.create_log(session, new_event.id, event_data.member_action_id)
+        # the member-type Logs row is looked up later by (event_id, action_id) via
+        # get_attendable_logs, not through this reference, so it is create-only here.
+        log_queries.create_log(session, new_event.id, event_data.member_action_id)
 
         # 4. give department points for each day
         days = (event_data.event.end_datetime - event_data.event.start_datetime).days + 1

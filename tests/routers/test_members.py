@@ -1,5 +1,4 @@
 from fastapi.testclient import TestClient
-from tests.factories import make_member
 from tests.utils import assert_2xx, assert_forbidden, assert_not_found, assert_unprocessable
 from app.DB.schema import Members, MembersGender, Role, RoleType
 

@@ -1,20 +1,18 @@
 import logging
-from fastapi import APIRouter, HTTPException, Query, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends
 from app.DB import members as member_queries
-from app.DB.schema import RoleType
+from app.DB.schema import Members, RoleType
 
 from app.routers.models import (
     Member_model,
     NotFoundResponse,
     ConflictResponse,
     CreatedMemberModel,
-    manual_members,
     MemberWithRole_model,
     MemberUpdateModel,
     ManualMemberCreateModel,
     BatchCreateMembersRequest,
     BatchCreateMembersResponse,
-    BatchCreateMemberItem,
 )
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import CurrentMember, admin_guard, authenticated_guard, credentials_to_member_model, super_admin_guard
@@ -194,6 +192,10 @@ def get_member_by_id(member_id: int, session: DB):
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=CreatedMemberModel)
 def create_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)], session: DB):
     member: Member_model | None = None
+    # credentials_to_member_model can raise before either of these is assigned;
+    # the `finally` below reads them regardless of how the try block exits.
+    new_member: Members | None = None
+    already_exist: bool = False
     try:
         member = credentials_to_member_model(credentials)
         logger.info(f"Creating Member {member.uni_id}")

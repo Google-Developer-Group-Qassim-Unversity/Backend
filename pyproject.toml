@@ -132,7 +132,10 @@ skip-magic-trailing-comma = true
 
 
 [tool.ruff.lint]
-select = ["FAST", "TID252"]
+# F = pyflakes: unused imports/variables, undefined names, and similar correctness
+# checks. These were previously invisible - CI only ran ruff check on the FAST/
+# TID252 selection below, so 28 dead imports/locals had built up unnoticed.
+select = ["F", "FAST", "TID252"]
 
 
 [tool.ruff.lint.per-file-ignores]

@@ -31,7 +31,9 @@ def test_reset_calls_the_leaderboard_app(admin_client: TestClient, leaderboard):
 def test_upstream_error_becomes_502(admin_client: TestClient, monkeypatch):
     def boom():
         raise httpx.HTTPStatusError(
-            "nope", request=httpx.Request("POST", "http://x"), response=httpx.Response(500, request=httpx.Request("POST", "http://x"))
+            "nope",
+            request=httpx.Request("POST", "http://x"),
+            response=httpx.Response(500, request=httpx.Request("POST", "http://x")),
         )
 
     monkeypatch.setattr("app.routers.cache.reset_leaderboard_cache", boom)

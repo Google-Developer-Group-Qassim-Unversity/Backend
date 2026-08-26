@@ -13,9 +13,6 @@ from app.DB import (
 
 from app.DB.schema import Events, Logs
 from app.routers.models import (
-    NotFoundResponse,
-    BadRequestResponse,
-    InternalServerErrorResponse,
     EventAttendanceResponse,
     ManualAttendanceRequest,
     BackfillAttendanceRequest,

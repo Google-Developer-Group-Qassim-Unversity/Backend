@@ -128,7 +128,7 @@ def send_manual_certificates_job(request_data: ManualCertificateRequest, sent_by
                         from_address=from_address,
                     )
                     call_certificate_api(cert_request)
-                    logger.info(f"Certificate API responded with 200 OK")
+                    logger.info("Certificate API responded with 200 OK")
                     email_queries.create_email_log(
                         session,
                         sent_by=sent_by_id,

@@ -282,7 +282,7 @@ def send_direct_email(
     response_model=CertificateEligibleCountResponse,
 )
 def get_certificate_eligible_count(event_id: int, session: DB):
-    event = events_queries.get_event_by_id(session, event_id)
+    events_queries.get_event_by_id(session, event_id)  # 404s if the event does not exist
     attendance = log_queries.get_event_attendance(session, event_id, "exclusive_all")
     already_sent = email_queries.get_members_who_received_certificate(session, event_id)
     already_sent_ids = {m["id"] for m in already_sent}
@@ -585,7 +585,7 @@ async def send_acceptance_blasts(
 
     logger.info(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
     logger.debug("request body: %s", {"subject": subject, "email_count": len(emails), "emails": emails})
-    response_data = await call_acceptance_api(emails, subject, html_content, from_addr)
+    await call_acceptance_api(emails, subject, html_content, from_addr)
     logger.info("Acceptance API responded successfully")
 
     def record() -> None:
@@ -633,7 +633,7 @@ async def send_acceptance_test(
     logger.info(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
 
     from_addr = await run_in_threadpool(get_from_address)
-    response_data = await call_acceptance_api(emails, subject, html_content, from_addr)
+    await call_acceptance_api(emails, subject, html_content, from_addr)
     logger.info("Acceptance API responded successfully")
 
     return {"sent_count": len(emails), "emails": emails}

@@ -128,8 +128,8 @@ def get_semesters(session: DB):
 @router.get("/members/total", status_code=status.HTTP_200_OK, response_model=list[Member_points_model])
 def get_all_members_points(
     session: DB,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
     semester: Annotated[int | None, Query()] = None,
-    credentials: HTTPAuthorizationCredentials | None = Depends(optional_clerk_guard),
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)
@@ -140,8 +140,8 @@ def get_all_members_points(
 def get_member_points(
     member_id: int,
     session: DB,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
     semester: Annotated[int | None, Query()] = None,
-    credentials: HTTPAuthorizationCredentials | None = Depends(optional_clerk_guard),
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)
@@ -157,8 +157,8 @@ def get_member_points(
 @router.get("/departments/total", status_code=status.HTTP_200_OK, response_model=Response_department_points_model)
 def get_all_departments_points(
     session: DB,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
     semester: Annotated[int | None, Query()] = None,
-    credentials: HTTPAuthorizationCredentials | None = Depends(optional_clerk_guard),
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)
@@ -177,8 +177,8 @@ def get_all_departments_points(
 def get_department_points(
     department_id: int,
     session: DB,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
     semester: Annotated[int | None, Query()] = None,
-    credentials: HTTPAuthorizationCredentials | None = Depends(optional_clerk_guard),
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)

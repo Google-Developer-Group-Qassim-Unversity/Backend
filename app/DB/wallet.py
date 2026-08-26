@@ -1,11 +1,11 @@
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.DB.schema import MemberProfiles, MemberProfilesNameLanguage, Members, Role, RoleType
+from app.DB.schema import MemberProfiles, MemberProfilesNameLanguage, Members, RoleType
 
 
 def get_member_by_uni_id_or_none(session: Session, uni_id: str) -> Optional[Members]:

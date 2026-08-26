@@ -8,10 +8,7 @@ from fastapi.testclient import TestClient
 
 from tests.utils import assert_2xx, assert_not_found
 
-PUBLIC_ENDPOINTS = [
-    "/points/members/total",
-    "/points/departments/total",
-]
+PUBLIC_ENDPOINTS = ["/points/members/total", "/points/departments/total"]
 
 
 def semesters(client: TestClient) -> dict:
@@ -113,9 +110,7 @@ def test_super_admin_sees_a_private_semester(super_admin_client: TestClient, db_
     assert_2xx(super_admin_client.get("/points/members/total?semester=471"))
 
 
-def test_private_current_semester_does_not_break_anonymous_callers(
-    client: TestClient, super_admin_client: TestClient
-):
+def test_private_current_semester_does_not_break_anonymous_callers(client: TestClient, super_admin_client: TestClient):
     """Making the current semester private must not start 403ing the public
     leaderboard - it falls back to the newest public semester instead."""
     assert_2xx(
