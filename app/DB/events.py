@@ -115,7 +115,7 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         existing_event.start_datetime = event_data.start_datetime
         existing_event.end_datetime = event_data.end_datetime
         existing_event.description = event_data.description
-        existing_event.status = event_data.status
+        existing_event.status = EventsStatus(event_data.status)
         existing_event.image_url = event_data.image_url
         session.flush()
         return existing_event

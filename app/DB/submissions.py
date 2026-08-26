@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from .schema import Submissions, t_forms_submissions
+
+from .schema import Submissions, SubmissionsSubmissionType, t_forms_submissions
 
 
 def create_submission(session: Session, form_id: int, submission_type: str, member_id: int):
@@ -59,18 +60,21 @@ def create_google_submission(
 def update_google_submission(
     session: Session,
     submission_id: int,
-    submission_type: str = None,
-    google_submission_id: str = None,
-    google_submission_value: str = None,
+    submission_type: Optional[str] = None,
+    google_submission_id: Optional[str] = None,
+    google_submission_value: Optional[dict] = None,
 ):
     submission = session.execute(select(Submissions).where(Submissions.id == submission_id)).scalar_one_or_none()
 
     if not submission:
         return None
 
-    submission.submission_type = submission_type
-    submission.google_submission_id = google_submission_id
-    submission.google_submission_value = google_submission_value
+    if submission_type is not None:
+        submission.submission_type = SubmissionsSubmissionType(submission_type)
+    if google_submission_id is not None:
+        submission.google_submission_id = google_submission_id
+    if google_submission_value is not None:
+        submission.google_submission_value = google_submission_value
 
     session.flush()
     return submission

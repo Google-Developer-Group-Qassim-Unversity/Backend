@@ -61,7 +61,7 @@ async def call_blast_api(
     # httpx serializes a None param value as an empty string rather than omitting the key,
     # which send-certificates' `EmailLogsFromAddress | None` Query rejects as invalid (422) --
     # so from_address/preview_text are only included when actually set.
-    params: dict[str, object] = {
+    params: dict[str, str | list[str]] = {
         "emails": emails,
         "subject": subject,
         "provider": provider.value,

@@ -1,6 +1,9 @@
 import logging
+from typing import cast
+
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import text
+from sqlalchemy.pool import QueuePool
 from app.DB.main import get_engine
 import os
 from time import perf_counter
@@ -14,6 +17,13 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/health", tags=["health"])
+
+
+def _get_pool() -> QueuePool:
+    """The engine is never created with a custom poolclass, so this is always
+    QueuePool - the size/checkedin/checkedout/overflow introspection below is
+    specific to it and not part of the base Pool interface."""
+    return cast(QueuePool, get_engine().pool)
 
 
 @router.get(
@@ -67,11 +77,11 @@ def db_check(session: DB):
                     # Connections in pool / checked_in: Connections that are currently idle/available in the pool (ready to be reused).
                     # Current Overflow / overflow: How many connections currently exist beyond pool_size (in practice: it’s effectively tied to “how far the total open connections are from pool_size”).
                     # Current Checked out connections / checked_out: Connections that are in use (leased to your requests/threads). Those are not available until returned.
-                    "pool_status": get_engine().pool.status(),
-                    "pool_size": get_engine().pool.size(),
-                    "checked_in": get_engine().pool.checkedin(),
-                    "checked_out": get_engine().pool.checkedout(),
-                    "overflow": get_engine().pool.overflow(),
+                    "pool_status": _get_pool().status(),
+                    "pool_size": _get_pool().size(),
+                    "checked_in": _get_pool().checkedin(),
+                    "checked_out": _get_pool().checkedout(),
+                    "overflow": _get_pool().overflow(),
                     "======== MySQL Status ========": "",
                     "DB_name": get_engine().url.database,
                     "DB_host": get_engine().url.host,
@@ -102,11 +112,11 @@ def print_pool_status():
                 # Connections in pool / checked_in: Connections that are currently idle/available in the pool (ready to be reused).
                 # Current Overflow / overflow: How many connections currently exist beyond pool_size (in practice: it’s effectively tied to “how far the total open connections are from pool_size”).
                 # Current Checked out connections / checked_out: Connections that are in use (leased to your requests/threads). Those are not available until returned.
-                "pool_status": get_engine().pool.status(),
-                "pool_size": get_engine().pool.size(),
-                "checked_in": get_engine().pool.checkedin(),
-                "checked_out": get_engine().pool.checkedout(),
-                "overflow": get_engine().pool.overflow(),
+                "pool_status": _get_pool().status(),
+                "pool_size": _get_pool().size(),
+                "checked_in": _get_pool().checkedin(),
+                "checked_out": _get_pool().checkedout(),
+                "overflow": _get_pool().overflow(),
             },
             indent=4,
         )

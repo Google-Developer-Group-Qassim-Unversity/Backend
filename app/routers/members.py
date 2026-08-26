@@ -122,7 +122,7 @@ def batch_create_members(request: BatchCreateMembersRequest, session: DB):
             )
             if existing:
                 existing_count += 1
-                result_members.append(existing)
+                result_members.append(Member_model.model_validate(existing))
                 logger.info(f"Member with uni_id {member_data.uni_id} already exists")
                 continue
 
@@ -151,7 +151,7 @@ def batch_create_members(request: BatchCreateMembersRequest, session: DB):
                 logger.error(f"Failed to create member with uni_id {member_data.uni_id}")
                 continue
             created_count += 1
-            result_members.append(new_member)
+            result_members.append(Member_model.model_validate(new_member))
             logger.info(f"Member with uni_id {member_data.uni_id} created successfully")
         except Exception as e:
             failed_count += 1

@@ -4,6 +4,8 @@ Shared by the routes and by the background jobs, which is why these live here
 rather than in either.
 """
 
+from fastapi import HTTPException, status
+
 from app.DB import events as events_queries
 from app.DB import members as members_queries
 from app.routers.email_models import ManualCertificateMember, ManualCertificateRequest, SimpleEvent, SimpleMember
@@ -24,6 +26,10 @@ def _resolve_event(request: ManualCertificateRequest, session) -> tuple[SimpleEv
 def _resolve_member(member_item: ManualCertificateMember, session) -> tuple[SimpleMember, int | None]:
     if member_item.member_id:
         member = members_queries.get_member_by_id(session, member_item.member_id)
+        if not member.email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=f"Member [{member_item.member_id}] has no email on file"
+            )
         return (SimpleMember(name=member.name, email=member.email, gender=member.gender), member_item.member_id)
     assert member_item.member is not None
     return member_item.member, None

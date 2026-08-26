@@ -180,6 +180,7 @@ def test_remove_attendance_success(admin_client: TestClient, db_session: Session
     event_id = create_attendance_ready_event(admin_client)
     log_id = get_member_log_id(db_session, event_id, seed_refs.member_action.id)
     event = db_session.query(Events).filter(Events.id == event_id).first()
+    assert event is not None
     target_date = event.start_datetime
     member_log = MembersLogs(member_id=seed_refs.ahmed.id, log_id=log_id, date=target_date)
     db_session.add(member_log)

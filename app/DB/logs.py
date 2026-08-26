@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from app.DB.schema import Events, Actions, DepartmentsLogs, Logs, Members, MembersLogs, Modifications
+from app.DB.schema import Events, Actions, DepartmentsLogs, Logs, Members, MembersLogs, Modifications, ModificationsType
 from typing import Literal
 from sqlalchemy import select, func, case, text
 from json import loads
@@ -236,7 +236,7 @@ def update_modification(session: Session, modification_id: int, mod_type: Litera
     modification = session.scalar(stmt)
     if not modification:
         return None
-    modification.type = mod_type
+    modification.type = ModificationsType(mod_type)
     modification.value = value
     session.flush()
     return modification

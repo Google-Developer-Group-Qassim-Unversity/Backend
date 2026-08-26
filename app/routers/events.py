@@ -31,6 +31,7 @@ from time import perf_counter
 from typing import Annotated
 from app.exceptions import DataIntegrityError
 from app.dependencies import DB
+from app.DB.schema import EventsStatus, FormType
 
 from app.routers.responses import DetailResponse
 
@@ -126,7 +127,9 @@ def create_event(event_data: createEvent_model, session: DB):
         logger.info(f"Created Event [{new_event.id}]: {new_event.name}")
 
         # 2. create associated form
-        new_form = form_queries.create_form(session, Form_model(event_id=new_event.id, form_type=event_data.form_type))
+        new_form = form_queries.create_form(
+            session, Form_model(event_id=new_event.id, form_type=FormType(event_data.form_type))
+        )
         logger.info(f"Created Form [{new_form.id}] for Event [{new_event.id}]")
 
         # 3. create logs for event
@@ -256,6 +259,10 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB):
             # if Same department but days changed
             elif current_dept_logs_count != new_days:
                 dept_id_to_use = new_dept_id if new_dept_id is not None else current_dept_id
+                if dept_id_to_use is None:
+                    raise DataIntegrityError(
+                        f"Log [{department_log.id}] has no department id and none was provided in the update"
+                    )
 
                 # if days increased - add more department logs
                 if new_days > current_dept_logs_count:
@@ -323,7 +330,7 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, ses
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     old_status = event.status
-    event.status = status_data.status
+    event.status = EventsStatus(status_data.status)
     session.commit()
     session.refresh(event)
 

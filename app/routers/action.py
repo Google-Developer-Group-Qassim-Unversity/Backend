@@ -74,7 +74,7 @@ def get_all_actions(session: DB):
             id=action.id,
             action_name=action.action_name,
             ar_action_name=action.ar_action_name,
-            action_type=action.action_type,
+            action_type=action.action_type.value,
             points=action.points,
             usage_count=usage_counts.get(action.id, 0),
             order=action.order,

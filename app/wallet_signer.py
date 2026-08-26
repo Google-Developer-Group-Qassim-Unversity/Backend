@@ -12,6 +12,7 @@ import jwt
 
 from app.config import config
 from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.serialization import pkcs12, Encoding
 from cryptography.hazmat.primitives.serialization.pkcs7 import PKCS7Options, PKCS7SignatureBuilder
@@ -176,6 +177,13 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         raise ValueError("Apple Pass signing certificate (APPLE_P12_BASE64 or Certificates.p12) is missing")
 
     private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(p12_bytes, p12_password)
+    if private_key is None or certificate is None:
+        raise ValueError("Apple Pass P12 bundle is missing a private key or signing certificate")
+    if not isinstance(private_key, (rsa.RSAPrivateKey, ec.EllipticCurvePrivateKey)):
+        # PKCS7SignatureBuilder.add_signer only accepts these two key types; Apple
+        # issues RSA certificates for pass signing, so anything else means a
+        # bundle that was never meant for this purpose.
+        raise ValueError(f"Apple Pass P12 private key must be RSA or EC, got {type(private_key).__name__}")
 
     wwdr_base64 = config.APPLE_WWDR_BASE64
     wwdr_path = config.APPLE_WWDR_PATH or os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer")

@@ -399,7 +399,7 @@ class MemberProfiles(Base):
         VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
     )
     bio: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
-    social_links: Mapped[Optional[dict]] = mapped_column(JSON)
+    social_links: Mapped[Optional[list]] = mapped_column(JSON)  # a list of {platform, url} objects, not a dict
     visibility: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")

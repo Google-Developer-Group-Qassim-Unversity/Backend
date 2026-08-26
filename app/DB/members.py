@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, func
 from app.DB.schema import Members, MembersLogs, Role, RoleType
-from app.exceptions import MemberNotFound
+from app.exceptions import DataIntegrityError, MemberNotFound
 from app.routers.models import Member_model
 from datetime import datetime
 
@@ -118,6 +118,10 @@ def get_member_by_clerk_user_id_or_none(session: Session, clerk_user_id: str) ->
 
 
 def update_member(session: Session, member: Member_model, is_authenticated: bool):
+    if member.id is None:
+        # update_member always identifies its target by id; the one caller
+        # (create_member_if_not_exists) sets it right before calling this.
+        raise MemberNotFound("unknown")
     existing_member = session.scalar(select(Members).where(Members.id == member.id))
     if not existing_member:
         raise MemberNotFound(member.id)
@@ -195,6 +199,10 @@ def update_member_role(session: Session, member_id: int, new_role: RoleType):
         .filter(Members.id == member_id)
         .first()
     )
+    if result is None:
+        # Should be unreachable: existing_member was just confirmed to exist and
+        # the role row above was either updated or created and flushed.
+        raise DataIntegrityError(f"Member [{member_id}] has no role row immediately after one was assigned")
 
     return result._asdict()
 

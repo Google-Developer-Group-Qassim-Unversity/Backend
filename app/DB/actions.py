@@ -1,7 +1,7 @@
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, delete, update
-from .schema import Actions, Logs
+from .schema import Actions, ActionsActionType, Logs
 
 
 def get_actions(session: Session):
@@ -85,7 +85,7 @@ def update_action(
     if points is not None:
         action.points = points
     if action_type is not None:
-        action.action_type = action_type
+        action.action_type = ActionsActionType(action_type)
     if ar_action_name is not None:
         action.ar_action_name = ar_action_name
     if is_hidden is not None:

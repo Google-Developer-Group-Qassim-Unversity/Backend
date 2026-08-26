@@ -2,13 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 
-def get_members_points_semester(session: Session, start_date: str, end_date: str, member_id: int | None = None):
-    params: dict = {"start_date": start_date, "end_date": end_date}
-    if member_id:
-        params["member_id"] = member_id
-
-    query = (
-        """
+_MEMBERS_POINTS_BASE_QUERY = """
         SELECT
             m.id AS member_id,
             m.name AS member_name,
@@ -27,17 +21,31 @@ def get_members_points_semester(session: Session, start_date: str, end_date: str
             GROUP BY mo.log_id
         ) mods ON mods.log_id = l.id
     """
-        + ("WHERE m.id = :member_id\n    " if member_id else "")
+
+
+def get_members_points_semester(session: Session, start_date: str, end_date: str) -> list[dict]:
+    """Every member's total points for the semester, ordered highest first."""
+    query = (
+        _MEMBERS_POINTS_BASE_QUERY
         + """GROUP BY m.id, m.name
         ORDER BY total_points DESC
     """
     )
-    result = session.execute(text(query), params)
-
-    if member_id:
-        row = result.first()
-        return dict(row._mapping) if row else None
+    result = session.execute(text(query), {"start_date": start_date, "end_date": end_date})
     return [dict(row._mapping) for row in result]
+
+
+def get_member_points_by_id_semester(session: Session, start_date: str, end_date: str, member_id: int) -> dict | None:
+    """One member's total points for the semester, or None if they do not exist."""
+    query = (
+        _MEMBERS_POINTS_BASE_QUERY
+        + """WHERE m.id = :member_id
+    GROUP BY m.id, m.name
+        ORDER BY total_points DESC
+    """
+    )
+    row = session.execute(text(query), {"start_date": start_date, "end_date": end_date, "member_id": member_id}).first()
+    return dict(row._mapping) if row else None
 
 
 def get_member_points_history_semester(session: Session, member_id: int, start_date: str, end_date: str):
@@ -79,13 +87,7 @@ def get_member_points_history_semester(session: Session, member_id: int, start_d
     return [dict(row._mapping) for row in result]
 
 
-def get_departments_points_semester(session: Session, start_date: str, end_date: str, department_id: int | None = None):
-    params: dict = {"start_date": start_date, "end_date": end_date}
-    if department_id:
-        params["department_id"] = department_id
-
-    query = (
-        """
+_DEPARTMENTS_POINTS_BASE_QUERY = """
         SELECT
             d.id AS department_id,
             d.name AS department_name,
@@ -105,17 +107,40 @@ def get_departments_points_semester(session: Session, start_date: str, end_date:
             GROUP BY modifications.log_id
         ) m ON m.log_id = l.id
     """
-        + ("WHERE d.id = :department_id\n    " if department_id else "WHERE d.active = 1\n    ")
-        + """GROUP BY d.id, d.name, d.type, d.ar_name
+
+
+def get_departments_points_semester(session: Session, start_date: str, end_date: str) -> list[dict]:
+    """Every active department's total points for the semester, highest first."""
+    query = (
+        _DEPARTMENTS_POINTS_BASE_QUERY
+        + """WHERE d.active = 1
+    GROUP BY d.id, d.name, d.type, d.ar_name
         ORDER BY total_points DESC
     """
     )
-    result = session.execute(text(query), params)
-
-    if department_id:
-        row = result.first()
-        return dict(row._mapping) if row else None
+    result = session.execute(text(query), {"start_date": start_date, "end_date": end_date})
     return [dict(row._mapping) for row in result]
+
+
+def get_department_points_by_id_semester(
+    session: Session, start_date: str, end_date: str, department_id: int
+) -> dict | None:
+    """One department's total points for the semester, or None if it does not exist.
+
+    Unlike the "all departments" query above, this is not filtered to active
+    departments - an admin can still look up a deactivated one by id.
+    """
+    query = (
+        _DEPARTMENTS_POINTS_BASE_QUERY
+        + """WHERE d.id = :department_id
+    GROUP BY d.id, d.name, d.type, d.ar_name
+        ORDER BY total_points DESC
+    """
+    )
+    row = session.execute(
+        text(query), {"start_date": start_date, "end_date": end_date, "department_id": department_id}
+    ).first()
+    return dict(row._mapping) if row else None
 
 
 def get_department_points_history_semester(session: Session, department_id: int, start_date: str, end_date: str):

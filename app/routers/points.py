@@ -133,7 +133,8 @@ def get_all_members_points(
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)
-    return points_queries.get_members_points_semester(session, start_date, end_date)
+    rows = points_queries.get_members_points_semester(session, start_date, end_date)
+    return [Member_points_model.model_validate(row) for row in rows]
 
 
 @router.get("/members/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_event_history_model)
@@ -146,12 +147,15 @@ def get_member_points(
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)
 
-    member_points = points_queries.get_members_points_semester(session, start_date, end_date, member_id)
+    member_points = points_queries.get_member_points_by_id_semester(session, start_date, end_date, member_id)
     if member_points is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} does not exist")
     member_points_history = points_queries.get_member_points_history_semester(session, member_id, start_date, end_date)
 
-    return Member_event_history_model(member=member_points, events=member_points_history)
+    return Member_event_history_model(
+        member=Member_points_model.model_validate(member_points),
+        events=[Event_model.model_validate(row) for row in member_points_history],
+    )
 
 
 @router.get("/departments/total", status_code=status.HTTP_200_OK, response_model=Response_department_points_model)
@@ -165,9 +169,15 @@ def get_all_departments_points(
     departments_points = points_queries.get_departments_points_semester(session, start_date, end_date)
     return Response_department_points_model(
         administrative=[
-            department for department in departments_points if department["department_type"] == "administrative"
+            Department_points_model.model_validate(department)
+            for department in departments_points
+            if department["department_type"] == "administrative"
         ],
-        practical=[department for department in departments_points if department["department_type"] == "practical"],
+        practical=[
+            Department_points_model.model_validate(department)
+            for department in departments_points
+            if department["department_type"] == "practical"
+        ],
     )
 
 
@@ -183,7 +193,9 @@ def get_department_points(
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)
 
-    department_points = points_queries.get_departments_points_semester(session, start_date, end_date, department_id)
+    department_points = points_queries.get_department_points_by_id_semester(
+        session, start_date, end_date, department_id
+    )
     if department_points is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {department_id} does not exist"
@@ -192,4 +204,7 @@ def get_department_points(
         session, department_id, start_date, end_date
     )
 
-    return Department_points_history_model(department=department_points, events=department_points_history)
+    return Department_points_history_model(
+        department=Department_points_model.model_validate(department_points),
+        events=[Event_model.model_validate(row) for row in department_points_history],
+    )
