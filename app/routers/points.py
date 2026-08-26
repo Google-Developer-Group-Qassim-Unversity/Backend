@@ -6,8 +6,7 @@ from app.DB.schema import Semesters
 from sqlalchemy.orm import Session
 from app.routers.models import BaseClassModel
 from datetime import date, datetime
-from app.helpers import is_super_admin
-from app.config import config
+from app.helpers import is_super_admin, optional_clerk_guard
 from app.semesters import resolve_semester, semester_date_bounds
 from typing import Annotated
 from app.dependencies import DB
@@ -130,7 +129,7 @@ def get_semesters(session: DB):
 def get_all_members_points(
     session: DB,
     semester: Annotated[int | None, Query()] = None,
-    credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_clerk_guard),
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)
@@ -142,7 +141,7 @@ def get_member_points(
     member_id: int,
     session: DB,
     semester: Annotated[int | None, Query()] = None,
-    credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_clerk_guard),
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)
@@ -159,7 +158,7 @@ def get_member_points(
 def get_all_departments_points(
     session: DB,
     semester: Annotated[int | None, Query()] = None,
-    credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_clerk_guard),
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)
@@ -179,7 +178,7 @@ def get_department_points(
     department_id: int,
     session: DB,
     semester: Annotated[int | None, Query()] = None,
-    credentials: HTTPAuthorizationCredentials | None = Depends(config.CLERK_GUARD_optional),
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_clerk_guard),
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
     start_date, end_date = semester_date_bounds(resolved)

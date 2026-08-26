@@ -150,14 +150,35 @@ def test_points_reject_unknown_semester(client: TestClient):
 # below is seen by the app as unauthenticated, whichever client fixture issues it.
 
 
-def test_points_reject_a_private_semester_asked_for_by_id(super_admin_client: TestClient):
+def test_super_admin_can_read_a_private_semester(super_admin_client: TestClient):
+    """This file previously asserted the super admin got a 403 here, which
+    contradicts `_validate_semester_access`. It passed only because the
+    super_admin_client fixture did not make the optional Clerk guard return
+    super-admin credentials, so the route saw a plain member instead.
+    """
     assert_2xx(
         super_admin_client.put(
             "/semesters/471",
             json={"name": "Fall 2025", "start_date": "2025-08-24", "end_date": "2026-01-17", "is_public": False},
         )
     )
-    assert_forbidden(super_admin_client.get("/points/members/total?semester=471"))
+    assert_2xx(super_admin_client.get("/points/members/total?semester=471"))
+
+
+def test_points_reject_a_private_semester_asked_for_by_id(client: TestClient, db_session):
+    """Anonymous callers must not see a private semester.
+
+    The flag is flipped directly rather than through the API, because the auth
+    fixtures all share one app and one dependency_overrides dict - asking for
+    `super_admin_client` here would authenticate this request too.
+    """
+    from app.DB.schema import Semesters
+
+    semester = db_session.get(Semesters, 471)
+    semester.is_public = False
+    db_session.commit()
+
+    assert_forbidden(client.get("/points/members/total?semester=471"))
 
 
 def test_points_default_falls_back_when_the_current_semester_is_private(super_admin_client: TestClient):

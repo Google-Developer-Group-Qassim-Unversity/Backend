@@ -5,9 +5,9 @@ from time import perf_counter
 from typing import Literal, Annotated
 from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks
 from app.DB.main import db_session
-from app.DB import submissions as submission_queries, members as member_queries, forms as form_queries
+from app.DB import submissions as submission_queries, forms as form_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.helpers import CurrentMember, admin_guard, resolve_member
+from app.helpers import authenticated_guard, CurrentMember, admin_guard, resolve_member
 from app.config import config
 from app.routers.models import submission_exists_model, submission_accept_model
 from google.oauth2.credentials import Credentials
@@ -28,7 +28,7 @@ router = APIRouter(prefix="/submissions", tags=["Submissions"])
 def create_submission(
     form_id: int,
     submission_type: Literal["none", "partial"],
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(config.CLERK_GUARD)],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)],
     session: DB,
 ):
     member_id = resolve_member(session, credentials).id

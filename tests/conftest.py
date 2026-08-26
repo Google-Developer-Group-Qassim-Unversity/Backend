@@ -297,11 +297,15 @@ def clerk_client(client) -> Generator:
 
 @pytest.fixture(scope="function")
 def super_admin_client(clerk_client) -> Generator:
-    from app.helpers import super_admin_guard
+    from app.helpers import optional_clerk_guard, super_admin_guard
 
     app.dependency_overrides[super_admin_guard] = lambda: FAKE_SUPER_ADMIN_CREDENTIALS
+    # endpoints that take the *optional* guard and then check is_super_admin -
+    # /points/* does this - would otherwise see a plain member here
+    app.dependency_overrides[optional_clerk_guard] = lambda: FAKE_SUPER_ADMIN_CREDENTIALS
     yield clerk_client
     app.dependency_overrides.pop(super_admin_guard, None)
+    app.dependency_overrides.pop(optional_clerk_guard, None)
 
 
 @pytest.fixture(scope="function")
@@ -313,6 +317,20 @@ def admin_client(clerk_client) -> Generator:
     yield clerk_client
     app.dependency_overrides.pop(admin_guard, None)
     app.dependency_overrides.pop(optional_clerk_guard, None)
+
+
+@pytest.fixture(scope="function")
+def admin_points_client(clerk_client) -> Generator:
+    """Bypasses admin_points_guard, which gates the /actions writes.
+
+    A super admin satisfies is_admin_points, which is how the frontend's
+    ["admin_points", "super_admin"] rule maps onto the backend.
+    """
+    from app.helpers import admin_points_guard
+
+    app.dependency_overrides[admin_points_guard] = lambda: FAKE_SUPER_ADMIN_CREDENTIALS
+    yield clerk_client
+    app.dependency_overrides.pop(admin_points_guard, None)
 
 
 @pytest.fixture(scope="function")
