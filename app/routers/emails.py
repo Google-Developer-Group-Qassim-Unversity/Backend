@@ -131,6 +131,7 @@ def send_certificates(event_id: int, requesting_member: CurrentMember, backgroun
 
     return {
         "message": f"Certificate generation initiated for event [{event.name}] with [{len(attendance)}] attendees.",
+        "recipient_count": len(attendance),
         "job_id": job.id,
     }
 
