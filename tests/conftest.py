@@ -387,3 +387,52 @@ def pytest_assertrepr_compare(config, op, left, right):
         return ["Assertion failed:", f"  Expected: {right!r}", f"  Actual:   {left!r}"]
     if op == "!=":
         return ["Assertion failed:", f"  Expected NOT: {right!r}", f"  Actual:        {left!r}"]
+
+
+@pytest.fixture(scope="function")
+def outbound(monkeypatch) -> Generator:
+    """Intercept and record every HTTP call this service makes to its neighbours.
+
+    See ``tests/outbound.py`` for why this sits at the transport rather than at
+    the gateway functions, and for the inventory of the three client shapes it
+    has to cover.
+    """
+    import httpx
+
+    import app.clients as clients
+    from tests.outbound import OutboundRecorder
+
+    recorder = OutboundRecorder()
+    transport = httpx.MockTransport(recorder.handle)
+
+    # 1. the shared async client, used by the `await call_*_api` gateway functions.
+    previous_async_client = clients._http_client
+    clients._http_client = httpx.AsyncClient(transport=transport)
+
+    # 2. per-call `httpx.Client(...)`, used by the sync gateway functions and by
+    #    reset_leaderboard_cache. Captured before patching so the factory below
+    #    still builds a real client. TestClient subclasses httpx.Client but bound
+    #    it at import time, so it is unaffected by this.
+    real_client_cls = httpx.Client
+
+    def recording_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_client_cls(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", recording_client)
+
+    # 3. module-level `httpx.get`, used by emails.download_certificate to fetch
+    #    the generated file. It resolves Client through httpx._api, not through
+    #    the attribute patched above, so it needs its own hook.
+    client_only_kwargs = {"verify", "cert", "trust_env", "proxy", "proxies", "transport"}
+
+    def recording_get(url, **kwargs):
+        request_kwargs = {key: value for key, value in kwargs.items() if key not in client_only_kwargs}
+        with real_client_cls(transport=transport) as client:
+            return client.get(url, **request_kwargs)
+
+    monkeypatch.setattr(httpx, "get", recording_get)
+
+    yield recorder
+
+    clients._http_client = previous_async_client
