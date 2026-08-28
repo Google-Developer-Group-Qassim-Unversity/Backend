@@ -87,6 +87,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /points/members/{member_id:int}": "optional_clerk_guard",
     "GET /points/semesters": None,
     "GET /semesters": "admin_guard",
+    "GET /submissions/sync-jobs/{job_id:int}": "admin_guard",
     "GET /submissions/test-google-forms/{google_form_id}": None,
     "GET /submissions/{form_id:int}": "authenticated_guard",
     "GET /wallet/health": None,

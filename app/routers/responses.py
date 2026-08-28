@@ -83,7 +83,9 @@ class WebhookAckResponse(BaseClassModel):
     """Acknowledgement for Google's Pub/Sub push.
 
     Every field except `status` depends on how far the message got before being
-    ignored, so all of them are optional.
+    ignored, so all of them are optional. `job_id` is only set on the
+    "received" path, once a sync has actually been queued - see
+    GET /submissions/sync-jobs/{job_id} for how it turns out.
     """
 
     status: Literal["received", "ignored"]
@@ -91,6 +93,22 @@ class WebhookAckResponse(BaseClassModel):
     event_type: str | None = None
     message_id: str | None = None
     reason: str | None = None
+    job_id: int | None = None
+
+
+class FormSyncJobModel(BaseClassModel):
+    """One Google Forms webhook sync, and how it ended."""
+
+    id: int
+    google_form_id: str
+    status: Literal["queued", "running", "succeeded", "partial", "failed"]
+    total: int
+    succeeded: int
+    failed: int
+    error: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
 
 class SubmissionResponse(BaseClassModel):

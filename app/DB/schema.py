@@ -135,6 +135,14 @@ class FormsSubmissionsFormType(str, enum.Enum):
     GOOGLE = "google"
 
 
+class FormSyncJobsStatus(str, enum.Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
 class FormsSubmissionsSubmissionType(str, enum.Enum):
     NONE = "none"
     REGISTRATION = "registration"
@@ -586,6 +594,36 @@ class EmailJobs(Base):
     finished_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
     creator: Mapped["Members"] = relationship("Members", foreign_keys=[created_by], passive_deletes=True)
+
+
+class FormSyncJobs(Base):
+    """One row per Google Forms webhook sync.
+
+    `sync_form_submissions` runs after the webhook's response is sent, same
+    as the email jobs above, and used to only surface a failure via
+    `logger.exception` - this table gives it the same job_tracker.track()
+    treatment `email_jobs` has: a status a caller can actually poll.
+    """
+
+    __tablename__ = "form_sync_jobs"
+    __table_args__ = (Index("ix_form_sync_jobs_created_at", "created_at"),)
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    google_form_id: Mapped[str] = mapped_column(VARCHAR(64, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    status: Mapped[FormSyncJobsStatus] = mapped_column(
+        Enum(FormSyncJobsStatus, values_callable=lambda cls: [member.value for member in cls]),
+        nullable=False,
+        server_default=text("'queued'"),
+    )
+    total: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, server_default=text("'0'"))
+    succeeded: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, server_default=text("'0'"))
+    failed: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, server_default=text("'0'"))
+    error: Mapped[Optional[str]] = mapped_column(TEXT)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    started_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    finished_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
 
 class EmailTemplates(Base):

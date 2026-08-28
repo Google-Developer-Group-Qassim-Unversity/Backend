@@ -41,3 +41,54 @@ def test_extract_email_answer_handles_empty_answers():
     from app.routers.submissions import extract_email_answer
 
     assert extract_email_answer({}) is None
+
+
+# ====================== sync_form_submissions job status ======================
+#
+# sync_form_submissions used to only `logger.exception` a failed fetch and
+# return - the same "invisible failure" shape email_jobs.py was rebuilt to
+# fix. These pin the job_boundary wiring: a fetch failure must fail the job,
+# and a clean run (even one with nothing to do) must succeed it.
+
+
+def test_sync_form_submissions_marks_job_failed_when_fetch_fails(db_session, monkeypatch):
+    import pytest
+
+    from app.DB import form_sync_jobs as job_queries
+    from app.DB.schema import FormSyncJobsStatus
+    from app.routers import submissions
+
+    monkeypatch.setattr(submissions, "fetch_form_responses", lambda google_form_id: None)
+
+    job = job_queries.create_job(db_session, "form-abc")
+
+    with pytest.raises(RuntimeError):
+        submissions.sync_form_submissions("form-abc", job.id)
+
+    db_session.expire_all()
+    finished = job_queries.get_job(db_session, job.id)
+    assert finished is not None
+    assert finished.status == FormSyncJobsStatus.FAILED
+
+
+def test_sync_form_submissions_marks_job_succeeded_when_nothing_to_sync(db_session, monkeypatch):
+    from app.DB import form_sync_jobs as job_queries
+    from app.DB import submissions as submission_queries
+    from app.DB.schema import FormSyncJobsStatus
+    from app.routers import submissions
+
+    monkeypatch.setattr(
+        submissions,
+        "fetch_form_responses",
+        lambda google_form_id: {"form_id": 1, "google_form_id": google_form_id, "responses": []},
+    )
+    monkeypatch.setattr(submission_queries, "get_partial_submissions_by_form_id", lambda session, form_id: [])
+
+    job = job_queries.create_job(db_session, "form-abc")
+
+    submissions.sync_form_submissions("form-abc", job.id)
+
+    db_session.expire_all()
+    finished = job_queries.get_job(db_session, job.id)
+    assert finished is not None
+    assert finished.status == FormSyncJobsStatus.SUCCEEDED

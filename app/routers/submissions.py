@@ -4,18 +4,22 @@ import re
 from time import perf_counter
 from typing import Literal, Annotated
 from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks
+from fastapi.concurrency import run_in_threadpool
 from app.DB.main import db_session
 from app.DB import submissions as submission_queries, forms as form_queries
+from app.DB import form_sync_jobs as job_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import authenticated_guard, CurrentMember, admin_guard, resolve_member
 from app.config import config
+from app.exceptions import NotFound
 from app.routers.models import submission_exists_model, submission_accept_model
+from app.services.job_tracker import FORM_SYNC_JOB_QUERIES, job_boundary
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request as GoogleRequest
 from app.dependencies import DB
 
-from app.routers.responses import StatusResponse, SubmissionResponse, WebhookAckResponse
+from app.routers.responses import FormSyncJobModel, StatusResponse, SubmissionResponse, WebhookAckResponse
 
 
 logger = logging.getLogger(__name__)
@@ -191,16 +195,18 @@ def fetch_form_responses(google_form_id: str):
         return None
 
 
-def sync_form_submissions(google_form_id: str):
-    try:
+def sync_form_submissions(google_form_id: str, job_id: int | None = None):
+    with job_boundary(job_id, FORM_SYNC_JOB_QUERIES) as (_tracker, session):
         logger.info(f"Running scheduled job: sync for google_form_id: {google_form_id}")
 
         # Fetch Google Form responses
         fetch_result = fetch_form_responses(google_form_id)
 
         if fetch_result is None:
-            logger.info("Error: Failed to fetch form responses")
-            return
+            # fetch_form_responses already logged the underlying exception (or lack
+            # of a form/refresh token); this is what makes the job itself FAILED
+            # rather than silently returning as if nothing was wrong.
+            raise RuntimeError(f"Failed to fetch form responses for google_form_id={google_form_id}")
 
         form_id = fetch_result["form_id"]
         google_responses = fetch_result["responses"]
@@ -208,81 +214,76 @@ def sync_form_submissions(google_form_id: str):
         logger.info(f"Form ID: {form_id}")
         logger.info(f"Google responses count: {len(google_responses)}")
 
-        # Get partial submissions from database
-        with db_session() as session:
-            partial_submissions = submission_queries.get_partial_submissions_by_form_id(session, form_id)
-            logger.info(f"Partial submissions count: {len(partial_submissions)}")
+        partial_submissions = submission_queries.get_partial_submissions_by_form_id(session, form_id)
+        logger.info(f"Partial submissions count: {len(partial_submissions)}")
 
-            if not partial_submissions:
-                logger.info("No partial submissions to sync")
-                return
+        if not partial_submissions:
+            logger.info("No partial submissions to sync")
+            return
 
-            # Create a mapping of email (normalized) to partial submissions
-            partial_by_email = {}
-            for submission in partial_submissions:
-                email = (submission.email or "").strip().lower()
-                if not email:
-                    logger.info(f"Partial submission: ID={submission.submission_id} has no email on file, skipping")
-                    continue
-                partial_by_email[email] = submission
-                logger.info(f"Partial submission: ID={submission.submission_id}, email={email}")
+        # Create a mapping of email (normalized) to partial submissions
+        partial_by_email = {}
+        for submission in partial_submissions:
+            email = (submission.email or "").strip().lower()
+            if not email:
+                logger.info(f"Partial submission: ID={submission.submission_id} has no email on file, skipping")
+                continue
+            partial_by_email[email] = submission
+            logger.info(f"Partial submission: ID={submission.submission_id}, email={email}")
 
-            # Match Google responses to partial submissions
-            matched_count = 0
-            unmatched_responses = []
+        # Match Google responses to partial submissions
+        matched_count = 0
+        unmatched_responses = []
 
-            for response in google_responses:
-                response_id = response.get("responseId")
-                answers = response.get("answers", {})
+        for response in google_responses:
+            response_id = response.get("responseId")
+            answers = response.get("answers", {})
 
-                email = extract_email_answer(answers)
-                if not email:
-                    logger.info(f"Response {response_id}: No email-shaped answer found")
-                    unmatched_responses.append(response_id)
-                    continue
+            email = extract_email_answer(answers)
+            if not email:
+                logger.info(f"Response {response_id}: No email-shaped answer found")
+                unmatched_responses.append(response_id)
+                continue
 
-                logger.info(f"Response {response_id}: email={email}")
+            logger.info(f"Response {response_id}: email={email}")
 
-                # Check if this email has a partial submission
-                if email in partial_by_email:
-                    partial_submission = partial_by_email[email]
+            # Check if this email has a partial submission
+            if email in partial_by_email:
+                partial_submission = partial_by_email[email]
 
-                    # Update submission with Google response data
-                    updated = submission_queries.update_google_submission(
-                        session,
-                        partial_submission.submission_id,
-                        submission_type="google",
-                        google_submission_id=response_id,
-                        google_submission_value=answers,
-                    )
+                # Update submission with Google response data
+                updated = submission_queries.update_google_submission(
+                    session,
+                    partial_submission.submission_id,
+                    submission_type="google",
+                    google_submission_id=response_id,
+                    google_submission_value=answers,
+                )
 
-                    if updated:
-                        matched_count += 1
-                        logger.info(f"✓ Matched and updated submission ID {partial_submission.id} for email {email}")
-                        logger.info(f"  - Google response ID: {response_id}")
-                    else:
-                        logger.info(f"✗ Failed to update submission ID {partial_submission.id}")
+                if updated:
+                    matched_count += 1
+                    logger.info(f"✓ Matched and updated submission ID {partial_submission.id} for email {email}")
+                    logger.info(f"  - Google response ID: {response_id}")
                 else:
-                    logger.info(f"Response {response_id}: No matching partial submission for email {email}")
-                    unmatched_responses.append(response_id)
+                    logger.info(f"✗ Failed to update submission ID {partial_submission.id}")
+            else:
+                logger.info(f"Response {response_id}: No matching partial submission for email {email}")
+                unmatched_responses.append(response_id)
 
-            # Commit all updates
-            session.commit()
+        # Commit all updates
+        session.commit()
 
-            # Summary
-            logger.info("\n=== Sync Summary ===")
-            logger.info(f"Total Google responses: {len(google_responses)}")
-            logger.info(f"Total partial submissions: {len(partial_submissions)}")
-            logger.info(f"Successfully matched: {matched_count}")
-            logger.info(f"Unmatched responses: {len(unmatched_responses)}")
+        # Summary
+        logger.info("\n=== Sync Summary ===")
+        logger.info(f"Total Google responses: {len(google_responses)}")
+        logger.info(f"Total partial submissions: {len(partial_submissions)}")
+        logger.info(f"Successfully matched: {matched_count}")
+        logger.info(f"Unmatched responses: {len(unmatched_responses)}")
 
-            if unmatched_responses:
-                logger.info(f"Unmatched response IDs: {unmatched_responses}")
+        if unmatched_responses:
+            logger.info(f"Unmatched response IDs: {unmatched_responses}")
 
-            logger.info("\n=== Sync Complete ===")
-
-    except Exception as e:
-        logger.exception(e)
+        logger.info("\n=== Sync Complete ===")
 
 
 @router.get("/test-google-forms/{google_form_id}", status_code=status.HTTP_200_OK, response_model=dict)
@@ -295,8 +296,22 @@ def test_fetch_form_responses(google_form_id: str):
     return schema
 
 
+@router.get(
+    "/sync-jobs/{job_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=FormSyncJobModel,
+    dependencies=[Depends(admin_guard)],
+    responses={404: {"description": "Job not found"}},
+)
+def get_form_sync_job(job_id: int, session: DB):
+    job = job_queries.get_job(session, job_id)
+    if job is None:
+        raise NotFound("Form sync job", job_id)
+    return job
+
+
 @router.post("/google/webhook", status_code=status.HTTP_200_OK, response_model=WebhookAckResponse)
-async def google_forms_webhook(request: Request, background_tasks: BackgroundTasks):
+async def google_forms_webhook(request: Request, background_tasks: BackgroundTasks, session: DB):
     try:
         logger.info("⚓ Google Forms Webhook Notification ⚓")
 
@@ -341,10 +356,17 @@ async def google_forms_webhook(request: Request, background_tasks: BackgroundTas
         )
 
         # Sync form submissions in the background
-        background_tasks.add_task(sync_form_submissions, form_id)
-        logger.info(f"Background task scheduled to sync submissions for form: {form_id}")
+        job = await run_in_threadpool(job_queries.create_job, session, form_id)
+        background_tasks.add_task(sync_form_submissions, form_id, job.id)
+        logger.info(f"Background task scheduled to sync submissions for form: {form_id} (job {job.id})")
 
-        return {"status": "received", "form_id": form_id, "event_type": event_type, "message_id": message_id}
+        return {
+            "status": "received",
+            "form_id": form_id,
+            "event_type": event_type,
+            "message_id": message_id,
+            "job_id": job.id,
+        }
 
     except json.JSONDecodeError as e:
         logger.exception(e)

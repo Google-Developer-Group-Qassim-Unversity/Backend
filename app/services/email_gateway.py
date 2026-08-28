@@ -16,6 +16,7 @@ from app.exceptions import BadGateway, GatewayTimeout, ServiceUnavailable
 from app.routers.email_models import (
     BlastAttachment,
     BlaseResponse,
+    CertificateGenerationRequest,
     CertificateLanguage,
     CertificateRequest,
     CustomEmailAttachment,
@@ -112,6 +113,30 @@ def call_certificate_api(cert_request: CertificateRequest) -> dict:
             raise BadGateway(detail=f"Certificate API returned error: {e.response.status_code}")
         except httpx.RequestError:
             raise ServiceUnavailable(detail="Failed to connect to certificate API")
+
+
+def call_certificate_download(cert_request: CertificateGenerationRequest) -> str | dict:
+    """Ask the certificate API to generate one, returning wherever it says the file lives.
+
+    That's a bare URL for some formats and a `{"url": ...}` / `{"key": ...}`
+    object for others - the caller resolves that shape, this only owns the
+    request/error-mapping.
+    """
+    with httpx.Client(timeout=120.0) as client:
+        try:
+            response = client.post(
+                f"{config.CERTIFICATE_API_URL}/generations/certificate",
+                json=cert_request.model_dump(mode="json"),
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.TimeoutException:
+            raise GatewayTimeout(detail="Certificate generation API request timed out")
+        except httpx.HTTPStatusError as e:
+            raise BadGateway(detail=f"Certificate generation API returned error: {e.response.status_code}")
+        except httpx.RequestError:
+            raise ServiceUnavailable(detail="Failed to connect to certificate generation API")
 
 
 async def call_custom_email_api(

@@ -52,7 +52,7 @@ from app.services.email_capacity import (
 )
 from app.DB import email_jobs as job_queries
 from app.DB.schema import EmailJobsStatus, EmailJobsType
-from app.services.email_recipients import _resolve_member
+from app.services.email_recipients import _resolve_member, resolve_ad_hoc_recipients
 from app.services.email_jobs import (
     send_blast_job,
     send_certificates_by_event_id,
@@ -60,10 +60,15 @@ from app.services.email_jobs import (
     send_direct_email_job,
     send_manual_certificates_job,
 )
-from app.services.email_gateway import call_acceptance_api, call_blast_api, call_custom_email_api
+from app.services.email_gateway import (
+    call_acceptance_api,
+    call_blast_api,
+    call_certificate_download,
+    call_custom_email_api,
+)
 
-from app.exceptions import NotFound, EmptyBody, GatewayTimeout, BadGateway, ServiceUnavailable
-from collections.abc import Sequence
+from app.exceptions import NotFound, EmptyBody
+from collections.abc import Callable, Iterator, Sequence
 
 import httpx
 import json
@@ -94,6 +99,47 @@ async def read_html_body(request: Request) -> str:
     if not html_content or not html_content.strip():
         raise EmptyBody()
     return html_content
+
+
+def sse_poll_loop(
+    fetch_batch: Callable[[int, int], Sequence[Any]],
+    *,
+    initial_batch_size: int,
+    poll_batch_size: int,
+    sleep_seconds: float,
+    initial_last_id: int = 0,
+    empty_message: str = "No new logs",
+    initial_empty_message: str | None = None,
+) -> Iterator[ServerSentEvent]:
+    """The long-poll shape shared by the two email-log SSE endpoints below.
+
+    `fetch_batch(after_id, batch_size)` does the DB query and model_validate
+    for one endpoint's own log shape, returning already-parsed response
+    models that expose `.id` and `.model_dump(mode="json")`. This only owns
+    the polling itself: a larger initial fetch, then poll-and-sleep forever.
+    """
+    last_id = initial_last_id
+
+    initial = fetch_batch(last_id, initial_batch_size)
+    if not initial:
+        yield ServerSentEvent(
+            data=json.dumps({"message": initial_empty_message or empty_message}), event="no_logs", id=str(last_id)
+        )
+    for item in initial:
+        yield ServerSentEvent(data=item.model_dump(mode="json"), event="log", id=str(item.id))
+        if item.id > last_id:
+            last_id = item.id
+
+    while True:
+        batch = fetch_batch(last_id, poll_batch_size)
+        if not batch:
+            yield ServerSentEvent(data=json.dumps({"message": empty_message}), event="no_logs", id=str(last_id))
+        else:
+            for item in batch:
+                yield ServerSentEvent(data=item.model_dump(mode="json"), event="log", id=str(item.id))
+                if item.id > last_id:
+                    last_id = item.id
+        time.sleep(sleep_seconds)
 
 
 # endregion
@@ -245,21 +291,7 @@ def send_direct_email(
 
     logger.info("Preparing direct email")
 
-    recipient_member_ids = [r.member_id for r in request.recipients if r.member_id is not None]
-    resolved_members = members_queries.get_members_by_id(session, recipient_member_ids) if recipient_member_ids else []
-    members_by_id = {m.id: m for m in resolved_members}
-
-    recipients: dict[str, dict] = {}
-    for r in request.recipients:
-        if r.member_id is not None:
-            member = members_by_id.get(r.member_id)
-            if member is None or not member.email:
-                continue
-            recipients[member.email.lower()] = {"name": member.name, "email": member.email, "member_id": member.id}
-        elif r.email is not None:
-            recipients[r.email.lower()] = {"name": r.name, "email": r.email, "member_id": None}
-
-    recipient_list = list(recipients.values())
+    recipient_list, _ = resolve_ad_hoc_recipients(session, request.recipients, include_member_id=True)
     logger.info(f"Resolved [{len(recipient_list)}] recipients")
 
     from_address = get_from_address() if request.provider == EmailProvider.GOOGLE else None
@@ -305,38 +337,12 @@ def get_certificate_eligible_count(event_id: int, session: DB):
     dependencies=[Depends(admin_guard)],
 )
 def get_certificate_event_logs(event_id: int, last_event_id: Annotated[int | None, Header()] = None):
-    last_id = 0
-
-    def get_logs_batch(after_id: int, batch_size: int = 10):
+    def fetch_batch(after_id: int, batch_size: int) -> list[CertificateEventEmailLog]:
         with db_session() as session:
-            logs = email_queries.get_event_certificate_email_log(session, event_id, after_id=after_id, limit=batch_size)
-            return logs
+            rows = email_queries.get_event_certificate_email_log(session, event_id, after_id=after_id, limit=batch_size)
+            return [CertificateEventEmailLog.model_validate(row) for row in rows]
 
-    # initial fetch to get the last logs and then start streaming new ones
-    logs = get_logs_batch(0, 1000)
-    if not logs:
-        yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(last_id))
-    for log in logs:
-        yield ServerSentEvent(
-            data=CertificateEventEmailLog.model_validate(log).model_dump(mode="json"), event="log", id=str(log["id"])
-        )
-        if log["id"] > last_id:
-            last_id = log["id"]
-
-    while True:
-        logs = get_logs_batch(last_id)
-        if not logs:
-            yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(last_id))
-        else:
-            for log in logs:
-                yield ServerSentEvent(
-                    data=CertificateEventEmailLog.model_validate(log).model_dump(mode="json"),
-                    event="log",
-                    id=str(log["id"]),
-                )
-                if log["id"] > last_id:
-                    last_id = log["id"]
-        time.sleep(1)  # Wait before checking for new logs
+    yield from sse_poll_loop(fetch_batch, initial_batch_size=1000, poll_batch_size=10, sleep_seconds=1.0)
 
 
 @router.get(
@@ -430,11 +436,9 @@ def stream_enriched_email_logs(
     start_date: Annotated[Optional[datetime], Query(description="Filter from date")] = None,
     end_date: Annotated[Optional[datetime], Query(description="Filter to date")] = None,
 ):
-    last_id = int(last_event_id) if last_event_id else 0
-
-    def get_batch(after_id: int, batch_size: int = 50, order_asc: bool = False):
+    def fetch_batch(after_id: int, batch_size: int) -> list[EnrichedEmailLog]:
         with db_session() as session:
-            return email_queries.get_enriched_email_logs(
+            rows = email_queries.get_enriched_email_logs(
                 session,
                 email_type=email_type,
                 event_id=event_id,
@@ -443,30 +447,19 @@ def stream_enriched_email_logs(
                 end_date=end_date,
                 after_id=after_id,
                 limit=batch_size,
-                order_asc=order_asc,
+                order_asc=True,
             )
+            return [EnrichedEmailLog.model_validate(dict(row)) for row in rows]
 
-    if last_id == 0:
-        initial = get_batch(0, 200, order_asc=True)
-        if not initial:
-            yield ServerSentEvent(data=json.dumps({"message": "No logs found"}), event="no_logs", id=str(last_id))
-        for row in initial:
-            log = EnrichedEmailLog.model_validate(dict(row))
-            yield ServerSentEvent(data=log.model_dump(mode="json"), event="log", id=str(log.id))
-            if log.id > last_id:
-                last_id = log.id
-
-    while True:
-        batch = get_batch(last_id, 50, order_asc=True)
-        if not batch:
-            yield ServerSentEvent(data=json.dumps({"message": "No new logs"}), event="no_logs", id=str(last_id))
-        else:
-            for row in batch:
-                log = EnrichedEmailLog.model_validate(dict(row))
-                yield ServerSentEvent(data=log.model_dump(mode="json"), event="log", id=str(log.id))
-                if log.id > last_id:
-                    last_id = log.id
-        time.sleep(1.5)
+    yield from sse_poll_loop(
+        fetch_batch,
+        initial_batch_size=200,
+        poll_batch_size=50,
+        sleep_seconds=1.5,
+        initial_last_id=int(last_event_id) if last_event_id else 0,
+        empty_message="No new logs",
+        initial_empty_message="No logs found",
+    )
 
 
 @router.get(
@@ -516,22 +509,7 @@ def download_certificate(
 
     cert_request = CertificateGenerationRequest(language=lang, format=format, event=simple_event, member=simple_member)
 
-    with httpx.Client(timeout=120.0) as client:
-        try:
-            response = client.post(
-                f"{config.CERTIFICATE_API_URL}/generations/certificate",
-                json=cert_request.model_dump(mode="json"),
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
-            data = response.json()
-        except httpx.TimeoutException:
-            raise GatewayTimeout(detail="Certificate generation API request timed out")
-        except httpx.HTTPStatusError as e:
-            raise BadGateway(detail=f"Certificate generation API returned error: {e.response.status_code}")
-        except httpx.RequestError:
-            raise ServiceUnavailable(detail="Failed to connect to certificate generation API")
-
+    data = call_certificate_download(cert_request)
     file_url = data if isinstance(data, str) else data.get("url", data.get("key", str(data)))
     filename = f"certificate-{event.name}-{member.name}.{format.value}"
 
@@ -654,23 +632,10 @@ def send_blast(
 
     logger.info("Preparing blast email")
 
-    guaranteed_member_ids = [r.member_id for r in request.guaranteed_recipients if r.member_id is not None]
-    resolved_members = (
-        members_queries.get_members_by_id(session, guaranteed_member_ids) if guaranteed_member_ids else []
+    guaranteed_list, resolved_member_ids = resolve_ad_hoc_recipients(
+        session, request.guaranteed_recipients, include_member_id=False
     )
-    members_by_id = {m.id: m for m in resolved_members}
-
-    guaranteed: dict[str, dict] = {}
-    for recipient in request.guaranteed_recipients:
-        if recipient.member_id is not None:
-            member = members_by_id.get(recipient.member_id)
-            if member is None or not member.email:
-                continue
-            guaranteed[member.email.lower()] = {"name": member.name, "email": member.email}
-        elif recipient.email is not None:
-            guaranteed[recipient.email.lower()] = {"name": recipient.name, "email": recipient.email}
-
-    logger.info(f"Resolved [{len(guaranteed)}] guaranteed recipients")
+    logger.info(f"Resolved [{len(guaranteed_list)}] guaranteed recipients")
 
     if request.provider == EmailProvider.GOOGLE:
         capped_count = min(request.count, get_total_remaining_send_capacity())
@@ -683,15 +648,15 @@ def send_blast(
 
     if request.order_by == "activity":
         pool = members_queries.get_blast_recipients_by_activity(
-            session, limit=capped_count, exclude_ids=list(members_by_id.keys())
+            session, limit=capped_count, exclude_ids=list(resolved_member_ids)
         )
     else:
         pool = members_queries.get_blast_recipients_alphabetical(
-            session, limit=capped_count, exclude_ids=list(members_by_id.keys())
+            session, limit=capped_count, exclude_ids=list(resolved_member_ids)
         )
     logger.info(f"Selected [{len(pool)}] recipients via [{request.order_by}] ordering")
 
-    all_recipients = dict(guaranteed)
+    all_recipients = {r["email"].lower(): r for r in guaranteed_list}
     for member in pool:
         if member.email:
             all_recipients.setdefault(member.email.lower(), {"name": member.name, "email": member.email})
@@ -701,13 +666,13 @@ def send_blast(
 
     job = job_queries.create_job(session, EmailJobsType.BLAST, requesting_member.id, total=len(recipients))
     background_tasks.add_task(
-        send_blast_job, recipients, list(guaranteed.values()), request.count, requesting_member.id, request, job.id
+        send_blast_job, recipients, guaranteed_list, request.count, requesting_member.id, request, job.id
     )
 
     return {
         "message": f"Blast email queued for [{len(recipients)}] recipient(s).",
         "recipient_count": len(recipients),
-        "guaranteed_count": len(guaranteed),
+        "guaranteed_count": len(guaranteed_list),
         "algorithmic_count": len(pool),
         "job_id": job.id,
     }
