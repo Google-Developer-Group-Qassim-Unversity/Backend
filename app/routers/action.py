@@ -28,7 +28,9 @@ def get_action_by_id(actions, action_id: int):
 
 @router.get("", status_code=status.HTTP_200_OK, response_model=Categorized_action)
 def get_categorized_actions(session: DB):
-    # These are to link department and member actions into composite actions
+    # These are to link department and member actions into composite actions.
+    # Paired positionally by the zip below, and hardcoded production IDs - so a
+    # new action can never join a pair. See docs/HARDCODED_ACTION_IDS.md.
     department_ids = [51, 52, 53, 54, 86, 88, 90, 105]
     member_ids = [76, 77, 78, 79, 87, 89, 91, 108]
 

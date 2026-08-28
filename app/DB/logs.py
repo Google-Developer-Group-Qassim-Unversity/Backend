@@ -52,6 +52,9 @@ def create_modification(session: Session, log_id: int, type: Literal["bonus", "d
 
 
 def get_attendable_logs(session: Session, event_id: int):
+    # Production `actions` primary keys, pasted in. Out of sync with the member
+    # list in routers/action.py (missing 91 and 108), and meaningless in any
+    # other database - see docs/HARDCODED_ACTION_IDS.md before touching this.
     ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89]
     stmt = select(Logs).where(Logs.event_id == event_id, Logs.action_id.in_(ATTENDABLE_ACTION_IDS))
     log = session.scalar(stmt)
