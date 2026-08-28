@@ -81,7 +81,7 @@ def mark_attendance(
     if token:
         logger.info(f"validating attendance token for event [{event_id}]")
         try:
-            validate_attendance_token(token, event_id)
+            token_result = validate_attendance_token(token, event_id)
             logger.info(f"Token validated successfully for event [{event_id}]")
         except HTTPException as e:
             logger.error(Exception(f"Token validation failed reason: '{e.detail}'"))
@@ -90,19 +90,25 @@ def mark_attendance(
         logger.info("HTTP 400:No attendance token provided")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance token provided!")
 
+    token_claims = token_result["payload"]
+    require_time_window = token_claims.get("requireAttendanceTimeWindow", True)
+    prevent_duplicate_daily = token_claims.get("preventDuplicateDailyAttendance", True)
+    require_registration = token_claims.get("requireAttendanceRegistration", True)
+
     logger.info(f"Marking attendance for member [{member.name}] with uni_id [{member.uni_id}]")
 
     event, event_log = get_event_with_attendable_log(session, event_id)
     logger.info(f"Attendace for event [{event.name}] for member [{member.name}]")
     logger.info(f"Attendable log found for event [{event_log.id}]")
 
-    effective_now = get_effective_date(datetime.now(), config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
-    event_start = event.start_datetime.date()
-    event_end = event.end_datetime.date()
-    if effective_now < event_start or effective_now > event_end:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="لا يمكنك تسجيل الحضور خارج فترة الحدث")
+    if require_time_window:
+        effective_now = get_effective_date(datetime.now(), config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+        event_start = event.start_datetime.date()
+        event_end = event.end_datetime.date()
+        if effective_now < event_start or effective_now > event_end:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="لا يمكنك تسجيل الحضور خارج فترة الحدث")
 
-    if is_member_marked_for_day(session, member.id, event_log.id, datetime.now()):
+    if prevent_duplicate_daily and is_member_marked_for_day(session, member.id, event_log.id, datetime.now()):
         logger.info(f"Member [{member.id}] has already marked attendance for today")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="!انت سجلت حضورك لهذا الحدث اليوم")
 
@@ -125,13 +131,14 @@ def mark_attendance(
         logger.info(
             f"Form type is google or registration, checking submissions for member [{member.id}] and form [{form.id}]"
         )
-        submissions = submission_queries.get_submission_by_form_and_member(session, form.id, member.id)
-        if not submissions:
-            logger.error(f"HTTP 400: Member [{member.id}] has not submitted the form [{form.id}]")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما عبيت فورم الحدث")
-        if submissions.is_accepted == 0:
-            logger.error(f"HTTP 400: Member [{member.id}] has not been accepted to the event [{event.name}]")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما انقبلت في الحدث")
+        if require_registration:
+            submissions = submission_queries.get_submission_by_form_and_member(session, form.id, member.id)
+            if not submissions:
+                logger.error(f"HTTP 400: Member [{member.id}] has not submitted the form [{form.id}]")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما عبيت فورم الحدث")
+            if submissions.is_accepted == 0:
+                logger.error(f"HTTP 400: Member [{member.id}] has not been accepted to the event [{event.name}]")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما انقبلت في الحدث")
 
         logger.info(
             f"Member [{member.id}] has submitted the form and been accepted to the event [{event.name}], marking attendance..."

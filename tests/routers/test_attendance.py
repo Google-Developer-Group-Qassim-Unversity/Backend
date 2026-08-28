@@ -46,8 +46,12 @@ def patch_get_attendable_logs():
     log_queries.get_attendable_logs = _original_get_attendable_logs
 
 
-def make_attendance_token(event_id: int, secret: str = JWT_SECRET, expires_in_hours: int = 1) -> str:
-    payload = {"eventId": event_id, "exp": datetime.now(timezone.utc) + timedelta(hours=expires_in_hours)}
+def make_attendance_token(event_id: int, secret: str = JWT_SECRET, expires_in_hours: int = 1, **extra_claims) -> str:
+    payload = {
+        "eventId": event_id,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=expires_in_hours),
+        **extra_claims,
+    }
     return jwt.encode(payload, secret, algorithm="HS256")
 
 
@@ -388,6 +392,23 @@ def test_mark_attendance_already_marked_today(
     assert_bad_request(response)
 
 
+def test_mark_attendance_duplicate_guard_disabled_allows_second_mark(
+    clerk_client: TestClient, admin_client: TestClient, db_session: Session, seed_refs
+):
+    event_id = create_ongoing_event(admin_client, form_type="none")
+    member = create_test_member(db_session)
+    log_id = get_member_log_id(db_session, event_id, seed_refs.member_action.id)
+    # Same calendar day but a distinct second, since `members_logs` has a unique
+    # index on the raw (member_id, log_id, date) tuple at second precision -
+    # marking "now" would collide with the endpoint's own insert.
+    existing_log = MembersLogs(member_id=member.id, log_id=log_id, date=datetime.now() - timedelta(minutes=1))
+    db_session.add(existing_log)
+    db_session.commit()
+    token = make_attendance_token(event_id, preventDuplicateDailyAttendance=False)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_2xx(response)
+
+
 def test_mark_attendance_event_not_found(clerk_client: TestClient):
     token = make_attendance_token(9999)
     response = clerk_client.post(f"/attendance/9999?token={token}")
@@ -404,6 +425,16 @@ def test_mark_form_registration_not_submitted(clerk_client: TestClient, admin_cl
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_bad_request(response)
     assert "ما عبيت فورم الحدث" in response.json()["detail"]
+
+
+def test_mark_form_registration_guard_disabled_allows_unsubmitted(
+    clerk_client: TestClient, admin_client: TestClient, db_session: Session
+):
+    event_id = create_ongoing_event(admin_client, form_type="registration")
+    create_test_member(db_session)
+    token = make_attendance_token(event_id, requireAttendanceRegistration=False)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_2xx(response)
 
 
 def test_mark_form_registration_not_accepted(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
@@ -488,6 +519,18 @@ def test_mark_attendance_event_ended_yesterday(clerk_client: TestClient, admin_c
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_bad_request(response)
     assert "خارج فترة الحدث" in response.json()["detail"]
+
+
+def test_mark_attendance_time_window_guard_disabled_allows_ended_event(
+    clerk_client: TestClient, admin_client: TestClient, db_session: Session
+):
+    start = "2025-01-01T00:00:00"
+    end = "2025-01-02T23:59:59"
+    event_id = create_attendance_ready_event(admin_client, form_type="none", start_datetime=start, end_datetime=end)
+    create_test_member(db_session)
+    token = make_attendance_token(event_id, requireAttendanceTimeWindow=False)
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+    assert_2xx(response)
 
 
 def test_mark_attendance_event_starts_tomorrow(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
