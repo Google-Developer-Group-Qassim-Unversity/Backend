@@ -22,11 +22,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column(
         "events",
-        sa.Column(
-            "meeting_url",
-            mysql.VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"),
-            nullable=True,
-        ),
+        sa.Column("meeting_url", mysql.VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=True),
     )
 
 

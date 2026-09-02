@@ -290,9 +290,7 @@ def test_active_remote_no_registration_event_appears_in_open_events(admin_client
 def test_active_onsite_event_not_in_open_events(admin_client: TestClient):
     event = admin_client.post(
         "/events",
-        json=make_create_event_payload(
-            event=make_event(location_type="on-site", location="room 1"), form_type="none"
-        ),
+        json=make_create_event_payload(event=make_event(location_type="on-site", location="room 1"), form_type="none"),
     ).json()
     admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
     admin_client.put(f"/events/{event['id']}/status", json={"status": "active"})
@@ -413,9 +411,7 @@ def test_editing_an_event_keeps_its_meeting_url(admin_client: TestClient, seed_r
     details = admin_client.get(f"/events/{event['id']}/details").json()
     updated_event = {**details["event"], "name": "renamed event"}
     updated_event.pop("meeting_url", None)
-    response = admin_client.put(
-        f"/events/{event['id']}", json={"event": updated_event, "actions": details["actions"]}
-    )
+    response = admin_client.put(f"/events/{event['id']}", json={"event": updated_event, "actions": details["actions"]})
     assert_2xx(response)
     assert response.json()["name"] == "renamed event"
     assert response.json()["meeting_url"] == "https://meet.google.com/abc"
@@ -429,9 +425,7 @@ def test_editing_an_event_to_onsite_clears_its_meeting_url(admin_client: TestCli
     details = admin_client.get(f"/events/{event['id']}/details").json()
     updated_event = {**details["event"], "location_type": "on-site", "location": "room 1"}
     updated_event.pop("meeting_url", None)
-    response = admin_client.put(
-        f"/events/{event['id']}", json={"event": updated_event, "actions": details["actions"]}
-    )
+    response = admin_client.put(f"/events/{event['id']}", json={"event": updated_event, "actions": details["actions"]})
     assert_2xx(response)
     assert response.json()["location_type"] == "on-site"
     assert response.json()["meeting_url"] is None
