@@ -32,7 +32,7 @@ from time import perf_counter
 from typing import Annotated
 from app.exceptions import DataIntegrityError
 from app.dependencies import DB
-from app.DB.schema import EventsStatus, FormType
+from app.DB.schema import EventsLocationType, EventsStatus, FormType
 
 from app.routers.responses import DetailResponse
 
@@ -355,10 +355,12 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, ses
 )
 def update_event_meeting_url(event_id: int, meeting_url_data: UpdateEventMeetingUrl_model, session: DB):
     """Set or clear the join link shown to members on a remote event."""
+    existing_event = events_queries.get_event_by_id(session, event_id)
+    if meeting_url_data.meeting_url and existing_event.location_type != EventsLocationType.ONLINE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="meeting_url can only be set on an online event"
+        )
     event = events_queries.update_event_meeting_url(session, event_id, meeting_url_data.meeting_url)
-    if not event:
-        logger.error(f"HTTP 404: Event [{event_id}] not found")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     session.commit()
     session.refresh(event)
     logger.info(f"Event [{event_id}] meeting url {'set' if meeting_url_data.meeting_url else 'cleared'}")

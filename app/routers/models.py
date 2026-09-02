@@ -89,6 +89,10 @@ class UpdateEventMeetingUrl_model(BaseClassModel):
             v = f"https://meet.google.com/{v.lower()}"
         elif "://" not in v:
             v = f"https://{v}"
+        # Reject non-http(s) schemes (e.g. "javascript://") - this is rendered
+        # directly as a link's href on the leaderboard app.
+        if not v.lower().startswith(("http://", "https://")):
+            raise ValueError("meeting_url must use http:// or https://")
         if len(v) > 500:
             raise ValueError("meeting_url must be at most 500 characters")
         return v

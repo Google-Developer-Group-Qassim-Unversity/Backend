@@ -395,12 +395,38 @@ def test_update_event_meeting_url_rejects_too_long(admin_client: TestClient):
     assert response.status_code == 422, f"Expected 422 for an over-length url, got {response.status_code}"
 
 
+def test_update_event_meeting_url_rejects_dangerous_scheme(admin_client: TestClient):
+    """meeting_url is rendered directly as a link's href on the leaderboard app."""
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+    response = admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "javascript://alert(1)"})
+    assert response.status_code == 422, f"Expected 422 for a javascript: scheme, got {response.status_code}"
+
+
 def test_unauthorized_update_event_meeting_url(clerk_client: TestClient):
     assert_forbidden(clerk_client.put("/events/1/meeting-url", json={"meeting_url": "https://meet.google.com/abc"}))
 
 
 def test_update_meeting_url_nonexistent_event(admin_client: TestClient):
     assert_not_found(admin_client.put("/events/9999/meeting-url", json={"meeting_url": "https://meet.google.com/abc"}))
+
+
+def test_update_event_meeting_url_rejects_onsite_event(admin_client: TestClient):
+    event = admin_client.post(
+        "/events", json=make_create_event_payload(event=make_event(location_type="on-site", location="room 1"))
+    ).json()
+    response = admin_client.put(
+        f"/events/{event['id']}/meeting-url", json={"meeting_url": "https://meet.google.com/abc"}
+    )
+    assert_bad_request(response)
+
+
+def test_clear_event_meeting_url_allowed_on_onsite_event(admin_client: TestClient):
+    """Clearing must stay allowed regardless of location_type, e.g. after an event goes on-site."""
+    event = admin_client.post(
+        "/events", json=make_create_event_payload(event=make_event(location_type="on-site", location="room 1"))
+    ).json()
+    response = admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": None})
+    assert_2xx(response)
 
 
 def test_editing_an_event_keeps_its_meeting_url(admin_client: TestClient, seed_refs):
