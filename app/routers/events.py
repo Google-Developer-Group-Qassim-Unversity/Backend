@@ -23,6 +23,7 @@ from app.routers.models import (
     InternalServerErrorResponse,
     UpdateEventModel,
     UpdateEventStatus_model,
+    UpdateEventMeetingUrl_model,
 )
 from app.helpers import CurrentMember, admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
@@ -341,6 +342,33 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, ses
             reset_leaderboard_cache()
         except Exception:
             pass
+
+    return event
+
+
+@router.put(
+    "/{event_id:int}/meeting-url",
+    status_code=status.HTTP_200_OK,
+    response_model=Events_model,
+    responses={404: {"model": NotFoundResponse, "description": "Event not found"}},
+    dependencies=[Depends(admin_guard)],
+)
+def update_event_meeting_url(event_id: int, meeting_url_data: UpdateEventMeetingUrl_model, session: DB):
+    """Set or clear the join link shown to members on a remote event."""
+    event = events_queries.update_event_meeting_url(session, event_id, meeting_url_data.meeting_url)
+    if not event:
+        logger.error(f"HTTP 404: Event [{event_id}] not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    session.commit()
+    session.refresh(event)
+    logger.info(f"Event [{event_id}] meeting url {'set' if meeting_url_data.meeting_url else 'cleared'}")
+
+    # Best-effort: the leaderboard app caches event data, so the link would otherwise
+    # not appear until the next revalidation.
+    try:
+        reset_leaderboard_cache()
+    except Exception as cache_err:
+        logger.error(cache_err)
 
     return event
 
