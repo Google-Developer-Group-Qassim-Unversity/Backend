@@ -88,6 +88,7 @@ def create_event(session: Session, event_data: Events_model):
         status=event_data.status,
         is_official=event_data.is_official,
         image_url=event_data.image_url,
+        meeting_url=event_data.meeting_url,
         created_at=datetime.now(),
     )
     session.add(new_event)
@@ -117,12 +118,26 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         existing_event.description = event_data.description
         existing_event.status = EventsStatus(event_data.status)
         existing_event.image_url = event_data.image_url
+        # meeting_url is owned by update_event_meeting_url, and the edit form does not
+        # carry it, so it otherwise survives untouched here. Except: once the event stops
+        # being online, a leftover link must not silently reappear if it goes online again.
+        if event_data.location_type != EventsLocationType.ONLINE:
+            existing_event.meeting_url = None
         session.flush()
         return existing_event
     except IntegrityError as e:
         session.rollback()
         logger.warning("IntegrityError in update_event: %s", e)
         return -1
+
+
+def update_event_meeting_url(session: Session, event_id: int, meeting_url: str | None):
+    event = session.scalar(select(Events).where(Events.id == event_id))
+    if not event:
+        return None
+    event.meeting_url = meeting_url
+    session.flush()
+    return event
 
 
 def get_member_events(session: Session, member_id: int):

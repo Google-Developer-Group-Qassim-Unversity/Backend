@@ -270,6 +270,48 @@ def test_get_registrable_events(admin_client: TestClient):
     assert response.json() == []
 
 
+def test_active_remote_no_registration_event_appears_in_open_events(admin_client: TestClient):
+    """Attendees can join without registering, so it should surface as joinable."""
+    event = admin_client.post(
+        "/events", json=make_create_event_payload(event=make_event(location_type="online"), form_type="none")
+    ).json()
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "active"})
+    admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "https://meet.google.com/abc"})
+
+    response = admin_client.get("/events/open")
+    assert_2xx(response)
+    ids = [e["id"] for e in response.json()]
+    assert event["id"] in ids, "Active, remote, no-registration events should be listed as open"
+    listed = next(e for e in response.json() if e["id"] == event["id"])
+    assert listed["meeting_url"] == "https://meet.google.com/abc"
+
+
+def test_active_onsite_event_not_in_open_events(admin_client: TestClient):
+    event = admin_client.post(
+        "/events",
+        json=make_create_event_payload(event=make_event(location_type="on-site", location="room 1"), form_type="none"),
+    ).json()
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "active"})
+
+    response = admin_client.get("/events/open")
+    ids = [e["id"] for e in response.json()]
+    assert event["id"] not in ids, "On-site events should not appear as joinable regardless of status"
+
+
+def test_active_remote_event_requiring_registration_not_in_open_events(admin_client: TestClient):
+    event = admin_client.post(
+        "/events", json=make_create_event_payload(event=make_event(location_type="online"), form_type="registration")
+    ).json()
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "active"})
+
+    response = admin_client.get("/events/open")
+    ids = [e["id"] for e in response.json()]
+    assert event["id"] not in ids, "Registration must close before an active event drops off the open list"
+
+
 def test_delete_non_draft_event(admin_client: TestClient):
     event = admin_client.post("/events", json=make_create_event_payload()).json()
     admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
@@ -309,6 +351,110 @@ def test_update_nonexistent_event(admin_client: TestClient, seed_refs):
 
 def test_delete_nonexistent_event(admin_client: TestClient):
     assert_not_found(admin_client.delete("/events/9999"))
+
+
+def test_update_event_meeting_url(admin_client: TestClient):
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+    assert event["meeting_url"] is None
+
+    response = admin_client.put(
+        f"/events/{event['id']}/meeting-url", json={"meeting_url": "https://meet.google.com/abc-defg-hij"}
+    )
+    assert_2xx(response)
+    assert response.json()["meeting_url"] == "https://meet.google.com/abc-defg-hij"
+
+    assert admin_client.get(f"/events/{event['id']}").json()["meeting_url"] == "https://meet.google.com/abc-defg-hij"
+
+
+def test_clear_event_meeting_url(admin_client: TestClient):
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+    admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "https://meet.google.com/abc"})
+
+    response = admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "   "})
+    assert_2xx(response)
+    assert response.json()["meeting_url"] is None
+
+
+def test_update_event_meeting_url_adds_scheme_when_missing(admin_client: TestClient):
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+    response = admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "meet.google.com/abc"})
+    assert_2xx(response)
+    assert response.json()["meeting_url"] == "https://meet.google.com/abc"
+
+
+def test_update_event_meeting_url_expands_bare_meet_code(admin_client: TestClient):
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+    response = admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "ghg-kqjw-fsr"})
+    assert_2xx(response)
+    assert response.json()["meeting_url"] == "https://meet.google.com/ghg-kqjw-fsr"
+
+
+def test_update_event_meeting_url_rejects_too_long(admin_client: TestClient):
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+    response = admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "a" * 501})
+    assert response.status_code == 422, f"Expected 422 for an over-length url, got {response.status_code}"
+
+
+def test_update_event_meeting_url_rejects_dangerous_scheme(admin_client: TestClient):
+    """meeting_url is rendered directly as a link's href on the leaderboard app."""
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+    response = admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "javascript://alert(1)"})
+    assert response.status_code == 422, f"Expected 422 for a javascript: scheme, got {response.status_code}"
+
+
+def test_unauthorized_update_event_meeting_url(clerk_client: TestClient):
+    assert_forbidden(clerk_client.put("/events/1/meeting-url", json={"meeting_url": "https://meet.google.com/abc"}))
+
+
+def test_update_meeting_url_nonexistent_event(admin_client: TestClient):
+    assert_not_found(admin_client.put("/events/9999/meeting-url", json={"meeting_url": "https://meet.google.com/abc"}))
+
+
+def test_update_event_meeting_url_rejects_onsite_event(admin_client: TestClient):
+    event = admin_client.post(
+        "/events", json=make_create_event_payload(event=make_event(location_type="on-site", location="room 1"))
+    ).json()
+    response = admin_client.put(
+        f"/events/{event['id']}/meeting-url", json={"meeting_url": "https://meet.google.com/abc"}
+    )
+    assert_bad_request(response)
+
+
+def test_clear_event_meeting_url_allowed_on_onsite_event(admin_client: TestClient):
+    """Clearing must stay allowed regardless of location_type, e.g. after an event goes on-site."""
+    event = admin_client.post(
+        "/events", json=make_create_event_payload(event=make_event(location_type="on-site", location="room 1"))
+    ).json()
+    response = admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": None})
+    assert_2xx(response)
+
+
+def test_editing_an_event_keeps_its_meeting_url(admin_client: TestClient, seed_refs):
+    """The edit form does not carry meeting_url, so a full update must not clear it."""
+    event = admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
+    admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "https://meet.google.com/abc"})
+
+    details = admin_client.get(f"/events/{event['id']}/details").json()
+    updated_event = {**details["event"], "name": "renamed event"}
+    updated_event.pop("meeting_url", None)
+    response = admin_client.put(f"/events/{event['id']}", json={"event": updated_event, "actions": details["actions"]})
+    assert_2xx(response)
+    assert response.json()["name"] == "renamed event"
+    assert response.json()["meeting_url"] == "https://meet.google.com/abc"
+
+
+def test_editing_an_event_to_onsite_clears_its_meeting_url(admin_client: TestClient, seed_refs):
+    """A leftover link must not silently reappear if the event goes online again later."""
+    event = admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
+    admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "https://meet.google.com/abc"})
+
+    details = admin_client.get(f"/events/{event['id']}/details").json()
+    updated_event = {**details["event"], "location_type": "on-site", "location": "room 1"}
+    updated_event.pop("meeting_url", None)
+    response = admin_client.put(f"/events/{event['id']}", json={"event": updated_event, "actions": details["actions"]})
+    assert_2xx(response)
+    assert response.json()["location_type"] == "on-site"
+    assert response.json()["meeting_url"] is None
 
 
 def test_update_status_nonexistent_event(admin_client: TestClient):

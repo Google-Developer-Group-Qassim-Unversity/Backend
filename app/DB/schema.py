@@ -255,6 +255,9 @@ class Events(Base):
     )
     description: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    # Join link for remote events. Owned by PUT /events/{id}/meeting-url, not by the
+    # full-event update, so editing an event cannot silently drop it.
+    meeting_url: Mapped[Optional[str]] = mapped_column(VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1), server_default=text("'0'"))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
@@ -724,6 +727,7 @@ t_open_events = Table(
     Column("end_datetime", DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column("status", Enum(OpenEventsStatus, values_callable=lambda cls: [member.value for member in cls])),
     Column("image_url", String(500)),
+    Column("meeting_url", String(500)),
     Column("is_official", TINYINT(1), server_default=text("'0'")),
     Column("form_id", INTEGER(unsigned=True), server_default=text("'0'")),
     Column("form_type", Enum(OpenEventsFormType, values_callable=lambda cls: [member.value for member in cls])),
