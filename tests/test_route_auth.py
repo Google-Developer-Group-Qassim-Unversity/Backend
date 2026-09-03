@@ -133,6 +133,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "PUT /custom/members/{log_id}": "admin_guard",
     "PUT /emails/blast/templates/{template_id:int}": "admin_guard",
     "PUT /events/{event_id:int}": "admin_guard",
+    "PUT /events/{event_id:int}/meeting-url": "admin_guard",
     "PUT /events/{event_id:int}/status": "admin_guard",
     "PUT /forms/{form_id:int}": "admin_guard",
     "PUT /semesters/{semester_id:int}": "super_admin_guard",

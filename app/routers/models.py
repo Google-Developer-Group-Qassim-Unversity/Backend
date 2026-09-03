@@ -1,8 +1,13 @@
+import re
+
 from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist, ConfigDict
 from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
 from app.DB.schema import EventsLocationType, MembersGender, RoleType, FormType
+
+# A bare Google Meet code, e.g. "abc-defg-hij" - no scheme, no domain.
+_MEET_CODE_RE = re.compile(r"^[a-zA-Z]{2,5}-[a-zA-Z]{2,5}-[a-zA-Z]{2,5}$")
 
 
 class BaseClassModel(BaseModel):
@@ -19,6 +24,7 @@ class Events_model(BaseClassModel):
     end_datetime: datetime
     status: Literal["draft", "open", "active", "closed"]
     image_url: str | None = None
+    meeting_url: str | None = None
     is_official: int | None = None
     created_at: datetime | None = None
 
@@ -60,6 +66,36 @@ class UpdateEventModel(BaseClassModel):
 
 class UpdateEventStatus_model(BaseClassModel):
     status: Literal["draft", "open", "active", "closed"]
+
+
+class UpdateEventMeetingUrl_model(BaseClassModel):
+    """The join link for a remote event. `None` (or blank) clears it.
+
+    Deliberately permissive: an admin may paste a full link, a bare domain,
+    or just a Google Meet code (e.g. "abc-defg-hij"), and it is normalized
+    into something clickable rather than rejected.
+    """
+
+    meeting_url: str | None = None
+
+    @field_validator("meeting_url")
+    def normalize(cls, v: str | None):
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if _MEET_CODE_RE.match(v):
+            v = f"https://meet.google.com/{v.lower()}"
+        elif "://" not in v:
+            v = f"https://{v}"
+        # Reject non-http(s) schemes (e.g. "javascript://") - this is rendered
+        # directly as a link's href on the leaderboard app.
+        if not v.lower().startswith(("http://", "https://")):
+            raise ValueError("meeting_url must use http:// or https://")
+        if len(v) > 500:
+            raise ValueError("meeting_url must be at most 500 characters")
+        return v
 
 
 class Open_Events_model(Events_model):
