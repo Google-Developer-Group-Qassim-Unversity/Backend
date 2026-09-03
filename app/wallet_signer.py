@@ -106,11 +106,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
                 {"key": "major", "label": "التخصص", "value": major},
                 {"key": "level", "label": "المستوى / المرحلة", "value": level},
                 {"key": "public_profile", "label": "رابط الصفحة الشخصية المعتمدة", "value": qr_target_url},
-                {
-                    "key": "club_name",
-                    "label": "النادي",
-                    "value": "Google Developer Group - Qassim",
-                },
+                {"key": "club_name", "label": "النادي", "value": "Google Developer Group - Qassim"},
             ],
         },
         "barcodes": [
