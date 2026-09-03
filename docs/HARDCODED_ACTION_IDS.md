@@ -1,8 +1,9 @@
 # Hardcoded action IDs
 
 Three lists of `actions` primary keys are pasted into the source. They decide
-which events an admin can create and whether those events can be attended, and
-they have already drifted apart from each other.
+which events an admin can create and whether those events can be attended.
+They disagree with each other, and nothing in the code says whether that is
+deliberate - you have to query production to find out (below).
 
 ```python
 # app/routers/action.py:32-33  - which pairs the admin UI offers
@@ -15,8 +16,21 @@ ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89]
 
 **The repository does not record what any of these rows are.** No migration
 creates them, no seed script names them; they are rows someone inserted into
-the production database, referenced by number. Before changing anything, dump
-them - this is the only place the meaning exists:
+the production database, referenced by number. Dumped from prod on 2026-09-03,
+they are:
+
+| dept | department action | member | member action | pts | attendable |
+|---|---|---|---|---|---|
+| 51 | Organized an On-site course | 76 | On-site course attendance | 6 | yes |
+| 52 | Organized an Online course | 77 | Online course attendance | 4 | yes |
+| 53 | Organized a Bootcamp | 78 | Bootcamp attendance | 10 | yes |
+| 54 | Organized a Technical meetup / Monthly session | 79 | Meetup or Monthly session attendance | 3 | yes |
+| 86 | Organized an Online Bootcamp | 87 | Online Bootcamp attendance | 6 | yes |
+| 88 | Organized a massive event (300+) | 89 | massive event attendance | 15 | yes |
+| 90 | Organized a twitter space | 91 | attend a twitter space | **0** | no |
+| 105 | Host a Tournament | 108 | مشاركة في بطولة | 5 | no |
+
+Re-run this if you suspect it has drifted again:
 
 ```sql
 SELECT id, action_name, ar_action_name, action_type, points, `order`, is_hidden
@@ -25,33 +39,16 @@ WHERE id IN (51,52,53,54,86,88,90,105, 76,77,78,79,87,89,91,108)
 ORDER BY id;
 ```
 
-## What the lists actually mean
-
-`get_categorized_actions` zips the first two **positionally**, so the pairing is
-carried by list order and nothing else:
-
-| department | member | attendable? |
-|---|---|---|
-| 51 | 76 | yes |
-| 52 | 77 | yes |
-| 53 | 78 | yes |
-| 54 | 79 | yes |
-| 86 | 87 | yes |
-| 88 | 89 | yes |
-| 90 | 91 | **no** |
-| 105 | 108 | **no** |
-
-A "composite action" is not a row. `ActionsActionType.COMPOSITE` exists in the
-enum and in three `Literal`s in `app/routers/models.py`, but nothing ever writes
-it - a composite is only ever this zip, computed per request.
+Note that `action_type` does not line up with the lists at all: 51-54 and 86-91
+are typed `composite`, 76-79 are `member`, 105 is `department`, and 108 is
+`bonus`. Attendability cannot be derived from that column - it has to be its
+own flag.
 
 ## What is broken because of it
 
-**Two of the eight event types the admin UI offers cannot be attended.**
-`ATTENDABLE_ACTION_IDS` is `member_ids` minus its last two entries. The `(90, 91)`
-and `(105, 108)` pairs were added to `action.py` without `logs.py` being updated,
-so an admin can create one of those events, members can register, and every
-attendance call - QR scan, manual marking, backfill - fails:
+**Two of the eight pairs cannot be attended - probably on purpose.**
+`ATTENDABLE_ACTION_IDS` is `member_ids` minus its last two entries, so an event
+built on the `(90, 91)` or `(105, 108)` pair 500s on every attendance route:
 
 ```
 500 {"detail": "Event has no attendable logs"}
@@ -59,13 +56,26 @@ attendance call - QR scan, manual marking, backfill - fails:
 
 `get_event_with_attendable_log` raises `DataIntegrityError` when the lookup
 returns nothing, and every route in `app/routers/attendance.py` goes through it.
-Confirm against prod before fixing, since the pairs may be unused in practice:
 
-```sql
-SELECT e.id, e.name, e.status, l.action_id
-FROM events e JOIN logs l ON l.event_id = e.id
-WHERE l.action_id IN (91, 108);
-```
+Checked against prod (2026-09-03): eight events use those two pairs - five
+twitter spaces and three tournaments - and **none of them has a single
+attendance row**. That is not evidence of loss so much as evidence the two
+pairs are for event types where attendance is not a thing. A twitter space has
+no attendance list, and `attend a twitter space` is worth 0 points. Tournaments
+award participation to *departments* (`departments_logs`), and individual
+placings through separate bonus actions, neither of which touches the
+attendance path.
+
+So the exclusion looks deliberate rather than dropped, even though nothing in
+the code says so. The one loose end is event 350 (بطولة الشطرنج), which has 5
+form submissions and no member awards at all - worth a look, but it is one
+event and there are other explanations.
+
+**Whichever way that goes, the flag has to carry it.** The current arrangement
+encodes "not attendable" as absence from a list in a different file from the
+one that defines the pairs, which is indistinguishable from someone having
+forgotten to update it - which is exactly how it reads until you query the
+database.
 
 **A new action can never be attendable.** `create_action` takes the next
 autoincrement ID, so anything an admin creates through `POST /actions` falls
@@ -102,8 +112,8 @@ metadata (`order`, `is_hidden`), so there is precedent and no new pattern.
 The literals above *are* the backfill, so the migration is mechanical:
 
 ```sql
+-- 91 and 108 stay 0: spaces and tournaments do not mark attendance (see above)
 UPDATE actions SET is_attendable = 1 WHERE id IN (76,77,78,79,87,89);
--- and 91, 108 if the drift above is a bug rather than a decision
 INSERT INTO composite_actions (department_action_id, member_action_id, `order`)
 VALUES (51,76,0), (52,77,1), (53,78,2), (54,79,3),
        (86,87,4), (88,89,5), (90,91,6), (105,108,7);
@@ -115,8 +125,9 @@ rather than failing the deploy.
 
 ### Checklist
 
-- [ ] Dump the 16 rows from prod; write their names into the migration as comments
-- [ ] Decide whether `(90, 91)` and `(105, 108)` should be attendable
+- [x] Dump the 16 rows from prod (table above; copy the names into the migration)
+- [ ] Confirm `(90, 91)` and `(105, 108)` stay non-attendable - the prod data says yes
+- [ ] Look at event 350 (بطولة الشطرنج): 5 submissions, zero member awards
 - [ ] Alembic revision: `is_attendable` column + `composite_actions` table + backfill
 - [ ] `get_attendable_logs` joins `actions` on `is_attendable = 1`
 - [ ] `get_categorized_actions` reads `composite_actions` instead of zipping
