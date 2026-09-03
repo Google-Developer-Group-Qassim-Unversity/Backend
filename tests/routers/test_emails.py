@@ -151,10 +151,7 @@ def test_resolve_ad_hoc_recipients_include_member_id_flag(db_session, seed_refs)
 
 
 def test_resolve_ad_hoc_recipients_skips_unresolvable_member_id(db_session, seed_refs):
-    items = [
-        BlastGuaranteedRecipient(member_id=999_999),
-        BlastGuaranteedRecipient(email=seed_refs.sara.email),
-    ]
+    items = [BlastGuaranteedRecipient(member_id=999_999), BlastGuaranteedRecipient(email=seed_refs.sara.email)]
 
     recipients, resolved_ids = resolve_ad_hoc_recipients(db_session, items, include_member_id=True)
 

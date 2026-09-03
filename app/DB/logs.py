@@ -52,6 +52,10 @@ def create_modification(session: Session, log_id: int, type: Literal["bonus", "d
 
 
 def get_attendable_logs(session: Session, event_id: int):
+    # Production `actions` primary keys, pasted in, and meaningless in any other
+    # database. Excludes 91 and 108, which routers/action.py does pair up -
+    # apparently on purpose (spaces and tournaments do not mark attendance) but
+    # nothing here says so. See docs/HARDCODED_ACTION_IDS.md before touching it.
     ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89]
     stmt = select(Logs).where(Logs.event_id == event_id, Logs.action_id.in_(ATTENDABLE_ACTION_IDS))
     log = session.scalar(stmt)

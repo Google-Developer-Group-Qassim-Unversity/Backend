@@ -562,6 +562,16 @@ async def send_acceptance_blasts(
     event, submissions, emails, from_addr = await run_in_threadpool(load)
     logger.info(f"Found [{len(submissions)}] submissions, [{len(emails)}] emails")
 
+    if not emails:
+        # Everyone accepted for this event has already been invited, or none of
+        # them has an address. Calling the blast API anyway sends it a request
+        # with no `emails` key at all - httpx omits an empty list from the query
+        # string rather than serializing it - and `emails` is a required Query
+        # param over there, so it 422s and the admin sees a 502. Nothing to
+        # record either: no email went out and no submission changed.
+        logger.info(f"No uninvited recipients for event [{event_id}], nothing to send")
+        return {"sent_count": 0, "emails": []}
+
     logger.info(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
     logger.debug("request body: %s", {"subject": subject, "email_count": len(emails), "emails": emails})
     await call_acceptance_api(emails, subject, html_content, from_addr)
