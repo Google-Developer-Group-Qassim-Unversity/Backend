@@ -109,7 +109,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
                 {
                     "key": "club_name",
                     "label": "النادي",
-                    "value": "Google Developer Group on Campus - Qassim University",
+                    "value": "Google Developer Group - Qassim",
                 },
             ],
         },
