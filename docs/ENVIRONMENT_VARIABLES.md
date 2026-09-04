@@ -30,8 +30,30 @@ the boot rather than the first request.
 
 | Variable | Needed | Default | Notes |
 |---|---|---|---|
-| `GOOGLE_CLIENT_ID` | when the feature runs | - |  |
-| `GOOGLE_CLIENT_SECRET` | when the feature runs | - |  |
+| `GOOGLE_CLIENT_ID` | when the feature runs | - | must match the Frontend's value - see below |
+| `GOOGLE_CLIENT_SECRET` | when the feature runs | - | must match the Frontend's value - see below |
+
+Only the OAuth client credentials live here. Everything else about this
+integration - the OAuth flow itself, the Drive template copy, the Pub/Sub
+watch registration, and the Forms publish/unpublish calls - runs in the
+**Frontend**, not here (`Frontend/app/api/auth/google/*`,
+`Frontend/app/api/drive/*`, `Frontend/lib/google-api.ts`). This backend only
+receives the Pub/Sub push webhook and does read-only Forms API calls with a
+refresh token stored in the `forms.google_refresh_token` DB column.
+
+The Frontend has three more variables for this integration, declared in
+`Frontend/lib/config-server.ts` and set under its own Infisical path
+(`/admin-frontend`). They aren't Backend `Settings` fields, so they don't get
+a row in the tables above (a test keeps those tables in sync with
+`Settings.model_fields`) - listed here only for context:
+
+- `GOOGLE_REDIRECT_URL` - this app's own OAuth callback URL, registered as an authorized redirect URI on the Google OAuth client
+- `GOOGLE_FORMS_TOPIC_NAME` - full Pub/Sub topic name (`projects/<id>/topics/<name>`) that Forms watches publish to
+- `TEMPLATE_FORM_FILE_ID` - Drive file ID of the template form every event's form is copied from
+
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` must be the **same** values in both
+Backend and Frontend: Frontend's OAuth flow issues the refresh token, and this
+backend refreshes it later using the same client credentials.
 
 ### Outbound services
 
