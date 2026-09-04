@@ -87,10 +87,14 @@ def accept_submission(submissions: list[submission_accept_model], session: DB):
 # ==============================================================
 
 
-def get_google_credentials(refresh_token: str):
+def get_google_credentials():
+    """Build credentials for the one club-owned Google account every form is created and read under.
+
+    See docs/GOOGLE_FORMS.md - there is no per-admin/per-event token anymore.
+    """
     credentials = Credentials(
         None,
-        refresh_token=refresh_token,
+        refresh_token=config.GOOGLE_REFRESH_TOKEN,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=config.GOOGLE_CLIENT_ID,
         client_secret=config.GOOGLE_CLIENT_SECRET,
@@ -111,11 +115,8 @@ def fetch_schema(google_form_id: str):
         if not form:
             raise ValueError(f"Form not found in database for google_form_id: {google_form_id}")
 
-        if not form.google_refresh_token:
-            raise ValueError("Form does not have a refresh token")
-
         # Get Google credentials
-        credentials = get_google_credentials(form.google_refresh_token)
+        credentials = get_google_credentials()
 
         # Build the Forms API service
         service = build("forms", "v1", credentials=credentials)
@@ -153,7 +154,7 @@ def fetch_form_responses(google_form_id: str):
     try:
         logger.info(f"Fetching responses for form: {google_form_id}")
 
-        # Get form details from database to retrieve refresh token
+        # Look up the internal form_id this google_form_id maps to
         with db_session() as session:
             form = form_queries.get_form_by_google_form_id(session, google_form_id)
 
@@ -161,15 +162,11 @@ def fetch_form_responses(google_form_id: str):
                 logger.info(f"ERROR: Form not found in database for google_form_id: {google_form_id}")
                 return None
 
-            if not form.google_refresh_token:
-                logger.info(f"ERROR: No refresh token available for form: {google_form_id}")
-                return None
-
             logger.info(f"Found form in database with ID: {form.id}")
             form_id = form.id
 
             # Get Google credentials
-            credentials = get_google_credentials(form.google_refresh_token)
+            credentials = get_google_credentials()
             logger.info("Successfully authenticated with Google")
 
             # Build the Forms API service

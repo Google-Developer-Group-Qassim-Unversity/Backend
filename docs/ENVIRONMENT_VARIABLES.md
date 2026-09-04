@@ -32,6 +32,10 @@ the boot rather than the first request.
 |---|---|---|---|
 | `GOOGLE_CLIENT_ID` | when the feature runs | - |  |
 | `GOOGLE_CLIENT_SECRET` | when the feature runs | - |  |
+| `GOOGLE_REFRESH_TOKEN` | when the feature runs | - | the club's Google account, minted once by `scripts/setup_google_oauth.py` - see `docs/GOOGLE_FORMS.md` |
+| `TEMPLATE_FORM_FILE_ID` | when the feature runs | - | Drive file ID of the template form copied for each event |
+| `GOOGLE_FORMS_TOPIC_NAME` | when the feature runs | - | Pub/Sub topic used for Forms response-change watches |
+| `GOOGLE_ALLOWED_EMAIL_DOMAINS` | optional | `gmail.com,googlemail.com` | comma-separated allow-list checked before inviting an admin to a form |
 
 ### Outbound services
 

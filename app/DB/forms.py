@@ -12,9 +12,9 @@ def create_form(session: Session, form: Form_model):
         new_form = Forms(
             google_form_id=form.google_form_id,
             form_type=form.form_type,
-            google_refresh_token=form.google_refresh_token,
             google_watch_id=form.google_watch_id,
             google_responders_url=form.google_responders_url,
+            admin_google_email=form.admin_google_email,
             event_id=form.event_id,
         )
         session.add(new_form)
@@ -33,9 +33,9 @@ def update_form(session: Session, form_id: int, form: Form_model):
         raise FormNotFoundById(form_id)
 
     existing_form.google_form_id = form.google_form_id
-    existing_form.google_refresh_token = form.google_refresh_token
     existing_form.google_watch_id = form.google_watch_id
     existing_form.google_responders_url = form.google_responders_url
+    existing_form.admin_google_email = form.admin_google_email
     existing_form.form_type = form.form_type
     # event_id is NOT updatable - forms are permanently bound to their events
 

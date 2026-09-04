@@ -66,6 +66,10 @@ class Settings(BaseSettings):
 
     GOOGLE_CLIENT_ID: Optional[str] = None
     GOOGLE_CLIENT_SECRET: Optional[str] = None
+    GOOGLE_REFRESH_TOKEN: Optional[str] = None
+    TEMPLATE_FORM_FILE_ID: Optional[str] = None
+    GOOGLE_FORMS_TOPIC_NAME: Optional[str] = None
+    GOOGLE_ALLOWED_EMAIL_DOMAINS: str = "gmail.com,googlemail.com"
 
     CERTIFICATE_API_URL: Optional[str] = None
     MEMBER_APP_URL: Optional[str] = None
@@ -189,6 +193,26 @@ class Config:
     @property
     def GOOGLE_CLIENT_SECRET(self) -> str:
         return env_or_except("GOOGLE_CLIENT_SECRET")
+
+    @property
+    def GOOGLE_REFRESH_TOKEN(self) -> str:
+        return env_or_except("GOOGLE_REFRESH_TOKEN")
+
+    @property
+    def TEMPLATE_FORM_FILE_ID(self) -> str:
+        return env_or_except("TEMPLATE_FORM_FILE_ID")
+
+    @property
+    def GOOGLE_FORMS_TOPIC_NAME(self) -> str:
+        return env_or_except("GOOGLE_FORMS_TOPIC_NAME")
+
+    @property
+    def GOOGLE_ALLOWED_EMAIL_DOMAINS(self) -> list[str]:
+        return [
+            domain.strip().lower()
+            for domain in get_settings().GOOGLE_ALLOWED_EMAIL_DOMAINS.split(",")
+            if domain.strip()
+        ]
 
     @property
     def JWT_SECRET(self) -> str:

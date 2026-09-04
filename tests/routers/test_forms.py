@@ -8,7 +8,7 @@ from app.DB.schema import Events, Forms, FormType
 from app.exceptions import DataIntegrityError, FormNotFound
 from app.routers.models import Form_model
 from tests.factories import make_create_event_payload
-from tests.utils import assert_2xx, assert_forbidden, assert_not_found
+from tests.utils import assert_2xx, assert_conflict, assert_forbidden, assert_not_found, assert_unprocessable
 
 
 def make_form_payload(event_id: int, **overrides):
@@ -177,3 +177,241 @@ def test_get_form_by_event_id_missing_form(db_session):
         get_form_by_event_id(db_session, event.id)
 
     assert f"Form for event with id '{event.id}'" in str(exc_info.value.detail)
+
+
+# =============================================================================
+# Attach / unattach / schema
+# =============================================================================
+# These endpoints are the replacement for the old per-admin OAuth flow: a
+# single club-owned Google account (never touched in tests) copies the
+# template and invites an admin as a Drive editor. Google's client is never
+# called for real here - `build` and `get_google_credentials` are monkeypatched
+# to fakes that record what they were asked to do, following the same
+# monkeypatch-the-module-function style test_submissions_sync.py uses rather
+# than mocking google.oauth2.credentials.Credentials directly.
+
+
+class _Execute:
+    def __init__(self, result):
+        self._result = result
+
+    def execute(self):
+        return self._result
+
+
+class FakeDrive:
+    """Records every Drive call the attach/unattach endpoints make."""
+
+    def __init__(self, copy_id="new-google-form-id", permissions=None):
+        self.copy_id = copy_id
+        self.permissions_list = permissions if permissions is not None else []
+        self.copy_calls = 0
+        self.created_permissions = []
+        self.deleted_permission_ids = []
+
+    def files(self):
+        outer = self
+
+        class _Files:
+            def copy(self, fileId, fields=None):
+                outer.copy_calls += 1
+                return _Execute({"id": outer.copy_id})
+
+        return _Files()
+
+    def permissions(self):
+        outer = self
+
+        class _Permissions:
+            def create(self, fileId, body, sendNotificationEmail=None):
+                outer.created_permissions.append(body)
+                return _Execute({})
+
+            def list(self, fileId, fields=None):
+                return _Execute({"permissions": outer.permissions_list})
+
+            def delete(self, fileId, permissionId):
+                outer.deleted_permission_ids.append(permissionId)
+                return _Execute({})
+
+        return _Permissions()
+
+
+class FakeForms:
+    """Records every Forms API call the attach/unattach/schema endpoints make."""
+
+    def __init__(self, watch_id="watch-123", responder_uri="https://docs.google.com/forms/d/e/fake/viewform"):
+        self.watch_id = watch_id
+        self.responder_uri = responder_uri
+        self.deleted_watches = []
+
+    def forms(self):
+        outer = self
+
+        class _Forms:
+            def watches(self):
+                class _Watches:
+                    def create(self, formId, body):
+                        return _Execute({"id": outer.watch_id})
+
+                    def delete(self, formId, watchId):
+                        outer.deleted_watches.append((formId, watchId))
+                        return _Execute({})
+
+                return _Watches()
+
+            def get(self, formId):
+                return _Execute({"responderUri": outer.responder_uri})
+
+        return _Forms()
+
+
+def _patch_google_client(monkeypatch, fake_drive: FakeDrive, fake_forms: FakeForms):
+    from app.routers import forms as forms_router
+
+    def fake_build(service_name, version, credentials=None):
+        return fake_drive if service_name == "drive" else fake_forms
+
+    monkeypatch.setattr(forms_router, "build", fake_build)
+    monkeypatch.setattr(forms_router, "get_google_credentials", lambda: object())
+    return fake_drive, fake_forms
+
+
+def test_attach_form_copies_template_and_invites_admin(admin_client: TestClient, monkeypatch):
+    fake_drive, fake_forms = _patch_google_client(monkeypatch, FakeDrive(), FakeForms())
+
+    event_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    response = admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "someone@gmail.com"})
+    assert_2xx(response)
+    data = response.json()
+    assert data["form_type"] == "google"
+    assert data["google_form_id"] == "new-google-form-id"
+    assert data["google_watch_id"] == "watch-123"
+    assert data["google_responders_url"] == "https://docs.google.com/forms/d/e/fake/viewform"
+    assert data["admin_google_email"] == "someone@gmail.com"
+    assert fake_drive.copy_calls == 1
+    assert fake_drive.created_permissions == [{"role": "writer", "type": "user", "emailAddress": "someone@gmail.com"}]
+
+
+def test_attach_form_is_idempotent_for_a_different_email(admin_client: TestClient, monkeypatch):
+    """Re-running attach with a different email re-invites without re-copying the form."""
+    fake_drive, fake_forms = _patch_google_client(monkeypatch, FakeDrive(), FakeForms())
+
+    event_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    first = admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "first@gmail.com"})
+    assert_2xx(first)
+
+    second = admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "second@gmail.com"})
+    assert_2xx(second)
+    data = second.json()
+    assert data["google_form_id"] == "new-google-form-id"
+    assert data["admin_google_email"] == "second@gmail.com"
+    assert fake_drive.copy_calls == 1, "attaching a second time must not re-copy the template"
+    assert [perm["emailAddress"] for perm in fake_drive.created_permissions] == ["first@gmail.com", "second@gmail.com"]
+
+
+def test_attach_form_rejects_disallowed_email_domain(admin_client: TestClient, monkeypatch):
+    _patch_google_client(monkeypatch, FakeDrive(), FakeForms())
+
+    event_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    response = admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "someone@work.example"})
+    assert_unprocessable(response)
+
+
+def test_unauthorized_attach_form(clerk_client: TestClient):
+    response = clerk_client.post("/forms/1/attach", json={"admin_google_email": "someone@gmail.com"})
+    assert_forbidden(response)
+
+
+def test_unattach_form_revokes_access_and_resets_row(admin_client: TestClient, monkeypatch):
+    fake_drive, fake_forms = _patch_google_client(
+        monkeypatch, FakeDrive(permissions=[{"id": "perm-1", "emailAddress": "someone@gmail.com"}]), FakeForms()
+    )
+
+    event_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    attach_response = admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "someone@gmail.com"})
+    assert_2xx(attach_response)
+
+    unattach_response = admin_client.post(f"/forms/{event_id}/unattach")
+    assert_2xx(unattach_response)
+    data = unattach_response.json()
+    assert data["form_type"] == "registration"
+    assert data["google_form_id"] is None
+    assert data["google_watch_id"] is None
+    assert data["google_responders_url"] is None
+    assert data["admin_google_email"] is None
+    assert fake_forms.deleted_watches == [("new-google-form-id", "watch-123")]
+    assert fake_drive.deleted_permission_ids == ["perm-1"]
+
+
+def test_unattach_form_without_a_form_attached_is_a_noop(admin_client: TestClient, monkeypatch):
+    fake_drive, fake_forms = _patch_google_client(monkeypatch, FakeDrive(), FakeForms())
+
+    event_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    response = admin_client.post(f"/forms/{event_id}/unattach")
+    assert_2xx(response)
+    assert fake_forms.deleted_watches == []
+    assert fake_drive.deleted_permission_ids == []
+
+
+def test_unauthorized_unattach_form(clerk_client: TestClient):
+    response = clerk_client.post("/forms/1/unattach")
+    assert_forbidden(response)
+
+
+def test_get_form_schema(admin_client: TestClient, monkeypatch):
+    from app.routers import forms as forms_router
+
+    event_response = admin_client.post("/events", json=make_create_event_payload(form_type="google"))
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    form_response = admin_client.get(f"/events/{event_id}/form")
+    form_id = form_response.json()["id"]
+    update_response = admin_client.put(
+        f"/forms/{form_id}", json={"event_id": event_id, "form_type": "google", "google_form_id": "test_google_id"}
+    )
+    assert_2xx(update_response)
+
+    monkeypatch.setattr(forms_router, "fetch_schema", lambda google_form_id: {"items": [], "form_id": google_form_id})
+
+    response = admin_client.get(f"/forms/{form_id}/schema")
+    assert_2xx(response)
+    assert response.json() == {"items": [], "form_id": "test_google_id"}
+
+
+def test_get_form_schema_not_yet_attached(admin_client: TestClient):
+    event_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    form_response = admin_client.get(f"/events/{event_id}/form")
+    form_id = form_response.json()["id"]
+
+    response = admin_client.get(f"/forms/{form_id}/schema")
+    assert_conflict(response)
+
+
+def test_get_form_schema_nonexistent_form(admin_client: TestClient):
+    response = admin_client.get("/forms/9999/schema")
+    assert_not_found(response)
+
+
+def test_unauthorized_get_form_schema(clerk_client: TestClient):
+    response = clerk_client.get("/forms/1/schema")
+    assert_forbidden(response)

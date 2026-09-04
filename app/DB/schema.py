@@ -325,11 +325,11 @@ class Forms(Base):
     google_form_id: Mapped[Optional[str]] = mapped_column(
         VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
     )
-    google_refresh_token: Mapped[Optional[str]] = mapped_column(
-        VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
-    )
     google_watch_id: Mapped[Optional[str]] = mapped_column(String(100))
     google_responders_url: Mapped[Optional[str]] = mapped_column(
+        VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
+    )
+    admin_google_email: Mapped[Optional[str]] = mapped_column(
         VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
     )
 

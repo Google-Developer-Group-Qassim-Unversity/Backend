@@ -54,6 +54,11 @@ class FormNotFound(NotFound):
         super().__init__("Form for event", event_id)
 
 
+class FormNotAttached(KnownHttpException):
+    def __init__(self, form_id: int):
+        super().__init__(status_code=409, detail=f"Form {form_id} is not attached to a Google Form yet")
+
+
 class EventNotFound(NotFound):
     def __init__(self, id: str | int):
         super().__init__("Event", id)
