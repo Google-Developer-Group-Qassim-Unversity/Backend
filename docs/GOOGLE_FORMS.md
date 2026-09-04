@@ -56,11 +56,11 @@ Forms directly.
   (default `gmail.com,googlemail.com`) before any Drive call - Drive's API
   otherwise queues a pending share for a non-Google address with no error at
   all, which would look like success and never resolve.
-- `POST /forms/{event_id}/unattach` deletes the Forms watch, revokes the
-  invited admin's Drive permission, and resets the form row
-  (`form_type='registration'`, all `google_*`/`admin_google_email` columns
-  cleared). The form file itself stays in the club's Drive; only access to it
-  changes.
+- `POST /forms/{event_id}/unattach` deletes the Forms watch, revokes
+  **every** admin's Drive permission (not just the most recent one - see
+  below), and resets the form row (`form_type='registration'`, all
+  `google_*`/`admin_google_email` columns cleared). The form file itself
+  stays in the club's Drive; only access to it changes.
 - `GET /forms/{form_id}/schema` is new: the old per-admin OAuth cookie session
   used to serve the responses page's column headers directly from the
   frontend. With that gone, the backend now exposes the form's schema
@@ -76,6 +76,27 @@ Forms directly.
   DB write and is allowed to raise (no try/except) - a failed publish must
   not leave the event "open" while the form still silently rejects
   submissions, which is exactly the failure mode this exists to prevent.
+
+## Multiple admins, one form
+
+`forms.admin_google_email` is a single column - it only ever remembers the
+most recently granted email. Early on this was also used to decide "does the
+admin viewing this page currently have access", by comparing it against the
+email this browser last saved locally. That breaks the moment a second admin
+requests access: the column gets overwritten, and the first admin's
+still-valid Drive permission now looks revoked to them - a false "request
+access" prompt for access they never lost, confirmed by hitting it with two
+real admin accounts on the same event.
+
+The `form_access_grants` table (`form_id`, `google_email`, unique per pair)
+fixes this by recording every grant, not just the latest. `Forms.granted_emails`
+(a relationship-backed property, not a mapped column) exposes the full list
+through `Form_model`; `POST /forms/{event_id}/attach` inserts into it
+alongside the Drive `permissions.create` call, and `POST
+/forms/{event_id}/unattach` revokes Drive access for everyone in it before
+clearing it. `admin_google_email` still exists purely as a "last requested"
+display convenience - it is no longer what "do I have access" is checked
+against; the frontend now checks its saved email against `granted_emails`.
 
 ## What this is not
 

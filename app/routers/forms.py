@@ -112,6 +112,7 @@ def attach_form(event_id: int, body: AttachFormRequest, session: DB):
         sendNotificationEmail=True,
         body={"role": "writer", "type": "user", "emailAddress": body.admin_google_email},
     ).execute()
+    form_queries.grant_form_access(session, form.id, body.admin_google_email)
 
     updated_form = form_queries.update_form(
         session,
@@ -138,11 +139,12 @@ def attach_form(event_id: int, body: AttachFormRequest, session: DB):
     dependencies=[Depends(admin_guard)],
 )
 def unattach_form(event_id: int, session: DB):
-    """Revoke the invited admin's access, delete the Forms watch, and reset the form row.
+    """Revoke every admin's access, delete the Forms watch, and reset the form row.
 
     The form itself stays in the club's Drive - only access to it changes.
     """
     form = form_queries.get_form_by_event_id(session, event_id)
+    granted_emails = form_queries.get_form_access_grants(session, form.id)
 
     if form.google_form_id:
         credentials = get_google_credentials()
@@ -158,7 +160,7 @@ def unattach_form(event_id: int, session: DB):
                 # it already lapsed - not a reason to abort the rest of unattach.
                 logger.exception(f"Failed to delete watch {form.google_watch_id} for form {form.google_form_id}")
 
-        if form.admin_google_email:
+        if granted_emails:
             try:
                 drive = build("drive", "v3", credentials=credentials)
                 permissions = (
@@ -167,18 +169,19 @@ def unattach_form(event_id: int, session: DB):
                     .execute()
                     .get("permissions", [])
                 )
-                permission_id = next(
-                    (
-                        permission["id"]
-                        for permission in permissions
-                        if permission.get("emailAddress") == form.admin_google_email
-                    ),
-                    None,
-                )
-                if permission_id:
-                    drive.permissions().delete(fileId=form.google_form_id, permissionId=permission_id).execute()
+                permission_ids_by_email = {
+                    permission.get("emailAddress"): permission["id"]
+                    for permission in permissions
+                    if permission.get("emailAddress")
+                }
+                for email in granted_emails:
+                    permission_id = permission_ids_by_email.get(email)
+                    if permission_id:
+                        drive.permissions().delete(fileId=form.google_form_id, permissionId=permission_id).execute()
             except HttpError:
-                logger.exception(f"Failed to revoke access for {form.admin_google_email} on form {form.google_form_id}")
+                logger.exception(f"Failed to revoke access for {granted_emails} on form {form.google_form_id}")
+
+    form_queries.clear_form_access_grants(session, form.id)
 
     updated_form = form_queries.update_form(
         session,
@@ -193,7 +196,7 @@ def unattach_form(event_id: int, session: DB):
         ),
     )
     session.commit()
-    logger.info(f"Unattached Google Form from event {event_id}")
+    logger.info(f"Unattached Google Form from event {event_id}, revoked {len(granted_emails)} admin(s)")
     return updated_form
 
 

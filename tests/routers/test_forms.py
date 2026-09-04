@@ -316,6 +316,55 @@ def test_attach_form_is_idempotent_for_a_different_email(admin_client: TestClien
     assert [perm["emailAddress"] for perm in fake_drive.created_permissions] == ["first@gmail.com", "second@gmail.com"]
 
 
+def test_attach_form_remembers_every_admin_granted_access(admin_client: TestClient, monkeypatch):
+    """admin_google_email only ever remembers the latest grant - granted_emails must
+    keep every admin who was actually given Drive access, or an earlier admin's
+    still-valid access looks revoked to them the next time they load the page."""
+    fake_drive, fake_forms = _patch_google_client(monkeypatch, FakeDrive(), FakeForms())
+
+    event_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    first = admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "first@gmail.com"})
+    assert_2xx(first)
+    assert first.json()["granted_emails"] == ["first@gmail.com"]
+
+    second = admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "second@gmail.com"})
+    assert_2xx(second)
+    assert set(second.json()["granted_emails"]) == {"first@gmail.com", "second@gmail.com"}
+
+    # Re-requesting for an email that already has access must not duplicate it.
+    third = admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "first@gmail.com"})
+    assert_2xx(third)
+    assert set(third.json()["granted_emails"]) == {"first@gmail.com", "second@gmail.com"}
+
+
+def test_unattach_form_revokes_every_granted_admin(admin_client: TestClient, monkeypatch):
+    fake_drive, fake_forms = _patch_google_client(
+        monkeypatch,
+        FakeDrive(
+            permissions=[
+                {"id": "perm-1", "emailAddress": "first@gmail.com"},
+                {"id": "perm-2", "emailAddress": "second@gmail.com"},
+            ]
+        ),
+        FakeForms(),
+    )
+
+    event_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "first@gmail.com"})
+    admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "second@gmail.com"})
+
+    unattach_response = admin_client.post(f"/forms/{event_id}/unattach")
+    assert_2xx(unattach_response)
+    assert set(fake_drive.deleted_permission_ids) == {"perm-1", "perm-2"}
+    assert unattach_response.json()["granted_emails"] == []
+
+
 def test_attach_form_rejects_disallowed_email_domain(admin_client: TestClient, monkeypatch):
     _patch_google_client(monkeypatch, FakeDrive(), FakeForms())
 

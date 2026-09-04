@@ -38,6 +38,7 @@ class Form_model(BaseClassModel):
     google_watch_id: str | None = None
     google_responders_url: str | None = None
     admin_google_email: str | None = None
+    granted_emails: list[str] = []
 
 
 class AttachFormRequest(BaseModel):

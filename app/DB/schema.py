@@ -335,6 +335,38 @@ class Forms(Base):
 
     event: Mapped["Events"] = relationship("Events", back_populates="forms")
     submissions: Mapped[list["Submissions"]] = relationship("Submissions", back_populates="form", passive_deletes=True)
+    access_grants: Mapped[list["FormAccessGrants"]] = relationship(
+        "FormAccessGrants", back_populates="form", passive_deletes=True
+    )
+
+    @property
+    def granted_emails(self) -> list[str]:
+        """Every Google email actually granted Drive access to this form - not just
+        the last one, since admin_google_email only ever remembers the most recent
+        grant and silently "forgets" earlier ones when a second admin requests
+        access. See docs/GOOGLE_FORMS.md."""
+        return [grant.google_email for grant in self.access_grants]
+
+
+class FormAccessGrants(Base):
+    __tablename__ = "form_access_grants"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["form_id"], ["forms.id"], ondelete="CASCADE", onupdate="CASCADE", name="form_access_grants_ibfk_1"
+        ),
+        Index("form_access_grants_unique_form_email", "form_id", "google_email", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    form_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    google_email: Mapped[str] = mapped_column(
+        VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
+    )
+    granted_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    form: Mapped["Forms"] = relationship("Forms", back_populates="access_grants")
 
 
 class Logs(Base):

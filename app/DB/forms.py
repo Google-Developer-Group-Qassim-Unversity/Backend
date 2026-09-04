@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
-from app.DB.schema import Events, Forms
+from sqlalchemy import delete, select
+from app.DB.schema import Events, Forms, FormAccessGrants
 from app.routers.models import Form_model
 from app.exceptions import EventNotFound, FormNotFound, FormNotFoundById, DataIntegrityError
 
@@ -75,3 +75,29 @@ def get_form_by_google_form_id(session: Session, google_form_id: str):
     statement = select(Forms).where(Forms.google_form_id == google_form_id)
     form = session.scalars(statement).first()
     return form
+
+
+def grant_form_access(session: Session, form_id: int, google_email: str):
+    """Record that google_email has been given Drive access to this form. Idempotent."""
+    normalized = google_email.strip().lower()
+    existing = session.scalar(
+        select(FormAccessGrants).where(FormAccessGrants.form_id == form_id, FormAccessGrants.google_email == normalized)
+    )
+    if existing:
+        return existing
+
+    grant = FormAccessGrants(form_id=form_id, google_email=normalized)
+    session.add(grant)
+    session.flush()
+    return grant
+
+
+def get_form_access_grants(session: Session, form_id: int) -> list[str]:
+    """Every email currently granted Drive access to this form."""
+    statement = select(FormAccessGrants.google_email).where(FormAccessGrants.form_id == form_id)
+    return list(session.scalars(statement).all())
+
+
+def clear_form_access_grants(session: Session, form_id: int):
+    """Forget every recorded grant for this form - used when the form itself is detached."""
+    session.execute(delete(FormAccessGrants).where(FormAccessGrants.form_id == form_id))
