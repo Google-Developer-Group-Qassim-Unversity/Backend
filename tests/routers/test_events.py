@@ -25,6 +25,90 @@ def test_update_event_status(admin_client: TestClient):
     assert update_response.json()["status"] == "open"
 
 
+def test_publishing_event_publishes_its_attached_google_form(admin_client: TestClient, monkeypatch):
+    """Copying a form does not carry over "accepting responses" - publishing the
+    event must also publish the Google Form, or members hit a dead form."""
+    from app.routers import events as events_router
+
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        events_router,
+        "set_form_publish_state",
+        lambda google_form_id, is_published: calls.append((google_form_id, is_published)),
+    )
+
+    event = admin_client.post("/events", json=make_create_event_payload(form_type="google")).json()
+    form_id = admin_client.get(f"/events/{event['id']}/form").json()["id"]
+    admin_client.put(
+        f"/forms/{form_id}", json={"event_id": event["id"], "form_type": "google", "google_form_id": "gform-123"}
+    )
+
+    open_response = admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    assert_2xx(open_response)
+    assert calls == [("gform-123", True)]
+
+    draft_response = admin_client.put(f"/events/{event['id']}/status", json={"status": "draft"})
+    assert_2xx(draft_response)
+    assert calls == [("gform-123", True), ("gform-123", False)]
+
+
+def test_publishing_event_without_google_form_does_not_call_forms_api(admin_client: TestClient, monkeypatch):
+    from app.routers import events as events_router
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(events_router, "set_form_publish_state", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    event = admin_client.post("/events", json=make_create_event_payload(form_type="registration")).json()
+    response = admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    assert_2xx(response)
+    assert calls == []
+
+
+def test_google_publish_failure_blocks_the_status_change(admin_client: TestClient, monkeypatch):
+    """The Forms API call happens before the DB write on purpose: a failure here must not
+    leave the event "open" while the form still silently rejects submissions."""
+    import pytest
+
+    from app.routers import events as events_router
+
+    def failing_publish(google_form_id, is_published):
+        raise RuntimeError("Google API unavailable")
+
+    monkeypatch.setattr(events_router, "set_form_publish_state", failing_publish)
+
+    event = admin_client.post("/events", json=make_create_event_payload(form_type="google")).json()
+    form_id = admin_client.get(f"/events/{event['id']}/form").json()["id"]
+    admin_client.put(
+        f"/forms/{form_id}", json={"event_id": event["id"], "form_type": "google", "google_form_id": "gform-789"}
+    )
+
+    with pytest.raises(RuntimeError):
+        admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+
+    unchanged = admin_client.get(f"/events/{event['id']}")
+    assert unchanged.json()["status"] == "draft"
+
+
+def test_transitions_among_non_open_statuses_do_not_touch_the_form(admin_client: TestClient, monkeypatch):
+    """Once already away from "open", moving between active/closed must not call the Forms API again."""
+    from app.routers import events as events_router
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(events_router, "set_form_publish_state", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    event = admin_client.post("/events", json=make_create_event_payload(form_type="google")).json()
+    form_id = admin_client.get(f"/events/{event['id']}/form").json()["id"]
+    admin_client.put(
+        f"/forms/{form_id}", json={"event_id": event["id"], "form_type": "google", "google_form_id": "gform-456"}
+    )
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "active"})
+    calls.clear()
+
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "closed"})
+    assert calls == []
+
+
 def test_points_admin_create_event(admin_client: TestClient, seed_refs):
     event = admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
     admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})

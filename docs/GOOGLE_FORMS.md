@@ -65,6 +65,17 @@ Forms directly.
   used to serve the responses page's column headers directly from the
   frontend. With that gone, the backend now exposes the form's schema
   (`fetch_schema`, unchanged) through an authenticated route instead.
+- `PUT /events/{event_id}/status` (`app/routers/events.py`) also publishes or
+  unpublishes the event's Google Form (`submissions.py::set_form_publish_state`,
+  `forms.setPublishSettings`) whenever the transition crosses the "open"
+  boundary, for events whose form is `form_type=google` with a `google_form_id`
+  set. **This is not optional** - confirmed empirically that copying the
+  template via `drive.files.copy` does not carry over "accepting responses";
+  a freshly copied form shows members an unpublished-form page until
+  something explicitly publishes it. The Forms API call happens before the
+  DB write and is allowed to raise (no try/except) - a failed publish must
+  not leave the event "open" while the form still silently rejects
+  submissions, which is exactly the failure mode this exists to prevent.
 
 ## What this is not
 

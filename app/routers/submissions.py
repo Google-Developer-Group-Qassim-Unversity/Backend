@@ -127,6 +127,25 @@ def fetch_schema(google_form_id: str):
         return schema
 
 
+def set_form_publish_state(google_form_id: str, is_published: bool):
+    """Publish or unpublish a Google Form via the Forms API.
+
+    Copying the template with Drive's files.copy does NOT carry over the
+    "published, accepting responses" state - confirmed the hard way: a freshly
+    copied form shows members an "unpublished form" page until someone
+    publishes it, previously only possible by opening the form in Google
+    Forms and doing it by hand. This is what wires that into the event's own
+    publish/unpublish action instead. isAcceptingResponses is kept equal to
+    isPublished; this app has no use case for "published but closed".
+    """
+    credentials = get_google_credentials()
+    service = build("forms", "v1", credentials=credentials)
+    service.forms().setPublishSettings(
+        formId=google_form_id,
+        body={"publishSettings": {"publishState": {"isPublished": is_published, "isAcceptingResponses": is_published}}},
+    ).execute()
+
+
 # Question IDs are NOT stable across forms - each form clone gets its own
 # internal IDs, and admins phrase the "personal email" question differently
 # across templates - so identifying the email question by a fixed ID or

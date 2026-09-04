@@ -27,6 +27,7 @@ from app.routers.models import (
 )
 from app.helpers import CurrentMember, admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
+from app.routers.submissions import set_form_publish_state
 from app.semesters import resolve_semester, semester_date_bounds
 from time import perf_counter
 from typing import Annotated
@@ -331,6 +332,20 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, ses
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     old_status = event.status
+
+    # Publishing/unpublishing the event also publishes/unpublishes its Google
+    # Form, if it has one - a copied form does not inherit the template's
+    # accepting-responses state, so without this members hit an "unpublished
+    # form" wall the admin has no way to see coming. Done before the DB write
+    # so a Google API failure raises instead of leaving the event "open" with
+    # a form that still silently rejects submissions.
+    entering_open = status_data.status == "open" and old_status != EventsStatus.OPEN
+    leaving_open = old_status == EventsStatus.OPEN and status_data.status != "open"
+    if entering_open or leaving_open:
+        form = form_queries.get_form_by_event_id(session, event_id)
+        if form.form_type == FormType.GOOGLE and form.google_form_id:
+            set_form_publish_state(form.google_form_id, is_published=entering_open)
+
     event.status = EventsStatus(status_data.status)
     session.commit()
     session.refresh(event)
