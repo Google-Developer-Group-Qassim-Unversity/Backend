@@ -5,6 +5,7 @@ from app.DB.schema import Members, RoleType
 
 from app.routers.models import (
     Member_model,
+    MemberWithActivity_model,
     NotFoundResponse,
     ConflictResponse,
     CreatedMemberModel,
@@ -56,7 +57,12 @@ def update_current_member(updates: MemberUpdateModel, member: CurrentMember, ses
     return updated_member
 
 
-@router.get("/", status_code=status.HTTP_200_OK, response_model=list[Member_model], dependencies=[Depends(admin_guard)])
+@router.get(
+    "/",
+    status_code=status.HTTP_200_OK,
+    response_model=list[MemberWithActivity_model],
+    dependencies=[Depends(admin_guard)],
+)
 def get_all_members(session: DB):
     members = member_queries.get_members(session)
     return members

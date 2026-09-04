@@ -57,9 +57,19 @@ def create_member_if_not_exists(
 
 
 def get_members(session: Session):
-    statement = select(Members)
-    member = session.scalars(statement).all()
-    return member
+    last_activity_subq = (
+        select(MembersLogs.member_id, func.max(MembersLogs.date).label("last_activity"))
+        .group_by(MembersLogs.member_id)
+        .subquery()
+    )
+    statement = select(Members, last_activity_subq.c.last_activity).outerjoin(
+        last_activity_subq, last_activity_subq.c.member_id == Members.id
+    )
+    members = []
+    for member, last_activity in session.execute(statement).all():
+        member.last_activity = last_activity
+        members.append(member)
+    return members
 
 
 def get_member_by_id(session: Session, member_id: int):

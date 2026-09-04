@@ -152,6 +152,10 @@ class Member_model(BaseClassModel):
     #     return value
 
 
+class MemberWithActivity_model(Member_model):
+    last_activity: datetime | None = None
+
+
 class CreatedMemberModel(BaseClassModel):
     member: Member_model
     already_exists: bool
