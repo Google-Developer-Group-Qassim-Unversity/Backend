@@ -43,14 +43,13 @@ refresh token stored in the `forms.google_refresh_token` DB column.
 
 The Frontend has three more variables for this integration, declared in
 `Frontend/lib/config-server.ts` and set under its own Infisical path
-(`/admin-frontend`), not documented in this file's table since it's the
-Backend's reference:
+(`/admin-frontend`). They aren't Backend `Settings` fields, so they don't get
+a row in the tables above (a test keeps those tables in sync with
+`Settings.model_fields`) - listed here only for context:
 
-| Variable | Notes |
-|---|---|
-| `GOOGLE_REDIRECT_URL` | this app's own OAuth callback URL, registered as an authorized redirect URI on the Google OAuth client |
-| `GOOGLE_FORMS_TOPIC_NAME` | full Pub/Sub topic name (`projects/<id>/topics/<name>`) that Forms watches publish to |
-| `TEMPLATE_FORM_FILE_ID` | Drive file ID of the template form every event's form is copied from |
+- `GOOGLE_REDIRECT_URL` - this app's own OAuth callback URL, registered as an authorized redirect URI on the Google OAuth client
+- `GOOGLE_FORMS_TOPIC_NAME` - full Pub/Sub topic name (`projects/<id>/topics/<name>`) that Forms watches publish to
+- `TEMPLATE_FORM_FILE_ID` - Drive file ID of the template form every event's form is copied from
 
 `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` must be the **same** values in both
 Backend and Frontend: Frontend's OAuth flow issues the refresh token, and this
