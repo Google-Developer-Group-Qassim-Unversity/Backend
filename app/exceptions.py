@@ -45,33 +45,21 @@ class ServiceUnavailable(KnownHttpException):
 
 
 class GoogleFormAuthExpired(KnownHttpException):
-    """Google rejected the refresh token stored on the form.
+    """Google rejected the club account's stored credentials.
 
     Distinct from `NotFound` (no such form) and from a plain `BadGateway`: the
-    form exists and Google is up, but the link an admin made when they attached
-    the form has been revoked or expired. Re-linking is the fix, so the message
-    says so rather than sending anyone to the logs.
+    form exists and Google is up, but the one refresh token every form is read
+    with (see docs/GOOGLE_FORMS.md) has been revoked or expired - not
+    something re-attaching this one form can fix, since it's a single
+    app-wide credential, not a per-form link.
     """
 
     def __init__(self, google_form_id: str):
         super().__init__(
             status_code=502,
             detail=(
-                f"Google rejected the stored credentials for form '{google_form_id}'. "
-                "Re-link the form from the event's manage page."
-            ),
-        )
-
-
-class GoogleFormNotLinked(KnownHttpException):
-    """The form row has no refresh token, so its responses cannot be read at all."""
-
-    def __init__(self, google_form_id: str):
-        super().__init__(
-            status_code=409,
-            detail=(
-                f"Form '{google_form_id}' is not linked to a Google account. "
-                "Link it from the event's manage page before syncing."
+                f"Google rejected the club account's stored credentials while reading form '{google_form_id}'. "
+                "Run scripts/setup_google_oauth.py again and update GOOGLE_REFRESH_TOKEN in Infisical."
             ),
         )
 
@@ -84,6 +72,11 @@ class FormNotFoundById(NotFound):
 class FormNotFound(NotFound):
     def __init__(self, event_id: int):
         super().__init__("Form for event", event_id)
+
+
+class FormNotAttached(KnownHttpException):
+    def __init__(self, form_id: int):
+        super().__init__(status_code=409, detail=f"Form {form_id} is not attached to a Google Form yet")
 
 
 class EventNotFound(NotFound):

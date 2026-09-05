@@ -18,10 +18,11 @@ report only a generic `RuntimeError` that no log line traced back to a cause.
 The mapping onto `app/exceptions.py` mirrors `app/services/email_gateway.py`:
 this module owns it, so callers never see a `googleapiclient` error.
 
-Reading a form needs a refresh token, which lives on the `forms` row. Resolving
-that is the caller's job (see `app/services/form_sync.py`), deliberately: it
-keeps the adapters free of database access, so the recorded one needs no
-fixtures beyond the payloads themselves.
+Every form is read with the same club-owned credentials
+(`app/services/google_client.py`) - there is no per-form token anymore (see
+docs/GOOGLE_FORMS.md). `FormAccess` still exists and still travels through
+`app/services/form_sync.py` because a form id is what both adapters key off
+of; it just no longer carries a secret.
 """
 
 import logging
@@ -30,31 +31,20 @@ from typing import Annotated, Any, NoReturn, Protocol
 
 from fastapi import Depends
 from google.auth.exceptions import GoogleAuthError, RefreshError, TransportError
-from google.auth.transport.requests import Request as GoogleRequest
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from app.config import config
 from app.exceptions import BadGateway, GoogleFormAuthExpired, NotFound, ServiceUnavailable
+from app.services.google_client import get_google_credentials
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class FormAccess:
-    """Everything needed to read one form: which form, and the token to read it with.
-
-    The token is per-form rather than per-app - each form is linked by whichever
-    admin authorised it - which is why this travels with the form id instead of
-    coming from config.
-    """
+    """Which Google form to read. Just an id - see the module docstring."""
 
     google_form_id: str
-    refresh_token: str
-
-    def __repr__(self) -> str:  # pragma: no cover - keeps the token out of logs and tracebacks
-        return f"FormAccess(google_form_id={self.google_form_id!r}, refresh_token=***)"
 
 
 class FormResponses(Protocol):
@@ -74,21 +64,12 @@ class FormResponses(Protocol):
 class GoogleFormResponses:
     """The production adapter, over the Google Forms REST API."""
 
-    def _service(self, access: FormAccess) -> Any:
-        credentials = Credentials(
-            None,
-            refresh_token=access.refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=config.GOOGLE_CLIENT_ID,
-            client_secret=config.GOOGLE_CLIENT_SECRET,
-        )
-        if not credentials.valid:
-            credentials.refresh(GoogleRequest())
-        return build("forms", "v1", credentials=credentials)
+    def _service(self) -> Any:
+        return build("forms", "v1", credentials=get_google_credentials())
 
     def list_responses(self, access: FormAccess) -> list[dict]:
         try:
-            service = self._service(access)
+            service = self._service()
             result = service.forms().responses().list(formId=access.google_form_id).execute()
         except Exception as exc:
             _reraise_mapped(exc, access.google_form_id)
@@ -98,7 +79,7 @@ class GoogleFormResponses:
 
     def get_schema(self, access: FormAccess) -> dict:
         try:
-            service = self._service(access)
+            service = self._service()
             return service.forms().get(formId=access.google_form_id).execute()
         except Exception as exc:
             _reraise_mapped(exc, access.google_form_id)

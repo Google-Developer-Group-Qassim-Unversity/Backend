@@ -28,7 +28,7 @@ from app.DB import members as member_queries
 from app.DB import submissions as submission_queries
 from app.DB import form_sync_jobs as job_queries
 from app.DB.main import db_session
-from app.exceptions import GoogleFormNotLinked, NotFound
+from app.exceptions import NotFound
 from app.services.form_responses import FormAccess, FormResponses, get_form_responses
 from app.services.job_tracker import FORM_SYNC_JOB_QUERIES, job_boundary
 
@@ -59,18 +59,16 @@ def extract_email_answer(answers: dict) -> str | None:
 
 
 def resolve_form_access(session: Session, google_form_id: str) -> tuple[int, FormAccess]:
-    """The `forms` row for a Google form id, as the id and the token to read it with.
+    """The internal form id for a Google form id, and what to read it with.
 
-    Raises rather than returning `None`. The two failures here used to be a
-    `logger.info` and a `return None` inside the fetch, which is how a form
-    nobody had linked came back looking exactly like an empty inbox.
+    Raises rather than returning `None`. This used to be a `logger.info` and a
+    `return None` inside the fetch, which is how a form nobody had linked came
+    back looking exactly like an empty inbox.
     """
     form = form_queries.get_form_by_google_form_id(session, google_form_id)
     if form is None:
         raise NotFound("Google form", google_form_id)
-    if not form.google_refresh_token:
-        raise GoogleFormNotLinked(google_form_id)
-    return form.id, FormAccess(google_form_id=google_form_id, refresh_token=form.google_refresh_token)
+    return form.id, FormAccess(google_form_id=google_form_id)
 
 
 def sync_form_submissions(

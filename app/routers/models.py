@@ -4,6 +4,7 @@ from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist, Con
 from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
+from app.config import config
 from app.DB.schema import EventsLocationType, MembersGender, RoleType, FormType
 
 # A bare Google Meet code, e.g. "abc-defg-hij" - no scheme, no domain.
@@ -34,9 +35,23 @@ class Form_model(BaseClassModel):
     event_id: int
     form_type: FormType
     google_form_id: str | None = None
-    google_refresh_token: str | None = None
     google_watch_id: str | None = None
     google_responders_url: str | None = None
+    admin_google_email: str | None = None
+    granted_emails: list[str] = []
+
+
+class AttachFormRequest(BaseModel):
+    admin_google_email: EmailStr
+
+    @field_validator("admin_google_email")
+    @classmethod
+    def _must_be_allowed_domain(cls, value: EmailStr) -> EmailStr:
+        domain = value.split("@")[-1].lower()
+        if domain not in config.GOOGLE_ALLOWED_EMAIL_DOMAINS:
+            allowed = ", ".join(config.GOOGLE_ALLOWED_EMAIL_DOMAINS)
+            raise ValueError(f"email domain '{domain}' is not allowed - must be one of: {allowed}")
+        return value
 
 
 class createEvent_model(BaseClassModel):

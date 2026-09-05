@@ -19,7 +19,7 @@ from googleapiclient.errors import HttpError
 from app.DB import form_sync_jobs as job_queries
 from app.DB.schema import Events, EventsLocationType, EventsStatus, Forms, FormType, FormSyncJobsStatus
 from app.DB.schema import Members, MembersGender, Submissions, SubmissionsSubmissionType
-from app.exceptions import BadGateway, GoogleFormAuthExpired, GoogleFormNotLinked, NotFound, ServiceUnavailable
+from app.exceptions import BadGateway, GoogleFormAuthExpired, NotFound, ServiceUnavailable
 from app.services.form_responses import FormAccess, RecordedFormResponses, _reraise_mapped, get_form_responses
 from app.services.form_sync import extract_email_answer, sync_form_submissions, sync_manual_form_submissions
 from tests.utils import assert_2xx
@@ -94,12 +94,7 @@ def linked_form(db_session):
     db_session.add(event)
     db_session.flush()
 
-    form = Forms(
-        event_id=event.id,
-        form_type=FormType.GOOGLE,
-        google_form_id=GOOGLE_FORM_ID,
-        google_refresh_token="refresh-token-xyz",
-    )
+    form = Forms(event_id=event.id, form_type=FormType.GOOGLE, google_form_id=GOOGLE_FORM_ID)
     db_session.add(form)
     db_session.flush()
     db_session.commit()
@@ -206,24 +201,6 @@ def test_sync_counts_every_match_against_the_job(db_session, linked_form):
     assert (finished.total, finished.succeeded, finished.failed) == (2, 2, 0)
 
 
-def test_sync_fails_the_job_when_the_form_is_not_linked(db_session, linked_form):
-    linked_form.google_refresh_token = None
-    db_session.commit()
-
-    job = job_queries.create_job(db_session, GOOGLE_FORM_ID)
-    with pytest.raises(GoogleFormNotLinked):
-        sync_form_submissions(GOOGLE_FORM_ID, job.id, RecordedFormResponses())
-
-    db_session.expire_all()
-    finished = job_queries.get_job(db_session, job.id)
-    assert finished is not None
-    assert finished.status == FormSyncJobsStatus.FAILED
-    # The cause survives into the job record, which a generic RuntimeError
-    # could not carry.
-    assert finished.error is not None
-    assert "GoogleFormNotLinked" in finished.error
-
-
 def test_sync_fails_the_job_when_the_form_is_unknown(db_session):
     job = job_queries.create_job(db_session, "form-nobody-has")
     with pytest.raises(NotFound):
@@ -247,8 +224,8 @@ def test_sync_succeeds_with_nothing_to_do(db_session, linked_form):
     assert finished.status == FormSyncJobsStatus.SUCCEEDED
 
 
-def test_sync_reads_the_form_with_its_own_refresh_token(db_session, linked_form):
-    """The token travels with the form id, so the adapter never touches the database."""
+def test_sync_reads_the_form_by_its_google_form_id(db_session, linked_form):
+    """FormAccess only carries the form id now - credentials come from config, not the row."""
     seen: list[FormAccess] = []
 
     class CapturingResponses(RecordedFormResponses):
@@ -260,12 +237,6 @@ def test_sync_reads_the_form_with_its_own_refresh_token(db_session, linked_form)
 
     assert len(seen) == 1
     assert seen[0].google_form_id == GOOGLE_FORM_ID
-    assert seen[0].refresh_token == "refresh-token-xyz"
-
-
-def test_form_access_repr_hides_the_refresh_token():
-    access = FormAccess(google_form_id="f", refresh_token="super-secret")
-    assert "super-secret" not in repr(access)
 
 
 # ====================== the webhook, end to end ======================
@@ -455,7 +426,7 @@ def test_unrecognised_errors_are_re_raised_untouched():
 
 def test_recorded_adapter_refuses_forms_it_was_not_given():
     """So a test cannot pass against a form it never set up."""
-    access = FormAccess(google_form_id="never-recorded", refresh_token="t")
+    access = FormAccess(google_form_id="never-recorded")
     with pytest.raises(NotFound):
         RecordedFormResponses().list_responses(access)
     with pytest.raises(NotFound):
@@ -463,6 +434,6 @@ def test_recorded_adapter_refuses_forms_it_was_not_given():
 
 
 def test_recorded_adapter_returns_a_recorded_schema():
-    access = FormAccess(google_form_id=GOOGLE_FORM_ID, refresh_token="t")
+    access = FormAccess(google_form_id=GOOGLE_FORM_ID)
     recorded = RecordedFormResponses(schemas={GOOGLE_FORM_ID: {"formId": GOOGLE_FORM_ID}})
     assert recorded.get_schema(access) == {"formId": GOOGLE_FORM_ID}
