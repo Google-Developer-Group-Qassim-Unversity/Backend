@@ -44,6 +44,26 @@ class ServiceUnavailable(KnownHttpException):
         super().__init__(status_code=503, detail=detail)
 
 
+class GoogleFormAuthExpired(KnownHttpException):
+    """Google rejected the club account's stored credentials.
+
+    Distinct from `NotFound` (no such form) and from a plain `BadGateway`: the
+    form exists and Google is up, but the one refresh token every form is read
+    with (see docs/GOOGLE_FORMS.md) has been revoked or expired - not
+    something re-attaching this one form can fix, since it's a single
+    app-wide credential, not a per-form link.
+    """
+
+    def __init__(self, google_form_id: str):
+        super().__init__(
+            status_code=502,
+            detail=(
+                f"Google rejected the club account's stored credentials while reading form '{google_form_id}'. "
+                "Run scripts/setup_google_oauth.py again and update GOOGLE_REFRESH_TOKEN in Infisical."
+            ),
+        )
+
+
 class FormNotFoundById(NotFound):
     def __init__(self, form_id: int):
         super().__init__("Form", form_id)

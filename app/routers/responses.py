@@ -67,7 +67,9 @@ class DbCheckResponse(BaseClassModel):
 class ManualSyncResponse(BaseClassModel):
     """Counts from a manual Google Forms backfill.
 
-    `form_id` is absent when the fetch itself failed, so it defaults to None.
+    Every field is always present. A backfill that cannot read the form raises
+    now - it used to return this shape with every count at zero, which is
+    indistinguishable from a form that simply had no new responses.
     """
 
     created: int
@@ -76,7 +78,7 @@ class ManualSyncResponse(BaseClassModel):
     skipped_missing_email: int
     processed: int
     total_fetched: int
-    form_id: int | None = None
+    form_id: int
 
 
 class WebhookAckResponse(BaseClassModel):

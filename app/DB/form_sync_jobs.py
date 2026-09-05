@@ -25,6 +25,20 @@ def create_job(session: Session, google_form_id: str) -> FormSyncJobs:
     return job
 
 
+def set_total(session: Session, job_id: int, total: int) -> None:
+    """Record how many items the run turned out to have.
+
+    Unlike the email jobs, a form sync cannot know its total when the job row is
+    created: the webhook only carries a form id, and how many responses are
+    waiting is not known until Google has been asked.
+    """
+    job = session.get(FormSyncJobs, job_id)
+    if job is None:
+        return
+    job.total = total
+    session.commit()
+
+
 def mark_running(session: Session, job_id: int) -> None:
     job = session.get(FormSyncJobs, job_id)
     if job is None:

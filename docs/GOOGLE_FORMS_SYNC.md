@@ -52,13 +52,16 @@ This works regardless of which `questionId` holds the email on a given form, and
 
 ## Implementation Locations
 
-### 1. `app/routers/submissions.py`
+### 1. `app/services/form_sync.py`
 - **What**: `extract_email_answer()`, replacing the old `extract_text_answer(answers, EMAIL_QUESTION_ID)`.
-- **Used by**: `sync_form_submissions()` - the scheduled job that runs after every `POST /submissions/google/webhook` notification, matching Google responses to existing `partial` submissions by email.
+- **Used by**: both syncs, which now live here rather than in the routers:
+  - `sync_form_submissions()` - the scheduled job that runs after every `POST /submissions/google/webhook` notification, matching Google responses to existing `partial` submissions by email.
+  - `sync_manual_form_submissions()` - the admin-triggered backfill (creates new submissions directly, doesn't require a pre-existing `partial` row). It used to live in `app/routers/submissions_manual.py` and import the other router to reach the same helpers.
 
-### 2. `app/routers/submissions_manual.py`
-- **What**: `sync_manual_form_submissions()` - the admin-triggered manual backfill path (creates new submissions directly, doesn't require a pre-existing `partial` row).
-- **Why it needed the same fix**: it imported and called the same broken `extract_text_answer(answers, EMAIL_QUESTION_ID)` independently.
+### 2. `app/services/form_responses.py`
+- **What**: the `FormResponses` interface and its two adapters - `GoogleFormResponses` over the Forms REST API, and `RecordedFormResponses` replaying captured payloads.
+- **Why**: the Google client used to be built inline in the router, so nothing could stand in for it and only `extract_email_answer` was reachable from a test. Reading a form needs the per-form refresh token, which the caller resolves (`resolve_form_access`) and passes in as a `FormAccess` - that keeps the adapters free of database access.
+- **Failures raise.** The old `fetch_form_responses` caught everything and returned `None`, so a form nobody had linked came back looking exactly like an empty inbox. A missing form now raises `NotFound`, a form with no refresh token raises `GoogleFormNotLinked`, and dead credentials raise `GoogleFormAuthExpired`.
 
 ### 3. `score-leaderboard-app/app/(google-form)/events/[id]/form/page.tsx`
 - **What**: `PERSONAL_EMAIL_ENTRY_ID` and friends (`UNI_ID_ENTRY_ID`, `NAME_ENTRY_ID`, `GENDER_ENTRY_ID`) - the entry-ID-based prefill.
@@ -66,6 +69,8 @@ This works regardless of which `questionId` holds the email on a given form, and
 
 ### 4. `tests/routers/test_submissions_sync.py`
 - Unit tests for `extract_email_answer()`, including the real captured response payload from form 156 (the one that exposed this bug) as a regression fixture.
+- Plus the sync itself, driven through `RecordedFormResponses`: matching, the resulting `Submissions` rows, the job accounting, and both failure paths. The webhook test overrides the `get_form_responses` dependency, which is how the recorded adapter reaches a background task.
+- One thing those tests cannot assert: rows written by a background task during a `TestClient` request. Every session in the suite shares one connection (`db_bind`, `join_transaction_mode="create_savepoint"`), and a second session's writes do not survive the request - the job row stays `QUEUED` even though the sync ran. In production the two sessions are on separate connections. Assert background-task writes by calling the sync directly instead.
 
 ## Things to know going forward
 

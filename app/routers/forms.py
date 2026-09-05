@@ -3,7 +3,8 @@ from fastapi import APIRouter, Depends, status
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from app.routers.models import Form_model, NotFoundResponse, AttachFormRequest
-from app.routers.submissions import get_google_credentials, fetch_schema
+from app.services.google_client import get_google_credentials
+from app.services.form_responses import FormAccess, FormResponsesClient
 from app.DB import forms as form_queries
 from app.DB.schema import FormType
 
@@ -219,10 +220,10 @@ def unattach_form(event_id: int, session: DB):
     responses={404: {"model": NotFoundResponse, "description": "Form not found"}},
     dependencies=[Depends(admin_guard)],
 )
-def get_form_schema(form_id: int, session: DB):
+def get_form_schema(form_id: int, session: DB, responses_client: FormResponsesClient):
     form = form_queries.get_form_by_id(session, form_id)
     if not form:
         raise FormNotFoundById(form_id)
     if not form.google_form_id:
         raise FormNotAttached(form_id)
-    return fetch_schema(form.google_form_id)
+    return responses_client.get_schema(FormAccess(google_form_id=form.google_form_id))

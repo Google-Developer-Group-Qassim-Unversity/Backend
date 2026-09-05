@@ -27,7 +27,7 @@ from app.routers.models import (
 )
 from app.helpers import CurrentMember, admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
-from app.routers.submissions import set_form_publish_state
+from app.services.google_client import set_form_publish_state
 from app.semesters import resolve_semester, semester_date_bounds
 from time import perf_counter
 from typing import Annotated

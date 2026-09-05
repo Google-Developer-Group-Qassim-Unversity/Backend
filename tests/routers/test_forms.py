@@ -466,8 +466,9 @@ def test_unauthorized_unattach_form(clerk_client: TestClient):
     assert_forbidden(response)
 
 
-def test_get_form_schema(admin_client: TestClient, monkeypatch):
-    from app.routers import forms as forms_router
+def test_get_form_schema(admin_client: TestClient):
+    from app.main import app
+    from app.services.form_responses import RecordedFormResponses, get_form_responses
 
     event_response = admin_client.post("/events", json=make_create_event_payload(form_type="google"))
     assert_2xx(event_response)
@@ -480,9 +481,13 @@ def test_get_form_schema(admin_client: TestClient, monkeypatch):
     )
     assert_2xx(update_response)
 
-    monkeypatch.setattr(forms_router, "fetch_schema", lambda google_form_id: {"items": [], "form_id": google_form_id})
+    recorded = RecordedFormResponses(schemas={"test_google_id": {"items": [], "form_id": "test_google_id"}})
+    app.dependency_overrides[get_form_responses] = lambda: recorded
+    try:
+        response = admin_client.get(f"/forms/{form_id}/schema")
+    finally:
+        app.dependency_overrides.pop(get_form_responses, None)
 
-    response = admin_client.get(f"/forms/{form_id}/schema")
     assert_2xx(response)
     assert response.json() == {"items": [], "form_id": "test_google_id"}
 

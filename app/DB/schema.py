@@ -634,10 +634,12 @@ class EmailJobs(Base):
 class FormSyncJobs(Base):
     """One row per Google Forms webhook sync.
 
-    `sync_form_submissions` runs after the webhook's response is sent, same
-    as the email jobs above, and used to only surface a failure via
-    `logger.exception` - this table gives it the same job_tracker.track()
-    treatment `email_jobs` has: a status a caller can actually poll.
+    `app.services.form_sync.sync_form_submissions` runs after the webhook's
+    response is sent, same as the email jobs above, and used to only surface a
+    failure via `logger.exception` - this table gives it the same
+    job_tracker.track() treatment `email_jobs` has: a status a caller can
+    actually poll. `total` is set once the sync knows how many responses it has
+    to match; unlike an email job it cannot know that up front.
     """
 
     __tablename__ = "form_sync_jobs"

@@ -37,6 +37,15 @@ the boot rather than the first request.
 | `GOOGLE_FORMS_TOPIC_NAME` | when the feature runs | - | Pub/Sub topic used for Forms response-change watches |
 | `GOOGLE_ALLOWED_EMAIL_DOMAINS` | optional | `gmail.com,googlemail.com` | comma-separated allow-list checked before inviting an admin to a form |
 
+Everything about this integration - the one-time club OAuth, the Drive
+template copy, the Pub/Sub watch registration, and the Forms publish calls -
+runs here in the Backend now. There is no Frontend-side OAuth flow anymore
+(see `docs/GOOGLE_FORMS.md`). The Frontend keeps its own copy of
+`TEMPLATE_FORM_FILE_ID` (declared in `Frontend/lib/config-server.ts`, set
+under its own Infisical path `/admin-frontend`) purely so a super admin can
+open the template from the Settings page - that file id isn't a secret, just
+duplicated across both apps for that one convenience link.
+
 ### Outbound services
 
 | Variable | Needed | Default | Notes |
