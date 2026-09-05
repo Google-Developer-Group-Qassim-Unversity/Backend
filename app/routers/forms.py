@@ -84,10 +84,22 @@ def attach_form(event_id: int, body: AttachFormRequest, session: DB):
         google_watch_id = form.google_watch_id
         google_responders_url = form.google_responders_url
     else:
-        copy_response = drive.files().copy(fileId=config.TEMPLATE_FORM_FILE_ID, fields="id").execute()
+        event_name = form.event.name
+        copy_response = (
+            drive.files().copy(fileId=config.TEMPLATE_FORM_FILE_ID, fields="id", body={"name": event_name}).execute()
+        )
         google_form_id = copy_response["id"]
 
         forms_service = build("forms", "v1", credentials=credentials)
+
+        # files.copy only renames the Drive file - the form's own title (what
+        # respondents see) is a separate property, only settable through the
+        # Forms API itself.
+        forms_service.forms().batchUpdate(
+            formId=google_form_id,
+            body={"requests": [{"updateFormInfo": {"info": {"title": event_name}, "updateMask": "title"}}]},
+        ).execute()
+
         watch_response = (
             forms_service.forms()
             .watches()

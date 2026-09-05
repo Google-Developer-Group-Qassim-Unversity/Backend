@@ -46,12 +46,16 @@ Forms directly.
   per-admin token anymore.
 - `POST /forms/{event_id}/attach` (`app/routers/forms.py`) is **idempotent**:
   if the event's form has no `google_form_id` yet, it copies the template
-  (`config.TEMPLATE_FORM_FILE_ID`) within the club's own Drive, registers a
-  Forms API watch (`config.GOOGLE_FORMS_TOPIC_NAME`) for the Pub/Sub sync
-  pipeline, and records the responder URL. Either way - first attach or a
-  later call with a different email - it shares the form with whatever
+  (`config.TEMPLATE_FORM_FILE_ID`) within the club's own Drive, names the
+  copy and the form's own title after the event (two separate calls - Drive's
+  `files.copy` only renames the file, the form's title as respondents see it
+  is set through `forms.batchUpdate`'s `updateFormInfo`), registers a Forms
+  API watch (`config.GOOGLE_FORMS_TOPIC_NAME`) for the Pub/Sub sync pipeline,
+  and records the responder URL. None of this repeats on a later call with a
+  different email - it only shares the existing form with whatever
   `admin_google_email` the request carries. This is what powers "request
-  access for a different email" in the UI: same endpoint, no re-copy.
+  access for a different email" in the UI: same endpoint, no re-copy, no
+  re-rename.
 - The request body's email is validated against `config.GOOGLE_ALLOWED_EMAIL_DOMAINS`
   (default `gmail.com,googlemail.com`) before any Drive call - Drive's API
   otherwise queues a pending share for a non-Google address with no error at

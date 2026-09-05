@@ -7,7 +7,7 @@ from app.DB.forms import create_form, get_form_by_event_id, get_form_by_google_f
 from app.DB.schema import Events, Forms, FormType
 from app.exceptions import DataIntegrityError, FormNotFound
 from app.routers.models import Form_model
-from tests.factories import make_create_event_payload
+from tests.factories import make_create_event_payload, make_event
 from tests.utils import assert_2xx, assert_conflict, assert_forbidden, assert_not_found, assert_unprocessable
 
 
@@ -206,6 +206,7 @@ class FakeDrive:
         self.copy_id = copy_id
         self.permissions_list = permissions if permissions is not None else []
         self.copy_calls = 0
+        self.copy_bodies = []
         self.created_permissions = []
         self.deleted_permission_ids = []
 
@@ -213,8 +214,9 @@ class FakeDrive:
         outer = self
 
         class _Files:
-            def copy(self, fileId, fields=None):
+            def copy(self, fileId, fields=None, body=None):
                 outer.copy_calls += 1
+                outer.copy_bodies.append(body)
                 return _Execute({"id": outer.copy_id})
 
         return _Files()
@@ -244,6 +246,7 @@ class FakeForms:
         self.watch_id = watch_id
         self.responder_uri = responder_uri
         self.deleted_watches = []
+        self.batch_updates = []
 
     def forms(self):
         outer = self
@@ -262,6 +265,10 @@ class FakeForms:
 
             def get(self, formId):
                 return _Execute({"responderUri": outer.responder_uri})
+
+            def batchUpdate(self, formId, body):
+                outer.batch_updates.append((formId, body))
+                return _Execute({})
 
         return _Forms()
 
@@ -294,6 +301,42 @@ def test_attach_form_copies_template_and_invites_admin(admin_client: TestClient,
     assert data["admin_google_email"] == "someone@gmail.com"
     assert fake_drive.copy_calls == 1
     assert fake_drive.created_permissions == [{"role": "writer", "type": "user", "emailAddress": "someone@gmail.com"}]
+
+
+def test_attach_form_names_the_copy_after_the_event(admin_client: TestClient, monkeypatch):
+    """The copied file and the form's own title (a separate property from the
+    Drive file name) should both read as the event, not the template's name."""
+    fake_drive, fake_forms = _patch_google_client(monkeypatch, FakeDrive(), FakeForms())
+
+    event_response = admin_client.post(
+        "/events", json=make_create_event_payload(event=make_event(name="Intro to Rust"), form_type="registration")
+    )
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    response = admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "someone@gmail.com"})
+    assert_2xx(response)
+    assert fake_drive.copy_bodies == [{"name": "Intro to Rust"}]
+    assert fake_forms.batch_updates == [
+        (
+            "new-google-form-id",
+            {"requests": [{"updateFormInfo": {"info": {"title": "Intro to Rust"}, "updateMask": "title"}}]},
+        )
+    ]
+
+
+def test_attach_form_does_not_rename_on_idempotent_re_invite(admin_client: TestClient, monkeypatch):
+    fake_drive, fake_forms = _patch_google_client(monkeypatch, FakeDrive(), FakeForms())
+
+    event_response = admin_client.post("/events", json=make_create_event_payload(form_type="registration"))
+    assert_2xx(event_response)
+    event_id = event_response.json()["id"]
+
+    admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "first@gmail.com"})
+    admin_client.post(f"/forms/{event_id}/attach", json={"admin_google_email": "second@gmail.com"})
+
+    assert fake_drive.copy_calls == 1
+    assert len(fake_forms.batch_updates) == 1
 
 
 def test_attach_form_is_idempotent_for_a_different_email(admin_client: TestClient, monkeypatch):
