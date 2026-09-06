@@ -64,11 +64,9 @@ def test_publishing_event_without_google_form_does_not_call_forms_api(admin_clie
     assert calls == []
 
 
-def test_google_publish_failure_blocks_the_status_change(admin_client: TestClient, monkeypatch):
-    """The Forms API call happens before the DB write on purpose: a failure here must not
-    leave the event "open" while the form still silently rejects submissions."""
-    import pytest
-
+def test_google_publish_failure_does_not_block_the_status_change(admin_client: TestClient, monkeypatch):
+    """The Forms API call is best-effort: the event's own status is the source of truth,
+    so a Google API failure must not stop the admin from opening/closing the event."""
     from app.routers import events as events_router
 
     def failing_publish(google_form_id, is_published):
@@ -82,11 +80,11 @@ def test_google_publish_failure_blocks_the_status_change(admin_client: TestClien
         f"/forms/{form_id}", json={"event_id": event["id"], "form_type": "google", "google_form_id": "gform-789"}
     )
 
-    with pytest.raises(RuntimeError):
-        admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    open_response = admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    assert_2xx(open_response)
 
-    unchanged = admin_client.get(f"/events/{event['id']}")
-    assert unchanged.json()["status"] == "draft"
+    changed = admin_client.get(f"/events/{event['id']}")
+    assert changed.json()["status"] == "open"
 
 
 def test_transitions_among_non_open_statuses_do_not_touch_the_form(admin_client: TestClient, monkeypatch):

@@ -336,15 +336,23 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, ses
     # Publishing/unpublishing the event also publishes/unpublishes its Google
     # Form, if it has one - a copied form does not inherit the template's
     # accepting-responses state, so without this members hit an "unpublished
-    # form" wall the admin has no way to see coming. Done before the DB write
-    # so a Google API failure raises instead of leaving the event "open" with
-    # a form that still silently rejects submissions.
+    # form" wall the admin has no way to see coming. Best-effort: the event's
+    # own status is the source of truth, so a Google API failure here must not
+    # block it - same reasoning as the leaderboard cache reset below.
     entering_open = status_data.status == "open" and old_status != EventsStatus.OPEN
     leaving_open = old_status == EventsStatus.OPEN and status_data.status != "open"
     if entering_open or leaving_open:
         form = form_queries.get_form_by_event_id(session, event_id)
         if form.form_type == FormType.GOOGLE and form.google_form_id:
-            set_form_publish_state(form.google_form_id, is_published=entering_open)
+            try:
+                set_form_publish_state(form.google_form_id, is_published=entering_open)
+            except Exception:
+                logger.exception(
+                    "Failed to %s Google Form %s for event %s",
+                    "publish" if entering_open else "unpublish",
+                    form.google_form_id,
+                    event_id,
+                )
 
     event.status = EventsStatus(status_data.status)
     session.commit()
