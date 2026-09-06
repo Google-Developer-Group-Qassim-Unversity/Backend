@@ -1,23 +1,21 @@
 import logging
 import uuid as uuid_lib
 from typing import Annotated, Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Body
+from fastapi import APIRouter, Depends, HTTPException, Response, status, Body
 from pydantic import BaseModel, Field
 
 from app.config import config
-from app.DB.main import db_session
-from app.DB.members import get_member_by_clerk_user_id_or_none
+from app.DB.schema import Members
 from app.DB.wallet import (
-    get_member_by_uni_id_or_none,
-    get_member_by_email_or_none,
     get_or_create_member_profile,
     get_public_profile_by_uuid,
     is_member_admin,
     update_member_profile,
 )
-from app.helpers import authenticated_guard, get_clerk_user_id_from_credentials, get_uni_id_from_credentials
+from app.helpers import MemberOrGuest, authenticated_guard
 from app.wallet_signer import generate_apple_pkpass, generate_google_wallet_pass_url
 from app.dependencies import DB
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -141,103 +139,57 @@ class UpdateWalletMePayload(BaseModel):
 # =============================================================================
 
 
-def _resolve_authenticated_member(session, credentials):
+DEFAULT_THEME = "gdg-blue"
+ADMIN_THEME = "gdg-gold-admin"
+
+
+def _permitted_theme(requested: str | None, is_admin: bool) -> str:
+    """The gold card is for admins. Anyone else asking for it gets the blue one.
+
+    Written twice before - once against the member's real role, once with the
+    answer hardcoded to False on the guest path - which is two places for the
+    same rule to be wrong.
     """
-    Safely resolves the authenticated Member from Clerk credentials, trying
-    clerk_user_id first and falling back to uni_id then email.
-    """
-    member = None
-    uni_id = None
-    try:
-        # `sub` is on every Clerk token; uni_id only exists for uni_id/password
-        # signups, so trying it first avoids a needless miss for everyone else.
-        member = get_member_by_clerk_user_id_or_none(session, get_clerk_user_id_from_credentials(credentials))
-    except Exception as e:
-        logger.info(f"clerk_user_id extraction note: {e}")
-
-    try:
-        uni_id = get_uni_id_from_credentials(credentials)
-        if not member and uni_id:
-            member = get_member_by_uni_id_or_none(session, str(uni_id))
-    except Exception as e:
-        logger.info(f"uni_id extraction note: {e}")
-
-    if not member:
-        try:
-            decoded = credentials.model_dump().get("decoded", {})
-            email = (
-                decoded.get("email") or decoded.get("primary_email_address") or decoded.get("metadata", {}).get("email")
-            )
-            if email:
-                member = get_member_by_email_or_none(session, str(email).strip().lower())
-        except Exception as e:
-            logger.info(f"email fallback note: {e}")
-
-    if not member:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"عضو غير مسجل في قاعدة البيانات الأساسية بعد ({uni_id or 'حساب جديد'}).",
-        )
-
-    return member
+    theme_id = requested or DEFAULT_THEME
+    if theme_id == ADMIN_THEME and not is_admin:
+        return DEFAULT_THEME
+    return theme_id
 
 
-def _resolve_pass_card_data(request: Request, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """
-    Hybrid resolver:
-    1. If user is authenticated via Clerk token and registered in DB -> loads authoritative member, profile, and roles.
-    2. If guest or unregistered -> uses incoming payload directly (safely falling back to member blue card if gold requested by non-admin).
-    """
-    card_data = dict(payload or {})
-    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
-
-    if auth_header and auth_header.startswith("Bearer "):
-        try:
-            with db_session() as session:
-                credentials = authenticated_guard(request)
-                member = _resolve_authenticated_member(session, credentials)
-                if member:
-                    profile = get_or_create_member_profile(session, member.id)
-                    session.commit()
-                    is_admin = is_member_admin(member)
-                    theme_id = profile.theme_id or card_data.get("themeId", "gdg-blue")
-                    if theme_id == "gdg-gold-admin" and not is_admin:
-                        theme_id = "gdg-blue"
-
-                    effective_name = profile.custom_name or card_data.get("fullName") or member.name
-
-                    return {
-                        "uuid": profile.uuid,
-                        "fullName": effective_name,
-                        "uniId": member.uni_id,
-                        "email": member.email or card_data.get("email", ""),
-                        "phone": member.phone_number or card_data.get("phone", ""),
-                        "uniCollege": profile.institution
-                        or member.uni_college
-                        or card_data.get("institution")
-                        or card_data.get("uniCollege", "جامعة القصيم"),
-                        "major": profile.major or member.uni_college or card_data.get("major", "علوم حاسب"),
-                        "userStatus": profile.user_status or card_data.get("userStatus", "student"),
-                        "educationLevel": profile.education_level or card_data.get("educationLevel", "university"),
-                        "studyYearOrLevel": profile.study_year_or_level or card_data.get("studyYearOrLevel", ""),
-                        "themeId": theme_id,
-                        "nameLanguage": "ar",
-                        "isAdmin": is_admin,
-                    }
-        except Exception as e:
-            logger.info(f"Auth token optional fallback for pass generation: {e}")
-
-    # Fallback to payload (Guest / Unregistered)
-    theme_id = card_data.get("themeId", "gdg-blue")
-    if theme_id == "gdg-gold-admin":
-        theme_id = "gdg-blue"
-
-    uuid_val = card_data.get("uuid")
-    if not uuid_val:
-        uuid_val = uuid_lib.uuid4().hex
+def _member_card_data(session: Session, member: Members, card_data: Dict[str, Any]) -> Dict[str, Any]:
+    """A pass for a registered member: the database wins, the payload fills gaps."""
+    profile = get_or_create_member_profile(session, member.id)
+    session.commit()
+    is_admin = is_member_admin(member)
 
     return {
-        "uuid": uuid_val,
+        "uuid": profile.uuid,
+        "fullName": profile.custom_name or card_data.get("fullName") or member.name,
+        "uniId": member.uni_id,
+        "email": member.email or card_data.get("email", ""),
+        "phone": member.phone_number or card_data.get("phone", ""),
+        "uniCollege": profile.institution
+        or member.uni_college
+        or card_data.get("institution")
+        or card_data.get("uniCollege", "جامعة القصيم"),
+        "major": profile.major or member.uni_college or card_data.get("major", "علوم حاسب"),
+        "userStatus": profile.user_status or card_data.get("userStatus", "student"),
+        "educationLevel": profile.education_level or card_data.get("educationLevel", "university"),
+        "studyYearOrLevel": profile.study_year_or_level or card_data.get("studyYearOrLevel", ""),
+        "themeId": _permitted_theme(profile.theme_id or card_data.get("themeId"), is_admin),
+        "nameLanguage": "ar",
+        "isAdmin": is_admin,
+    }
+
+
+def _guest_card_data(card_data: Dict[str, Any]) -> Dict[str, Any]:
+    """A pass for someone with no member row: everything comes from the payload.
+
+    The uuid is generated per request rather than persisted - a guest card is
+    not tied to a profile, so it has nothing stable to point at.
+    """
+    return {
+        "uuid": card_data.get("uuid") or uuid_lib.uuid4().hex,
         "fullName": card_data.get("fullName") or "عضو GDG",
         "uniId": card_data.get("uniId", ""),
         "email": card_data.get("email", ""),
@@ -247,10 +199,63 @@ def _resolve_pass_card_data(request: Request, payload: Optional[Dict[str, Any]] 
         "userStatus": card_data.get("userStatus", "student"),
         "educationLevel": card_data.get("educationLevel", "university"),
         "studyYearOrLevel": card_data.get("studyYearOrLevel", ""),
-        "themeId": theme_id,
+        "themeId": _permitted_theme(card_data.get("themeId"), is_admin=False),
         "nameLanguage": "ar",
         "isAdmin": False,
     }
+
+
+def _unregistered_wallet_me(credentials) -> Dict[str, Any]:
+    """What `/wallet/me` returns for a signed-in caller with no member row.
+
+    Everything the token knows and nothing else. Deliberately a 200: the member
+    app shows this as an unregistered card, and a 404 here would read as "the
+    endpoint is broken" rather than "you are not registered yet".
+    """
+    decoded = credentials.model_dump().get("decoded", {})
+    return {
+        "member_id": None,
+        "name": decoded.get("name") or "",
+        "official_name": "",
+        "custom_name": None,
+        "uni_id": decoded.get("metadata", {}).get("uni_id"),
+        "email": decoded.get("email") or "",
+        "phone_number": None,
+        "gender": None,
+        "uni_level": None,
+        "uni_college": None,
+        "is_admin": False,
+        "roles": [],
+        "profile": {
+            "uuid": None,
+            "custom_name": None,
+            "theme_id": DEFAULT_THEME,
+            "name_language": "ar",
+            "user_status": "student",
+            "education_level": "university",
+            "institution": "جامعة القصيم",
+            "major": "علوم حاسب",
+            "study_year_or_level": "",
+            "bio": "",
+            "social_links": [],
+            "visibility": {"showPhone": False, "showEmail": False, "showAcademic": True, "showBio": True},
+        },
+    }
+
+
+def _pass_card_data(session: Session, member: Members | None, payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """What goes on the card, for a member or for a guest.
+
+    This used to read the Authorization header itself, call the guard by hand
+    and wrap the lot in `except Exception: logger.info(...)` - so an expired
+    token, a database error and a genuine guest all produced the same blank
+    card. Resolving the caller is the `MemberOrGuest` dependency's job now, and
+    this only decides what to print.
+    """
+    card_data = dict(payload or {})
+    if member is None:
+        return _guest_card_data(card_data)
+    return _member_card_data(session, member, card_data)
 
 
 # =============================================================================
@@ -259,100 +264,87 @@ def _resolve_pass_card_data(request: Request, payload: Optional[Dict[str, Any]] 
 
 
 @router.get("/me", summary="Get authenticated member wallet data and profile", response_model=WalletMeResponse)
-def get_wallet_me(session: DB, credentials=Depends(authenticated_guard)):
+def get_wallet_me(session: DB, member: MemberOrGuest, credentials=Depends(authenticated_guard)):
     """
     Returns the authenticated member's core info, role permissions, and MemberProfiles settings.
+
+    `authenticated_guard` means a token is required; `MemberOrGuest` means the
+    member row is not. Somebody who has just signed up with Clerk has the first
+    and not the second, and gets the skeleton below rather than a 404 - the
+    member app renders it as an unregistered card.
     """
-    try:
-        member = _resolve_authenticated_member(session, credentials)
-        profile = get_or_create_member_profile(session, member.id)
-        session.commit()
+    if member is None:
+        return _unregistered_wallet_me(credentials)
 
-        is_admin = is_member_admin(member)
-        role_names = [r.role.value for r in member.role] if member.role else []
+    profile = get_or_create_member_profile(session, member.id)
+    session.commit()
 
-        effective_name = profile.custom_name or member.name
-        effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
-        effective_major = profile.major or member.uni_college or "علوم حاسب"
-        effective_level = profile.study_year_or_level or (
-            f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG"
-        )
+    is_admin = is_member_admin(member)
+    role_names = [r.role.value for r in member.role] if member.role else []
 
-        return {
-            "member_id": member.id,
-            "name": effective_name,
-            "official_name": member.name,
+    effective_name = profile.custom_name or member.name
+    effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
+    effective_major = profile.major or member.uni_college or "علوم حاسب"
+    effective_level = profile.study_year_or_level or (
+        f"المستوى {member.uni_level}" if member.uni_level else "عضو مجتمع GDG"
+    )
+
+    return {
+        "member_id": member.id,
+        "name": effective_name,
+        "official_name": member.name,
+        "custom_name": profile.custom_name,
+        "uni_id": member.uni_id,
+        "email": member.email,
+        "phone_number": member.phone_number,
+        "gender": member.gender.value if hasattr(member.gender, "value") else str(member.gender),
+        "uni_level": member.uni_level,
+        "uni_college": member.uni_college,
+        "is_admin": is_admin,
+        "roles": role_names,
+        "profile": {
+            "uuid": profile.uuid,
             "custom_name": profile.custom_name,
-            "uni_id": member.uni_id,
-            "email": member.email,
-            "phone_number": member.phone_number,
-            "gender": member.gender.value if hasattr(member.gender, "value") else str(member.gender),
-            "uni_level": member.uni_level,
-            "uni_college": member.uni_college,
-            "is_admin": is_admin,
-            "roles": role_names,
-            "profile": {
-                "uuid": profile.uuid,
-                "custom_name": profile.custom_name,
-                "theme_id": profile.theme_id,
-                "name_language": "ar",
-                "user_status": profile.user_status or "student",
-                "education_level": profile.education_level or "university",
-                "institution": effective_institution,
-                "major": effective_major,
-                "study_year_or_level": effective_level,
-                "bio": profile.bio or "",
-                "social_links": profile.social_links or [],
-                "visibility": profile.visibility
-                or {"showPhone": False, "showEmail": False, "showAcademic": True, "showBio": True},
-                "created_at": profile.created_at.isoformat() if profile.created_at else None,
-                "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
-            },
-        }
-    except HTTPException:
-        decoded = credentials.model_dump().get("decoded", {})
-        return {
-            "member_id": None,
-            "name": decoded.get("name") or "",
-            "official_name": "",
-            "custom_name": None,
-            "uni_id": decoded.get("metadata", {}).get("uni_id"),
-            "email": decoded.get("email") or "",
-            "phone_number": None,
-            "gender": None,
-            "uni_level": None,
-            "uni_college": None,
-            "is_admin": False,
-            "roles": [],
-            "profile": {
-                "uuid": None,
-                "custom_name": None,
-                "theme_id": "gdg-blue",
-                "name_language": "ar",
-                "user_status": "student",
-                "education_level": "university",
-                "institution": "جامعة القصيم",
-                "major": "علوم حاسب",
-                "study_year_or_level": "",
-                "bio": "",
-                "social_links": [],
-                "visibility": {"showPhone": False, "showEmail": False, "showAcademic": True, "showBio": True},
-            },
-        }
+            "theme_id": profile.theme_id,
+            "name_language": "ar",
+            "user_status": profile.user_status or "student",
+            "education_level": profile.education_level or "university",
+            "institution": effective_institution,
+            "major": effective_major,
+            "study_year_or_level": effective_level,
+            "bio": profile.bio or "",
+            "social_links": profile.social_links or [],
+            "visibility": profile.visibility
+            or {"showPhone": False, "showEmail": False, "showAcademic": True, "showBio": True},
+            "created_at": profile.created_at.isoformat() if profile.created_at else None,
+            "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
+        },
+    }
 
 
 @router.put("/me", summary="Update member wallet profile settings", response_model=WalletUpdateResponse)
 @router.patch("/me", summary="Update member wallet profile settings", response_model=WalletUpdateResponse)
-def update_wallet_me(payload: UpdateWalletMePayload, session: DB, credentials=Depends(authenticated_guard)):
+def update_wallet_me(
+    payload: UpdateWalletMePayload, session: DB, member: MemberOrGuest, credentials=Depends(authenticated_guard)
+):
     """
     Updates the authenticated member's profile and academic fields (custom_name, theme_id, name_language, user_status, education_level, institution, major, study_year_or_level, bio, social_links, visibility).
     Enforces server-side admin role check if gold card (gdg-gold-admin) is requested.
+
+    Unlike the GET above, there is nothing to write to without a member row, so
+    this is the one wallet endpoint where not being registered is an error.
     """
-    member = _resolve_authenticated_member(session, credentials)
+    if member is None:
+        uni_id = credentials.model_dump().get("decoded", {}).get("metadata", {}).get("uni_id")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"عضو غير مسجل في قاعدة البيانات الأساسية بعد ({uni_id or 'حساب جديد'}).",
+        )
+
     is_admin = is_member_admin(member)
 
     # Check theme authorization
-    if payload.theme_id == "gdg-gold-admin" and not is_admin:
+    if payload.theme_id == ADMIN_THEME and not is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Unauthorized: Gold Leadership Card is restricted to GDG Administrators and Board Members.",
@@ -415,12 +407,14 @@ def update_wallet_me(payload: UpdateWalletMePayload, session: DB, credentials=De
 @router.post(
     "/apple-pass", summary="Generate signed Apple Wallet (.pkpass) for member or guest", response_class=Response
 )
-def create_apple_wallet_pass(request: Request, payload: Annotated[Optional[Dict[str, Any]], Body()] = None):
+def create_apple_wallet_pass(
+    session: DB, member: MemberOrGuest, payload: Annotated[Optional[Dict[str, Any]], Body()] = None
+):
     """
     Generates and signs an official Apple Wallet .pkpass file.
     Supports authenticated members (loading DB record) and guest cards without 401 failures.
     """
-    card_data = _resolve_pass_card_data(request, payload)
+    card_data = _pass_card_data(session, member, payload)
     pkpass_bytes = generate_apple_pkpass(card_data)
     file_name = f"gdg-pass-{card_data['uuid'][:8]}.pkpass"
 
@@ -439,12 +433,14 @@ def create_apple_wallet_pass(request: Request, payload: Annotated[Optional[Dict[
     summary="Generate signed Google Wallet save link for member or guest",
     response_model=GoogleWalletPassResponse,
 )
-def create_google_wallet_pass(request: Request, payload: Annotated[Optional[Dict[str, Any]], Body()] = None):
+def create_google_wallet_pass(
+    session: DB, member: MemberOrGuest, payload: Annotated[Optional[Dict[str, Any]], Body()] = None
+):
     """
     Generates a signed Google Wallet save URL.
     Supports authenticated members and guest cards.
     """
-    card_data = _resolve_pass_card_data(request, payload)
+    card_data = _pass_card_data(session, member, payload)
     try:
         save_url = generate_google_wallet_pass_url(card_data)
     except ValueError as exc:
