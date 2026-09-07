@@ -64,6 +64,20 @@ class BlastQueuedResponse(BaseModel):
     job_id: Optional[int] = None
 
 
+class AcceptanceQueuedResponse(BaseModel):
+    """Result of queueing an acceptance blast.
+
+    `recipient_count` is what was claimed and handed to the job, not what has
+    been delivered - the send itself happens after this response. `job_id` is
+    None only when there was nobody left to invite and no job was created.
+    """
+
+    message: str
+    recipient_count: int
+    emails: list[str]
+    job_id: Optional[int] = None
+
+
 class BlastEligibleCountResponse(BaseModel):
     eligible_count: int
     remaining_capacity: int | None = None

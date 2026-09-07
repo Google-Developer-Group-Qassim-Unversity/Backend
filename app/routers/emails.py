@@ -20,6 +20,7 @@ from app.helpers import CurrentMember, admin_guard
 from app.routers.responses import MessageResponse
 from app.routers.email_models import (
     EmailJobModel,
+    AcceptanceQueuedResponse,
     BlastEligibleCountResponse,
     BlastQueuedResponse,
     BlastSendRequest,
@@ -54,6 +55,7 @@ from app.DB import email_jobs as job_queries
 from app.DB.schema import EmailJobsStatus, EmailJobsType
 from app.services.email_recipients import _resolve_member, resolve_ad_hoc_recipients
 from app.services.email_jobs import (
+    send_acceptance_job,
     send_blast_job,
     send_certificates_by_event_id,
     send_custom_email_job,
@@ -539,16 +541,29 @@ def download_certificate(
     "/acceptance/blasts/{event_id:int}",
     status_code=status.HTTP_200_OK,
     dependencies=[Depends(admin_guard)],
-    response_model=EmailTestResponse,
+    response_model=AcceptanceQueuedResponse,
 )
 async def send_acceptance_blasts(
     event_id: int,
     request: Request,
     subject: Annotated[str, Query(description="Email subject line")],
     requesting_member: CurrentMember,
+    background_tasks: BackgroundTasks,
     session: DB,
 ):
-    logger.info(f"Sending acceptance blasts for event [{event_id}]")
+    """Queue the acceptance blast for everyone accepted-but-not-yet-invited.
+
+    This used to send inline, so the admin's browser held the request open for
+    the whole Gmail send. Gmail issues one RCPT TO per recipient over the same
+    connection (~0.2s each in production) against a flat 60s gateway timeout,
+    which put a hard ceiling of roughly 300 recipients on an acceptance blast
+    before it 504'd - and made every send feel broken long before that.
+
+    So the response now says *queued*, not *sent*, like every other blast. What
+    still happens synchronously is only what the admin needs an answer about:
+    who the recipients are, and whether there are any.
+    """
+    logger.info(f"Queueing acceptance blast for event [{event_id}]")
 
     html_content = await read_html_body(request)
     logger.info(f"Received HTML body with {len(html_content)} characters")
@@ -568,37 +583,59 @@ async def send_acceptance_blasts(
         # with no `emails` key at all - httpx omits an empty list from the query
         # string rather than serializing it - and `emails` is a required Query
         # param over there, so it 422s and the admin sees a 502. Nothing to
-        # record either: no email went out and no submission changed.
+        # queue either: no email would go out and no submission would change.
         logger.info(f"No uninvited recipients for event [{event_id}], nothing to send")
-        return {"sent_count": 0, "emails": []}
+        return {"message": "No uninvited recipients for this event.", "recipient_count": 0, "emails": []}
 
-    logger.info(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
-    logger.debug("request body: %s", {"subject": subject, "email_count": len(emails), "emails": emails})
-    await call_acceptance_api(emails, subject, html_content, from_addr)
-    logger.info("Acceptance API responded successfully")
+    # Every accepted submission is claimed and logged, including any with no
+    # address - that was the behaviour before this became a job and it is the
+    # right one: a submission with no email can never be sent to, so leaving it
+    # unclaimed would strand it in the accepted-not-invited list permanently,
+    # keeping a non-zero count on a button that would then send to nobody. The
+    # gateway call itself still only gets the addresses that exist.
+    recipients = [{"name": sub.name, "email": sub.email} for sub in submissions]
+    submission_ids = [sub.submission_id for sub in submissions]
+    simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
 
-    def record() -> None:
-        email_queries.create_email_log(
-            session,
-            sent_by=requesting_member.id,
-            from_address=from_addr.value,
-            email_type=EmailLogsEmailType.ACCEPTANCE,
-            event_id=event.id,
-            recipient_count=len(emails),
-            data={
-                "subject": subject,
-                "html_content": html_content,
-                "event": {"name": event.name, "date": format_event_date(event), "official": bool(event.is_official)},
-                "member": [{"name": sub.name, "email": sub.email} for sub in submissions],
-            },
+    def claim() -> int:
+        """Create the job and take the recipients off the uninvited list.
+
+        Marking invited here rather than after the send is what stops a second
+        click queueing the same blast again while the first is still running -
+        `get_accepted_not_invited_by_event` is the only guard against a
+        duplicate acceptance email, and it now has to hold for the length of a
+        background job rather than the length of a request. `send_acceptance_job`
+        releases the claim if the send fails.
+        """
+        job = job_queries.create_job(
+            session, EmailJobsType.ACCEPTANCE, requesting_member.id, total=len(emails), event_id=event.id
         )
-        submissions_queries.mark_submissions_as_invited(session, [sub.submission_id for sub in submissions])
+        submissions_queries.mark_submissions_as_invited(session, submission_ids)
         session.commit()
+        return job.id
 
-    await run_in_threadpool(record)
-    logger.info(f"Marked [{len(submissions)}] submissions as invited")
+    job_id = await run_in_threadpool(claim)
+    logger.info(f"Claimed [{len(submission_ids)}] submissions as invited under job [{job_id}]")
 
-    return {"sent_count": len(emails), "emails": emails}
+    background_tasks.add_task(
+        send_acceptance_job,
+        recipients,
+        submission_ids,
+        subject,
+        html_content,
+        simple_event,
+        event.id,
+        from_addr,
+        requesting_member.id,
+        job_id,
+    )
+
+    return {
+        "message": f"Acceptance blast queued for [{len(emails)}] recipient(s).",
+        "recipient_count": len(emails),
+        "emails": emails,
+        "job_id": job_id,
+    }
 
 
 @router.post(

@@ -193,9 +193,15 @@ def test_member_signs_up_attends_and_ends_up_on_the_leaderboard(api, seed_refs, 
     #    arrived: this is the wire contract with send-certificates' POST /blasts,
     #    and the shape of it (repeated `emails`, HTML in the body, no empty-string
     #    params) is what broke before.
+    #
+    #    The response says queued, not sent - the send is a background job now.
+    #    TestClient runs BackgroundTasks before handing the response back, so
+    #    the outbound request below has still happened by the time we look.
     html = "<p>You're in.</p>"
     result = send_acceptance_blast(api, event["id"], subject="You're in", html=html)
-    assert result == {"sent_count": 1, "emails": [CLERK_EMAIL]}
+    assert result["recipient_count"] == 1
+    assert result["emails"] == [CLERK_EMAIL]
+    assert result["job_id"] is not None
 
     blast = outbound.one("/blasts")
     assert blast.method == "POST"
@@ -216,7 +222,10 @@ def test_member_signs_up_attends_and_ends_up_on_the_leaderboard(api, seed_refs, 
     # so "nobody left to invite" has to short-circuit before the gateway call,
     # not through it. tests/outbound.py answers an empty `emails` with the same
     # 422 the real service does, so removing that guard fails this test.
-    assert send_acceptance_blast(api, event["id"], subject="You're in", html=html) == {"sent_count": 0, "emails": []}
+    repeat = send_acceptance_blast(api, event["id"], subject="You're in", html=html)
+    assert repeat["recipient_count"] == 0
+    assert repeat["emails"] == []
+    assert repeat["job_id"] is None
     assert len(outbound.to("/blasts")) == 1
 
     # 6. An admin marks them attended.

@@ -19,6 +19,7 @@ import logging
 from app.config import config
 from app.DB import emails as email_queries
 from app.DB import events as events_queries
+from app.DB import submissions as submissions_queries
 from app.DB.schema import EmailLogsEmailType, EmailLogsFromAddress, EmailProvider, Events
 from app.routers.email_models import (
     CustomEmailRequest,
@@ -32,6 +33,7 @@ from app.services.email_recipients import _resolve_event, _resolve_member
 from app.services.email_capacity import _personalize, get_from_address, get_send_capacity
 from app.services.job_tracker import EMAIL_JOB_QUERIES, job_boundary
 from app.services.email_gateway import (
+    call_acceptance_api,
     call_blast_api,
     call_certificate_api,
     call_custom_email_api,
@@ -328,3 +330,65 @@ async def send_blast_job(
                 },
             )
             session.commit()
+
+
+async def send_acceptance_job(
+    recipients: list[dict],
+    submission_ids: list[int],
+    subject: str,
+    html_content: str,
+    simple_event: SimpleEvent,
+    event_id: int,
+    from_address: EmailLogsFromAddress,
+    sent_by_id: int,
+    job_id: int | None = None,
+):
+    """Send one acceptance blast for an event and record it.
+
+    One gateway call for the whole recipient list, like the SES branch of
+    `send_blast_job` - Gmail sends it as a single BCC message. So there is no
+    per-recipient loop here and no `tracker.recipient`: the send either happens
+    for everyone or for nobody.
+
+    The route has already marked these submissions invited, claiming them so a
+    second click cannot send the same email twice while this job is still
+    running. A claim that is never redeemed has to be given back, or the
+    recipients are stranded - invited according to the database, holding an
+    email that was never sent, and invisible to
+    `get_accepted_not_invited_by_event` forever after.
+    """
+    with job_boundary(job_id, EMAIL_JOB_QUERIES) as (tracker, session):
+        # `recipients` is every accepted submission, address or not - that is
+        # what gets logged and what the route claimed. Only the ones with an
+        # address can actually be sent to.
+        emails = [recipient["email"] for recipient in recipients if recipient["email"]]
+        logger.info(f"Sending acceptance blast to [{len(emails)}] recipients via [{from_address.value}]")
+
+        try:
+            await call_acceptance_api(emails, subject, html_content, from_address)
+        except Exception:
+            submissions_queries.mark_submissions_as_uninvited(session, submission_ids)
+            session.commit()
+            logger.warning(
+                f"Acceptance send failed; released the invited claim on [{len(submission_ids)}] submission(s) "
+                f"for event [{event_id}] so they can be retried"
+            )
+            raise
+        logger.info("Acceptance API responded successfully")
+
+        email_queries.create_email_log(
+            session,
+            sent_by=sent_by_id,
+            from_address=from_address.value,
+            email_type=EmailLogsEmailType.ACCEPTANCE,
+            event_id=event_id,
+            recipient_count=len(emails),
+            data={
+                "subject": subject,
+                "html_content": html_content,
+                "event": simple_event.model_dump(mode="json"),
+                "member": recipients,
+            },
+        )
+        session.commit()
+        tracker.success(len(emails))

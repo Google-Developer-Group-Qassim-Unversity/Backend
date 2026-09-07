@@ -123,3 +123,17 @@ def mark_submissions_as_invited(session: Session, submission_ids: list[int]):
 
     session.execute(update(Submissions).where(Submissions.id.in_(submission_ids)).values(is_invited=1))
     session.flush()
+
+
+def mark_submissions_as_uninvited(session: Session, submission_ids: list[int]):
+    """Release the invited flag after a send that never happened.
+
+    `is_invited` is what stops a second acceptance blast reaching the same
+    people, so the acceptance route claims its recipients before queueing the
+    job rather than after the send. That claim has to be given back when the
+    send fails, or those submissions are stranded: invited according to the
+    database, and holding an email nobody received."""
+    from sqlalchemy import update
+
+    session.execute(update(Submissions).where(Submissions.id.in_(submission_ids)).values(is_invited=0))
+    session.flush()
