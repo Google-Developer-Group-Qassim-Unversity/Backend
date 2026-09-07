@@ -21,7 +21,17 @@ from app.config import config
 DB_POOL_SIZE = 5
 DB_MAX_OVERFLOW = 5
 DB_POOL_TIMEOUT_SECONDS = 8
-DB_POOL_RECYCLE_SECONDS = 600
+# MySQL is reached over the public internet, and something on that path drops
+# idle connections without sending a RST. A socket killed that way looks alive
+# until it is used: `pool_pre_ping` writes its ping into the void and then
+# blocks on the read for the full DB_READ_TIMEOUT_SECONDS below before
+# SQLAlchemy invalidates the connection and transparently reconnects. The
+# request succeeds - twenty seconds late, with nothing in the error log.
+# Production showed ~10 of those a day at 600s across unrelated endpoints.
+# Recycling well inside the idle window is what stops a dead socket being
+# handed out in the first place; the cost is a reconnect per pooled connection
+# every two minutes, which is nothing next to a 20s stall.
+DB_POOL_RECYCLE_SECONDS = 120
 DB_CONNECT_TIMEOUT_SECONDS = 5
 DB_READ_TIMEOUT_SECONDS = 20
 DB_WRITE_TIMEOUT_SECONDS = 20
