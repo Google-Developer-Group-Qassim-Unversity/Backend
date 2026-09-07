@@ -127,6 +127,7 @@ class EmailJobsType(str, enum.Enum):
     CUSTOM_EMAIL = "custom-email"
     DIRECT_EMAIL = "direct-email"
     BLAST = "blast"
+    ACCEPTANCE = "acceptance"
 
 
 class FormsSubmissionsFormType(str, enum.Enum):
