@@ -17,6 +17,13 @@ directly rather than on a named guard. They were recorded here as public, which
 was wrong - they did require a token. They now go through
 `optional_clerk_guard` / `authenticated_guard` like everything else, so this
 table describes them accurately and `dependency_overrides` can reach them.
+
+The two `/wallet/*-pass` routes moved from `None` to `optional_clerk_guard` for
+the same reason. They always read the caller's token - by pulling the
+Authorization header off the request and calling the guard by hand, inside a
+`try/except Exception` - which this test could not see. The token is a
+dependency now, so the table describes what they actually do. Neither route
+rejects an anonymous caller; both still issue a guest card.
 """
 
 import pytest
@@ -128,8 +135,8 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "POST /submissions_manual/google/{google_form_id}": "admin_guard",
     "POST /upload/": "admin_guard",
     "POST /upload/email-attachment": "admin_guard",
-    "POST /wallet/apple-pass": None,
-    "POST /wallet/google-pass": None,
+    "POST /wallet/apple-pass": "optional_clerk_guard",
+    "POST /wallet/google-pass": "optional_clerk_guard",
     "PUT /actions/reorder": "admin_points_guard",
     "PUT /actions/{action_id:int}": "admin_points_guard",
     "PUT /custom/departments/{log_id}": "admin_guard",

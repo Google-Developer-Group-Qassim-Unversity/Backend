@@ -60,13 +60,37 @@ def get_clerk_user_id_from_credentials(credentials) -> str:
     return str(decoded["sub"])
 
 
+def get_email_from_credentials(credentials) -> str | None:
+    """The caller's email, from the three places a Clerk token has carried it.
+
+    ``metadata.email`` is publicMetadata - written by the auth app rather than
+    verified by Clerk - so it is tried last, after the two claims Clerk issues
+    itself. It stays in the chain because members whose row predates the
+    top-level claim are only findable through it.
+    """
+    decoded = credentials.model_dump().get("decoded", {})
+    return decoded.get("email") or decoded.get("primary_email_address") or decoded.get("metadata", {}).get("email")
+
+
 def resolve_member(session: Session, credentials) -> Members:
     """Resolve the ``Members`` row for the currently authenticated caller.
 
-    Looks up by ``clerk_user_id`` first (works for every member once they've
-    authenticated at least once after this identity model was introduced).
-    Falls back to ``uni_id`` for members who haven't re-authenticated yet,
-    self-healing their ``clerk_user_id`` in the process.
+    One chain, ordered by how much each claim is worth:
+
+    1. ``clerk_user_id`` - the token's ``sub``. On every Clerk token, and the
+       only one of the three that cannot drift.
+    2. ``uni_id`` from publicMetadata, for members who have not authenticated
+       since this identity model was introduced.
+    3. the email claim, for a member whose row was created by an admin before
+       they ever signed in, so it carries neither of the first two.
+
+    A hit on 2 or 3 writes ``clerk_user_id`` back, so the next request takes the
+    first branch and the fallbacks decay into dead weight rather than a
+    permanent cost.
+
+    Lookup failures are not swallowed. "This caller is not a member" and "the
+    database is unreachable" are different answers, and the wallet router used
+    to have its own copy of this that reported both as the first.
     """
     clerk_user_id = get_clerk_user_id_from_credentials(credentials)
     member = member_queries.get_member_by_clerk_user_id_or_none(session, clerk_user_id)
@@ -77,6 +101,12 @@ def resolve_member(session: Session, credentials) -> Members:
     uni_id = decoded.get("metadata", {}).get("uni_id")
     if uni_id:
         member = member_queries.get_member_by_uni_id_or_none(session, str(uni_id))
+        if member:
+            return member_queries.set_member_clerk_user_id(session, member, clerk_user_id)
+
+    email = get_email_from_credentials(credentials)
+    if email:
+        member = member_queries.get_member_by_email_or_none(session, str(email))
         if member:
             return member_queries.set_member_clerk_user_id(session, member, clerk_user_id)
 
@@ -146,6 +176,31 @@ def get_current_member(session: DB, credentials=Depends(authenticated_guard)) ->
 
 
 CurrentMember = Annotated[Members, Depends(get_current_member)]
+
+
+def get_member_or_none(session: DB, credentials=Depends(optional_clerk_guard)) -> Members | None:
+    """The caller's ``Members`` row, or ``None`` when there is not one.
+
+    Two different situations collapse into ``None`` on purpose - nobody is
+    signed in, and somebody is signed in but has no member row yet - because
+    every caller of this treats them the same way: show the guest version.
+    A route that needs to tell them apart pairs this with
+    ``Depends(authenticated_guard)``, which rejects the anonymous case before
+    the handler runs.
+
+    ``MemberNotFound`` is the only exception caught. Anything else - a database
+    error, a malformed token that somehow got past the guard - propagates, so a
+    broken lookup cannot quietly present an admin as a guest.
+    """
+    if credentials is None:
+        return None
+    try:
+        return resolve_member(session, credentials)
+    except MemberNotFound:
+        return None
+
+
+MemberOrGuest = Annotated[Members | None, Depends(get_member_or_none)]
 
 
 def credentials_to_member_model(credentials) -> Member_model:
