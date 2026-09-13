@@ -98,11 +98,77 @@ membership/leadership/President writes, stale reads, archive locking, UTC insert
 defaults, distinct counts, and tenure preservation. Concurrency tests use
 independent connections and clean up only their own committed fixture records.
 
+## Step 3: guarded API endpoints
+
+The management API is under `/club-structure`. Reads use the existing
+`admin_guard` (admins, points admins, and super admins); every write requires
+`super_admin_guard`. The public `/departments` endpoints retain their existing
+authorization and four-field payload (`id`, `name`, `ar_name`, `type`).
+
+| Method | Path under `/club-structure` | Result |
+| --- | --- | --- |
+| GET | empty path | Department cards, two equal President slots, distinct `total_members` |
+| GET | `/departments/{department_id}` | Department settings and capability/status fields |
+| GET | `/departments/{department_id}/roster` | Current assignments, including leaders/deputies |
+| GET | `/history` | Paginated current and closed tenures |
+| POST | `/departments` | Create a department; returns 201 |
+| PUT | `/departments/{department_id}` | Replace all editable settings |
+| POST | `/departments/{department_id}/archive` | Archive, retaining roster and points |
+| POST | `/departments/{department_id}/restore` | Restore the existing roster |
+| POST | `/departments/{department_id}/members` | Add a regular member; returns 201 |
+| DELETE | `/departments/{department_id}/members/{member_id}` | Close the exact expected department tenure |
+| PUT | `/departments/{department_id}/leadership/{role}` | Fill, replace, or clear `leader`/`deputy` |
+| PUT | `/presidents/{slot}` | Fill, replace, or clear slot 1 or 2 |
+
+Overview defaults to active departments; `include_archived=true` includes
+archived cards and people. Both President slots are always present, with a
+nullable `assignment`. Cards include `member_count`, `leader`, and `deputy`.
+The new read query loads leadership in bulk rather than querying each card.
+
+Assignment responses include the tenure ID, member/department IDs, role,
+President slot, UTC timestamps with a `Z` suffix, actor subjects, and a minimal
+`member` object containing only `id` and `name`. They do not expose generated
+database keys or additional member contact/profile fields. Existing unknown
+department creation timestamps remain `null`.
+
+Creation accepts `name`, `ar_name`, `type`, and optional `color`/`icon`. Updating
+requires all six editable fields so omitted appearance settings cannot silently
+reset to defaults. IDs, timestamps, `active`, and `leadership_enabled` are not
+editable through settings. Department creation/settings/archive/restore refresh
+the existing public leaderboard cache after a successful commit. Cache failures
+are logged without misreporting a committed change as a failed mutation.
+
+Membership creation accepts `{"member_id": 123}`. Leadership and President
+writes require both `member_id` and `expected_assignment_id`, even when either
+value is `null`:
+
+```json
+{"member_id": 123, "expected_assignment_id": null}
+```
+
+This example claims a vacant seat. Supply the current tenure ID to replace it;
+set `member_id` to `null` to clear it. Successful clears return JSON `null`.
+Removing a roster member requires the `expected_assignment_id` query parameter
+and returns the closed tenure. Body IDs must be positive integers; unknown
+fields, including forged actor IDs or timestamps, are rejected.
+
+Assignment actors come only from the authenticated super admin's Clerk `sub`.
+The caller need not have a member row. Assignments never create members or
+change permission rows. Missing/invalid subjects fail before any assignment
+write. Service conflicts remain HTTP 409, missing records return 404, and
+invalid payloads return 422. Responses are validated and writes committed
+before returning success.
+
+History accepts optional `department_id`, `member_id`, and `role` filters,
+`limit` from 1 to 100 (default 50), and nonnegative `offset`. It returns `items`,
+`limit`, `offset`, and `has_more`; archived tenure stays readable. Every route
+has an explicit response model and is recorded in the auth inventory. HTTP
+tests run the real guards with only JWT verification stubbed, and cover actor
+spoofing, stale replacements, rollback on commit failure, archive protection,
+history pagination, UTC serialization, and public API compatibility.
+
 ## Next steps
 
-3. Add guarded API endpoints for overview, department settings, membership,
-   leadership replacement, tenure history, and archive/restore. Admins view;
-   super admins manage. Preserve the existing public department endpoints.
 4. Add the page, navigation, two equal President slots, department cards,
    creation dialog, and Roster/Leadership/Settings drawer. Reuse the existing
    member picker and request/query components. Hide Leadership for the Board.
@@ -119,7 +185,7 @@ visibility: existing leaderboard queries filter the current active status even
 when requesting a past semester. Date-aware visibility across repeated
 archive/restore cycles requires a separate status-history table and query work.
 
-Steps 1 and 2 run migrations only against isolated test databases. They do not
+Steps 1 through 3 run migrations only against isolated test databases. They do not
 apply them to a shared development or production database. A later rollout
 applies the migration before deploying the new backend. Downgrading drops the
 assignment table and its tenure history; the corrected Board name is retained

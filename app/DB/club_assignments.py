@@ -27,6 +27,23 @@ def get_presidents(session: Session) -> Sequence[ClubAssignments]:
     ).all()
 
 
+def get_current_leadership(session: Session, *, include_archived: bool = False) -> Sequence[ClubAssignments]:
+    """Load overview leadership in bulk, without querying once per card."""
+    statement = (
+        select(ClubAssignments)
+        .join(Departments, Departments.id == ClubAssignments.department_id)
+        .where(
+            ClubAssignments.ends_at.is_(None),
+            ClubAssignments.role.in_([ClubAssignmentRole.LEADER, ClubAssignmentRole.DEPUTY]),
+        )
+        .options(selectinload(ClubAssignments.member))
+        .order_by(ClubAssignments.department_id, ClubAssignments.role)
+    )
+    if not include_archived:
+        statement = statement.where(Departments.active == 1)
+    return session.scalars(statement).all()
+
+
 def get_tenure_history(
     session: Session,
     *,

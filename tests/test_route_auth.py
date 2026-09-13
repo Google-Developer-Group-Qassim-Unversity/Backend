@@ -42,6 +42,18 @@ STRICTNESS = {
 
 # route -> the strictest guard it enforces, or None when the route is public
 EXPECTED_AUTH: dict[str, str | None] = {
+    "GET /club-structure": "admin_guard",
+    "GET /club-structure/departments/{department_id:int}": "admin_guard",
+    "GET /club-structure/departments/{department_id:int}/roster": "admin_guard",
+    "GET /club-structure/history": "admin_guard",
+    "POST /club-structure/departments": "super_admin_guard",
+    "PUT /club-structure/departments/{department_id:int}": "super_admin_guard",
+    "POST /club-structure/departments/{department_id:int}/archive": "super_admin_guard",
+    "POST /club-structure/departments/{department_id:int}/restore": "super_admin_guard",
+    "POST /club-structure/departments/{department_id:int}/members": "super_admin_guard",
+    "DELETE /club-structure/departments/{department_id:int}/members/{member_id:int}": "super_admin_guard",
+    "PUT /club-structure/departments/{department_id:int}/leadership/{role}": "super_admin_guard",
+    "PUT /club-structure/presidents/{slot:int}": "super_admin_guard",
     "DELETE /actions/{action_id:int}": "admin_points_guard",
     "DELETE /attendance/{event_id}/manual": "admin_guard",
     "DELETE /custom/departments/{log_id}": "admin_guard",
