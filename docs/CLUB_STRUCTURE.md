@@ -45,14 +45,61 @@ those with only past assignments, so deletion cannot silently erase tenure.
 Leadership-enabled and archive rules span tables and belong in the service
 layer in Step 2. They are not yet enforced by an API in this database-only step.
 
+## Step 2: queries and transactional services
+
+`app/DB/club_assignments.py` reads current rosters, the two President seats,
+filtered/paginated tenure history, department counts, and distinct club people.
+Leaders and deputies count as roster members. The club count includes Presidents
+and people in active departments, counting each person once; `include_archived`
+includes archived rosters. Individual rosters and history remain readable when
+archived. Empty departments have a count of zero.
+
+`app/services/club_structure.py` creates and edits departments, archives/restores
+them, adds/removes roster members, and fills/replaces/clears leadership and
+President seats. Callers supply the authenticated Clerk subject as `changed_by`
+and commit the session before sending a successful response. These services use
+[SQLAlchemy savepoints](https://docs.sqlalchemy.org/en/20/orm/session_transaction.html#using-savepoint)
+to roll back a failed replacement's closures and inserts together. They do not
+commit the caller's outer transaction. Deadlocks/lock timeouts require rollback
+of the outer transaction and a fresh request.
+
+Department roster changes and archive/restore lock the same department row.
+Assignment checks use
+[MySQL locking reads](https://dev.mysql.com/doc/refman/8.0/en/innodb-locking-reads.html)
+and refresh cached ORM objects, so a transaction cannot change an archived
+roster or replace a newer holder using an old snapshot. `leadership_enabled` is
+the sole capability check, and ordinary department settings cannot change it.
+Names, Arabic labels, type, color, and icon can be edited, including while
+archived; assignments and points are retained through archive/restore.
+
+Replacement calls require `expected_assignment_id`; `NULL` means the caller
+saw an empty seat. A mismatched ID returns a conflict. Removing a roster member
+also requires the current assignment ID. A leader/deputy replacement closes the
+old leader's period and any incoming regular membership, then opens the new
+leader's period and a regular membership for the former leader, all at one UTC
+timestamp. Clearing a leadership seat also retains regular membership. Removing
+someone from the roster ends their department role entirely. Moving between
+leader and deputy requires explicitly clearing the other seat first.
+
+President replacements lock the exact expected tenure. Claims on empty seats
+use the existing unique indexes to arbitrate concurrent inserts, avoiding locks
+on empty index ranges. The two slots remain equal, and a President change never
+changes Board membership. Re-selecting the current holder with the correct
+expected ID is a no-op and does not create another tenure.
+
+Known assignment conflicts return HTTP 409 with a useful message through the
+existing exception handler. Missing records return 404 and invalid service
+inputs return 422. Application, Alembic, and test connections explicitly set
+the MySQL session timezone to `+00:00`; new tenure values use UTC with microsecond
+precision. No additional migration or API endpoints are introduced in Step 2.
+
+MySQL tests cover complete rollback after failed replacements, concurrent
+membership/leadership/President writes, stale reads, archive locking, UTC insert
+defaults, distinct counts, and tenure preservation. Concurrency tests use
+independent connections and clean up only their own committed fixture records.
+
 ## Next steps
 
-2. Implement queries and transactional services: lock the department during
-   membership and leadership changes; check the expected assignment during
-   replacements; close former periods before opening new ones. Enforce the
-   Board setting and reject changes to archived rosters. President writes must
-   handle occupied-slot conflicts without assigning a third person. Translate
-   database conflicts into useful HTTP responses.
 3. Add guarded API endpoints for overview, department settings, membership,
    leadership replacement, tenure history, and archive/restore. Admins view;
    super admins manage. Preserve the existing public department endpoints.
@@ -72,8 +119,9 @@ visibility: existing leaderboard queries filter the current active status even
 when requesting a past semester. Date-aware visibility across repeated
 archive/restore cycles requires a separate status-history table and query work.
 
-This step only writes and tests the migration. It does not apply it to a shared
-development or production database. A later rollout applies it before deploying
-the new backend. Downgrading drops the assignment table and its tenure history;
-the corrected Board name is retained because the previous English name cannot
-be reconstructed. Other existing department data and references are preserved.
+Steps 1 and 2 run migrations only against isolated test databases. They do not
+apply them to a shared development or production database. A later rollout
+applies the migration before deploying the new backend. Downgrading drops the
+assignment table and its tenure history; the corrected Board name is retained
+because the previous English name cannot be reconstructed. Other existing
+department data and references are preserved.

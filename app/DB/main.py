@@ -37,7 +37,7 @@ DB_READ_TIMEOUT_SECONDS = 20
 DB_WRITE_TIMEOUT_SECONDS = 20
 
 
-def _build_connect_args(database_url: str) -> dict[str, int]:
+def _build_connect_args(database_url: str) -> dict[str, int | str]:
     url = make_url(database_url)
     if not url.drivername.startswith("mysql"):
         return {}
@@ -45,6 +45,9 @@ def _build_connect_args(database_url: str) -> dict[str, int]:
         "connect_timeout": DB_CONNECT_TIMEOUT_SECONDS,
         "read_timeout": DB_READ_TIMEOUT_SECONDS,
         "write_timeout": DB_WRITE_TIMEOUT_SECONDS,
+        # DATETIME defaults (including assignment CURRENT_TIMESTAMP(6)) use
+        # the connection's timezone. A numeric offset needs no MySQL tz tables.
+        "init_command": "SET time_zone = '+00:00'",
     }
 
 
