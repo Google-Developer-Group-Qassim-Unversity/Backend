@@ -227,10 +227,52 @@ Backend Ruff format/check pass and the isolated MySQL suite reports 771 passed,
 in the current dependencies; Pyright also reports environment/import-resolution
 errors. Step 4 changes backend documentation only, not Python or migrations.
 
-## Next steps
+## Step 5: bilingual UI, responsive states, and refresh behavior
 
-5. Refine bilingual copy, RTL/mobile layouts, themes, loading/error/empty states,
-   and cache refresh behavior across the integrated application.
+English and Arabic copy now covers refresh, stale data, settings conflicts,
+validation, and unavailable member choices. API errors use localized messages
+based on HTTP status rather than exposing untranslated backend prose. An
+unconfirmed write tells the user to refresh and check whether it was saved.
+Counts use locale-aware formatting, including Arabic plurals. Close buttons,
+search fields, and form controls have translated accessible labels.
+
+Cards and rosters wrap long names and isolate mixed-direction text. Dialogs use
+dynamic viewport heights, the member picker keeps its actions outside scrolling
+lists, and mobile controls have larger touch targets. The drawer uses logical
+spacing and RTL-aware tabs. Badges and selected colors work in light/dark themes.
+Loading skeletons announce their status; search empty states offer a clear-search
+action, and member selection distinguishes no eligible members from no matches.
+The shared points picker retains multiple selection and member creation.
+
+Club queries become stale after 30 seconds and refresh on window focus or
+reconnection. Explicit Refresh controls update active club queries and invalidate
+inactive ones. Every settled mutation refreshes club data and existing event
+department selectors, including when the response was lost or returned an error.
+Pending reads are cancelled before invalidation so a pre-write response cannot
+repopulate the cache. Missing-member and assignment conflicts also invalidate
+member choices. Writes are never automatically retried; reads retry transient
+failures once and do not retry 4xx responses.
+
+Background query failures retain the last loaded data with an explanation and
+disable changes that depend on the failed query. Confirmation dialogs disable
+repeat submission after an error and preserve the original assignment expectation.
+Archive/restore confirmations retain the intended status across refreshes.
+Settings drafts survive tab switches and refreshes; a changed server snapshot
+blocks saving until the user loads the latest settings or resets the draft.
+This detects observed changes, not server-side optimistic locking for settings.
+
+Validation: frontend typecheck and production build pass with development
+settings from Infisical. ESLint has zero errors and 18 existing warnings.
+Isolated Chromium checks exercise the actual components with mocked auth/API
+responses, including assignment flows, read-only roles, stale-data recovery,
+settings drafts, and 320px English/Arabic layouts in light/dark themes. These
+checks do not replace the integrated validation in Step 6.
+Backend Ruff format/check pass; the isolated MySQL suite reports 771 passed,
+48 skipped, and one expected failure. `mypy` remains unavailable in the existing
+dependencies. This step changes backend documentation only.
+
+## Next step
+
 6. Validate API permissions, transactions and concurrent replacements, archived
    departments, and frontend flows against the supplied Figma source.
 
