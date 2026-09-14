@@ -132,7 +132,7 @@ database keys or additional member contact/profile fields. Existing unknown
 department creation timestamps remain `null`.
 
 Creation accepts `name`, `ar_name`, `type`, and optional `color`/`icon`. Updating
-requires all six editable fields so omitted appearance settings cannot silently
+requires all five editable fields so omitted appearance settings cannot silently
 reset to defaults. IDs, timestamps, `active`, and `leadership_enabled` are not
 editable through settings. Department creation/settings/archive/restore refresh
 the existing public leaderboard cache after a successful commit. Cache failures
@@ -167,13 +167,70 @@ tests run the real guards with only JWT verification stubbed, and cover actor
 spoofing, stale replacements, rollback on commit failure, archive protection,
 history pagination, UTC serialization, and public API compatibility.
 
+## Step 4: management page and department drawer
+
+`Frontend/app/club-structure/page.tsx` adds the management page, with links in
+the navigation and dashboard. It follows the supplied
+[Figma Make reference](https://www.figma.com/make/usYqch40Q7dRmRsuTdvTHi/Design-Club-Structure-Page)
+and its React source: four overview statistics, active/archive filters,
+department search, department cards, a creation dialog, and a 480px department
+drawer. Two equal President seats are added above the departments, as required
+by the implementation plan. Existing app components and theme tokens supply
+the controls and colors. The reference's **Specialized** label maps to the
+existing `practical` API enum; it does not introduce a new department type.
+
+The drawer contains Roster, Leadership, and Settings tabs. The Board's
+Leadership tab and card leadership rows are hidden using `leadership_enabled`.
+The roster shows names and roles from the management API, which does not
+expose member emails. Super admins can add/remove members, assign/replace/clear
+both leadership roles and President seats, edit the five department settings,
+and archive/restore departments. Admins and points admins can read these views;
+editing controls are omitted and settings are disabled. Archived rosters remain
+readable; their assignment controls become available again after restoration.
+
+The existing `MemberSelectDialog` gains optional single-selection, loading,
+error, and existing-members-only modes. Existing points callers retain their
+multiple-selection/create behavior. Club assignment flows use one existing
+member at a time and never create an account or alter application permissions.
+The shared `useMembers()` query now owns its token through `useApi()`; older
+standalone member calls and member creation remain on the legacy API adapter.
+
+`lib/api/resources.ts` owns the typed `/club-structure` resource. Query hooks
+refresh overview, roster, department, and existing event department selectors
+after writes. Seat changes capture `expected_assignment_id` when the picker
+opens, so a later query refresh cannot silently approve replacing a newer
+holder. Removal sends the exact roster tenure ID. Conflicts refresh the views
+and require closing/reviewing the confirmation before trying again; mutations
+are not automatically retried.
+
+The headline member count comes from the API's distinct active-club count,
+including Presidents. An inclusive overview supplies archive cards and
+department counts. Searching/filtering cards does not change the headline
+count. Archive copy reflects the existing current-status leaderboard filtering;
+it does not promise date-aware historical visibility.
+
+English/Arabic messages, responsive grids, RTL drawer placement, theme tokens,
+and basic loading/error/empty states are included as foundations for the next
+step, keeping these working controls consistent with the rest of the app.
+
+Validation: frontend typecheck and production build pass (the build uses
+Infisical's development frontend settings); ESLint reports zero errors and 18
+existing warnings. Isolated Chromium checks render the actual page/components
+with mocked Clerk metadata and API responses. They cover both read-only admin
+roles, Board leadership visibility, distinct counts, seat and roster changes,
+expected-tenure payloads, conflict recovery, settings, archive/restore, creation,
+Arabic mobile layout, and query error/empty states. These are component-flow
+checks, not a deployed frontend/backend or live Clerk integration test.
+
+Backend Ruff format/check pass and the isolated MySQL suite reports 771 passed,
+48 skipped, and one expected failure. The documented `mypy` command is unavailable
+in the current dependencies; Pyright also reports environment/import-resolution
+errors. Step 4 changes backend documentation only, not Python or migrations.
+
 ## Next steps
 
-4. Add the page, navigation, two equal President slots, department cards,
-   creation dialog, and Roster/Leadership/Settings drawer. Reuse the existing
-   member picker and request/query components. Hide Leadership for the Board.
-5. Add bilingual messages, RTL and mobile layouts, theme support, meaningful
-   loading/error/empty states, and cache refreshes. Count distinct people.
+5. Refine bilingual copy, RTL/mobile layouts, themes, loading/error/empty states,
+   and cache refresh behavior across the integrated application.
 6. Validate API permissions, transactions and concurrent replacements, archived
    departments, and frontend flows against the supplied Figma source.
 
