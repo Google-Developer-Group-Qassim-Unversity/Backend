@@ -149,7 +149,12 @@ def test_public_structure_is_anonymous_active_and_display_only(sign_in, seed_ref
 
 @pytest.mark.parametrize(
     ("full_name", "public_name"),
-    [("Ahmed", "Ahmed"), ("Ahmed Ali", "Ahmed Ali"), ("  Ahmed   Mohammed   Ali  ", "Ahmed Ali")],
+    [
+        ("Ahmed", "Ahmed"),
+        ("Ahmed Ali", "Ahmed Ali"),
+        ("  Ahmed   Mohammed   Ali  ", "Ahmed Ali"),
+        ("بدر خالد الدخيل الله", "بدر الدخيل الله"),
+    ],
 )
 def test_public_name_keeps_only_first_and_family_name(full_name, public_name):
     assert router._public_name(full_name) == public_name

@@ -48,7 +48,10 @@ ManagementActor = Annotated[str, Depends(_management_actor)]
 def _public_name(full_name: str) -> str:
     """Limit public names to the first and final whitespace-delimited parts."""
     parts = full_name.split()
-    return " ".join(parts if len(parts) <= 2 else (parts[0], parts[-1]))
+    if len(parts) <= 2:
+        return " ".join(parts)
+    family_name = parts[-2:] if parts[-1] == "الله" else parts[-1:]
+    return " ".join([parts[0], *family_name])
 
 
 def _show_public_members(department: Departments) -> bool:
