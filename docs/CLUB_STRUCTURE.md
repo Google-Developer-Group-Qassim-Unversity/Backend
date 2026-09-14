@@ -271,10 +271,47 @@ Backend Ruff format/check pass; the isolated MySQL suite reports 771 passed,
 48 skipped, and one expected failure. `mypy` remains unavailable in the existing
 dependencies. This step changes backend documentation only.
 
-## Next step
+## Step 6: integration and regression validation
 
-6. Validate API permissions, transactions and concurrent replacements, archived
-   departments, and frontend flows against the supplied Figma source.
+`tests/test_club_structure_browser.py` starts a local API server with independent
+request sessions against the migrated MySQL test database. The checked-in
+`Frontend/tests/club-structure/` runner bundles the actual page, controls, API
+client, query provider, translations, and fresh Tailwind CSS. Chromium sends real
+HTTP requests. Only Clerk verification/browser metadata and the external
+leaderboard cache call are stubbed; permission guards and club data operations
+remain unchanged. Test records are uniquely scoped and cleaned up on failure.
+
+| Requirement | Validation |
+| --- | --- |
+| API permissions | Route inventory and full read/write role matrix; browser read-only controls plus direct forbidden requests |
+| Atomic replacements | Rollback and constraint tests; independent MySQL sessions compete for vacant/occupied seats and exercise deadlock recovery |
+| Stale clients | An open browser picker retains its original expected tenure while another HTTP caller replaces it; confirmation returns 409 and refreshes the winner |
+| President/Board independence | Browser membership and President changes retain the Board roster; competing HTTP replacements leave one current holder and intact history |
+| Archive/restore | Two cycles preserve exact roster/tenure records, block assignments, and restore active views |
+| Existing points | A published event earns department points; two archive/restore cycles retain totals, event history, and club tenure |
+| Frontend design | Supplied Figma React source compared with overview statistics, search/status filters, cards, creation, roster/leadership/settings, and the 480px drawer; English/Arabic mobile checks in both themes |
+
+The planned differences from the reference remain explicit: two equal President
+seats, distinct-person counts, Board behavior controlled by capability, existing
+member selection, app theme/navigation, and the documented current-status archive
+visibility. The reference's future-only archive wording does not match the
+existing leaderboard and is not promised by this implementation.
+
+Run `RUN_CLUB_BROWSER=1 uv run pytest` from `Backend/` after installing frontend
+dependencies and Playwright Chromium. Set `CHROMIUM_PATH` to use a system browser.
+Leave `DATABASE_URL` unset to use the isolated MySQL container. See
+`Frontend/tests/club-structure/README.md` for setup and screenshot locations.
+The new `club-structure-integration.yml` workflow runs the suite on PRs and saves
+browser screenshots. Ordinary backend runs skip the opt-in browser test.
+
+Final local validation with the browser enabled: **773 passed, 48 skipped,
+1 expected failure**, with two dependency deprecation warnings. Ruff format/check,
+frontend typecheck, and the production build pass. ESLint reports zero errors
+and the existing 18 warnings. `mypy` remains absent from the backend environment.
+Workflow YAML parses locally; the GitHub Actions job is configured for the PR.
+
+This validates the component/API/database integration. Live Clerk sign-in,
+production deployment, and shared-database migration remain rollout work.
 
 ## Archive scope and rollout
 

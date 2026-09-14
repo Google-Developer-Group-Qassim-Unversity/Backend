@@ -1,6 +1,6 @@
 """Exercise real guards and the Step 2 services through the HTTP boundary."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -384,3 +384,50 @@ def test_openapi_describes_required_replacement_fields_and_bounded_history(clien
     history = schema["paths"]["/club-structure/history"]["get"]
     limit = next(p for p in history["parameters"] if p["name"] == "limit")
     assert limit["schema"]["maximum"] == 100
+
+
+def test_repeated_archive_restore_retains_points_and_assignment_history(sign_in, seed_refs, outbound):
+    """Club status must preserve both explicit tenure and legacy event points."""
+    from tests.factories import make_create_event_payload, make_event
+
+    client = sign_in()
+    department_id = seed_refs.dept_design.id
+    path = f"{PREFIX}/departments/{department_id}"
+    semesters = client.get("/points/semesters").json()
+    semester_id = semesters["current_semester"]
+    semester = next(s for s in semesters["details"] if s["id"] == semester_id)
+    event_date = (datetime.fromisoformat(semester["start_date"]) + timedelta(days=1)).isoformat()
+    original = replace(client, f"/departments/{department_id}/leadership/leader", seed_refs.ahmed.id).json()
+    response = client.post(
+        "/events/",
+        json=make_create_event_payload(
+            seed_refs,
+            event=make_event(status="open", start_datetime=event_date, end_datetime=event_date),
+            department_id=department_id,
+        ),
+    )
+    assert response.status_code == 201, response.text
+
+    def department_totals():
+        response = client.get("/points/departments/total", params={"semester": semester_id})
+        assert response.status_code == 200, response.text
+        return [row for rows in response.json().values() for row in rows]
+
+    points_before = next(row for row in department_totals() if row["department_id"] == department_id)
+    assert points_before["total_points"] == seed_refs.dept_action.points
+    event_history_before = client.get(f"/points/departments/{department_id}", params={"semester": semester_id}).json()
+    assert event_history_before["events"][0]["event_id"] == response.json()["id"]
+    tenure_before = client.get(f"{PREFIX}/history", params={"department_id": department_id}).json()
+
+    for _ in range(2):
+        assert client.post(path + "/archive").status_code == 200
+        assert all(row["department_id"] != department_id for row in department_totals())
+        assert client.get(path + "/roster").json() == [original]
+        assert client.get(f"{PREFIX}/history", params={"department_id": department_id}).json() == tenure_before
+        assert client.post(path + "/restore").status_code == 200
+        assert next(row for row in department_totals() if row["department_id"] == department_id) == points_before
+        assert (
+            client.get(f"/points/departments/{department_id}", params={"semester": semester_id}).json()
+            == event_history_before
+        )
+        assert client.get(path + "/roster").json() == [original]
