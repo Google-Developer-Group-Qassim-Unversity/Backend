@@ -42,6 +42,7 @@ STRICTNESS = {
 
 # route -> the strictest guard it enforces, or None when the route is public
 EXPECTED_AUTH: dict[str, str | None] = {
+    "GET /club-structure/public": None,
     "GET /club-structure": "admin_guard",
     "GET /club-structure/departments/{department_id:int}": "admin_guard",
     "GET /club-structure/departments/{department_id:int}/roster": "admin_guard",

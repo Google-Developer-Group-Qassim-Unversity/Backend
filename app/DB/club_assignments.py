@@ -18,6 +18,17 @@ def get_department_roster(session: Session, department_id: int) -> Sequence[Club
     ).all()
 
 
+def get_active_department_rosters(session: Session) -> Sequence[ClubAssignments]:
+    """Load every current assignment for active departments in one query."""
+    return session.scalars(
+        select(ClubAssignments)
+        .join(Departments, Departments.id == ClubAssignments.department_id)
+        .where(ClubAssignments.ends_at.is_(None), Departments.active == 1)
+        .options(selectinload(ClubAssignments.member))
+        .order_by(ClubAssignments.department_id, ClubAssignments.role, ClubAssignments.member_id)
+    ).all()
+
+
 def get_presidents(session: Session) -> Sequence[ClubAssignments]:
     return session.scalars(
         select(ClubAssignments)

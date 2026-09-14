@@ -71,6 +71,24 @@ class ClubOverviewResponse(BaseModel):
     total_members: int
 
 
+class PublicClubDepartmentResponse(BaseModel):
+    id: int
+    name: str
+    ar_name: str
+    type: DepartmentsType
+    color: str
+    icon: str
+    leadership_enabled: bool
+    leader: str | None
+    deputy: str | None
+    members: list[str]
+
+
+class PublicClubStructureResponse(BaseModel):
+    presidents: list[str]
+    departments: list[PublicClubDepartmentResponse]
+
+
 class TenureHistoryResponse(BaseModel):
     items: list[ClubAssignmentResponse]
     limit: int

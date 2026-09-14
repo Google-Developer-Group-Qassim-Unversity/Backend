@@ -106,6 +106,55 @@ def test_empty_overview_has_two_equal_vacant_seats_and_zero_counts(sign_in, seed
     assert all(d["member_count"] == 0 and d["leader"] is None and d["deputy"] is None for d in body["departments"])
 
 
+def test_public_structure_is_anonymous_active_and_display_only(sign_in, seed_refs, db_session):
+    client = sign_in()
+    design = seed_refs.dept_design
+    business = seed_refs.dept_business
+    design.name = "Operations"
+    design.ar_name = "قسم التشغيل"
+    design.color = "#22c55e"
+    design.icon = "users"
+    seed_refs.ahmed.name = "Ahmed Mohammed Ali"
+    seed_refs.sara.name = "Sara Abdullah Khalid"
+    db_session.flush()
+
+    add(client, design.id, seed_refs.ahmed.id)
+    assert replace(client, f"/departments/{design.id}/leadership/leader", seed_refs.sara.id).status_code == 200
+    add(client, business.id, seed_refs.sara.id)
+    assert replace(client, "/presidents/1", seed_refs.ahmed.id).status_code == 200
+
+    app.dependency_overrides.pop(config.CLERK_GUARD, None)
+    response = client.get(PREFIX + "/public")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["presidents"] == ["Ahmed Ali"]
+    cards = {department["id"]: department for department in body["departments"]}
+    assert set(cards) == {design.id, business.id}
+    assert cards[design.id] == {
+        "id": design.id,
+        "name": "Operations",
+        "ar_name": "قسم التشغيل",
+        "type": design.type.value,
+        "color": "#22c55e",
+        "icon": "users",
+        "leadership_enabled": True,
+        "leader": "Sara Khalid",
+        "deputy": None,
+        "members": [],
+    }
+    assert cards[business.id]["members"] == ["Sara Khalid"]
+    for private_field in ("member_id", "role", "starts_at", "ends_at", "changed_by", "ended_by"):
+        assert private_field not in response.text
+
+
+@pytest.mark.parametrize(
+    ("full_name", "public_name"),
+    [("Ahmed", "Ahmed"), ("Ahmed Ali", "Ahmed Ali"), ("  Ahmed   Mohammed   Ali  ", "Ahmed Ali")],
+)
+def test_public_name_keeps_only_first_and_family_name(full_name, public_name):
+    assert router._public_name(full_name) == public_name
+
+
 def test_super_admin_creates_and_updates_department_and_refreshes_public_cache(sign_in, db_session, cache_reset):
     client = sign_in()
     response = client.post(f"{PREFIX}/departments", json=SETTINGS)
@@ -257,7 +306,7 @@ def test_archive_blocks_roster_mutations_but_preserves_reads_and_restores(sign_i
     restored = client.post(PREFIX + path + "/restore")
     assert restored.status_code == 200 and restored.json()["active"] is True
     assert replace(client, path + "/leadership/leader", seed_refs.sara.id, original["id"]).status_code == 200
-    assert cache_reset.call_count == 2
+    assert cache_reset.call_count == 4
 
 
 def test_history_filters_and_pagination(sign_in, seed_refs):
