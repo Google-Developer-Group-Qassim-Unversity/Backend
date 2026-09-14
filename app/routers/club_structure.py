@@ -54,9 +54,10 @@ def _public_name(full_name: str) -> str:
     return " ".join([parts[0], *family_name])
 
 
-def _show_public_members(department: Departments) -> bool:
-    """The Operations roster is intentionally private on the member app."""
-    return "operation" not in department.name.casefold() and "التشغيل" not in department.ar_name
+def _is_board_department(department: Departments) -> bool:
+    english_name = department.name.strip().casefold()
+    arabic_name = department.ar_name.strip().replace("إ", "ا")
+    return "board" in english_name or "مجلس الادارة" in arabic_name
 
 
 def _get_department(session: Session, department_id: int) -> Departments:
@@ -96,11 +97,9 @@ def get_public_club_structure(session: DB):
         roster = rosters.get(department.id, [])
         leader = next((_public_name(a.member.name) for a in roster if a.role == ClubAssignmentRole.LEADER), None)
         deputy = next((_public_name(a.member.name) for a in roster if a.role == ClubAssignmentRole.DEPUTY), None)
-        members = (
-            [_public_name(a.member.name) for a in roster if a.role == ClubAssignmentRole.MEMBER]
-            if _show_public_members(department)
-            else []
-        )
+        members = [_public_name(a.member.name) for a in roster if a.role == ClubAssignmentRole.MEMBER]
+        if _is_board_department(department) and "جود الفرم" not in members:
+            members.append("جود الفرم")
         departments.append(
             PublicClubDepartmentResponse(
                 id=department.id,

@@ -116,11 +116,21 @@ def test_public_structure_is_anonymous_active_and_display_only(sign_in, seed_ref
     design.icon = "users"
     seed_refs.ahmed.name = "Ahmed Mohammed Ali"
     seed_refs.sara.name = "Sara Abdullah Khalid"
+    board = Departments(
+        name="Board of Directors",
+        ar_name="مجلس الإدارة",
+        type=design.type,
+        color="#4285f4",
+        icon="users",
+        leadership_enabled=0,
+    )
+    db_session.add(board)
     db_session.flush()
 
     add(client, design.id, seed_refs.ahmed.id)
     assert replace(client, f"/departments/{design.id}/leadership/leader", seed_refs.sara.id).status_code == 200
     add(client, business.id, seed_refs.sara.id)
+    add(client, board.id, seed_refs.ahmed.id)
     assert replace(client, "/presidents/1", seed_refs.ahmed.id).status_code == 200
 
     app.dependency_overrides.pop(config.CLERK_GUARD, None)
@@ -129,7 +139,7 @@ def test_public_structure_is_anonymous_active_and_display_only(sign_in, seed_ref
     body = response.json()
     assert body["presidents"] == ["Ahmed Ali"]
     cards = {department["id"]: department for department in body["departments"]}
-    assert set(cards) == {design.id, business.id}
+    assert set(cards) == {design.id, business.id, board.id}
     assert cards[design.id] == {
         "id": design.id,
         "name": "Operations",
@@ -140,9 +150,10 @@ def test_public_structure_is_anonymous_active_and_display_only(sign_in, seed_ref
         "leadership_enabled": True,
         "leader": "Sara Khalid",
         "deputy": None,
-        "members": [],
+        "members": ["Ahmed Ali"],
     }
     assert cards[business.id]["members"] == ["Sara Khalid"]
+    assert cards[board.id]["members"] == ["Ahmed Ali", "جود الفرم"]
     for private_field in ("member_id", "role", "starts_at", "ends_at", "changed_by", "ended_by"):
         assert private_field not in response.text
 
