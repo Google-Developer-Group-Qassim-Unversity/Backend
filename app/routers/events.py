@@ -9,6 +9,7 @@ from app.DB import (
 )
 
 from app.routers.models import (
+    PaginatedEvents_model,
     Events_model,
     ConflictResponse,
     NotFoundResponse,
@@ -30,7 +31,7 @@ from app.leaderboard_cache import reset_leaderboard_cache
 from app.services.google_client import set_form_publish_state
 from app.semesters import resolve_semester, semester_date_bounds
 from time import perf_counter
-from typing import Annotated
+from typing import Annotated, Literal
 from app.exceptions import DataIntegrityError
 from app.dependencies import DB
 from app.DB.schema import EventsLocationType, EventsStatus, FormType
@@ -64,6 +65,40 @@ def get_all_events(session: DB, semester: Annotated[int | str, Query()] = "all")
         f"fetched [{len(events)}] events DB took [{(end - start) * 1000:.2f}]ms to execute (semester={semester})"
     )
     return events
+
+
+@router.get(
+    "/paginated",
+    status_code=status.HTTP_200_OK,
+    response_model=PaginatedEvents_model,
+    dependencies=[Depends(admin_guard)],
+)
+def list_events_paginated(
+    session: DB,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    semester: Annotated[int | str, Query()] = "all",
+    status_filter: Annotated[Literal["draft", "open", "active", "closed"] | None, Query(alias="status")] = None,
+    search: Annotated[str | None, Query()] = None,
+    exclude_custom: Annotated[bool, Query()] = False,
+):
+    """One page of events for the admin table - filtered and counted in the
+    database. The full-array GET / is left intact for the leaderboard app and
+    the dashboard aggregates."""
+    start_date = end_date = None
+    if semester != "all":
+        try:
+            semester_id = int(semester)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Semester '{semester}' not found")
+        resolved = resolve_semester(session, semester_id)
+        start_date, end_date = semester_date_bounds(resolved)
+
+    offset = (page - 1) * page_size
+    total = events_queries.count_events(session, start_date, end_date, status_filter, search)
+    items = events_queries.get_events_paginated(session, page_size, offset, start_date, end_date, status_filter, search)
+    total_pages = (total + page_size - 1) // page_size if page_size else 0
+    return {"items": items, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
 
 
 @router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model)

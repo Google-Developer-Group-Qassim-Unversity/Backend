@@ -1,7 +1,7 @@
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.exceptions import EventNotFound
 from .schema import (
@@ -44,6 +44,43 @@ def get_events_by_semester(session: Session, start_date: str, end_date: str):
     )
     events = session.scalars(statement).all()
     return events
+
+
+def _apply_event_filters(stmt, start_date=None, end_date=None, status=None, search=None, exclude_custom=False):
+    """Shared WHERE clauses for the paginated list: optional semester bounds,
+    status, and a name search. Applied to both the page query and its count."""
+    if start_date is not None and end_date is not None:
+        stmt = stmt.where(Events.end_datetime >= start_date, Events.end_datetime < end_date)
+    if status is not None:
+        stmt = stmt.where(Events.status == status)
+    if search and search.strip():
+        stmt = stmt.where(Events.name.like(f"%{search.strip()}%"))
+    if exclude_custom:
+        # "none"/"hidden" location types are custom point activities - they live
+        # on the points page, not the events list.
+        stmt = stmt.where(Events.location_type.notin_([EventsLocationType.NONE, EventsLocationType.HIDDEN]))
+    return stmt
+
+
+def count_events(session: Session, start_date=None, end_date=None, status=None, search=None) -> int:
+    stmt = _apply_event_filters(select(func.count()).select_from(Events), start_date, end_date, status, search)
+    return session.scalar(stmt) or 0
+
+
+def get_events_paginated(
+    session: Session,
+    limit: int,
+    offset: int,
+    start_date=None,
+    end_date=None,
+    status=None,
+    search=None,
+    exclude_custom=False,
+):
+    stmt = _apply_event_filters(select(Events), start_date, end_date, status, search, exclude_custom)
+    # newest first, id as the deterministic tiebreaker for stable page edges.
+    stmt = stmt.order_by(Events.start_datetime.desc(), Events.id.desc()).offset(offset).limit(limit)
+    return session.scalars(stmt).all()
 
 
 def get_actions_by_event_id(session: Session, event_id: int):

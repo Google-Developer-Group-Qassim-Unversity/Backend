@@ -847,9 +847,10 @@ def delete_email_template(template_id: int, session: DB):
 def list_email_jobs(
     session: DB,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
     status_filter: Annotated[Optional[EmailJobsStatus], Query(alias="status")] = None,
 ):
-    return job_queries.get_jobs(session, limit=limit, status=status_filter)
+    return job_queries.get_jobs(session, limit=limit, status=status_filter, offset=offset)
 
 
 @router.get(

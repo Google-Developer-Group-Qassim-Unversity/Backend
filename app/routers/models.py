@@ -15,6 +15,15 @@ class BaseClassModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PaginationMeta_model(BaseClassModel):
+    """Shared page metadata for the paginated list endpoints."""
+
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 class Events_model(BaseClassModel):
     id: int | None = None
     name: str
@@ -178,6 +187,14 @@ class CreatedMemberModel(BaseClassModel):
 
 class MemberWithRole_model(Member_model):
     role: RoleType
+
+
+class MemberStats_model(BaseClassModel):
+    total: int
+    authenticated: int
+    manual: int
+    male: int
+    female: int
 
 
 class Get_Submission_model(BaseClassModel):
@@ -441,3 +458,11 @@ class EventWithAttendance_model(Events_model):
 class MemberEvents_model(BaseClassModel):
     attended: list[EventWithAttendance_model]
     participated: list[Events_model]
+
+
+class PaginatedEvents_model(PaginationMeta_model):
+    items: list[Events_model]
+
+
+class PaginatedMembers_model(PaginationMeta_model):
+    items: list[MemberWithActivity_model]
