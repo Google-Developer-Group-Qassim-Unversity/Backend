@@ -12,9 +12,12 @@ from app.DB import (
 )
 
 from app.DB.schema import Events, Logs
+from app.DB.wallet import get_public_profile_by_uuid
 from app.routers.models import (
     EventAttendanceResponse,
     ManualAttendanceRequest,
+    ScanAttendanceRequest,
+    ScanAttendanceResponse,
     BackfillAttendanceRequest,
     BackfillAttendanceResponse,
 )
@@ -309,6 +312,45 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
 
     session.commit()
     return {"success": success_count, "failed": failed_count}
+
+
+@router.post(
+    "/{event_id}/scan",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(admin_guard)],
+    response_model=ScanAttendanceResponse,
+)
+def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB):
+    """Marks attendance from a member's wallet-card QR (`/p/{uuid}`), scanned by an admin."""
+    logger.info(f"Scan attendance for event [{event_id}], uuid [{request.uuid}]")
+
+    result = get_public_profile_by_uuid(session, request.uuid)
+    if not result:
+        logger.info(f"Scan attendance: no member found for uuid [{request.uuid}]")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+
+    member, _profile, _is_admin = result
+
+    event, event_log = get_event_with_attendable_log(session, event_id)
+    event_days = get_event_days(event)
+    if request.day is not None and (request.day < 1 or request.day > event_days):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Day {request.day} is out of range. Event has {event_days} day(s).",
+        )
+
+    target_date = get_target_date_for_day(event, request.day)
+
+    if is_member_marked_for_day(session, member.id, event_log.id, target_date):
+        logger.info(f"Scan attendance: member [{member.name}] already marked for event [{event.name}]")
+        return ScanAttendanceResponse(
+            status="already_marked", member_id=member.id, member_name=member.name, uni_id=member.uni_id
+        )
+
+    log_queries.create_member_log(session, member.id, event_log.id, target_date)
+    session.commit()
+    logger.info(f"Scan attendance: marked member [{member.name}] for event [{event.name}]")
+    return ScanAttendanceResponse(status="marked", member_id=member.id, member_name=member.name, uni_id=member.uni_id)
 
 
 @router.delete(

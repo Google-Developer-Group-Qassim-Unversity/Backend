@@ -428,6 +428,18 @@ class ManualAttendanceRequest(BaseModel):
     days: list[int] | None = None
 
 
+class ScanAttendanceRequest(BaseModel):
+    uuid: str
+    day: int | None = None
+
+
+class ScanAttendanceResponse(BaseClassModel):
+    status: Literal["marked", "already_marked"]
+    member_id: int
+    member_name: str
+    uni_id: str | None = None
+
+
 class CopyAttendanceRequest(BaseModel):
     source_day: int
     target_days: list[int]
