@@ -10,7 +10,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError, TimeoutError as SQLAlchemyTimeoutError
 
 from app.error_handlers import register_exception_handlers
-from app.exceptions import Conflict, DataIntegrityError, GatewayTimeout, MemberNotFound
+from app.exceptions import (
+    ClubStructureConflict,
+    Conflict,
+    DataIntegrityError,
+    GatewayTimeout,
+    InvalidClubStructure,
+    MemberNotFound,
+)
 
 
 def make_client(exc: Exception) -> TestClient:
@@ -30,6 +37,8 @@ def make_client(exc: Exception) -> TestClient:
         (MemberNotFound(42), 404, "Member with id '42' not found or does not exist"),
         (Conflict("Semester", "fall"), 409, "Semester with id 'fall' already exists"),
         (GatewayTimeout(), 504, "Upstream request timed out"),
+        (ClubStructureConflict("This assignment has changed."), 409, "This assignment has changed."),
+        (InvalidClubStructure("President slot must be 1 or 2."), 422, "President slot must be 1 or 2."),
     ],
 )
 def test_known_http_exceptions_keep_their_status_and_detail(exc, expected_status, expected_detail):

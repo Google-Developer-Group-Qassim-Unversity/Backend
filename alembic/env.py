@@ -6,6 +6,7 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
+from app.DB.main import _build_connect_args
 from app.DB.schema import Base
 
 config = context.config
@@ -58,8 +59,14 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    migration_url = config.get_main_option("sqlalchemy.url")
+    if not migration_url:
+        raise RuntimeError("sqlalchemy.url is required for online migrations")
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+        connect_args=_build_connect_args(migration_url),
     )
 
     with connectable.connect() as connection:

@@ -3,7 +3,9 @@ import datetime
 import enum
 
 from sqlalchemy import (
+    CheckConstraint,
     Column,
+    Computed,
     Date,
     DateTime,
     Enum,
@@ -16,7 +18,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.mysql import INTEGER, LONGTEXT, TEXT, TINYINT, VARCHAR
+from sqlalchemy.dialects.mysql import DATETIME, INTEGER, LONGTEXT, TEXT, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -62,6 +64,13 @@ class ActionsActionType(str, enum.Enum):
 class DepartmentsType(str, enum.Enum):
     ADMINISTRATIVE = "administrative"
     PRACTICAL = "practical"
+
+
+class ClubAssignmentRole(str, enum.Enum):
+    PRESIDENT = "president"
+    LEADER = "leader"
+    DEPUTY = "deputy"
+    MEMBER = "member"
 
 
 class EventsLocationType(str, enum.Enum):
@@ -227,10 +236,77 @@ class Departments(Base):
         VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
     )
     active: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    color: Mapped[str] = mapped_column(String(7), nullable=False, server_default=text("'#4285f4'"))
+    icon: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'users'"))
+    leadership_enabled: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    # The creation date of departments that predate this feature is unknown.
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime, nullable=True, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    )
 
     departments_logs: Mapped[list["DepartmentsLogs"]] = relationship(
         "DepartmentsLogs", back_populates="department", passive_deletes=True
     )
+
+
+class ClubAssignments(Base):
+    """Dated organizational roles; independent of application authorization.
+
+    Generated nullable keys enforce uniqueness only for current assignments.
+    President slots are equal seats, not ranks. Closing a period frees its seat
+    while retaining the member and actor references for tenure history.
+    """
+
+    __tablename__ = "club_assignments"
+    __table_args__ = (
+        ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_club_assignments_member", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_club_assignments_department", ondelete="RESTRICT"
+        ),
+        CheckConstraint(
+            "(role = 'president' AND department_id IS NULL AND president_slot IS NOT NULL "
+            "AND president_slot IN (1, 2)) OR "
+            "(role IN ('leader', 'deputy', 'member') AND department_id IS NOT NULL AND president_slot IS NULL)",
+            name="ck_club_assignments_scope",
+        ),
+        CheckConstraint("ends_at IS NULL OR ends_at >= starts_at", name="ck_club_assignments_period"),
+        Index("uq_club_assignments_current_member", "current_scope_id", "member_id", unique=True),
+        Index("uq_club_assignments_current_leader", "current_scope_id", "current_leadership_role", unique=True),
+        Index("uq_club_assignments_current_president", "current_president_slot", unique=True),
+        Index("ix_club_assignments_department_period", "department_id", "ends_at"),
+        Index("ix_club_assignments_member_period", "member_id", "starts_at"),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    department_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    role: Mapped[ClubAssignmentRole] = mapped_column(
+        Enum(ClubAssignmentRole, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    )
+    president_slot: Mapped[Optional[int]] = mapped_column(TINYINT(unsigned=True))
+    starts_at: Mapped[datetime.datetime] = mapped_column(
+        DATETIME(fsp=6), nullable=False, server_default=text("CURRENT_TIMESTAMP(6)")
+    )
+    ends_at: Mapped[Optional[datetime.datetime]] = mapped_column(DATETIME(fsp=6))
+    # Clerk subject IDs are available even when an admin has no members row.
+    changed_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    ended_by: Mapped[Optional[str]] = mapped_column(String(255))
+    current_scope_id: Mapped[Optional[int]] = mapped_column(
+        INTEGER(unsigned=True), Computed("CASE WHEN ends_at IS NULL THEN COALESCE(department_id, 0) END")
+    )
+    current_leadership_role: Mapped[Optional[str]] = mapped_column(
+        String(6), Computed("CASE WHEN ends_at IS NULL AND role IN ('leader', 'deputy') THEN role END")
+    )
+    current_president_slot: Mapped[Optional[int]] = mapped_column(
+        TINYINT(unsigned=True), Computed("CASE WHEN ends_at IS NULL THEN president_slot END")
+    )
+
+    # No delete cascades: removing a referenced person/department must not erase tenure.
+    member: Mapped["Members"] = relationship("Members")
+    department: Mapped[Optional["Departments"]] = relationship("Departments")
 
 
 class Events(Base):
