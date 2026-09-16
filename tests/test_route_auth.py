@@ -123,6 +123,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "POST /attendance/{event_id:int}": "authenticated_guard",
     "POST /attendance/{event_id}/backfill": "admin_guard",
     "POST /attendance/{event_id}/manual": "admin_guard",
+    "POST /attendance/{event_id}/scan": "admin_guard",
     "POST /cache/reset": "admin_guard",
     "POST /custom/departments": "admin_guard",
     "POST /custom/members": "admin_guard",
