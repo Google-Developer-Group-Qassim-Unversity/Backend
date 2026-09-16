@@ -15,6 +15,16 @@ class Conflict(KnownHttpException):
         super().__init__(status_code=409, detail=f"{resource} with id '{identifier}' already exists")
 
 
+class ClubStructureConflict(KnownHttpException):
+    def __init__(self, detail: str):
+        super().__init__(status_code=409, detail=detail)
+
+
+class InvalidClubStructure(KnownHttpException):
+    def __init__(self, detail: str):
+        super().__init__(status_code=422, detail=detail)
+
+
 class DataIntegrityError(HTTPException):
     """Exception raised when a data integrity violation is detected.
     (basically raise whenver somethign that should NEVER happen, happens.)

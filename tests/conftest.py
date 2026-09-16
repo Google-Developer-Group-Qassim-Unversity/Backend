@@ -122,7 +122,9 @@ def engine(database_url):
     This ensures tests run against the same database structure as production.
     """
 
-    engine = create_engine(database_url, pool_pre_ping=True, pool_recycle=3600)
+    engine = create_engine(
+        database_url, pool_pre_ping=True, pool_recycle=3600, connect_args=db_main._build_connect_args(database_url)
+    )
 
     print("[conftest] Running Alembic migrations...")
     alembic_cfg = Config("alembic.ini")

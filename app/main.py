@@ -28,6 +28,7 @@ from app.routers import (
     health,
     cache,
     wallet,
+    club_structure,
 )
 
 sentry_sdk.init(
@@ -92,3 +93,4 @@ app.include_router(submissions_manual.router)
 app.include_router(upload.router)
 app.include_router(cache.router)
 app.include_router(wallet.router)
+app.include_router(club_structure.router)
