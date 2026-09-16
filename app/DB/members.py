@@ -1,7 +1,7 @@
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_, asc, desc, case
 from app.DB.schema import Members, MembersLogs, Role, RoleType
 from app.exceptions import DataIntegrityError, MemberNotFound
 from app.routers.models import Member_model
@@ -65,6 +65,67 @@ def get_members(session: Session):
     statement = select(Members, last_activity_subq.c.last_activity).outerjoin(
         last_activity_subq, last_activity_subq.c.member_id == Members.id
     )
+    members = []
+    for member, last_activity in session.execute(statement).all():
+        member.last_activity = last_activity
+        members.append(member)
+    return members
+
+
+# Columns the members table is allowed to sort by, mapped to their ORM column.
+# Anything else falls back to name so a bad query param can never 500.
+_MEMBER_SORT_COLUMNS = {
+    "name": Members.name,
+    "uni_id": Members.uni_id,
+    "email": Members.email,
+    "created_at": Members.created_at,
+    "is_authenticated": Members.is_authenticated,
+}
+
+
+def _member_search_filter(search: str | None):
+    """A case-insensitive LIKE across the columns the UI search box covers."""
+    if not search or not search.strip():
+        return None
+    like = f"%{search.strip()}%"
+    return or_(
+        Members.name.like(like), Members.email.like(like), Members.uni_id.like(like), Members.phone_number.like(like)
+    )
+
+
+def count_members(session: Session, search: str | None = None) -> int:
+    stmt = select(func.count()).select_from(Members)
+    search_filter = _member_search_filter(search)
+    if search_filter is not None:
+        stmt = stmt.where(search_filter)
+    return session.scalar(stmt) or 0
+
+
+def get_members_paginated(
+    session: Session, limit: int, offset: int, search: str | None = None, sort_by: str = "name", order: str = "asc"
+):
+    """One page of members, carrying last_activity like get_members(), filtered
+    and ordered in the database so the client never loads the whole table."""
+    last_activity_subq = (
+        select(MembersLogs.member_id, func.max(MembersLogs.date).label("last_activity"))
+        .group_by(MembersLogs.member_id)
+        .subquery()
+    )
+    statement = select(Members, last_activity_subq.c.last_activity).outerjoin(
+        last_activity_subq, last_activity_subq.c.member_id == Members.id
+    )
+    search_filter = _member_search_filter(search)
+    if search_filter is not None:
+        statement = statement.where(search_filter)
+
+    if sort_by == "last_activity":
+        sort_column = last_activity_subq.c.last_activity
+    else:
+        sort_column = _MEMBER_SORT_COLUMNS.get(sort_by, Members.name)
+    direction = desc if order == "desc" else asc
+    # id is the tiebreaker so the page boundary is always deterministic.
+    statement = statement.order_by(direction(sort_column), asc(Members.id)).offset(offset).limit(limit)
+
     members = []
     for member, last_activity in session.execute(statement).all():
         member.last_activity = last_activity
@@ -274,3 +335,25 @@ def get_blast_recipients_alphabetical(session: Session, limit: int, exclude_ids:
     if exclude_ids:
         stmt = stmt.where(Members.id.notin_(exclude_ids))
     return session.scalars(stmt).all()
+
+
+def get_member_stats(session: Session) -> dict:
+    """Whole-table counts for the members page cards, in one grouped query so
+    the page never has to load every row to show its totals."""
+    row = session.execute(
+        select(
+            func.count().label("total"),
+            func.coalesce(func.sum(case((Members.is_authenticated == 1, 1), else_=0)), 0).label("authenticated"),
+            func.coalesce(func.sum(case((Members.gender == "Male", 1), else_=0)), 0).label("male"),
+            func.coalesce(func.sum(case((Members.gender == "Female", 1), else_=0)), 0).label("female"),
+        )
+    ).one()
+    total = int(row.total)
+    authenticated = int(row.authenticated)
+    return {
+        "total": total,
+        "authenticated": authenticated,
+        "manual": total - authenticated,
+        "male": int(row.male),
+        "female": int(row.female),
+    }

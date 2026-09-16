@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 from app.DB import members as member_queries
 from app.DB.schema import Members, RoleType
 
@@ -10,6 +10,8 @@ from app.routers.models import (
     ConflictResponse,
     CreatedMemberModel,
     MemberWithRole_model,
+    PaginatedMembers_model,
+    MemberStats_model,
     MemberUpdateModel,
     ManualMemberCreateModel,
     BatchCreateMembersRequest,
@@ -66,6 +68,37 @@ def update_current_member(updates: MemberUpdateModel, member: CurrentMember, ses
 def get_all_members(session: DB):
     members = member_queries.get_members(session)
     return members
+
+
+@router.get(
+    "/paginated",
+    status_code=status.HTTP_200_OK,
+    response_model=PaginatedMembers_model,
+    dependencies=[Depends(admin_guard)],
+)
+def list_members_paginated(
+    session: DB,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    search: Annotated[str | None, Query()] = None,
+    sort_by: Annotated[str, Query()] = "name",
+    order: Annotated[str, Query(pattern="^(asc|desc)$")] = "asc",
+):
+    """One page of members, searched/sorted/counted in the database. The full
+    list at GET / is untouched for callers that need every row."""
+    offset = (page - 1) * page_size
+    total = member_queries.count_members(session, search)
+    items = member_queries.get_members_paginated(session, page_size, offset, search, sort_by, order)
+    total_pages = (total + page_size - 1) // page_size if page_size else 0
+    return {"items": items, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
+
+
+@router.get(
+    "/stats", status_code=status.HTTP_200_OK, response_model=MemberStats_model, dependencies=[Depends(admin_guard)]
+)
+def get_member_stats(session: DB):
+    """Aggregate member counts for the page cards - one grouped COUNT query."""
+    return member_queries.get_member_stats(session)
 
 
 @router.post(
