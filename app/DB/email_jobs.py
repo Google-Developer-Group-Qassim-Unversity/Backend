@@ -88,10 +88,13 @@ def finish(session: Session, job_id: int, error: str | None = None) -> None:
     )
 
 
-def get_jobs(session: Session, limit: int = 50, status: EmailJobsStatus | None = None) -> list[EmailJobs]:
-    stmt = select(EmailJobs).order_by(desc(EmailJobs.created_at), desc(EmailJobs.id)).limit(limit)
+def get_jobs(
+    session: Session, limit: int = 50, status: EmailJobsStatus | None = None, offset: int = 0
+) -> list[EmailJobs]:
+    stmt = select(EmailJobs).order_by(desc(EmailJobs.created_at), desc(EmailJobs.id))
     if status is not None:
         stmt = stmt.where(EmailJobs.status == status)
+    stmt = stmt.offset(offset).limit(limit)
     return list(session.scalars(stmt).all())
 
 
