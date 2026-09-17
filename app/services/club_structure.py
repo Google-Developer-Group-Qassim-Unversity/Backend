@@ -7,7 +7,7 @@ Clerk subjects come from the authenticated caller, never from a request body.
 These services do not grant application permissions.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
@@ -155,14 +155,33 @@ def set_department_active(session: Session, department_id: int, *, active: bool)
 
 
 def add_department_member(session: Session, department_id: int, member_id: int, *, changed_by: str) -> ClubAssignments:
+    return add_department_members(session, department_id, [member_id], changed_by=changed_by)[0]
+
+
+def add_department_members(
+    session: Session, department_id: int, member_ids: Sequence[int], *, changed_by: str
+) -> list[ClubAssignments]:
+    """Add a roster selection atomically, using one timestamp for the batch."""
     _actor(changed_by)
+    if not member_ids:
+        raise InvalidClubStructure("At least one member is required.")
+    if len(member_ids) != len(set(member_ids)):
+        raise InvalidClubStructure("A member can only appear once in a roster batch.")
     with _change(session):
         _department(session, department_id)
-        _member(session, member_id)
-        if queries.lock_member_assignment(session, department_id, member_id) is not None:
-            raise ClubStructureConflict("This person is already on the department roster.")
-        assignment = _open(session, member_id, department_id, ClubAssignmentRole.MEMBER, _now(), changed_by)
-    return assignment
+        at = _now()
+        assignments = []
+        for member_id in member_ids:
+            _member(session, member_id)
+            if queries.lock_member_assignment(session, department_id, member_id) is not None:
+                detail = (
+                    "This person is already on the department roster."
+                    if len(member_ids) == 1
+                    else "One or more selected people are already on the department roster."
+                )
+                raise ClubStructureConflict(detail)
+            assignments.append(_open(session, member_id, department_id, ClubAssignmentRole.MEMBER, at, changed_by))
+    return assignments
 
 
 def remove_department_member(

@@ -17,6 +17,7 @@ from app.helpers import admin_guard, super_admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.club_structure_models import (
     AddDepartmentMemberRequest,
+    AddDepartmentMembersRequest,
     ClubAssignmentResponse,
     ClubDepartmentResponse,
     ClubOverviewResponse,
@@ -229,6 +230,18 @@ def add_club_department_member(
 ):
     assignment = service.add_department_member(session, department_id, payload.member_id, changed_by=actor)
     result = ClubAssignmentResponse.model_validate(assignment)
+    _commit_and_refresh(session)
+    return result
+
+
+@router.post(
+    "/departments/{department_id:int}/members/batch", status_code=201, response_model=list[ClubAssignmentResponse]
+)
+def add_club_department_members(
+    department_id: DatabaseId, payload: AddDepartmentMembersRequest, session: DB, actor: ManagementActor
+):
+    assignments = service.add_department_members(session, department_id, payload.member_ids, changed_by=actor)
+    result = [ClubAssignmentResponse.model_validate(assignment) for assignment in assignments]
     _commit_and_refresh(session)
     return result
 

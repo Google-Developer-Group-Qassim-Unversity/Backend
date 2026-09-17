@@ -116,6 +116,7 @@ authorization and four-field payload (`id`, `name`, `ar_name`, `type`).
 | POST | `/departments/{department_id}/archive` | Archive, retaining roster and points |
 | POST | `/departments/{department_id}/restore` | Restore the existing roster |
 | POST | `/departments/{department_id}/members` | Add a regular member; returns 201 |
+| POST | `/departments/{department_id}/members/batch` | Add multiple regular members atomically; returns 201 |
 | DELETE | `/departments/{department_id}/members/{member_id}` | Close the exact expected department tenure |
 | PUT | `/departments/{department_id}/leadership/{role}` | Fill, replace, or clear `leader`/`deputy` |
 | PUT | `/presidents/{slot}` | Fill, replace, or clear slot 1 or 2 |
@@ -138,7 +139,8 @@ editable through settings. Department creation/settings/archive/restore refresh
 the existing public leaderboard cache after a successful commit. Cache failures
 are logged without misreporting a committed change as a failed mutation.
 
-Membership creation accepts `{"member_id": 123}`. Leadership and President
+Membership creation accepts `{"member_id": 123}`. Atomic batch creation accepts
+`{"member_ids": [123, 456]}` with 1–100 unique IDs. Leadership and President
 writes require both `member_id` and `expected_assignment_id`, even when either
 value is `null`:
 
@@ -190,8 +192,10 @@ readable; their assignment controls become available again after restoration.
 
 The existing `MemberSelectDialog` gains optional single-selection, loading,
 error, and existing-members-only modes. Existing points callers retain their
-multiple-selection/create behavior. Club assignment flows use one existing
-member at a time and never create an account or alter application permissions.
+multiple-selection/create behavior. Roster additions can select multiple
+existing members at once; leadership and President assignments remain
+single-selection. These flows never create an account or alter application
+permissions.
 The shared `useMembers()` query now owns its token through `useApi()`; older
 standalone member calls and member creation remain on the legacy API adapter.
 

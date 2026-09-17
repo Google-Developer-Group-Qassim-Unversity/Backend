@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 from app.DB.schema import ClubAssignmentRole, DepartmentsType
 from app.services.club_structure import DepartmentSettings
@@ -100,6 +100,19 @@ class AddDepartmentMemberRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     member_id: MemberId
+
+
+class AddDepartmentMembersRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    member_ids: list[MemberId] = Field(min_length=1, max_length=100)
+
+    @field_validator("member_ids")
+    @classmethod
+    def require_unique_member_ids(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)):
+            raise ValueError("member_ids must not contain duplicates")
+        return value
 
 
 class ReplaceAssignmentRequest(BaseModel):

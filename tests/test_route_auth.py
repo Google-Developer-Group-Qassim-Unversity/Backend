@@ -52,6 +52,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "POST /club-structure/departments/{department_id:int}/archive": "super_admin_guard",
     "POST /club-structure/departments/{department_id:int}/restore": "super_admin_guard",
     "POST /club-structure/departments/{department_id:int}/members": "super_admin_guard",
+    "POST /club-structure/departments/{department_id:int}/members/batch": "super_admin_guard",
     "DELETE /club-structure/departments/{department_id:int}/members/{member_id:int}": "super_admin_guard",
     "PUT /club-structure/departments/{department_id:int}/leadership/{role}": "super_admin_guard",
     "PUT /club-structure/presidents/{slot:int}": "super_admin_guard",

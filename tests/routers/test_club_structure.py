@@ -24,6 +24,7 @@ WRITES = [
     ("POST", "/departments/{department_id}/archive", None),
     ("POST", "/departments/{department_id}/restore", None),
     ("POST", "/departments/{department_id}/members", {"member_id": 1}),
+    ("POST", "/departments/{department_id}/members/batch", {"member_ids": [1]}),
     ("DELETE", "/departments/{department_id}/members/{member_id}?expected_assignment_id=1", None),
     ("PUT", "/departments/{department_id}/leadership/leader", {"member_id": 1, "expected_assignment_id": None}),
     ("PUT", "/presidents/1", {"member_id": 1, "expected_assignment_id": None}),
@@ -198,6 +199,46 @@ def test_assignment_actor_comes_from_clerk_without_creating_a_member(sign_in, se
     assert "current_scope_id" not in assignment
     assert db_session.scalar(select(func.count()).select_from(Members)) == before
     assert db_session.scalars(select(Role)).all() == []
+
+
+def test_batch_adds_members_atomically_with_one_actor_and_timestamp(sign_in, seed_refs, db_session, monkeypatch):
+    client = sign_in(subject="clerk_batch_admin")
+    at = datetime(2026, 1, 2, 12, 0, 0, 654321)
+    monkeypatch.setattr(service, "_now", lambda: at)
+
+    response = client.post(
+        f"{PREFIX}/departments/{seed_refs.dept_design.id}/members/batch",
+        json={"member_ids": [seed_refs.ahmed.id, seed_refs.sara.id]},
+    )
+
+    assert response.status_code == 201, response.text
+    assignments = response.json()
+    assert [assignment["member_id"] for assignment in assignments] == [seed_refs.ahmed.id, seed_refs.sara.id]
+    assert {assignment["changed_by"] for assignment in assignments} == {"clerk_batch_admin"}
+    assert {assignment["starts_at"] for assignment in assignments} == {"2026-01-02T12:00:00.654321Z"}
+    assert db_session.scalar(select(func.count()).select_from(ClubAssignments)) == 2
+
+
+def test_batch_conflict_rolls_back_every_selected_member(sign_in, seed_refs):
+    client = sign_in()
+    department = seed_refs.dept_design.id
+    existing = add(client, department, seed_refs.ahmed.id)
+
+    response = client.post(
+        f"{PREFIX}/departments/{department}/members/batch", json={"member_ids": [seed_refs.sara.id, seed_refs.ahmed.id]}
+    )
+
+    assert response.status_code == 409
+    roster = client.get(f"{PREFIX}/departments/{department}/roster").json()
+    assert [assignment["id"] for assignment in roster] == [existing["id"]]
+
+
+@pytest.mark.parametrize("member_ids", [[], [1, 1], [True], ["1"], list(range(1, 102))])
+def test_batch_membership_payload_rejects_invalid_selections(sign_in, seed_refs, member_ids):
+    response = sign_in().post(
+        f"{PREFIX}/departments/{seed_refs.dept_design.id}/members/batch", json={"member_ids": member_ids}
+    )
+    assert response.status_code == 422
 
 
 @pytest.mark.parametrize("role", ["leader", "deputy"])
