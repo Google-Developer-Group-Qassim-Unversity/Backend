@@ -235,6 +235,11 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     service_account_email = config.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL.strip()
     private_key_pem = config.GOOGLE_WALLET_PRIVATE_KEY
 
+    if not issuer_id.isdigit():
+        raise ValueError(
+            "GOOGLE_WALLET_ISSUER_ID must be a numeric Google Wallet Issuer ID from the "
+            "Google Wallet API console, not a Google Pay merchant ID."
+        )
     if not service_account_email.endswith(".gserviceaccount.com"):
         raise ValueError("GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL is missing or invalid")
     if not private_key_pem.strip():
