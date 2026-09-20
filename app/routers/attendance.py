@@ -22,7 +22,7 @@ from app.routers.models import (
     BackfillAttendanceResponse,
 )
 from app.config import config
-from app.exceptions import DataIntegrityError, MemberNotFound
+from app.exceptions import AttendanceTokenAbsent, AttendanceTokenError, DataIntegrityError, MemberNotFound
 from app.helpers import (
     CurrentMember,
     validate_attendance_token,
@@ -86,12 +86,19 @@ def mark_attendance(
         try:
             token_result = validate_attendance_token(token, event_id)
             logger.info(f"Token validated successfully for event [{event_id}]")
-        except HTTPException as e:
-            logger.error(Exception(f"Token validation failed reason: '{e.detail}'"))
+        except AttendanceTokenError as e:
+            # Name the caller: without it a failed check-in cannot be traced back
+            # to a student, and attendance cannot be recovered after the event.
+            logger.error(
+                Exception(
+                    f"Token validation failed for member [{member.id}] uni_id [{member.uni_id}] "
+                    f"event [{event_id}] code [{e.code}] reason: '{e.detail}'"
+                )
+            )
             raise
     else:
-        logger.info("HTTP 400:No attendance token provided")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance token provided!")
+        logger.info(f"No attendance token provided by member [{member.id}] for event [{event_id}]")
+        raise AttendanceTokenAbsent()
 
     token_claims = token_result["payload"]
     require_time_window = token_claims.get("requireAttendanceTimeWindow", True)
