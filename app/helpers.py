@@ -7,7 +7,17 @@ from app.dependencies import DB
 from app.routers.models import Member_model
 from app.DB.schema import Members
 from app.DB import members as member_queries
-from app.exceptions import MemberNotFound
+from app.exceptions import (
+    AttendanceTokenBadAlgorithm,
+    AttendanceTokenBadSignature,
+    AttendanceTokenEventMismatch,
+    AttendanceTokenExpired,
+    AttendanceTokenInvalid,
+    AttendanceTokenMalformed,
+    AttendanceTokenMissingClaim,
+    AttendanceTokenNotYetValid,
+    MemberNotFound,
+)
 from json import dumps
 import jwt
 from datetime import datetime, date, timedelta
@@ -247,6 +257,11 @@ def credentials_to_member_model(credentials) -> Member_model:
 
 
 def validate_attendance_token(token: str, expected_event_id: int) -> dict:
+    """Decode a QR/link attendance token and check it belongs to this event.
+
+    Raises `AttendanceTokenError` subclasses, each carrying a `code` the member
+    app maps to localized copy. The `detail` strings here are for logs only.
+    """
     try:
         # 1. Decode & Verify
         payload = jwt.decode(token, config.JWT_SECRET, algorithms=["HS256"], options={"require": ["exp", "eventId"]})
@@ -255,34 +270,29 @@ def validate_attendance_token(token: str, expected_event_id: int) -> dict:
         token_event_id = payload.get("eventId")
 
         if int(token_event_id) != int(expected_event_id):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Token event ID does not match the requested event"
-            )
+            raise AttendanceTokenEventMismatch()
 
         return {"valid": True, "event_id": token_event_id, "payload": payload}
 
     except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,  # 401 is usually better for expired tokens
-            detail="رابط الحضور هذا منتهي الصلاحية. الرجاء التواصل مع المنظم للحصول على رابط جديد.",
-        )
-    except jwt.MissingRequiredClaimError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Token missing required claim: {e.claim}")
+        raise AttendanceTokenExpired()
 
-    # More specific "invalid token" causes:
+    except jwt.MissingRequiredClaimError as e:
+        raise AttendanceTokenMissingClaim(e.claim)
+
+    # InvalidSignatureError subclasses DecodeError, so it must be caught first -
+    # otherwise a wrong secret would be reported as a truncated link.
     except jwt.InvalidSignatureError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid attendance token signature")
+        raise AttendanceTokenBadSignature()
 
     except jwt.InvalidAlgorithmError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attendance token algorithm")
+        raise AttendanceTokenBadAlgorithm()
 
     except jwt.DecodeError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed attendance token")
+        raise AttendanceTokenMalformed()
 
     except jwt.ImmatureSignatureError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Attendance token not yet valid")
+        raise AttendanceTokenNotYetValid()
 
     except jwt.InvalidTokenError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid attendance token ({type(e).__name__})"
-        )
+        raise AttendanceTokenInvalid(type(e).__name__)

@@ -29,7 +29,10 @@ def register_exception_handlers(app: FastAPI) -> None:
         the error feed.
         """
         logger.info("%s %s -> %d %s", request.method, request.url.path, exc.status_code, exc.detail)
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
+        content: dict[str, object] = {"detail": exc.detail}
+        if exc.code:
+            content["code"] = exc.code
+        return JSONResponse(status_code=exc.status_code, content=content, headers=exc.headers)
 
     @app.exception_handler(OperationalError)
     def database_operational_error_handler(request: Request, exc: OperationalError) -> JSONResponse:
