@@ -64,9 +64,9 @@ vps 'grep "req:6cefc82ee87c" ~/.pm2/logs/GDG-backend-*.log'
 ## Reading a log line
 
 ```
-INFO [pid:1996265] [req:6cefc82ee87c] app.middleware: GET /health -> 200 in 3.9ms
-└─┬─┘ └──────┬────┘ └───────┬───────┘ └──────┬──────┘ └────────────┬──────────┘
-level  which worker    request id        source module          message
+INFO [pid:1996265] [req:6cefc82ee87c] [actor:812/441200931] app.middleware: POST /attendance/420 -> 200 in 3.9ms
+└─┬─┘ └──────┬────┘ └───────┬───────┘ └────────┬─────────┘ └──────┬──────┘ └───────────────┬────────────────┘
+level  which worker    request id       member id/uni_id     source module              message
 ```
 
 - **No timestamp in the line.** PM2 is started with `--time` and prefixes one
@@ -75,6 +75,12 @@ level  which worker    request id        source module          message
   concurrent requests interleave; the pid and request id are what untangle them.
 - **`req`** is `-` for anything outside a request: startup, shutdown, background
   tasks.
+- **`actor`** is the member the request is acting as, as `id/uni_id`, set the
+  moment `get_current_member` resolves the caller. It is `-` before that and for
+  anything unauthenticated. This is what makes a failure recoverable: grep the
+  actor out of the failing lines and you have the `uni_id` list to hand to the
+  attendance backfill. Before it existed, 18 students whose check-in failed
+  could not be identified at all.
 - **module** is the Python logger name, so it tells you the file:
   `app.routers.emails` is `app/routers/emails.py`.
 
@@ -103,8 +109,26 @@ log lines.
 | Which requests hit this code path | PM2, grep the module name |
 | Is this happening to many users | Sentry |
 
-Sentry's `LoggingIntegration` is on by default at `level=INFO` /
-`event_level=ERROR`. That means:
+### Check Sentry is actually receiving before you trust it
+
+`GET /health/sentry` answers this:
+
+```json
+{"ingesting": true, "rejections": 0, "last_rejection": null, "last_rejection_at": null}
+```
+
+`ingesting: false` means events are being **dropped at ingest** and PM2 is your
+only record. This is not hypothetical: the organization's error quota ran out on
+2026-09-12 and every event was rejected with `429 error_usage_exceeded` until
+2026-09-20. 1045 errors were logged on the VPS in that window and **none**
+reached Sentry. An empty Sentry issue feed means "no errors reported", which is
+not the same as "no errors".
+
+When `ingesting` is false, fix the quota in Sentry (plan limit, on-demand
+budget, or spike protection) and work from PM2 in the meantime.
+
+Sentry's `LoggingIntegration` is configured explicitly in `app/main.py` at
+`level=INFO` / `event_level=ERROR`. That means:
 
 - every `logger.info(...)` becomes a **breadcrumb** attached to any error event
   raised later in the same request
@@ -216,6 +240,22 @@ logger = logging.getLogger(__name__)   # module-scoped, never the root logger
 | `logger.warning` | recovered problems: a retry, a rejected input |
 | `logger.error` | a failure, no traceback available |
 | `logger.exception` | a failure inside `except:` - includes the traceback |
+
+**`warning` and `error` are not interchangeable, and the difference costs
+money.** `error` raises a Sentry event and consumes one of a finite monthly
+quota; `warning` does not. So the question is not "how bad does this feel" but
+**"is something broken that we would act on?"**
+
+- A student's attendance link is expired, truncated, or they never registered:
+  that is the system working. `warning`.
+- A `KnownHttpException` of any kind is by definition expected - the handler in
+  `app/error_handlers.py` already logs it. Do not also log it at `error`.
+- The database is unreachable, an upstream returned nonsense, an invariant
+  broke: `error` or `exception`.
+
+Getting this wrong is what caused the September 2026 outage of Sentry itself:
+routine bad attendance links were logged at `error`, 681 of them in a week, and
+they exhausted the quota that every real bug then needed.
 
 Do **not** reintroduce `print()`, and do not build a second logging mechanism.
 `tests/test_logging.py` fails the build if `print(`, `write_log` or `LogFile`

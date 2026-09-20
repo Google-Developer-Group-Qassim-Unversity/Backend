@@ -87,14 +87,12 @@ def mark_attendance(
             token_result = validate_attendance_token(token, event_id)
             logger.info(f"Token validated successfully for event [{event_id}]")
         except AttendanceTokenError as e:
-            # Name the caller: without it a failed check-in cannot be traced back
-            # to a student, and attendance cannot be recovered after the event.
-            logger.error(
-                Exception(
-                    f"Token validation failed for member [{member.id}] uni_id [{member.uni_id}] "
-                    f"event [{event_id}] code [{e.code}] reason: '{e.detail}'"
-                )
-            )
+            # warning, not error: a student with an expired or truncated link is
+            # an expected outcome of handing links to humans, not a fault in this
+            # service. Logged at ERROR these drowned the Sentry error quota - 681
+            # of 1045 events in one week - and took the real bugs down with them.
+            # The actor is already on the line; see app/logging_config.py.
+            logger.warning(f"Token validation failed for event [{event_id}] code [{e.code}] reason: '{e.detail}'")
             raise
     else:
         logger.info(f"No attendance token provided by member [{member.id}] for event [{event_id}]")
@@ -144,10 +142,10 @@ def mark_attendance(
         if require_registration:
             submissions = submission_queries.get_submission_by_form_and_member(session, form.id, member.id)
             if not submissions:
-                logger.error(f"HTTP 400: Member [{member.id}] has not submitted the form [{form.id}]")
+                logger.warning(f"Member has not submitted the form [{form.id}] for event [{event_id}]")
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما عبيت فورم الحدث")
             if submissions.is_accepted == 0:
-                logger.error(f"HTTP 400: Member [{member.id}] has not been accepted to the event [{event.name}]")
+                logger.warning(f"Member has not been accepted to the event [{event.name}]")
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما انقبلت في الحدث")
 
         logger.info(
