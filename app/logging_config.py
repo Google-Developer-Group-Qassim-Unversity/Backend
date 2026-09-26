@@ -7,6 +7,10 @@ line with a timestamp - so the formatter here deliberately does not add one.
 Four uvicorn workers share that one stream, so every line carries the PID and
 the id of the request that produced it; without those, concurrent requests
 interleave into something unreadable.
+
+Lines also carry the member the request is acting as. That is what makes a
+failure recoverable after the fact: an error nobody can attribute to a person
+is an error nobody can put right.
 """
 
 import logging
@@ -15,8 +19,12 @@ from contextvars import ContextVar
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
+# Who the request is acting as, set once the caller is resolved. "-" until then,
+# and for anything unauthenticated.
+actor_var: ContextVar[str] = ContextVar("actor", default="-")
+
 # no leading timestamp: `pm2 --time` already prefixes one
-LOG_FORMAT = "%(levelname)s [pid:%(process)d] [req:%(request_id)s] %(name)s: %(message)s"
+LOG_FORMAT = "%(levelname)s [pid:%(process)d] [req:%(request_id)s] [actor:%(actor)s] %(name)s: %(message)s"
 
 
 class RequestContextFilter(logging.Filter):
@@ -28,6 +36,7 @@ class RequestContextFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = request_id_var.get()
+        record.actor = actor_var.get()
         return True
 
 

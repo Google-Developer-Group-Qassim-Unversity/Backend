@@ -30,6 +30,19 @@ class StatusResponse(BaseClassModel):
     status: str
 
 
+class SentryHealthResponse(BaseClassModel):
+    """Whether error reporting is actually reaching Sentry.
+
+    `ingesting` false means errors are being dropped at ingest and this
+    service's only record of them is the pm2 log.
+    """
+
+    ingesting: bool
+    rejections: int
+    last_rejection: str | None = None
+    last_rejection_at: str | None = None
+
+
 class CountsResponse(BaseClassModel):
     """Per-item outcome of a bulk mutation."""
 

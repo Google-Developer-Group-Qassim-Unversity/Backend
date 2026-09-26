@@ -98,3 +98,31 @@ def test_no_print_calls_remain(path):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print"
     ]
     assert not calls, f"{path} still calls print() at line(s) {calls}"
+
+
+def test_filter_stamps_the_current_actor():
+    """Identity on every line is what makes a failure recoverable afterwards."""
+    from app.logging_config import actor_var
+
+    token = actor_var.set("42/441200000")
+    try:
+        record = make_record()
+        RequestContextFilter().filter(record)
+        assert getattr(record, "actor") == "42/441200000"
+    finally:
+        actor_var.reset(token)
+
+
+def test_filter_falls_back_for_anonymous_callers():
+    record = make_record()
+    RequestContextFilter().filter(record)
+    assert getattr(record, "actor") == "-"
+
+
+def test_log_format_carries_request_and_actor():
+    """Both ids must survive in the formatted line; the pm2 log is the only
+    record of anything Sentry rejects."""
+    from app.logging_config import LOG_FORMAT
+
+    assert "%(request_id)s" in LOG_FORMAT
+    assert "%(actor)s" in LOG_FORMAT

@@ -1,9 +1,11 @@
 import logging
+import sentry_sdk
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Annotated
 from app.config import config
 from app.dependencies import DB
+from app.logging_config import actor_var
 from app.routers.models import Member_model
 from app.DB.schema import Members
 from app.DB import members as member_queries
@@ -181,8 +183,15 @@ def get_current_member(session: DB, credentials=Depends(authenticated_guard)) ->
     Wraps the ``authenticated_guard`` + ``resolve_member`` pair that a route
     would otherwise repeat by hand. Like ``resolve_member`` it only flushes the
     ``clerk_user_id`` self-heal; a route that wants it persisted still commits.
+
+    Also the single place the caller becomes known, so it is where the actor is
+    published to logging and Sentry. Doing it here rather than in each route is
+    the point: every line logged for the rest of the request names the member
+    without any route having to remember to say so.
     """
-    return resolve_member(session, credentials)
+    member = resolve_member(session, credentials)
+    identify_actor(member)
+    return member
 
 
 CurrentMember = Annotated[Members, Depends(get_current_member)]
@@ -211,6 +220,18 @@ def get_member_or_none(session: DB, credentials=Depends(optional_clerk_guard)) -
 
 
 MemberOrGuest = Annotated[Members | None, Depends(get_member_or_none)]
+
+
+def identify_actor(member: Members) -> None:
+    """Attach the caller to this request's log lines and Sentry events.
+
+    `uni_id` is the id a human organizer can actually act on - it is what the
+    attendance sheets and the admin app are keyed by - so it leads. Sentry gets
+    the same identity, which is what turns "Users Impacted: 0" into a list of
+    people to follow up with.
+    """
+    actor_var.set(f"{member.id}/{member.uni_id}")
+    sentry_sdk.set_user({"id": str(member.id), "username": str(member.uni_id)})
 
 
 def credentials_to_member_model(credentials) -> Member_model:
