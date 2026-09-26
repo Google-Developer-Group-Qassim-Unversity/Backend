@@ -1,76 +1,111 @@
 from datetime import date
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .schema import Semesters
+from .schema import Events, Semesters, SemesterTerm
 
 
 def get_semesters(session: Session, public_only: bool = False):
-    """All semesters, newest first (semester codes increase over time)."""
+    """All semesters, newest first."""
     statement = select(Semesters).order_by(Semesters.start_date.desc())
     if public_only:
         statement = statement.where(Semesters.is_public == 1)
     return session.scalars(statement).all()
 
 
-def get_semester_by_id(session: Session, semester_id: int) -> Semesters | None:
-    return session.scalars(select(Semesters).where(Semesters.id == semester_id)).first()
+def get_semester_by_id(session: Session, semester_id: str) -> Semesters | None:
+    return session.get(Semesters, semester_id)
 
 
-def get_current_semester(session: Session) -> Semesters | None:
-    """The semester flagged as current, falling back to the most recent one."""
-    current = session.scalars(select(Semesters).where(Semesters.is_current == 1)).first()
-    if current:
-        return current
-    return session.scalars(select(Semesters).order_by(Semesters.start_date.desc())).first()
+def get_semester_by_hijri_code(session: Session, hijri_code: int) -> Semesters | None:
+    return session.scalars(select(Semesters).where(Semesters.hijri_code == hijri_code)).first()
 
 
-def create_semester(
-    session: Session,
-    semester_id: int,
-    name: str | None,
-    start_date: date,
-    end_date: date,
-    is_public: bool,
-    is_current: bool,
-) -> Semesters:
-    semester = Semesters(
-        id=semester_id, name=name, start_date=start_date, end_date=end_date, is_public=int(is_public), is_current=0
+def get_semester_started_by(session: Session, day: date, public_only: bool = False) -> Semesters | None:
+    """The most recent semester that had started on or before ``day``.
+
+    This one rule answers both "which semester is current" and "which semester
+    does an event belong to". The time between two terms belongs to the term
+    that just ended, never the next one; a summer term, when one exists, is an
+    ordinary semester and takes that period itself.
+    """
+    statement = select(Semesters).where(Semesters.start_date <= day)
+    if public_only:
+        statement = statement.where(Semesters.is_public == 1)
+    return session.scalars(statement.order_by(Semesters.start_date.desc()).limit(1)).first()
+
+
+def get_term_conflict(
+    session: Session, term: SemesterTerm, hijri_year: int, academic_year_start: int, exclude_id: str | None = None
+) -> Semesters | None:
+    """A semester that would share a code with this term, if any."""
+    statement = select(Semesters).where(
+        ((Semesters.hijri_year == hijri_year) | (Semesters.academic_year_start == academic_year_start))
+        & (Semesters.term == term)
     )
-    session.add(semester)
-    session.flush()
-    if is_current:
-        set_current_semester(session, semester_id)
-    return semester
+    if exclude_id is not None:
+        statement = statement.where(Semesters.id != exclude_id)
+    return session.scalars(statement).first()
 
 
-def update_semester(
-    session: Session, semester: Semesters, name: str | None, start_date: date, end_date: date, is_public: bool
-) -> Semesters:
-    semester.name = name
-    semester.start_date = start_date
-    semester.end_date = end_date
-    semester.is_public = int(is_public)
-    session.flush()
-    return semester
-
-
-def set_current_semester(session: Session, semester_id: int) -> None:
-    """Flag one semester as current, clearing the flag on every other row."""
-    session.execute(update(Semesters).where(Semesters.id != semester_id).values(is_current=0))
-    session.execute(update(Semesters).where(Semesters.id == semester_id).values(is_current=1))
-    session.flush()
-
-
-def delete_semester(session: Session, semester: Semesters) -> None:
-    session.delete(semester)
-    session.flush()
-
-
-def get_overlapping_semesters(session: Session, start_date: date, end_date: date, exclude_id: int | None = None):
+def get_overlapping_semesters(session: Session, start_date: date, end_date: date, exclude_id: str | None = None):
     """Semesters whose date range intersects [start_date, end_date]."""
     statement = select(Semesters).where(Semesters.start_date <= end_date, Semesters.end_date >= start_date)
     if exclude_id is not None:
         statement = statement.where(Semesters.id != exclude_id)
     return session.scalars(statement).all()
+
+
+def count_semester_events(session: Session, semester_id: str) -> int:
+    return session.scalar(select(func.count()).select_from(Events).where(Events.semester_id == semester_id)) or 0
+
+
+def create_semester(
+    session: Session,
+    term: SemesterTerm,
+    hijri_year: int,
+    academic_year_start: int,
+    start_date: date,
+    end_date: date,
+    is_public: bool,
+) -> Semesters:
+    semester = Semesters(
+        term=term,
+        hijri_year=hijri_year,
+        academic_year_start=academic_year_start,
+        start_date=start_date,
+        end_date=end_date,
+        is_public=int(is_public),
+    )
+    session.add(semester)
+    session.flush()
+    # The codes and name are generated by MySQL; load them back.
+    session.refresh(semester)
+    return semester
+
+
+def update_semester(
+    session: Session,
+    semester: Semesters,
+    term: SemesterTerm,
+    hijri_year: int,
+    academic_year_start: int,
+    start_date: date,
+    end_date: date,
+    is_public: bool,
+) -> Semesters:
+    semester.term = term
+    semester.hijri_year = hijri_year
+    semester.academic_year_start = academic_year_start
+    semester.start_date = start_date
+    semester.end_date = end_date
+    semester.is_public = int(is_public)
+    session.flush()
+    session.refresh(semester)
+    return semester
+
+
+def delete_semester(session: Session, semester: Semesters) -> None:
+    session.delete(semester)
+    session.flush()

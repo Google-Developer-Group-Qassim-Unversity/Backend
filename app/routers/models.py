@@ -36,6 +36,9 @@ class Events_model(BaseClassModel):
     image_url: str | None = None
     meeting_url: str | None = None
     is_official: int | None = None
+    # On input: file the event under this semester instead of deriving it from
+    # the end date. On output: the semester it is filed under.
+    semester_id: str | None = None
     created_at: datetime | None = None
 
 

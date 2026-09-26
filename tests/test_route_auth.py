@@ -61,7 +61,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "DELETE /custom/members/{log_id}": "admin_guard",
     "DELETE /emails/blast/templates/{template_id:int}": "admin_guard",
     "DELETE /events/{event_id:int}": "admin_guard",
-    "DELETE /semesters/{semester_id:int}": "super_admin_guard",
+    "DELETE /semesters/{semester_id}": "super_admin_guard",
     "GET /": None,
     "GET /actions": None,
     "GET /actions/all": None,
@@ -171,8 +171,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "PUT /events/{event_id:int}/meeting-url": "admin_guard",
     "PUT /events/{event_id:int}/status": "admin_guard",
     "PUT /forms/{form_id:int}": "admin_guard",
-    "PUT /semesters/{semester_id:int}": "super_admin_guard",
-    "PUT /semesters/{semester_id:int}/current": "super_admin_guard",
+    "PUT /semesters/{semester_id}": "super_admin_guard",
     "PUT /submissions/accept": "admin_guard",
     "PUT /wallet/me": "authenticated_guard",
 }

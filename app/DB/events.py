@@ -18,6 +18,7 @@ from .schema import (
 from app.routers.models import Events_model
 from app.config import config
 from app.helpers import get_effective_date
+from app.semesters import semester_for_event
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -36,21 +37,17 @@ def get_open_events(session: Session):
     return [dict(row._mapping) for row in results]
 
 
-def get_events_by_semester(session: Session, start_date: str, end_date: str):
-    statement = (
-        select(Events)
-        .where(Events.end_datetime >= start_date, Events.end_datetime < end_date)
-        .order_by(Events.start_datetime.desc())
-    )
+def get_events_by_semester(session: Session, semester_id: str):
+    statement = select(Events).where(Events.semester_id == semester_id).order_by(Events.start_datetime.desc())
     events = session.scalars(statement).all()
     return events
 
 
-def _apply_event_filters(stmt, start_date=None, end_date=None, status=None, search=None, exclude_custom=False):
-    """Shared WHERE clauses for the paginated list: optional semester bounds,
-    status, and a name search. Applied to both the page query and its count."""
-    if start_date is not None and end_date is not None:
-        stmt = stmt.where(Events.end_datetime >= start_date, Events.end_datetime < end_date)
+def _apply_event_filters(stmt, semester_id=None, status=None, search=None, exclude_custom=False):
+    """Shared WHERE clauses for the paginated list: optional semester, status,
+    and a name search. Applied to both the page query and its count."""
+    if semester_id is not None:
+        stmt = stmt.where(Events.semester_id == semester_id)
     if status is not None:
         stmt = stmt.where(Events.status == status)
     if search and search.strip():
@@ -62,22 +59,15 @@ def _apply_event_filters(stmt, start_date=None, end_date=None, status=None, sear
     return stmt
 
 
-def count_events(session: Session, start_date=None, end_date=None, status=None, search=None) -> int:
-    stmt = _apply_event_filters(select(func.count()).select_from(Events), start_date, end_date, status, search)
+def count_events(session: Session, semester_id=None, status=None, search=None) -> int:
+    stmt = _apply_event_filters(select(func.count()).select_from(Events), semester_id, status, search)
     return session.scalar(stmt) or 0
 
 
 def get_events_paginated(
-    session: Session,
-    limit: int,
-    offset: int,
-    start_date=None,
-    end_date=None,
-    status=None,
-    search=None,
-    exclude_custom=False,
+    session: Session, limit: int, offset: int, semester_id=None, status=None, search=None, exclude_custom=False
 ):
-    stmt = _apply_event_filters(select(Events), start_date, end_date, status, search, exclude_custom)
+    stmt = _apply_event_filters(select(Events), semester_id, status, search, exclude_custom)
     # newest first, id as the deterministic tiebreaker for stable page edges.
     stmt = stmt.order_by(Events.start_datetime.desc(), Events.id.desc()).offset(offset).limit(limit)
     events = session.scalars(stmt).all()
@@ -172,6 +162,7 @@ def create_event(session: Session, event_data: Events_model):
         is_official=event_data.is_official,
         image_url=event_data.image_url,
         meeting_url=event_data.meeting_url,
+        semester_id=semester_for_event(session, event_data.end_datetime, event_data.semester_id).id,
         created_at=datetime.now(),
     )
     session.add(new_event)
@@ -193,6 +184,10 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
     if not existing_event:
         return None
     try:
+        # An explicit semester wins. Otherwise a new end date re-derives it, and
+        # an unchanged one keeps whatever the event is already filed under.
+        if event_data.semester_id is not None or event_data.end_datetime.date() != existing_event.end_datetime.date():
+            existing_event.semester_id = semester_for_event(session, event_data.end_datetime, event_data.semester_id).id
         existing_event.name = event_data.name
         existing_event.location_type = event_data.location_type
         existing_event.location = event_data.location

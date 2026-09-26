@@ -22,6 +22,7 @@ Fixture chain (scope):
 """
 
 import os
+from datetime import date
 import pytest
 from typing import Generator
 
@@ -80,6 +81,19 @@ def _fresh_settings():
     reload_settings()
     yield
     reload_settings()
+
+
+TEST_TODAY = date(2026, 7, 15)
+
+
+@pytest.fixture(autouse=True)
+def _pinned_today(monkeypatch):
+    """Pin the club's calendar so "the current semester" does not depend on
+    when the suite runs. 2026-07-15 falls inside the seeded Summer 2026 (475).
+    Tests that need another day patch ``app.semesters.today`` again."""
+    import app.semesters
+
+    monkeypatch.setattr(app.semesters, "today", lambda: TEST_TODAY)
 
 
 @pytest.fixture(scope="session")

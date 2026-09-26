@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi.testclient import TestClient
 from tests.factories import make_create_event_payload, make_event
-from tests.utils import assert_2xx, assert_forbidden, assert_not_found, assert_bad_request
+from tests.utils import assert_2xx, assert_forbidden, assert_not_found, assert_bad_request, semester_id_on
 from app.DB.schema import Events, Submissions
 
 
@@ -230,6 +230,7 @@ def test_unauthorized_update_event(clerk_client: TestClient, db_session):
         description="test description",
         start_datetime=datetime(2026, 3, 1, 0, 0, 0),
         end_datetime=datetime(2026, 3, 2, 0, 0),
+        semester_id=semester_id_on(db_session, "2026-03-02"),
         status="draft",
         location_type="on-site",
         location="the moon",
@@ -276,6 +277,7 @@ def test_unauthorized_delete_event(clerk_client: TestClient, db_session):
         description="test description",
         start_datetime=datetime(2026, 3, 1, 0, 0, 0),
         end_datetime=datetime(2026, 3, 2, 0, 0),
+        semester_id=semester_id_on(db_session, "2026-03-02"),
         status="draft",
         location_type="on-site",
         location="the moon",

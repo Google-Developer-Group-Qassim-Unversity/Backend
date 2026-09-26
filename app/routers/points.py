@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.routers.models import BaseClassModel
 from datetime import date, datetime
 from app.helpers import is_super_admin, optional_clerk_guard
-from app.semesters import resolve_semester, semester_date_bounds
+from app.semesters import current_semester, resolve_semester
 from typing import Annotated
 from app.dependencies import DB
 
@@ -56,8 +56,11 @@ class Department_points_history_model(BaseClassModel):
 
 
 class Semester_summary_model(BaseClassModel):
+    # `id` stays the Hijri code (471): it is what `?semester=` takes and what
+    # the leaderboard app links with. The row's UUID is admin-only.
     id: int
-    name: str | None = None
+    gregorian_code: int
+    name: str
     start_date: date
     end_date: date
     is_current: bool
@@ -77,28 +80,23 @@ def _validate_semester_access(semester: Semesters, credentials: HTTPAuthorizatio
         if not credentials or not is_super_admin(credentials):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Semester {semester.id} is not publicly accessible. Super admin credentials required.",
+                detail=f"Semester {semester.hijri_code} is not publicly accessible. Super admin credentials required.",
             )
 
 
 def _resolve_requested_semester(
-    session: Session, semester_id: int | None, credentials: HTTPAuthorizationCredentials | None
+    session: Session, hijri_code: int | None, credentials: HTTPAuthorizationCredentials | None
 ) -> Semesters:
     """Resolve the semester a request is asking for, or its default, and authorize it.
 
     An explicit ``?semester`` is honoured as-is. When none is given the default is
     the current semester - but a public caller must not start getting 403s just
-    because a super admin made the current semester private, so they fall back to
-    the newest public one, matching what ``/points/semesters`` advertises.
+    because a super admin made the current semester private, so they get the
+    current *public* one, matching what ``/points/semesters`` advertises.
     """
-    if semester_id is not None:
-        semester = resolve_semester(session, semester_id)
-    else:
-        semester = resolve_semester(session, None)
-        if not semester.is_public and not (credentials and is_super_admin(credentials)):
-            public = semesters_queries.get_semesters(session, public_only=True)
-            if public:
-                semester = public[0]
+    semester = resolve_semester(session, hijri_code)
+    if hijri_code is None and not semester.is_public and not (credentials and is_super_admin(credentials)):
+        semester = current_semester(session, public_only=True) or semester
 
     _validate_semester_access(semester, credentials)
     return semester
@@ -111,17 +109,23 @@ def _resolve_requested_semester(
 def get_semesters(session: DB):
     """The publicly visible semesters, plus which one is the default."""
     public = semesters_queries.get_semesters(session, public_only=True)
-    current = semesters_queries.get_current_semester(session)
-    # A private current semester must not leak here - fall back to the newest public one
-    # so callers always get a usable default rather than null.
-    if current is not None and current.is_public:
-        current_id = current.id
-    else:
-        current_id = public[0].id if public else None
+    # A private current semester must not leak here - the default is the current public one.
+    current = current_semester(session, public_only=True)
+    current_code = current.hijri_code if current is not None else None
     return Semesters_model(
-        current_semester=current_id,
-        semesters=[semester.id for semester in public],
-        details=[Semester_summary_model.model_validate(semester) for semester in public],
+        current_semester=current_code,
+        semesters=[semester.hijri_code for semester in public],
+        details=[
+            Semester_summary_model(
+                id=semester.hijri_code,
+                gregorian_code=semester.gregorian_code,
+                name=semester.name,
+                start_date=semester.start_date,
+                end_date=semester.end_date,
+                is_current=semester.hijri_code == current_code,
+            )
+            for semester in public
+        ],
     )
 
 
@@ -132,8 +136,7 @@ def get_all_members_points(
     semester: Annotated[int | None, Query()] = None,
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
-    start_date, end_date = semester_date_bounds(resolved)
-    rows = points_queries.get_members_points_semester(session, start_date, end_date)
+    rows = points_queries.get_members_points_semester(session, resolved.id)
     return [Member_points_model.model_validate(row) for row in rows]
 
 
@@ -145,12 +148,11 @@ def get_member_points(
     semester: Annotated[int | None, Query()] = None,
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
-    start_date, end_date = semester_date_bounds(resolved)
 
-    member_points = points_queries.get_member_points_by_id_semester(session, start_date, end_date, member_id)
+    member_points = points_queries.get_member_points_by_id_semester(session, resolved.id, member_id)
     if member_points is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} does not exist")
-    member_points_history = points_queries.get_member_points_history_semester(session, member_id, start_date, end_date)
+    member_points_history = points_queries.get_member_points_history_semester(session, resolved.id, member_id)
 
     return Member_event_history_model(
         member=Member_points_model.model_validate(member_points),
@@ -165,8 +167,7 @@ def get_all_departments_points(
     semester: Annotated[int | None, Query()] = None,
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
-    start_date, end_date = semester_date_bounds(resolved)
-    departments_points = points_queries.get_departments_points_semester(session, start_date, end_date)
+    departments_points = points_queries.get_departments_points_semester(session, resolved.id)
     return Response_department_points_model(
         administrative=[
             Department_points_model.model_validate(department)
@@ -191,17 +192,14 @@ def get_department_points(
     semester: Annotated[int | None, Query()] = None,
 ):
     resolved = _resolve_requested_semester(session, semester, credentials)
-    start_date, end_date = semester_date_bounds(resolved)
 
-    department_points = points_queries.get_department_points_by_id_semester(
-        session, start_date, end_date, department_id
-    )
+    department_points = points_queries.get_department_points_by_id_semester(session, resolved.id, department_id)
     if department_points is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {department_id} does not exist"
         )
     department_points_history = points_queries.get_department_points_history_semester(
-        session, department_id, start_date, end_date
+        session, resolved.id, department_id
     )
 
     return Department_points_history_model(

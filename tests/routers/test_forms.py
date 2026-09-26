@@ -8,7 +8,14 @@ from app.DB.schema import Events, Forms, FormType
 from app.exceptions import DataIntegrityError, FormNotFound
 from app.routers.models import Form_model
 from tests.factories import make_create_event_payload, make_event
-from tests.utils import assert_2xx, assert_conflict, assert_forbidden, assert_not_found, assert_unprocessable
+from tests.utils import (
+    assert_2xx,
+    assert_conflict,
+    assert_forbidden,
+    assert_not_found,
+    assert_unprocessable,
+    semester_id_on,
+)
 
 
 def make_form_payload(event_id: int, **overrides):
@@ -141,6 +148,7 @@ def test_create_form_integrity_violation(db_session):
         description="test",
         start_datetime=datetime(2026, 3, 1),
         end_datetime=datetime(2026, 3, 2),
+        semester_id=semester_id_on(db_session, "2026-03-02"),
         status="draft",
         location_type="online",
         location="space",
@@ -166,6 +174,7 @@ def test_get_form_by_event_id_missing_form(db_session):
         description="test",
         start_datetime=datetime(2026, 3, 1),
         end_datetime=datetime(2026, 3, 2),
+        semester_id=semester_id_on(db_session, "2026-03-02"),
         status="draft",
         location_type="online",
         location="space",

@@ -10,7 +10,7 @@ _MEMBERS_POINTS_BASE_QUERY = """
         FROM members m
         LEFT JOIN members_logs ml ON ml.member_id = m.id
         LEFT JOIN logs l ON l.id = ml.log_id
-        LEFT JOIN events e ON e.id = l.event_id AND e.end_datetime > :start_date AND e.end_datetime < :end_date AND e.status <> 'draft'
+        LEFT JOIN events e ON e.id = l.event_id AND e.semester_id = :semester_id AND e.status <> 'draft'
         LEFT JOIN actions a ON a.id = l.action_id
         LEFT JOIN (
             SELECT mo.log_id AS log_id,
@@ -23,7 +23,7 @@ _MEMBERS_POINTS_BASE_QUERY = """
     """
 
 
-def get_members_points_semester(session: Session, start_date: str, end_date: str) -> list[dict]:
+def get_members_points_semester(session: Session, semester_id: str) -> list[dict]:
     """Every member's total points for the semester, ordered highest first."""
     query = (
         _MEMBERS_POINTS_BASE_QUERY
@@ -31,11 +31,11 @@ def get_members_points_semester(session: Session, start_date: str, end_date: str
         ORDER BY total_points DESC
     """
     )
-    result = session.execute(text(query), {"start_date": start_date, "end_date": end_date})
+    result = session.execute(text(query), {"semester_id": semester_id})
     return [dict(row._mapping) for row in result]
 
 
-def get_member_points_by_id_semester(session: Session, start_date: str, end_date: str, member_id: int) -> dict | None:
+def get_member_points_by_id_semester(session: Session, semester_id: str, member_id: int) -> dict | None:
     """One member's total points for the semester, or None if they do not exist."""
     query = (
         _MEMBERS_POINTS_BASE_QUERY
@@ -44,11 +44,11 @@ def get_member_points_by_id_semester(session: Session, start_date: str, end_date
         ORDER BY total_points DESC
     """
     )
-    row = session.execute(text(query), {"start_date": start_date, "end_date": end_date, "member_id": member_id}).first()
+    row = session.execute(text(query), {"semester_id": semester_id, "member_id": member_id}).first()
     return dict(row._mapping) if row else None
 
 
-def get_member_points_history_semester(session: Session, member_id: int, start_date: str, end_date: str):
+def get_member_points_history_semester(session: Session, semester_id: str, member_id: int):
     statement = text("""
         WITH log_modifications AS (
             SELECT modifications.log_id AS log_id,
@@ -76,14 +76,13 @@ def get_member_points_history_semester(session: Session, member_id: int, start_d
         JOIN actions a ON l.action_id = a.id
         LEFT JOIN log_modifications lm ON l.id = lm.log_id
         WHERE m.id = :member_id
-            AND e.end_datetime > :start_date
-            AND e.end_datetime < :end_date
+            AND e.semester_id = :semester_id
             AND e.status <> 'draft'
             AND e.location_type <> 'hidden'
         GROUP BY m.id, m.name, e.id, e.name, e.start_datetime, e.end_datetime
         ORDER BY e.start_datetime DESC
     """)
-    result = session.execute(statement, {"member_id": member_id, "start_date": start_date, "end_date": end_date})
+    result = session.execute(statement, {"member_id": member_id, "semester_id": semester_id})
     return [dict(row._mapping) for row in result]
 
 
@@ -97,7 +96,7 @@ _DEPARTMENTS_POINTS_BASE_QUERY = """
         FROM departments d
         LEFT JOIN departments_logs dl ON dl.department_id = d.id
         LEFT JOIN logs l ON l.id = dl.log_id
-        LEFT JOIN events e ON e.id = l.event_id AND e.end_datetime > :start_date AND e.end_datetime < :end_date AND e.status <> 'draft'
+        LEFT JOIN events e ON e.id = l.event_id AND e.semester_id = :semester_id AND e.status <> 'draft'
         LEFT JOIN actions a ON a.id = l.action_id
         LEFT JOIN (
             SELECT modifications.log_id AS log_id,
@@ -109,7 +108,7 @@ _DEPARTMENTS_POINTS_BASE_QUERY = """
     """
 
 
-def get_departments_points_semester(session: Session, start_date: str, end_date: str) -> list[dict]:
+def get_departments_points_semester(session: Session, semester_id: str) -> list[dict]:
     """Every active department's total points for the semester, highest first."""
     query = (
         _DEPARTMENTS_POINTS_BASE_QUERY
@@ -118,13 +117,11 @@ def get_departments_points_semester(session: Session, start_date: str, end_date:
         ORDER BY total_points DESC
     """
     )
-    result = session.execute(text(query), {"start_date": start_date, "end_date": end_date})
+    result = session.execute(text(query), {"semester_id": semester_id})
     return [dict(row._mapping) for row in result]
 
 
-def get_department_points_by_id_semester(
-    session: Session, start_date: str, end_date: str, department_id: int
-) -> dict | None:
+def get_department_points_by_id_semester(session: Session, semester_id: str, department_id: int) -> dict | None:
     """One department's total points for the semester, or None if it does not exist.
 
     Unlike the "all departments" query above, this is not filtered to active
@@ -137,13 +134,11 @@ def get_department_points_by_id_semester(
         ORDER BY total_points DESC
     """
     )
-    row = session.execute(
-        text(query), {"start_date": start_date, "end_date": end_date, "department_id": department_id}
-    ).first()
+    row = session.execute(text(query), {"semester_id": semester_id, "department_id": department_id}).first()
     return dict(row._mapping) if row else None
 
 
-def get_department_points_history_semester(session: Session, department_id: int, start_date: str, end_date: str):
+def get_department_points_history_semester(session: Session, semester_id: str, department_id: int):
     statement = text("""
         SELECT
             dl.department_id AS department_id,
@@ -172,14 +167,11 @@ def get_department_points_history_semester(session: Session, department_id: int,
             GROUP BY mo.log_id
         ) mods ON mods.log_id = l.id
         WHERE dl.department_id = :department_id
-            AND e.end_datetime > :start_date
-            AND e.end_datetime < :end_date
+            AND e.semester_id = :semester_id
             AND e.status <> 'draft'
             AND e.location_type <> 'hidden'
         GROUP BY dl.department_id, d.name, d.ar_name, l.event_id, e.name, e.start_datetime, e.end_datetime, l.action_id, a.action_name, a.ar_action_name
         ORDER BY e.start_datetime DESC
     """)
-    result = session.execute(
-        statement, {"department_id": department_id, "start_date": start_date, "end_date": end_date}
-    )
+    result = session.execute(statement, {"department_id": department_id, "semester_id": semester_id})
     return [dict(row._mapping) for row in result]

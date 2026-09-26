@@ -20,6 +20,7 @@ import asyncio
 import pytest
 
 from app.DB import email_jobs as job_queries
+from tests.utils import semester_id_on
 from app.DB.schema import (
     EmailJobsStatus,
     EmailJobsType,
@@ -190,6 +191,7 @@ def invited_submission(db_session, seed_refs):
         location="space",
         start_datetime="2026-06-29 00:00:00",
         end_datetime="2026-06-29 00:00:00",
+        semester_id=semester_id_on(db_session, "2026-06-29"),
         status=EventsStatus.OPEN,
     )
     db_session.add(event)

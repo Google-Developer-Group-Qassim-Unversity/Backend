@@ -54,12 +54,6 @@ def _public_name(full_name: str) -> str:
     return " ".join([parts[0], *family_name])
 
 
-def _is_board_department(department: Departments) -> bool:
-    english_name = department.name.strip().casefold()
-    arabic_name = department.ar_name.strip().replace("إ", "ا")
-    return "board" in english_name or "مجلس الادارة" in arabic_name
-
-
 def _get_department(session: Session, department_id: int) -> Departments:
     department = department_queries.get_department_by_id(session, department_id)
     if department is None:
@@ -98,8 +92,6 @@ def get_public_club_structure(session: DB):
         leader = next((_public_name(a.member.name) for a in roster if a.role == ClubAssignmentRole.LEADER), None)
         deputy = next((_public_name(a.member.name) for a in roster if a.role == ClubAssignmentRole.DEPUTY), None)
         members = [_public_name(a.member.name) for a in roster if a.role == ClubAssignmentRole.MEMBER]
-        if _is_board_department(department) and "جود الفرم" not in members:
-            members.append("جود الفرم")
         departments.append(
             PublicClubDepartmentResponse(
                 id=department.id,
