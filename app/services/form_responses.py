@@ -72,7 +72,7 @@ class GoogleFormResponses:
             service = self._service()
             result = service.forms().responses().list(formId=access.google_form_id).execute()
         except Exception as exc:
-            _reraise_mapped(exc, access.google_form_id)
+            reraise_mapped(exc, access.google_form_id)
         responses = result.get("responses", [])
         logger.info("form %s returned %d responses", access.google_form_id, len(responses))
         return responses
@@ -82,7 +82,7 @@ class GoogleFormResponses:
             service = self._service()
             return service.forms().get(formId=access.google_form_id).execute()
         except Exception as exc:
-            _reraise_mapped(exc, access.google_form_id)
+            reraise_mapped(exc, access.google_form_id)
 
 
 @dataclass
@@ -109,7 +109,7 @@ class RecordedFormResponses:
         return self.schemas[access.google_form_id]
 
 
-def _reraise_mapped(exc: Exception, google_form_id: str) -> NoReturn:
+def reraise_mapped(exc: Exception, google_form_id: str) -> NoReturn:
     """Turn a Google client failure into one of this app's exceptions.
 
     Anything unrecognised is re-raised untouched rather than flattened into a

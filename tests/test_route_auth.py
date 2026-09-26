@@ -98,6 +98,12 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /health": None,
     "GET /health/db": None,
     "GET /health/sentry": None,
+    # Public for the same reason as /health/sentry: an external uptime check
+    # has to reach it without a token, and that is the entire point of it -
+    # the club Google token expires every seven days (docs/GOOGLE_FORMS.md)
+    # and nothing else notices. It reveals that the integration is down, not
+    # any credential.
+    "GET /health/google": None,
     "GET /health/print-status": None,
     "GET /members/": "admin_guard",
     "GET /members/me": "authenticated_guard",
@@ -142,6 +148,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "POST /events/": "admin_guard",
     "POST /forms/{event_id:int}/attach": "admin_guard",
     "POST /forms/{event_id:int}/unattach": "admin_guard",
+    "POST /forms/watches/renew": "admin_guard",
     "POST /members/": "authenticated_guard",
     "POST /members/batch": "super_admin_guard",
     "POST /members/manual": "super_admin_guard",

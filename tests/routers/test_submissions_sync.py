@@ -20,7 +20,7 @@ from app.DB import form_sync_jobs as job_queries
 from app.DB.schema import Events, EventsLocationType, EventsStatus, Forms, FormType, FormSyncJobsStatus
 from app.DB.schema import Members, MembersGender, Submissions, SubmissionsSubmissionType
 from app.exceptions import BadGateway, GoogleFormAuthExpired, NotFound, ServiceUnavailable
-from app.services.form_responses import FormAccess, RecordedFormResponses, _reraise_mapped, get_form_responses
+from app.services.form_responses import FormAccess, RecordedFormResponses, reraise_mapped, get_form_responses
 from app.services.form_sync import extract_email_answer, sync_form_submissions, sync_manual_form_submissions
 from tests.utils import assert_2xx
 
@@ -388,7 +388,7 @@ def make_http_error(status_code: int) -> HttpError:
 
 def test_expired_credentials_map_to_auth_expired():
     with pytest.raises(GoogleFormAuthExpired) as raised:
-        _reraise_mapped(RefreshError("token revoked"), GOOGLE_FORM_ID)
+        reraise_mapped(RefreshError("token revoked"), GOOGLE_FORM_ID)
     assert GOOGLE_FORM_ID in raised.value.detail
     assert raised.value.status_code == 502
 
@@ -396,31 +396,31 @@ def test_expired_credentials_map_to_auth_expired():
 @pytest.mark.parametrize("status_code", [401, 403])
 def test_rejected_requests_map_to_auth_expired(status_code):
     with pytest.raises(GoogleFormAuthExpired):
-        _reraise_mapped(make_http_error(status_code), GOOGLE_FORM_ID)
+        reraise_mapped(make_http_error(status_code), GOOGLE_FORM_ID)
 
 
 def test_unknown_form_maps_to_not_found():
     with pytest.raises(NotFound) as raised:
-        _reraise_mapped(make_http_error(404), GOOGLE_FORM_ID)
+        reraise_mapped(make_http_error(404), GOOGLE_FORM_ID)
     assert raised.value.status_code == 404
 
 
 def test_other_google_errors_map_to_bad_gateway():
     with pytest.raises(BadGateway) as raised:
-        _reraise_mapped(make_http_error(500), GOOGLE_FORM_ID)
+        reraise_mapped(make_http_error(500), GOOGLE_FORM_ID)
     assert "500" in raised.value.detail
 
 
 def test_transport_failures_map_to_service_unavailable():
     with pytest.raises(ServiceUnavailable):
-        _reraise_mapped(TransportError("connection reset"), GOOGLE_FORM_ID)
+        reraise_mapped(TransportError("connection reset"), GOOGLE_FORM_ID)
 
 
 def test_unrecognised_errors_are_re_raised_untouched():
     """A bug in this module must not come back looking like Google having a bad day."""
     original = ValueError("something else entirely")
     with pytest.raises(ValueError) as raised:
-        _reraise_mapped(original, GOOGLE_FORM_ID)
+        reraise_mapped(original, GOOGLE_FORM_ID)
     assert raised.value is original
 
 

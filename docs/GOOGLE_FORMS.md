@@ -102,6 +102,74 @@ clearing it. `admin_google_email` still exists purely as a "last requested"
 display convenience - it is no longer what "do I have access" is checked
 against; the frontend now checks its saved email against `granted_emails`.
 
+## Two seven-day clocks
+
+Both of these expire on a timer, both fail quietly, and both have bitten
+production. Neither is a bug to fix once - they are standing maintenance.
+
+### The refresh token expires every 7 days
+
+The OAuth client's consent screen is in **Testing** publishing status, and
+Google expires refresh tokens issued by a testing client after **seven days**.
+Not idle-expiry: a timer that starts the moment the token is minted. Re-mint
+with `scripts/setup_google_oauth.py` and paste the result into Infisical
+(`/admin-backend`, `dev` and `prod`), then `pm2 restart GDG-backend`.
+
+This is only fixable properly by leaving Testing status, and every route out
+has a real cost:
+
+| Option | Why it is not done |
+|---|---|
+| Publish the app | The **Publish app** button is disabled until the Branding page is complete, and the `drive` scope is *restricted*, so staying unverified past that means Google's warning screen and a 100-user lifetime cap |
+| Service account | No Workspace domain, so no domain-wide delegation; the service account would have to own every form in its own Drive, with no human-browsable UI |
+| Drop to `drive.file` | Would mean building forms with `forms.create` instead of `drive.files.copy`, losing the editable template and a faster, more reliable copy |
+
+Until one of those changes, **`GET /health/google` is the safety net.** It
+attempts a refresh and answers `{"valid": false, "reason": "invalid_grant"}`
+once the token is dead. Point an uptime check at it. There is deliberately no
+"days remaining" countdown - Google does not report when a token was minted,
+so that number could only come from a hand-maintained config value that would
+eventually lie.
+
+On 2026-09-20 the token expired at ~13:09 UTC and nothing noticed for seven
+hours: the only symptom was a Starlette `RuntimeError: Caught handled
+exception, but response already started.` on the webhook path (a background
+task raising after the 200 is already sent), the real `GoogleFormAuthExpired`
+appeared only in `job_boundary`'s log line, and Sentry was over quota. 11 form
+submissions sat unmatched while the event ran the next morning.
+
+### Forms watches expire every 7 days
+
+`forms.watches.create` in `attach_form` is what makes a form notify us at all.
+Per the Forms API reference, `watches.renew` extends a watch by seven days and
+resets `expireTime`; once a watch has actually expired, renewing it fails with
+`NOT_FOUND` and the only fix is to create a new one.
+
+This is the quieter of the two. A dead credential at least raises; an expired
+watch just stops sending notifications, so a form attached more than a week
+before its event looks exactly like a form nobody filled in.
+
+`app/services/form_watches.py` renews all of them, and recreates any that
+already expired (writing the new id back to `forms.google_watch_id`). Run it
+daily - six days of slack means a missed run costs nothing:
+
+```bash
+# cron on the VPS
+cd ~/GDG-backend && infisical run --env=prod --path=/admin-backend -- \
+    uv run python scripts/renew_form_watches.py
+```
+
+`POST /forms/watches/renew` (admin) is the same sweep on demand. Exit codes:
+`0` all good, `1` aborted because the credential is dead, `2` at least one
+form failed.
+
+**Watches can outlive their DB row.** `1uAEk3DoFgcNqdyIyiGrCuEMsjVqjxWazbPDBmh_Pohk`
+sent 98 notifications over two days against a form with no `forms` row at all,
+each one a `NotFound` deep inside a background task. Nothing reconciles in
+either direction - `watches.list` is per-form, so a watch on a form we have
+never heard of is not discoverable from here. Deleting a stray one needs its
+form id and watch id explicitly.
+
 ## What this is not
 
 This does not touch Google's response-sync logic at all.
