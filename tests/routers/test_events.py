@@ -596,3 +596,52 @@ def test_update_event_days_decrease(admin_client: TestClient, seed_refs):
 
     points_response = admin_client.get(f"/points/departments/{seed_refs.dept_business.id}")
     assert points_response.json()["department"]["total_points"] == seed_refs.dept_action.points
+
+
+def test_paginated_events_include_department_and_attendance(admin_client: TestClient, db_session, seed_refs):
+    from app.DB.schema import Logs, MembersLogs
+
+    event = admin_client.post(
+        "/events", json=make_create_event_payload(seed_refs=seed_refs, department_id=seed_refs.dept_business.id)
+    ).json()
+    member_log_id = None
+    logs = db_session.query(Logs).filter(Logs.event_id == event["id"]).all()
+    for log in logs:
+        if log.action_id == seed_refs.member_action.id:
+            member_log_id = log.id
+    assert member_log_id is not None
+    db_session.add(MembersLogs(member_id=seed_refs.ahmed.id, log_id=member_log_id, date=datetime.now()))
+    db_session.add(MembersLogs(member_id=seed_refs.sara.id, log_id=member_log_id, date=datetime.now()))
+    db_session.add(MembersLogs(member_id=seed_refs.ahmed.id, log_id=member_log_id, date=datetime(2026, 6, 30)))
+    db_session.commit()
+
+    response = admin_client.get("/events/paginated")
+    assert_2xx(response)
+    items = response.json()["items"]
+    item = next(row for row in items if row["id"] == event["id"])
+    assert item["department_id"] == seed_refs.dept_business.id
+    assert item["department_name"] == seed_refs.dept_business.name
+    assert item["department_ar_name"] == seed_refs.dept_business.ar_name
+    # Same member attending twice must be counted once.
+    assert item["attendance_count"] == 2
+
+
+def test_paginated_events_without_department_or_attendance(admin_client: TestClient, db_session, seed_refs):
+    from app.DB.schema import DepartmentsLogs, Logs
+
+    event = admin_client.post(
+        "/events", json=make_create_event_payload(seed_refs=seed_refs, department_id=seed_refs.dept_design.id)
+    ).json()
+    for log in db_session.query(Logs).filter(Logs.event_id == event["id"]).all():
+        row = db_session.query(DepartmentsLogs).filter(DepartmentsLogs.log_id == log.id).first()
+        if row:
+            db_session.delete(row)
+    db_session.commit()
+
+    response = admin_client.get("/events/paginated")
+    assert_2xx(response)
+    item = next(row for row in response.json()["items"] if row["id"] == event["id"])
+    assert item["department_id"] is None
+    assert item["department_name"] is None
+    assert item["department_ar_name"] is None
+    assert item["attendance_count"] == 0
