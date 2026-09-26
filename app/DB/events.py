@@ -80,7 +80,53 @@ def get_events_paginated(
     stmt = _apply_event_filters(select(Events), start_date, end_date, status, search, exclude_custom)
     # newest first, id as the deterministic tiebreaker for stable page edges.
     stmt = stmt.order_by(Events.start_datetime.desc(), Events.id.desc()).offset(offset).limit(limit)
-    return session.scalars(stmt).all()
+    events = session.scalars(stmt).all()
+    if not events:
+        return events
+    return _attach_department_and_attendance(session, events)
+
+
+def _attach_department_and_attendance(session: Session, events: list[Events]) -> list[Events]:
+    """Annotate one page's worth of events with their department and distinct
+    attendee count. Two grouped queries for the whole page - no N+1."""
+    event_ids = [event.id for event in events if event.id is not None]
+
+    # Event department: the event's department log (first action is always the
+    # department action). Tie to the per-day department_logs row ids.
+    dept_stmt = (
+        select(
+            Logs.event_id,
+            Departments.id.label("department_id"),
+            Departments.name.label("department_name"),
+            Departments.ar_name.label("department_ar_name"),
+        )
+        .select_from(Logs)
+        .join(DepartmentsLogs, DepartmentsLogs.log_id == Logs.id)
+        .join(Departments, Departments.id == DepartmentsLogs.department_id)
+        .where(Logs.event_id.in_(event_ids))
+        .group_by(Logs.event_id, Departments.id)
+    )
+    for row in session.execute(dept_stmt).all():
+        event = next((e for e in events if e.id == row.event_id), None)
+        if event and getattr(event, "department_id", None) is None:
+            event.department_id = row.department_id
+            event.department_name = row.department_name
+            event.department_ar_name = row.department_ar_name
+
+    # Distinct members who attended any day of the event.
+    att_stmt = (
+        select(Logs.event_id, func.count(func.distinct(MembersLogs.member_id)).label("attendance_count"))
+        .select_from(Logs)
+        .join(MembersLogs, MembersLogs.log_id == Logs.id)
+        .where(Logs.event_id.in_(event_ids))
+        .group_by(Logs.event_id)
+    )
+    for row in session.execute(att_stmt).all():
+        event = next((e for e in events if e.id == row.event_id), None)
+        if event:
+            event.attendance_count = row.attendance_count
+
+    return events
 
 
 def get_actions_by_event_id(session: Session, event_id: int):

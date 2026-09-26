@@ -39,6 +39,16 @@ class Events_model(BaseClassModel):
     created_at: datetime | None = None
 
 
+class EventListItem_model(Events_model):
+    """Extra per-event data for the admin paginated list - department of the
+    event and distinct attendees count."""
+
+    department_id: int | None = None
+    department_name: str | None = None
+    department_ar_name: str | None = None
+    attendance_count: int = 0
+
+
 class Form_model(BaseClassModel):
     id: int | None = None
     event_id: int
@@ -473,7 +483,7 @@ class MemberEvents_model(BaseClassModel):
 
 
 class PaginatedEvents_model(PaginationMeta_model):
-    items: list[Events_model]
+    items: list[EventListItem_model]
 
 
 class PaginatedMembers_model(PaginationMeta_model):
