@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, status
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from app.routers.models import Form_model, NotFoundResponse, AttachFormRequest
+from app.routers.responses import WatchRenewalResponse
+from app.services.form_watches import renew_form_watches
 from app.services.google_client import get_google_credentials
 from app.services.form_responses import FormAccess, FormResponsesClient
 from app.DB import forms as form_queries
@@ -227,3 +229,27 @@ def get_form_schema(form_id: int, session: DB, responses_client: FormResponsesCl
     if not form.google_form_id:
         raise FormNotAttached(form_id)
     return responses_client.get_schema(FormAccess(google_form_id=form.google_form_id))
+
+
+@router.post(
+    "/watches/renew",
+    status_code=status.HTTP_200_OK,
+    response_model=WatchRenewalResponse,
+    dependencies=[Depends(admin_guard)],
+    description=(
+        "Renew every registered Google Forms watch for another seven days, recreating any that "
+        "have already expired. Google expires watches seven days after creation or last renewal, "
+        "and an expired watch stops sending notifications silently - a form attached more than a "
+        "week before its event simply stops syncing. Intended to run daily; "
+        "scripts/renew_form_watches.py is the same sweep for cron."
+    ),
+)
+def renew_watches(session: DB):
+    """Manual trigger for the sweep that scripts/renew_form_watches.py runs on a timer.
+
+    Synchronous rather than a BackgroundTask: the caller wants the outcome,
+    there are only as many API calls as there are attached forms, and a
+    background failure here would land in the same "response already started"
+    trap that hid the credential expiry on the webhook path.
+    """
+    return renew_form_watches(session)

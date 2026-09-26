@@ -2,6 +2,9 @@ import logging
 from contextlib import asynccontextmanager
 
 import sentry_sdk
+from sentry_sdk.integrations.logging import LoggingIntegration
+
+from app.sentry_health import install_delivery_watcher
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -31,9 +34,19 @@ from app.routers import (
     club_structure,
 )
 
+# `event_level=ERROR` is the sentry-sdk default, stated here because it is the
+# contract the rest of the codebase logs against: WARNING is an expected outcome
+# worth keeping in the pm2 log, ERROR means something is broken and costs a slot
+# in a finite monthly error quota. Blurring the two is not free - logging routine
+# bad attendance links at ERROR exhausted the quota for a week in September 2026
+# and every real bug in that window was rejected at ingest alongside them.
 sentry_sdk.init(
-    dsn=config.SENTRY_DSN, environment="development" if config.is_dev else "production", traces_sample_rate=0.2
+    dsn=config.SENTRY_DSN,
+    environment="development" if config.is_dev else "production",
+    traces_sample_rate=0.2,
+    integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
 )
+install_delivery_watcher()
 
 logger = logging.getLogger(__name__)
 

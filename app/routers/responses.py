@@ -30,6 +30,54 @@ class StatusResponse(BaseClassModel):
     status: str
 
 
+class GoogleHealthResponse(BaseClassModel):
+    """Whether the club Google credential still works.
+
+    `valid` false means every Drive/Forms call is failing and form submissions
+    are not syncing. `reason` is `invalid_grant` when Google has expired or
+    revoked the refresh token (it uses one code for both), `unreachable` when
+    Google could not be contacted - which says nothing about the token itself.
+    `cached` marks an answer served from the short success TTL rather than a
+    fresh call; a false answer is never cached.
+    """
+
+    valid: bool
+    reason: str | None = None
+    detail: str | None = None
+    checked_at: str
+    cached: bool = False
+
+
+class WatchRenewalResponse(BaseClassModel):
+    """Outcome of one sweep over every registered Google Forms watch.
+
+    `recreated` is not an error: a watch that expired before the sweep reached
+    it cannot be renewed (Google answers `NOT_FOUND`), so it is registered
+    again and the form's `google_watch_id` updated. `aborted_reason` is set
+    when the sweep stopped early - one dead credential fails every form, so
+    there is no point walking the rest.
+    """
+
+    renewed: int
+    recreated: int
+    failed: int
+    aborted_reason: str | None = None
+    results: list[dict[str, Any]] = []
+
+
+class SentryHealthResponse(BaseClassModel):
+    """Whether error reporting is actually reaching Sentry.
+
+    `ingesting` false means errors are being dropped at ingest and this
+    service's only record of them is the pm2 log.
+    """
+
+    ingesting: bool
+    rejections: int
+    last_rejection: str | None = None
+    last_rejection_at: str | None = None
+
+
 class CountsResponse(BaseClassModel):
     """Per-item outcome of a bulk mutation."""
 

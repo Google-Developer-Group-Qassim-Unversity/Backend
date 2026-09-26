@@ -10,7 +10,9 @@ from time import perf_counter
 from json import dumps
 from app.dependencies import DB
 
-from app.routers.responses import DbCheckResponse, StatusResponse
+from app.routers.responses import DbCheckResponse, GoogleHealthResponse, SentryHealthResponse, StatusResponse
+from app.sentry_health import delivery_status
+from app.services.google_health import credential_status
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,35 @@ def _get_pool() -> QueuePool:
 )
 def health_check():
     return {"status": "ok"}
+
+
+@router.get(
+    "/sentry",
+    status_code=status.HTTP_200_OK,
+    description=(
+        "Whether Sentry is accepting the events this service sends it. A rate-limited or "
+        "over-quota Sentry drops events silently, which is indistinguishable from having no "
+        "errors - point an uptime check at this so that never goes unnoticed again."
+    ),
+    response_model=SentryHealthResponse,
+)
+def sentry_health():
+    return delivery_status()
+
+
+@router.get(
+    "/google",
+    status_code=status.HTTP_200_OK,
+    description=(
+        "Whether the club-owned Google refresh token still works. The OAuth client is in Testing "
+        "publishing status, which means Google expires the token seven days after it is minted - "
+        "point an uptime check at this and alert on `valid: false`, because every Google Forms sync "
+        "stops the moment it flips and nothing else says so in a way that names the cause."
+    ),
+    response_model=GoogleHealthResponse,
+)
+def google_health():
+    return credential_status()
 
 
 @router.get(
