@@ -19,7 +19,7 @@ from app.DB import forms as form_queries
 from app.DB.schema import Events, EventsLocationType, EventsStatus, Forms, FormType
 from app.exceptions import BadGateway, GoogleFormAuthExpired
 from app.services.form_watches import RecordedFormWatches, renew_form_watches
-from tests.utils import assert_2xx
+from tests.utils import assert_2xx, semester_id_on
 
 
 def make_linked_form(db_session, name: str, google_form_id: str, watch_id: str | None):
@@ -29,6 +29,7 @@ def make_linked_form(db_session, name: str, google_form_id: str, watch_id: str |
         location="space",
         start_datetime="2026-06-29 00:00:00",
         end_datetime="2026-06-29 00:00:00",
+        semester_id=semester_id_on(db_session, "2026-06-29"),
         status=EventsStatus.OPEN,
     )
     db_session.add(event)
