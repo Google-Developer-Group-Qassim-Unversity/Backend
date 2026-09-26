@@ -153,7 +153,8 @@ def test_public_structure_is_anonymous_active_and_display_only(sign_in, seed_ref
         "members": ["Ahmed Ali"],
     }
     assert cards[business.id]["members"] == ["Sara Khalid"]
-    assert cards[board.id]["members"] == ["Ahmed Ali", "جود الفرم"]
+    # Only people with a members row appear - nobody is added by name.
+    assert cards[board.id]["members"] == ["Ahmed Ali"]
     for private_field in ("member_id", "role", "starts_at", "ends_at", "changed_by", "ended_by"):
         assert private_field not in response.text
 
