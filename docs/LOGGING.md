@@ -127,6 +127,28 @@ not the same as "no errors".
 When `ingesting` is false, fix the quota in Sentry (plan limit, on-demand
 budget, or spike protection) and work from PM2 in the meantime.
 
+### Check the Google credential the same way
+
+`GET /health/google` answers the equivalent question for Google Forms:
+
+```json
+{"valid": true, "reason": null, "detail": null, "checked_at": "...", "cached": false}
+```
+
+`valid: false` with `reason: "invalid_grant"` means the club refresh token has
+expired or been revoked and **every** Drive/Forms call is failing - form
+submissions are not syncing at all. The OAuth client is in Testing publishing
+status, where Google caps refresh tokens at seven days, so this happens on a
+schedule rather than exceptionally. Re-mint with
+`scripts/setup_google_oauth.py`; see [GOOGLE_FORMS.md](GOOGLE_FORMS.md).
+
+`reason: "unreachable"` is Google being uncontactable, which says nothing
+about the token itself.
+
+Both health endpoints exist for the same reason: a dependency that fails
+silently is indistinguishable from one that is working, and both of these
+have already cost a week each.
+
 Sentry's `LoggingIntegration` is configured explicitly in `app/main.py` at
 `level=INFO` / `event_level=ERROR`. That means:
 

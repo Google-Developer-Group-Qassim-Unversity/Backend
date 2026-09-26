@@ -43,6 +43,21 @@ def update_form(session: Session, form_id: int, form: Form_model):
     return existing_form
 
 
+def set_form_watch_id(session: Session, form_id: int, google_watch_id: str):
+    """Point a form at a newly registered watch.
+
+    Narrower than `update_form` on purpose: the watch renewal sweep
+    (`app/services/form_watches.py`) replaces expired watches one at a time
+    and must not touch any other column while doing it.
+    """
+    form = session.scalar(select(Forms).where(Forms.id == form_id))
+    if not form:
+        raise FormNotFoundById(form_id)
+    form.google_watch_id = google_watch_id
+    session.flush()
+    return form
+
+
 def get_forms(session: Session):
     """Get all forms from the database"""
     statement = select(Forms)
