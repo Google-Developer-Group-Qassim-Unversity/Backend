@@ -66,3 +66,18 @@ def assert_bad_request(response: Response):
             f"\tResponse body: {response.text}",
         ]
     )
+
+
+def semester_id_on(session, day: str) -> str:
+    """The semester an event ending on ``day`` (YYYY-MM-DD) is filed under.
+
+    For tests that insert ``Events`` rows directly instead of going through the
+    API, which would assign the semester itself.
+    """
+    from datetime import date
+
+    from app.DB.semesters import get_semester_started_by
+
+    semester = get_semester_started_by(session, date.fromisoformat(day))
+    assert semester is not None, f"no seeded semester had started by {day}"
+    return semester.id

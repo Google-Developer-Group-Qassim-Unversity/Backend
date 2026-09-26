@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import HTTPException
 
 
@@ -127,6 +129,27 @@ class NoSemestersDefined(KnownHttpException):
         super().__init__(
             status_code=409,
             detail="No semesters are defined. Add one from the admin app before using semester-scoped endpoints.",
+        )
+
+
+class NoSemesterForDate(KnownHttpException):
+    """An event ends before the oldest semester, so it has no semester to belong to."""
+
+    code = "no_semester_for_date"
+
+    def __init__(self, day: date):
+        super().__init__(
+            status_code=422,
+            detail=f"No semester had started by {day.isoformat()}. Add that semester from the admin app first.",
+        )
+
+
+class SemesterHasEvents(KnownHttpException):
+    code = "semester_has_events"
+
+    def __init__(self, name: str, event_count: int):
+        super().__init__(
+            status_code=409, detail=f"{name} has {event_count} events and cannot be deleted. Move or delete them first."
         )
 
 

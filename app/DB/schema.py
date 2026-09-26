@@ -1,6 +1,7 @@
 from typing import Optional
 import datetime
 import enum
+import uuid
 
 from sqlalchemy import (
     CheckConstraint,
@@ -18,7 +19,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.mysql import DATETIME, INTEGER, LONGTEXT, TEXT, TINYINT, VARCHAR
+from sqlalchemy.dialects.mysql import CHAR, DATETIME, INTEGER, LONGTEXT, SMALLINT, TEXT, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -204,6 +205,17 @@ class OpenEventsStatus(str, enum.Enum):
     CLOSED = "closed"
 
 
+class SemesterTerm(str, enum.Enum):
+    FIRST = "first"
+    SECOND = "second"
+    SUMMER = "summer"
+
+
+# Every UUID column shares one charset/collation: MySQL foreign keys need both
+# sides to match, and tables here do not share a default charset.
+UUID_CHAR = CHAR(36, charset="ascii", collation="ascii_bin")
+
+
 class Actions(Base):
     __tablename__ = "actions"
 
@@ -311,7 +323,12 @@ class ClubAssignments(Base):
 
 class Events(Base):
     __tablename__ = "events"
-    __table_args__ = (Index("event_name", "name"), Index("events_id_IDX", "id", "name"))
+    __table_args__ = (
+        ForeignKeyConstraint(["semester_id"], ["semesters.id"], ondelete="RESTRICT", name="fk_events_semester"),
+        Index("event_name", "name"),
+        Index("events_id_IDX", "id", "name"),
+        Index("ix_events_semester_start", "semester_id", "start_datetime"),
+    )
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     name: Mapped[str] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
@@ -336,10 +353,14 @@ class Events(Base):
     # full-event update, so editing an event cannot silently drop it.
     meeting_url: Mapped[Optional[str]] = mapped_column(VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1), server_default=text("'0'"))
+    # The semester the event counts toward. Set from the end date when the event
+    # is saved (app/semesters.py), and never moved by editing a semester's dates.
+    semester_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
 
+    semester: Mapped["Semesters"] = relationship("Semesters")
     forms: Mapped[list["Forms"]] = relationship("Forms", back_populates="event", passive_deletes=True)
     logs: Mapped[list["Logs"]] = relationship("Logs", back_populates="event", passive_deletes=True)
     email_logs: Mapped[list["EmailLogs"]] = relationship("EmailLogs", back_populates="event", passive_deletes=True)
@@ -771,21 +792,61 @@ class EmailTemplates(Base):
 
 
 class Semesters(Base):
-    """An academic semester and the date range its events/points are counted in.
+    """An academic term. Events (and, later, the club structure) point at it by ``id``.
 
-    ``id`` is the university's term code (e.g. 475) and is chosen by the admin,
-    not auto-generated. Exactly one row is expected to have ``is_current`` set;
-    it is the semester used when a request doesn't name one. ``is_public`` rows
-    are readable by anyone, the rest require super admin credentials.
+    A semester is described by three facts an admin enters - ``term``,
+    ``hijri_year`` and ``academic_year_start`` - and MySQL derives the rest, so
+    a code can never disagree with its term:
+
+    - ``hijri_code``: the university's number, e.g. 471 / 472 / 475. The Hijri
+      year's last two digits, then 1 (first), 2 (second) or 5 (summer).
+    - ``gregorian_code``: ours, e.g. 251 / 252 / 253. The academic start year's
+      last two digits, then 1, 2 or 3.
+    - ``name``: "Fall 2025" / "Spring 2026" / "Summer 2026".
+
+    There is no "current" flag: the current semester is the most recent one
+    that has started (see ``app/semesters.py``). ``is_public`` rows are readable
+    by anyone, the rest require super admin credentials.
     """
 
     __tablename__ = "semesters"
+    __table_args__ = (
+        Index("uq_semesters_hijri_code", "hijri_code", unique=True),
+        Index("uq_semesters_gregorian_code", "gregorian_code", unique=True),
+        Index("uq_semesters_hijri_year_term", "hijri_year", "term", unique=True),
+        CheckConstraint("end_date >= start_date", name="ck_semesters_dates"),
+    )
 
-    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True, autoincrement=False)
-    name: Mapped[Optional[str]] = mapped_column(VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    term: Mapped[SemesterTerm] = mapped_column(
+        Enum(SemesterTerm, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    )
+    hijri_year: Mapped[int] = mapped_column(SMALLINT(unsigned=True), nullable=False)
+    academic_year_start: Mapped[int] = mapped_column(SMALLINT(unsigned=True), nullable=False)
+    # Same expressions as migration d1e2f3a4b5c6.
+    hijri_code: Mapped[int] = mapped_column(
+        SMALLINT(unsigned=True),
+        Computed(
+            "(hijri_year % 100) * 10 + CASE term WHEN 'first' THEN 1 WHEN 'second' THEN 2 ELSE 5 END", persisted=True
+        ),
+    )
+    gregorian_code: Mapped[int] = mapped_column(
+        SMALLINT(unsigned=True),
+        Computed(
+            "(academic_year_start % 100) * 10 + CASE term WHEN 'first' THEN 1 WHEN 'second' THEN 2 ELSE 3 END",
+            persisted=True,
+        ),
+    )
+    name: Mapped[str] = mapped_column(
+        String(20),
+        Computed(
+            "CONCAT(CASE term WHEN 'first' THEN 'Fall' WHEN 'second' THEN 'Spring' ELSE 'Summer' END, ' ', "
+            "academic_year_start + (term <> 'first'))",
+            persisted=True,
+        ),
+    )
     start_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     end_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
-    is_current: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
     is_public: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")

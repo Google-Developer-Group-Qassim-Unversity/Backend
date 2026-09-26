@@ -22,7 +22,7 @@ from app.DB.schema import Members, MembersGender, Submissions, SubmissionsSubmis
 from app.exceptions import BadGateway, GoogleFormAuthExpired, NotFound, ServiceUnavailable
 from app.services.form_responses import FormAccess, RecordedFormResponses, _reraise_mapped, get_form_responses
 from app.services.form_sync import extract_email_answer, sync_form_submissions, sync_manual_form_submissions
-from tests.utils import assert_2xx
+from tests.utils import assert_2xx, semester_id_on
 
 GOOGLE_FORM_ID = "google-form-abc"
 
@@ -89,6 +89,7 @@ def linked_form(db_session):
         location="space",
         start_datetime="2026-06-29 00:00:00",
         end_datetime="2026-06-29 00:00:00",
+        semester_id=semester_id_on(db_session, "2026-06-29"),
         status=EventsStatus.OPEN,
     )
     db_session.add(event)

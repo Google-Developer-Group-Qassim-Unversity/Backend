@@ -29,11 +29,12 @@ from app.routers.models import (
 from app.helpers import CurrentMember, admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.services.google_client import set_form_publish_state
-from app.semesters import resolve_semester, semester_date_bounds
+from app.semesters import resolve_semester
 from time import perf_counter
 from typing import Annotated, Literal
 from app.exceptions import DataIntegrityError
 from app.dependencies import DB
+from sqlalchemy.orm import Session
 from app.DB.schema import EventsLocationType, EventsStatus, FormType
 
 from app.routers.responses import DetailResponse
@@ -45,6 +46,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/events", tags=["events"])
 
 
+def _semester_id(session: Session, semester: int | str) -> str:
+    """The row id of the semester a ``?semester=<hijri code>`` filter names."""
+    try:
+        hijri_code = int(semester)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Semester '{semester}' not found")
+    return resolve_semester(session, hijri_code).id
+
+
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
 def get_all_events(session: DB, semester: Annotated[int | str, Query()] = "all"):
     logger.info("Fetching all events")
@@ -53,13 +63,7 @@ def get_all_events(session: DB, semester: Annotated[int | str, Query()] = "all")
     if semester == "all":
         events = events_queries.get_events(session)
     else:
-        try:
-            semester_id = int(semester)
-        except ValueError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Semester '{semester}' not found")
-        resolved = resolve_semester(session, semester_id)
-        start_date, end_date = semester_date_bounds(resolved)
-        events = events_queries.get_events_by_semester(session, start_date, end_date)
+        events = events_queries.get_events_by_semester(session, _semester_id(session, semester))
     end = perf_counter()
     logger.info(
         f"fetched [{len(events)}] events DB took [{(end - start) * 1000:.2f}]ms to execute (semester={semester})"
@@ -85,18 +89,11 @@ def list_events_paginated(
     """One page of events for the admin table - filtered and counted in the
     database. The full-array GET / is left intact for the leaderboard app and
     the dashboard aggregates."""
-    start_date = end_date = None
-    if semester != "all":
-        try:
-            semester_id = int(semester)
-        except ValueError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Semester '{semester}' not found")
-        resolved = resolve_semester(session, semester_id)
-        start_date, end_date = semester_date_bounds(resolved)
+    semester_id = _semester_id(session, semester) if semester != "all" else None
 
     offset = (page - 1) * page_size
-    total = events_queries.count_events(session, start_date, end_date, status_filter, search)
-    items = events_queries.get_events_paginated(session, page_size, offset, start_date, end_date, status_filter, search)
+    total = events_queries.count_events(session, semester_id, status_filter, search)
+    items = events_queries.get_events_paginated(session, page_size, offset, semester_id, status_filter, search)
     total_pages = (total + page_size - 1) // page_size if page_size else 0
     return {"items": items, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
 

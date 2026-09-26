@@ -511,8 +511,8 @@ def test_mark_attendance_event_in_progress(clerk_client: TestClient, admin_clien
 
 
 def test_mark_attendance_event_ended_yesterday(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
-    start = "2025-01-01T00:00:00"
-    end = "2025-01-02T23:59:59"
+    start = "2025-09-01T00:00:00"
+    end = "2025-09-02T23:59:59"
     event_id = create_attendance_ready_event(admin_client, form_type="none", start_datetime=start, end_datetime=end)
     create_test_member(db_session)
     token = make_attendance_token(event_id)
@@ -524,8 +524,8 @@ def test_mark_attendance_event_ended_yesterday(clerk_client: TestClient, admin_c
 def test_mark_attendance_time_window_guard_disabled_allows_ended_event(
     clerk_client: TestClient, admin_client: TestClient, db_session: Session
 ):
-    start = "2025-01-01T00:00:00"
-    end = "2025-01-02T23:59:59"
+    start = "2025-09-01T00:00:00"
+    end = "2025-09-02T23:59:59"
     event_id = create_attendance_ready_event(admin_client, form_type="none", start_datetime=start, end_datetime=end)
     create_test_member(db_session)
     token = make_attendance_token(event_id, requireAttendanceTimeWindow=False)

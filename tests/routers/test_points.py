@@ -4,7 +4,11 @@ Everything here is reachable without a token - the leaderboard app reads it -
 so the interesting behaviour is which semester an anonymous caller is shown.
 """
 
+from datetime import date
+
 from fastapi.testclient import TestClient
+
+import app.semesters
 
 from tests.utils import assert_2xx, assert_not_found
 
@@ -88,10 +92,11 @@ def test_private_semester_is_refused_without_a_token(client: TestClient, db_sess
     """The auth fixtures share one app and one overrides dict, so a private
     semester is created directly here rather than via super_admin_client - which
     would authenticate this request too."""
-    from app.DB.schema import Semesters
+    from app.DB.semesters import get_semester_by_hijri_code
 
-    semester = db_session.get(Semesters, 471)
-    semester.is_public = False
+    semester = get_semester_by_hijri_code(db_session, 471)
+    assert semester is not None
+    semester.is_public = 0
     db_session.commit()
 
     response = client.get("/points/members/total?semester=471")
@@ -101,35 +106,41 @@ def test_private_semester_is_refused_without_a_token(client: TestClient, db_sess
 
 
 def test_super_admin_sees_a_private_semester(super_admin_client: TestClient, db_session, seed_refs):
-    from app.DB.schema import Semesters
+    from app.DB.semesters import get_semester_by_hijri_code
 
-    semester = db_session.get(Semesters, 471)
-    semester.is_public = False
+    semester = get_semester_by_hijri_code(db_session, 471)
+    assert semester is not None
+    semester.is_public = 0
     db_session.commit()
 
     assert_2xx(super_admin_client.get("/points/members/total?semester=471"))
 
 
-def test_private_current_semester_does_not_break_anonymous_callers(client: TestClient, super_admin_client: TestClient):
+def test_private_current_semester_does_not_break_anonymous_callers(
+    client: TestClient, super_admin_client: TestClient, monkeypatch
+):
     """Making the current semester private must not start 403ing the public
     leaderboard - it falls back to the newest public semester instead."""
+    # A private Fall 2026 that has already started by the pinned day, so by the
+    # calendar it - not 475 - is the current one.
     assert_2xx(
         super_admin_client.post(
             "/semesters",
             json={
-                "id": 902,
-                "name": "Hidden current",
-                "start_date": "2027-07-01",
-                "end_date": "2027-12-01",
+                "term": "first",
+                "hijri_year": 1448,
+                "academic_year_start": 2026,
+                "start_date": "2026-08-23",
+                "end_date": "2026-12-17",
                 "is_public": False,
-                "is_current": True,
             },
         )
     )
+    monkeypatch.setattr(app.semesters, "today", lambda: date(2026, 9, 1))
 
     assert_2xx(client.get("/points/members/total"))
     body = semesters(client)
-    assert body["current_semester"] != 902, "a private semester must not be advertised as the default"
+    assert body["current_semester"] == 475, "a private semester must not be advertised as the default"
 
 
 def test_unknown_semester_is_rejected(client: TestClient, seed_refs):
