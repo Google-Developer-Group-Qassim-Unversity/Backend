@@ -1,21 +1,26 @@
-"""The events pipeline's rules: which days can be booked, and by whom.
+"""The events pipeline's rules: which days can be booked, by whom, and what a request may do next.
 
 Every day is bookable unless it falls in the lockout (today plus the next three
-days, in Riyadh) or Logistics banned it. The time comes from
-``event_pipeline_clock`` so tests can freeze it.
+days, in Riyadh) or Logistics banned it. A booking holds its days for 24 hours
+while it is a draft, and keeps them from submit until the event is published.
+The time comes from ``event_pipeline_clock`` so tests can freeze it.
+
+Correctness never waits for the sweep: a draft whose hold ran out already
+counts as free here, even before anything has marked it.
 """
 
 import logging
-from dataclasses import dataclass
-from datetime import date, timedelta
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import date, datetime, time, timedelta
 from enum import Enum
 
 from sqlalchemy.orm import Session
 
 from app.DB import department_permissions as permission_queries
 from app.DB import event_pipeline as queries
-from app.DB.schema import PipelineTeam
-from app.exceptions import DepartmentForbidden, PipelineConflict
+from app.DB.schema import Departments, EventRequests, EventRequestStage, EventRequestUndatedReason, PipelineTeam
+from app.exceptions import DepartmentForbidden, NotFound, PipelineConflict
 from app.services import event_pipeline_clock as clock
 from app.services.department_permissions import PipelineActor
 
@@ -25,12 +30,23 @@ logger = logging.getLogger(__name__)
 LOCKOUT_DAYS = 4
 # The widest window one calendar read may ask for.
 MAX_CALENDAR_DAYS = 120
+# The longest event one request can book.
+MAX_BOOKING_DAYS = 4
+HOLD = timedelta(hours=24)
+
+# Official working hours: Sunday to Thursday, 08:00 to 15:00 (Python weekday: Monday is 0).
+OFFICIAL_DAYS = {6, 0, 1, 2, 3}
+OFFICIAL_START = time(8, 0)
+OFFICIAL_END = time(15, 0)
 
 
 class DayStatus(str, Enum):
     LOCKED = "locked"
     BANNED = "banned"
     OPEN = "open"
+    HELD = "held"
+    BOOKED = "booked"
+    PUBLISHED = "published"
 
 
 @dataclass
@@ -38,6 +54,7 @@ class CalendarDay:
     date: date
     status: DayStatus
     reason: str | None = None
+    requests: list[EventRequests] = field(default_factory=list)
 
 
 def first_bookable_day() -> date:
@@ -55,14 +72,44 @@ def check_range(start: date, end: date, limit: int = MAX_CALENDAR_DAYS) -> None:
         raise PipelineConflict("range_too_long", f"At most {limit} days at once", 422)
 
 
+def takes_its_days(request: EventRequests, now: datetime) -> bool:
+    """Whether the request's dates are taken right now.
+
+    A draft only while its hold lasts; any later stage until it is published,
+    and a published event keeps them for good.
+    """
+    if request.start_date is None or request.stage == EventRequestStage.CANCELLED:
+        return False
+    if request.stage == EventRequestStage.DRAFT:
+        return request.hold_expires_at is not None and request.hold_expires_at > now
+    return True
+
+
+def _day_status_for(request: EventRequests) -> DayStatus:
+    if request.stage == EventRequestStage.PUBLISHED:
+        return DayStatus.PUBLISHED
+    if request.stage == EventRequestStage.DRAFT:
+        return DayStatus.HELD
+    return DayStatus.BOOKED
+
+
+_PRIORITY = [DayStatus.PUBLISHED, DayStatus.BOOKED, DayStatus.HELD]
+
+
 def calendar(session: Session, start: date, end: date) -> list[CalendarDay]:
     check_range(start, end)
+    now = clock.now()
     bans = {ban.date: ban for ban in queries.get_bans(session, start, end)}
+    taking = [r for r in queries.get_dated_requests(session, start, end) if takes_its_days(r, now)]
     first_open = first_bookable_day()
     days = []
     for day in days_between(start, end):
+        on_day = [r for r in taking if r.start_date <= day <= r.end_date]  # type: ignore[operator]
         if day in bans:
-            days.append(CalendarDay(day, DayStatus.BANNED, bans[day].reason))
+            days.append(CalendarDay(day, DayStatus.BANNED, bans[day].reason, on_day))
+        elif on_day:
+            status = min((_day_status_for(r) for r in on_day), key=_PRIORITY.index)
+            days.append(CalendarDay(day, status, None, on_day))
         elif day < first_open:
             days.append(CalendarDay(day, DayStatus.LOCKED))
         else:
@@ -70,14 +117,22 @@ def calendar(session: Session, start: date, end: date) -> list[CalendarDay]:
     return days
 
 
-def require_team(session: Session, actor: PipelineActor, team: PipelineTeam) -> int:
-    """The department playing ``team``, if the caller can act for it."""
+def team_department_id(session: Session, team: PipelineTeam) -> int:
     department_id = permission_queries.get_team_department_id(session, team)
     if department_id is None:
         raise PipelineConflict("team_not_set", f"No department is set as the {team.value} team yet")
+    return department_id
+
+
+def require_team(session: Session, actor: PipelineActor, team: PipelineTeam) -> int:
+    """The department playing ``team``, if the caller can act for it."""
+    department_id = team_department_id(session, team)
     if not actor.can_act_for(department_id):
         raise DepartmentForbidden(department_id)
     return department_id
+
+
+# --------------------------------------------------------------------------- bans
 
 
 def _check_ban_days(days: list[date]) -> list[date]:
@@ -90,12 +145,33 @@ def _check_ban_days(days: list[date]) -> list[date]:
     return unique
 
 
-def ban(session: Session, actor: PipelineActor, days: list[date], reason: str | None) -> list[date]:
+def ban(
+    session: Session, actor: PipelineActor, days: list[date], reason: str | None
+) -> tuple[list[date], list[EventRequests]]:
+    """Close ``days`` and take them away from every request covering one of them.
+
+    That applies at any stage before publish: the request keeps everything
+    else, loses its dates and says why. Returns the days and the requests that
+    lost their dates, so the caller can tell their teams.
+    """
     require_team(session, actor, PipelineTeam.LOGISTICS)
     unique = _check_ban_days(days)
     queries.ban_days(session, unique, reason, actor.member.id)
-    logger.info("Banned %d day(s) from %s to %s", len(unique), unique[0], unique[-1])
-    return unique
+    undated = []
+    for request in queries.get_dated_requests(session, unique[0], unique[-1], lock=True):
+        if request.stage == EventRequestStage.PUBLISHED:
+            continue
+        if any(request.start_date <= day <= request.end_date for day in unique):  # type: ignore[operator]
+            _undate(request, EventRequestUndatedReason.DAY_BANNED)
+            undated.append(request)
+    logger.info(
+        "Banned %d day(s) from %s to %s; %d request(s) lost their dates",
+        len(unique),
+        unique[0],
+        unique[-1],
+        len(undated),
+    )
+    return unique, undated
 
 
 def unban(session: Session, actor: PipelineActor, days: list[date]) -> int:
@@ -104,3 +180,183 @@ def unban(session: Session, actor: PipelineActor, days: list[date]) -> int:
     removed = queries.unban_days(session, unique)
     logger.info("Unbanned %d day(s)", removed)
     return removed
+
+
+def _undate(request: EventRequests, reason: EventRequestUndatedReason) -> None:
+    request.start_date = None
+    request.end_date = None
+    request.hold_expires_at = None
+    request.undated_reason = reason
+
+
+# --------------------------------------------------------------------------- booking
+
+
+@contextmanager
+def booking_lock(session: Session):
+    """Hold the booking lock for a change to who holds which day. Commit inside it."""
+    queries.acquire_booking_lock(session)
+    try:
+        yield
+    finally:
+        queries.release_booking_lock(session)
+
+
+def _check_bookable(session: Session, actor: PipelineActor, start: date, end: date, ignore_id: int | None) -> None:
+    """Super admins have full authority: they skip every rule here but a sane range."""
+    if actor.is_super_admin:
+        check_range(start, end, MAX_CALENDAR_DAYS)
+        return
+    check_range(start, end, MAX_BOOKING_DAYS)
+    if start < first_bookable_day():
+        raise PipelineConflict(
+            "day_locked", f"The first day you can book is {first_bookable_day().isoformat()}", status_code=409
+        )
+    if queries.get_bans(session, start, end, lock=True):
+        raise PipelineConflict("day_banned", "Logistics closed one of these days")
+    now = clock.now()
+    for request in queries.get_dated_requests(session, start, end, lock=True):
+        if request.id != ignore_id and takes_its_days(request, now):
+            raise PipelineConflict("day_taken", "One of these days is already taken")
+
+
+def _check_one_live_hold(session: Session, department_id: int, ignore_id: int | None = None) -> None:
+    held = [
+        r for r in queries.get_department_drafts_with_hold(session, department_id, clock.now()) if r.id != ignore_id
+    ]
+    if held:
+        raise PipelineConflict(
+            "hold_exists", f"Your department already holds dates for request {held[0].id}; finish or cancel it first"
+        )
+
+
+def book(session: Session, actor: PipelineActor, department_id: int, start: date, end: date) -> EventRequests:
+    """Create a draft holding ``start``..``end`` for 24 hours. Call inside ``booking_lock``."""
+    actor.require_act_for(department_id)
+    if session.get(Departments, department_id) is None:
+        raise NotFound("Department", department_id)
+    if not actor.is_super_admin:
+        _check_one_live_hold(session, department_id)
+    _check_bookable(session, actor, start, end, None)
+    request = EventRequests(
+        department_id=department_id,
+        created_by=actor.member.id,
+        stage=EventRequestStage.DRAFT,
+        start_date=start,
+        end_date=end,
+        hold_expires_at=clock.now() + HOLD,
+    )
+    session.add(request)
+    session.flush()
+    logger.info("Request %s booked %s..%s for department %s", request.id, start, end, department_id)
+    return request
+
+
+def redate(session: Session, actor: PipelineActor, request: EventRequests, start: date, end: date) -> None:
+    """Give a request that lost its dates new ones. Call inside ``booking_lock``.
+
+    A draft gets a fresh 24-hour hold. A submitted request that lost its days
+    to a ban takes the new ones outright, as its old ones were.
+    """
+    actor.require_act_for(request.department_id)
+    if request.stage in (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED):
+        raise PipelineConflict("not_redatable", "This request can no longer change its dates")
+    if takes_its_days(request, clock.now()) and not actor.is_super_admin:
+        raise PipelineConflict("still_held", "This request still holds its dates")
+    is_draft = request.stage == EventRequestStage.DRAFT
+    if is_draft and not actor.is_super_admin:
+        _check_one_live_hold(session, request.department_id, ignore_id=request.id)
+    _check_bookable(session, actor, start, end, request.id)
+    request.start_date = start
+    request.end_date = end
+    request.hold_expires_at = clock.now() + HOLD if is_draft else None
+    request.undated_reason = None
+    # Keep the modes of the days that are still in the range.
+    if request.day_modes:
+        kept = {d.isoformat() for d in days_between(start, end)}
+        request.day_modes = {k: v for k, v in request.day_modes.items() if k in kept} or None
+    session.flush()
+    logger.info("Request %s re-dated to %s..%s", request.id, start, end)
+
+
+def cancel(session: Session, actor: PipelineActor, request: EventRequests) -> None:
+    """A team drops its own draft. Its dates, if it still held any, are free again."""
+    actor.require_act_for(request.department_id)
+    if request.stage != EventRequestStage.DRAFT and not (
+        actor.is_super_admin and request.stage != EventRequestStage.PUBLISHED
+    ):
+        raise PipelineConflict("not_a_draft", "Only a draft can be cancelled")
+    request.stage = EventRequestStage.CANCELLED
+    request.hold_expires_at = None
+    session.flush()
+
+
+# --------------------------------------------------------------------------- details
+
+EDITABLE_STAGES = {EventRequestStage.DRAFT}
+
+
+def can_edit(actor: PipelineActor, request: EventRequests) -> bool:
+    """The team edits its draft; a super admin edits anything not yet published."""
+    if actor.is_super_admin:
+        return request.stage not in (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED)
+    return actor.can_act_for(request.department_id) and request.stage in EDITABLE_STAGES
+
+
+def update_details(session: Session, actor: PipelineActor, request: EventRequests, fields: dict) -> None:
+    """Save any subset of the event details. Nothing is required until submit."""
+    actor.require_act_for(request.department_id)
+    if not can_edit(actor, request):
+        raise PipelineConflict("not_editable", "The details are frozen once the request is submitted")
+
+    partners = fields.pop("partner_department_ids", None)
+    if "day_modes" in fields and fields["day_modes"] is not None:
+        modes = {d.isoformat() if isinstance(d, date) else str(d): v for d, v in fields["day_modes"].items()}
+        if request.start_date is None:
+            raise PipelineConflict("no_dates", "Book dates before choosing each day's mode", 422)
+        allowed = {d.isoformat() for d in days_between(request.start_date, request.end_date)}  # type: ignore[arg-type]
+        if not set(modes) <= allowed:
+            raise PipelineConflict("mode_outside_dates", "Every day with a mode must be one of the booked days", 422)
+        fields["day_modes"] = modes
+    for key in ("is_official",):
+        if key in fields and fields[key] is not None:
+            fields[key] = int(fields[key])
+    for key, value in fields.items():
+        setattr(request, key, value)
+    if partners is not None:
+        if request.department_id in partners:
+            raise PipelineConflict("self_partner", "A department cannot partner with itself", 422)
+        if partners and len(permission_queries.get_departments(session, set(partners))) != len(set(partners)):
+            raise PipelineConflict("unknown_department", "A partner department does not exist", 422)
+        queries.set_partners(session, request, partners)
+    session.flush()
+
+
+def within_official_hours(request: EventRequests) -> bool | None:
+    """Whether every booked day is Sun-Thu and the daily times fit in 08:00-15:00."""
+    if request.start_date is None or request.daily_start_time is None or request.daily_end_time is None:
+        return None
+    days = days_between(request.start_date, request.end_date)  # type: ignore[arg-type]
+    return all(d.weekday() in OFFICIAL_DAYS for d in days) and (
+        OFFICIAL_START <= request.daily_start_time and request.daily_end_time <= OFFICIAL_END
+    )
+
+
+# --------------------------------------------------------------------------- reading
+
+
+def get_request_for(session: Session, actor: PipelineActor, request_id: int, lock: bool = False) -> EventRequests:
+    request = queries.get_request(session, request_id, lock=lock)
+    if request is None or request.stage == EventRequestStage.CANCELLED:
+        raise NotFound("Event request", request_id)
+    if not can_view(session, actor, request):
+        raise DepartmentForbidden(request.department_id, "see requests of")
+    return request
+
+
+def can_view(session: Session, actor: PipelineActor, request: EventRequests) -> bool:
+    return actor.can_act_for(request.department_id)
+
+
+def visible_department_ids(actor: PipelineActor) -> set[int] | None:
+    return None if actor.is_super_admin else actor.acting_department_ids

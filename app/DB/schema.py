@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     JSON,
     String,
+    Time,
     Table,
     Text,
     text,
@@ -1023,6 +1024,141 @@ class BookingBans(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+
+
+class EventRequestStage(str, enum.Enum):
+    """Where an event request is. The whole path is here from the start; see docs/EVENTS_PIPELINE.md."""
+
+    DRAFT = "draft"
+    IN_REVIEW = "in_review"
+    RETURNED = "returned"
+    MEDIA = "media"
+    READY = "ready"
+    PUBLISHED = "published"
+    CANCELLED = "cancelled"
+
+
+class EventRequestUndatedReason(str, enum.Enum):
+    HOLD_EXPIRED = "hold_expired"
+    DAY_BANNED = "day_banned"
+
+
+class EventRequestType(str, enum.Enum):
+    COURSE = "course"
+    BOOTCAMP = "bootcamp"
+    MEETUP = "meetup"
+    WORKSHOP = "workshop"
+    COMPETITION = "competition"
+
+
+class EventRequestLocationScope(str, enum.Enum):
+    INSIDE = "inside"
+    OUTSIDE = "outside"
+
+
+class EventRequestAudience(str, enum.Enum):
+    MALE = "male"
+    FEMALE = "female"
+    MIXED = "mixed"
+    NONE = "none"
+
+
+class EventRequestRegistration(str, enum.Enum):
+    ACCEPTANCE = "acceptance"
+    OPEN = "open"
+    NONE = "none"
+
+
+def _enum(cls):
+    return Enum(cls, values_callable=lambda members: [member.value for member in members])
+
+
+class EventRequests(Base):
+    """A department's request to hold an event, from booking its dates to publishing it.
+
+    The dates are held for 24 hours while the request is a draft
+    (``hold_expires_at``), and stay taken from submit until it is published. A
+    request that loses its dates keeps everything else and says why in
+    ``undated_reason``. The event details are real columns because the
+    calendar and publish read them; they are all nullable while the request is
+    a draft and checked on submit.
+    """
+
+    __tablename__ = "event_requests"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_event_requests_department", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(["created_by"], ["members.id"], name="fk_event_requests_created_by", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_event_requests_event", ondelete="SET NULL"),
+        CheckConstraint("end_date >= start_date", name="ck_event_requests_dates"),
+        Index("ix_event_requests_dates", "start_date", "end_date"),
+        Index("ix_event_requests_department_stage", "department_id", "stage"),
+        Index("ix_event_requests_stage", "stage"),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    created_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    stage: Mapped[EventRequestStage] = mapped_column(
+        _enum(EventRequestStage), nullable=False, server_default=text("'draft'")
+    )
+    start_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
+    end_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
+    hold_expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    undated_reason: Mapped[Optional[EventRequestUndatedReason]] = mapped_column(_enum(EventRequestUndatedReason))
+
+    title: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    description: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    event_type: Mapped[Optional[EventRequestType]] = mapped_column(_enum(EventRequestType))
+    presenter_name: Mapped[Optional[str]] = mapped_column(
+        VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
+    )
+    presenter_email: Mapped[Optional[str]] = mapped_column(String(150))
+    # {"2026-10-12": "on_site", "2026-10-13": "online"} - one entry per booked day.
+    day_modes: Mapped[Optional[dict]] = mapped_column(JSON)
+    daily_start_time: Mapped[Optional[datetime.time]] = mapped_column(Time)
+    daily_end_time: Mapped[Optional[datetime.time]] = mapped_column(Time)
+    is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1))
+    location_scope: Mapped[Optional[EventRequestLocationScope]] = mapped_column(_enum(EventRequestLocationScope))
+    audience: Mapped[Optional[EventRequestAudience]] = mapped_column(_enum(EventRequestAudience))
+    registration: Mapped[Optional[EventRequestRegistration]] = mapped_column(_enum(EventRequestRegistration))
+    expected_accepted: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    help_needed: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    )
+    submitted_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+
+    department: Mapped["Departments"] = relationship("Departments")
+    creator: Mapped["Members"] = relationship("Members")
+    partners: Mapped[list["EventRequestPartners"]] = relationship(
+        "EventRequestPartners", passive_deletes=True, cascade="all, delete-orphan"
+    )
+
+
+class EventRequestPartners(Base):
+    """Another department the event is run with."""
+
+    __tablename__ = "event_request_partners"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["request_id"], ["event_requests.id"], name="fk_event_request_partners_request", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_event_request_partners_department", ondelete="RESTRICT"
+        ),
+    )
+
+    request_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+
+    department: Mapped["Departments"] = relationship("Departments")
 
 
 # =============================================================================
