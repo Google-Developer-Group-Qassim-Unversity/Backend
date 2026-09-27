@@ -79,7 +79,7 @@ Two workflows, one per event:
 
 - **pr.yml** – on PRs to `main`; jobs skip when their half of the repo is untouched
   - `backend-lint` – `uv run ruff check .` and `uv run ruff format --check .`
-  - `production-migrations` – `alembic check` from main against the production DB
   - `frontend-lint` – `pnpm run lint` and `pnpm run typecheck`
-  - `test` – `RUN_CLUB_BROWSER=1 uv run pytest` (the fixtures also run `alembic upgrade head` on a fresh MySQL)
+  - `test` – `RUN_CLUB_BROWSER=1 uv run pytest` (the fixtures also run `alembic upgrade head` on a fresh MySQL, and `tests/test_migrations.py` fails on multiple heads or models that no migration matches)
 - **deploy.yml** – on push to `main`; SSH-deploys whichever of backend (PM2, infisical prod env, port 7501) and frontend changed. Run it manually to redeploy both.
+  The backend deploy builds the release in `~/GDG-backend.new`, runs `alembic upgrade head` against production, swaps it in (the previous release stays in `~/GDG-backend.old`), restarts, and fails unless `/health/db` and `/events/` answer. Migrations are never run by hand.
