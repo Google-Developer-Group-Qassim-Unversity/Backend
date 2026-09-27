@@ -228,7 +228,9 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
 def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     """
     Generates a signed Google Wallet Save Link (JWT) using RS256 algorithm.
-    Uses full card Figma artwork for heroImage to match the complete card design.
+    heroImage is the wide strip banner, not the full card artwork: Google Wallet
+    draws the barcode itself in a fixed spot mid-card, so the full artwork's own
+    empty QR frame showed up as a second, blank square under the real code.
     """
     issuer_id = config.GOOGLE_WALLET_ISSUER_ID.strip()
     class_id = config.GOOGLE_WALLET_CLASS_ID.strip() or f"{issuer_id}.gdgq-card"
@@ -272,7 +274,7 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
             "contentDescription": {"defaultValue": {"language": "ar", "value": "GDG Qassim Logo"}},
         },
         "heroImage": {
-            "sourceUri": {"uri": f"https://gdg-q.com/wallet-v2/card-{theme_id}@2x.png"},
+            "sourceUri": {"uri": f"https://gdg-q.com/wallet-v2/strip-{theme_id}@3x.png"},
             "contentDescription": {"defaultValue": {"language": "ar", "value": f"GDG Qassim {theme['role_title']}"}},
         },
         "textModulesData": [
