@@ -103,10 +103,40 @@ roster rows exactly as mapped; no department's points changed. Past rankings
 now show the archived departments that earned points then (e.g. Cybersecurity
 in 471) and no longer list departments that did not exist yet.
 
+## Importing past semesters
+
+`scripts/import_club_structure.py` loads past structures from CSV, one row per
+role held (format and rules in `app/services/club_import.py`):
+
+```csv
+semester,department,member,role,department_name,department_ar_name
+461,Development,441234567,leader,,
+461,التصميم,sara@qu.edu.sa,member,,
+461,7,#1214,vp,Innovation,قسم الابتكار
+```
+
+- `semester` is the Hijri code and must exist already (Settings → Semesters).
+- `department` is an id or its current English/Arabic name. A department that
+  is gone today is created (and archived) in the admin app first.
+- `member` is a university id, an email or `#<members.id>`. Nobody is created;
+  an unknown person fails the import.
+- `role` is `leader`, `vp` or `member`. Leaders and VPs get their member row.
+- The two name columns record what the department was called that semester.
+
+It is a dry run unless `--apply` is passed. Every row in every file is checked
+first and all problems are listed together; any problem, including a full
+seat, means nothing is written. Rows already present are skipped, so it can be
+re-run. Against production:
+
+```bash
+infisical run --env=prod --path=/admin-backend -- uv run python scripts/import_club_structure.py 461.csv 462.csv
+```
+
 ## Tests
 
 - `tests/routers/test_club_structure.py` - every route through the real guards
 - `tests/test_club_structure_concurrency.py` - independent MySQL transactions
 - `tests/routers/test_points.py` - the department ranking rules
+- `tests/test_club_import.py` - the CSV import and the script
 - `tests/test_club_structure_browser.py` + `Frontend/tests/club-structure/` -
   Chromium against the real API (`RUN_CLUB_BROWSER=1`, runs in CI)
