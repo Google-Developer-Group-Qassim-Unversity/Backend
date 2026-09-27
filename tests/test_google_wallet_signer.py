@@ -49,7 +49,7 @@ def test_google_wallet_jwt_matches_current_google_contract(monkeypatch: pytest.M
     assert google_object["hexBackgroundColor"] == "#BFF2FF"
     assert google_object["subheader"]["defaultValue"]["value"] == "عضو نادي قوقل للطلبة المطورين"
     # 361ac26 intentionally moved the hero art from the strip to the full-card render
-    assert google_object["heroImage"]["sourceUri"]["uri"].endswith("/wallet-v2/card-gdg-blue@2x.png")
+    assert google_object["heroImage"]["sourceUri"]["uri"].endswith("/wallet-v2/strip-gdg-blue@3x.png")
     assert "classTemplateInfo" not in claims["payload"]["genericClasses"][0]
 
 
