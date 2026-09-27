@@ -106,8 +106,10 @@ class Pipeline:
 
 
 @pytest.fixture
-def pipeline(db_session, client, monkeypatch):
+def pipeline(db_session, client, monkeypatch, outbound):
+    """Pipeline steps send emails in the background; ``outbound`` records them instead of sending."""
     helper = Pipeline(db_session, client, monkeypatch)
+    helper.outbound = outbound
     yield helper
     app.dependency_overrides.pop(config.CLERK_GUARD, None)
 

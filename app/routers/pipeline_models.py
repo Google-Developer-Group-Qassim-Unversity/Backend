@@ -13,6 +13,7 @@ from app.DB.schema import (
     EventRequestTaskStatus,
     EventRequestType,
     EventRequestUndatedReason,
+    PipelineNotificationKind,
     PipelineTeam,
 )
 from app.routers.club_structure_models import UtcDateTime
@@ -117,6 +118,8 @@ class UnbanDaysRequest(BaseModel):
 
 
 class BanResult(BaseModel):
+    """How many rows a bulk action changed."""
+
     count: int
 
 
@@ -215,3 +218,28 @@ class SaveBriefRequest(BaseModel):
     """A draft brief, saved as it is. Its fields are the team's form (app/services/event_briefs.py)."""
 
     brief: dict
+
+
+class NotificationRequest(BaseModel):
+    id: int
+    title: str | None
+    stage: EventRequestStage
+
+
+class NotificationItem(BaseModel):
+    id: int
+    kind: PipelineNotificationKind
+    department: PipelineDepartment
+    request: NotificationRequest
+    payload: dict | None
+    created_at: UtcDateTime
+    read: bool
+
+
+class PaginatedNotifications(BaseModel):
+    items: list[NotificationItem]
+    total: int
+    unread: int
+    page: int
+    page_size: int
+    total_pages: int

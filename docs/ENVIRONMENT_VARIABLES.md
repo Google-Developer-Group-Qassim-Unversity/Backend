@@ -54,6 +54,8 @@ duplicated across both apps for that one convenience link.
 | `MEMBER_APP_URL` | when the feature runs | - |  |
 | `MEMBER_APP_REVALIDATE_SECRET` | when the feature runs | - | bearer token for the leaderboard cache reset |
 | `SES_FROM_ADDRESS` | when the feature runs | - |  |
+| `PIPELINE_EMAILS_LIVE` | no | `false` | events pipeline: `false` sends each email only to whoever triggered it, as a trial copy; `true` emails the whole department |
+| `ADMIN_APP_URL` | no | `https://admin.gdg-q.com` | links in events pipeline emails |
 
 ### Cloudflare R2 (uploads)
 

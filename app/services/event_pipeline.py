@@ -26,11 +26,14 @@ from app.DB.schema import (
     EventRequestTasks,
     EventRequestTaskStatus,
     EventRequestUndatedReason,
+    PipelineNotificationKind,
     PipelineTeam,
 )
 from app.exceptions import DepartmentForbidden, IncompleteRequest, NotFound, PipelineConflict
 from app.services import event_briefs
 from app.services import event_pipeline_clock as clock
+from app.services import pipeline_notifications as notifications
+from app.services.pipeline_notifications import PendingEmail
 from app.services.department_permissions import PipelineActor
 
 logger = logging.getLogger(__name__)
@@ -171,7 +174,15 @@ def ban(
         if request.stage == EventRequestStage.PUBLISHED:
             continue
         if any(request.start_date <= day <= request.end_date for day in unique):  # type: ignore[operator]
+            lost = {"start_date": request.start_date.isoformat(), "end_date": request.end_date.isoformat()}  # type: ignore[union-attr]
             _undate(request, EventRequestUndatedReason.DAY_BANNED)
+            notifications.notify(
+                session,
+                request.department_id,
+                request,
+                PipelineNotificationKind.DATES_BANNED,
+                {**lost, "reason": reason},
+            )
             undated.append(request)
     logger.info(
         "Banned %d day(s) from %s to %s; %d request(s) lost their dates",
@@ -364,7 +375,16 @@ def get_request_for(session: Session, actor: PipelineActor, request_id: int, loc
 
 
 def can_view(session: Session, actor: PipelineActor, request: EventRequests) -> bool:
-    return actor.can_act_for(request.department_id)
+    """The requesting department, and every team the request has reached."""
+    if actor.can_act_for(request.department_id):
+        return True
+    team_departments = {row.team: row.department_id for row in permission_queries.get_teams(session)}
+    return any(
+        task.status != EventRequestTaskStatus.BRIEF
+        and task.team in team_departments
+        and actor.can_act_for(team_departments[task.team])
+        for task in request.tasks
+    )
 
 
 def visible_department_ids(actor: PipelineActor) -> set[int] | None:
@@ -402,11 +422,11 @@ def save_brief(session: Session, actor: PipelineActor, request: EventRequests, t
     session.flush()
 
 
-def submit(session: Session, actor: PipelineActor, request: EventRequests) -> list[PipelineTeam]:
+def submit(session: Session, actor: PipelineActor, request: EventRequests) -> list[PendingEmail | None]:
     """Send a complete draft to Design and Logistics at the same moment.
 
-    From here on the dates stay taken without a hold. Returns the teams that
-    received it, so the caller can tell them.
+    From here on the dates stay taken without a hold. Both teams get a
+    notification; returns their emails, to send once this commits.
     """
     actor.require_act_for(request.department_id)
     if request.stage != EventRequestStage.DRAFT:
@@ -429,4 +449,20 @@ def submit(session: Session, actor: PipelineActor, request: EventRequests) -> li
         task.opened_at = now
     session.flush()
     logger.info("Request %s submitted to Design and Logistics", request.id)
-    return list(BRIEF_TEAMS)
+    return [
+        reach_team(session, actor, request, team, PipelineNotificationKind.REQUEST_RECEIVED) for team in BRIEF_TEAMS
+    ]
+
+
+def reach_team(
+    session: Session,
+    actor: PipelineActor,
+    request: EventRequests,
+    team: PipelineTeam,
+    kind: PipelineNotificationKind,
+    note: str | None = None,
+) -> PendingEmail | None:
+    """A request reached a team: notify its department and prepare its email."""
+    department_id = team_department_id(session, team)
+    notifications.notify(session, department_id, request, kind, {"team": team.value})
+    return notifications.department_email(session, department_id, request, kind, actor.member, note)
