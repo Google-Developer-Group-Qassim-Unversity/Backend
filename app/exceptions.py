@@ -35,6 +35,23 @@ class InvalidClubStructure(KnownHttpException):
         super().__init__(status_code=422, detail=detail)
 
 
+class DepartmentForbidden(KnownHttpException):
+    """The caller cannot act for this department in the events pipeline."""
+
+    code = "department_forbidden"
+
+    def __init__(self, department_id: int, action: str = "act for"):
+        super().__init__(status_code=403, detail=f"You cannot {action} department {department_id}")
+
+
+class PipelineConflict(KnownHttpException):
+    """An events-pipeline rule refused the change. ``code`` says which rule."""
+
+    def __init__(self, code: str, detail: str, status_code: int = 409):
+        super().__init__(status_code=status_code, detail=detail)
+        self.code = code
+
+
 class DataIntegrityError(HTTPException):
     """Exception raised when a data integrity violation is detected.
     (basically raise whenver somethign that should NEVER happen, happens.)
