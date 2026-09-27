@@ -9,8 +9,10 @@ from datetime import date
 from fastapi.testclient import TestClient
 
 import app.semesters
+from app.DB.schema import DepartmentsLogs, Events, EventsLocationType, EventsStatus, Logs, SemesterDepartments
+from app.DB.semesters import get_semester_by_hijri_code
 
-from tests.utils import assert_2xx, assert_not_found
+from tests.utils import assert_2xx, assert_not_found, semester_id_on
 
 PUBLIC_ENDPOINTS = ["/points/members/total", "/points/departments/total"]
 
@@ -146,3 +148,70 @@ def test_private_current_semester_does_not_break_anonymous_callers(
 def test_unknown_semester_is_rejected(client: TestClient, seed_refs):
     response = client.get("/points/members/total?semester=999999")
     assert response.status_code in (404, 409)
+
+
+# ---------- which departments a semester's ranking lists ----------
+
+
+def _department_points(client: TestClient, semester: int) -> dict[int, dict]:
+    response = client.get("/points/departments/total", params={"semester": semester})
+    assert_2xx(response)
+    body = response.json()
+    return {d["department_id"]: d for d in body["administrative"] + body["practical"]}
+
+
+def _award_department_points(db_session, seed_refs, department_id: int, day: str) -> None:
+    event = Events(
+        name="Ranked workshop",
+        location_type=EventsLocationType.ON_SITE,
+        location="Hall",
+        start_datetime=f"{day} 10:00:00",
+        end_datetime=f"{day} 12:00:00",
+        status=EventsStatus.CLOSED,
+        semester_id=semester_id_on(db_session, day),
+    )
+    db_session.add(event)
+    db_session.flush()
+    log = Logs(action_id=seed_refs.dept_action.id, event_id=event.id)
+    db_session.add(log)
+    db_session.flush()
+    db_session.add(DepartmentsLogs(department_id=department_id, log_id=log.id))
+    db_session.flush()
+
+
+def test_ranking_lists_the_semesters_departments_and_any_with_points(client, db_session, seed_refs):
+    summer = get_semester_by_hijri_code(db_session, 475)
+    db_session.add(SemesterDepartments(semester_id=summer.id, department_id=seed_refs.dept_design.id))
+    db_session.flush()
+    assert set(_department_points(client, 475)) == {seed_refs.dept_design.id}
+
+    # Business is not part of 475, but points it earned there still show.
+    _award_department_points(db_session, seed_refs, seed_refs.dept_business.id, "2026-07-01")
+    ranking = _department_points(client, 475)
+    assert set(ranking) == {seed_refs.dept_design.id, seed_refs.dept_business.id}
+    assert ranking[seed_refs.dept_business.id]["total_points"] == seed_refs.dept_action.points
+    # A semester the departments had nothing to do with lists neither.
+    assert set(_department_points(client, 472)) == set()
+
+
+def test_ranking_leaves_out_departments_not_shown_in_the_leaderboard(client, db_session, seed_refs):
+    summer = get_semester_by_hijri_code(db_session, 475)
+    db_session.add(SemesterDepartments(semester_id=summer.id, department_id=seed_refs.dept_design.id))
+    seed_refs.dept_design.show_in_leaderboard = 0
+    db_session.flush()
+    _award_department_points(db_session, seed_refs, seed_refs.dept_design.id, "2026-07-01")
+    # The Leadership department (part of 475 from the migration) is left out the same way.
+    assert _department_points(client, 475) == {}
+
+
+def test_ranking_uses_the_name_a_department_had_that_semester(client, db_session, seed_refs):
+    spring = get_semester_by_hijri_code(db_session, 472)
+    db_session.add(
+        SemesterDepartments(
+            semester_id=spring.id, department_id=seed_refs.dept_design.id, name="Old Design", ar_name="التصميم القديم"
+        )
+    )
+    db_session.flush()
+    ranking = _department_points(client, 472)[seed_refs.dept_design.id]
+    assert (ranking["department_name"], ranking["ar_department_name"]) == ("Old Design", "التصميم القديم")
+    assert _department_points(client, 475) == {}

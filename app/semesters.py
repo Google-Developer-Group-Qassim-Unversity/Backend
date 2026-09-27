@@ -14,10 +14,13 @@ decide where events land when they are saved.
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException, status
+from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.DB import semesters as semesters_queries
 from app.DB.schema import Semesters
+from app.helpers import is_super_admin
 from app.exceptions import NoSemesterForDate, NoSemestersDefined, SemesterNotFound
 
 CLUB_TIMEZONE = ZoneInfo("Asia/Riyadh")
@@ -43,6 +46,29 @@ def resolve_semester(session: Session, hijri_code: int | None) -> Semesters:
     semester = semesters_queries.get_semester_by_hijri_code(session, hijri_code)
     if semester is None:
         raise SemesterNotFound(hijri_code)
+    return semester
+
+
+def resolve_semester_for_caller(
+    session: Session, hijri_code: int | None, credentials: HTTPAuthorizationCredentials | None
+) -> Semesters:
+    """Resolve the semester a public-facing request is asking for, or its default, and authorize it.
+
+    An explicit ``?semester`` is honoured as-is. When none is given the default is
+    the current semester - but a public caller must not start getting 403s just
+    because a super admin made the current semester private, so they get the
+    current *public* one, matching what ``/points/semesters`` advertises.
+    """
+    semester = resolve_semester(session, hijri_code)
+    is_super = bool(credentials and is_super_admin(credentials))
+    if hijri_code is None and not semester.is_public and not is_super:
+        semester = current_semester(session, public_only=True) or semester
+
+    if not semester.is_public and not is_super:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Semester {semester.hijri_code} is not publicly accessible. Super admin credentials required.",
+        )
     return semester
 
 

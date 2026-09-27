@@ -89,11 +89,12 @@ def get_member_points_history_semester(session: Session, semester_id: str, membe
 _DEPARTMENTS_POINTS_BASE_QUERY = """
         SELECT
             d.id AS department_id,
-            d.name AS department_name,
+            COALESCE(sd.name, d.name) AS department_name,
             d.type AS department_type,
-            d.ar_name AS ar_department_name,
+            COALESCE(sd.ar_name, d.ar_name) AS ar_department_name,
             COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN ((COALESCE(a.points, 0) + COALESCE(m.bonus, 0)) - COALESCE(m.discount, 0)) ELSE 0 END), 0) AS total_points
         FROM departments d
+        LEFT JOIN semester_departments sd ON sd.department_id = d.id AND sd.semester_id = :semester_id
         LEFT JOIN departments_logs dl ON dl.department_id = d.id
         LEFT JOIN logs l ON l.id = dl.log_id
         LEFT JOIN events e ON e.id = l.event_id AND e.semester_id = :semester_id AND e.status <> 'draft'
@@ -109,11 +110,18 @@ _DEPARTMENTS_POINTS_BASE_QUERY = """
 
 
 def get_departments_points_semester(session: Session, semester_id: str) -> list[dict]:
-    """Every active department's total points for the semester, highest first."""
+    """The semester's departments and their total points, highest first.
+
+    A department is listed when it is part of the semester (``semester_departments``)
+    or earned points in it, so points are never hidden by a missing row. Departments
+    with ``show_in_leaderboard = 0`` (the Board, Leadership) are left out. Names are
+    the ones the department had that semester, when recorded.
+    """
     query = (
         _DEPARTMENTS_POINTS_BASE_QUERY
-        + """WHERE d.active = 1
-    GROUP BY d.id, d.name, d.type, d.ar_name
+        + """WHERE d.show_in_leaderboard = 1
+    GROUP BY d.id, d.name, d.type, d.ar_name, sd.name, sd.ar_name, sd.department_id
+    HAVING sd.department_id IS NOT NULL OR COUNT(e.id) > 0
         ORDER BY total_points DESC
     """
     )
@@ -124,13 +132,13 @@ def get_departments_points_semester(session: Session, semester_id: str) -> list[
 def get_department_points_by_id_semester(session: Session, semester_id: str, department_id: int) -> dict | None:
     """One department's total points for the semester, or None if it does not exist.
 
-    Unlike the "all departments" query above, this is not filtered to active
-    departments - an admin can still look up a deactivated one by id.
+    Unlike the "all departments" query above, this is not limited to the
+    semester's departments - an admin can look any department up by id.
     """
     query = (
         _DEPARTMENTS_POINTS_BASE_QUERY
         + """WHERE d.id = :department_id
-    GROUP BY d.id, d.name, d.type, d.ar_name
+    GROUP BY d.id, d.name, d.type, d.ar_name, sd.name, sd.ar_name
         ORDER BY total_points DESC
     """
     )

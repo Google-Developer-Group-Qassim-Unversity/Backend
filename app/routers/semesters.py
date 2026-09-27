@@ -16,10 +16,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.DB import club_structure as club_queries
 from app.DB import semesters as semesters_queries
 from app.DB.schema import Semesters, SemesterTerm
 
-from app.exceptions import SemesterHasEvents, SemesterNotFound
+from app.exceptions import SemesterHasEvents, SemesterHasRoster, SemesterNotFound
 from app.helpers import admin_guard, super_admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.models import BaseClassModel
@@ -169,6 +170,8 @@ def delete_semester(semester_id: UUID, session: DB):
     event_count = semesters_queries.count_semester_events(session, semester.id)
     if event_count:
         raise SemesterHasEvents(semester.name, event_count)
+    if club_queries.semester_has_memberships(session, semester.id):
+        raise SemesterHasRoster(semester.name)
 
     semesters_queries.delete_semester(session, semester)
     session.commit()
