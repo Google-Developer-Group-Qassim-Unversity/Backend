@@ -1009,6 +1009,22 @@ class DepartmentPermissions(Base):
     granter: Mapped["Members"] = relationship("Members", foreign_keys=[granted_by])
 
 
+class BookingBans(Base):
+    """A day Logistics closed to bookings, e.g. exams. Every team sees the reason."""
+
+    __tablename__ = "booking_bans"
+    __table_args__ = (
+        ForeignKeyConstraint(["banned_by"], ["members.id"], name="fk_booking_bans_banned_by", ondelete="RESTRICT"),
+    )
+
+    date: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
+    reason: Mapped[Optional[str]] = mapped_column(VARCHAR(200, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    banned_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
 # =============================================================================
 # Views (read-only, defined in DB migrations)
 # =============================================================================

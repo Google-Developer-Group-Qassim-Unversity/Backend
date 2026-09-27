@@ -1,26 +1,40 @@
 """The events pipeline: from booking a date to a published event."""
 
 import logging
+from datetime import date
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from app.DB import department_permissions as permission_queries
 from app.DB.schema import PipelineTeam
 from app.dependencies import DB
-from app.exceptions import NotFound, PipelineConflict
+from app.exceptions import DepartmentForbidden, NotFound, PipelineConflict
 from app.helpers import super_admin_guard
 from app.routers.pipeline_models import (
     ActingDepartment,
+    BanDaysRequest,
+    BanResult,
+    CalendarDayResponse,
+    CalendarResponse,
+    UnbanDaysRequest,
     PipelineDepartment,
     PipelineMeResponse,
     PipelineTeamEntry,
     SetPipelineTeamsRequest,
 )
-from app.services.department_permissions import Actor
+from app.services import event_pipeline as pipeline_service
+from app.services import event_pipeline_clock as clock
+from app.services.department_permissions import Actor, PipelineActor
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pipeline", tags=["events pipeline"])
+
+
+def _require_access(actor: PipelineActor) -> None:
+    if not actor.has_pipeline_access:
+        raise DepartmentForbidden(0, "use the pipeline for any")
 
 
 def _team_entries(session) -> list[PipelineTeamEntry]:
@@ -76,3 +90,33 @@ def set_pipeline_teams(body: SetPipelineTeamsRequest, session: DB):
     session.commit()
     logger.info("Pipeline teams set: %s", {t.value: d for t, d in mapping.items()})
     return _team_entries(session)
+
+
+@router.get("/calendar", status_code=status.HTTP_200_OK, response_model=CalendarResponse)
+def get_pipeline_calendar(
+    session: DB, actor: Actor, start: Annotated[date, Query(alias="from")], end: Annotated[date, Query(alias="to")]
+):
+    """One entry per day from ``from`` to ``to`` (at most 120 days), with its status."""
+    _require_access(actor)
+    days = pipeline_service.calendar(session, start, end)
+    return CalendarResponse(
+        today=clock.today(),
+        first_bookable_date=pipeline_service.first_bookable_day(),
+        days=[CalendarDayResponse(date=d.date, status=d.status.value, reason=d.reason) for d in days],
+    )
+
+
+@router.put("/calendar/bans", status_code=status.HTTP_200_OK, response_model=BanResult)
+def ban_pipeline_days(body: BanDaysRequest, session: DB, actor: Actor):
+    """Logistics closes days to bookings. A day already banned takes the new reason."""
+    days = pipeline_service.ban(session, actor, body.dates, body.reason)
+    session.commit()
+    return BanResult(count=len(days))
+
+
+@router.delete("/calendar/bans", status_code=status.HTTP_200_OK, response_model=BanResult)
+def unban_pipeline_days(body: UnbanDaysRequest, session: DB, actor: Actor):
+    """Logistics reopens days. Requests that lost a day to the ban do not get it back."""
+    removed = pipeline_service.unban(session, actor, body.dates)
+    session.commit()
+    return BanResult(count=removed)
