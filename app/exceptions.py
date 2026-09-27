@@ -52,6 +52,17 @@ class PipelineConflict(KnownHttpException):
         self.code = code
 
 
+class IncompleteRequest(KnownHttpException):
+    """Submit found fields still missing. ``detail`` lists them the way FastAPI lists a 422."""
+
+    code = "incomplete"
+
+    def __init__(self, missing: list[str]):
+        super().__init__(
+            status_code=422, detail=[{"loc": field.split("."), "msg": f"{field} is required"} for field in missing]
+        )
+
+
 class DataIntegrityError(HTTPException):
     """Exception raised when a data integrity violation is detected.
     (basically raise whenver somethign that should NEVER happen, happens.)

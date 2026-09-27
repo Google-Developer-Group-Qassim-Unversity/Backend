@@ -110,3 +110,39 @@ def pipeline(db_session, client, monkeypatch):
     helper = Pipeline(db_session, client, monkeypatch)
     yield helper
     app.dependency_overrides.pop(config.CLERK_GUARD, None)
+
+
+COMPLETE_DETAILS = {
+    "title": "Intro to ML",
+    "description": "Hands-on machine learning",
+    "event_type": "workshop",
+    "presenter_name": "Dr. Noura",
+    "presenter_email": "noura@example.com",
+    "day_modes": {"2026-07-20": "on_site", "2026-07-21": "online"},
+    "daily_start_time": "10:00",
+    "daily_end_time": "12:00",
+    "is_official": True,
+    "location_scope": "inside",
+    "audience": "mixed",
+    "registration": "open",
+}
+COMPLETE_DESIGN = {"design_type": "poster", "idea": "A robot", "content_status": "final", "content": "Join us"}
+COMPLETE_LOGISTICS = {"meet_link_by_logistics": True, "venue": "التيك فالي (60)", "buses_needed": False}
+
+
+def book_complete(pipeline, department, start="2026-07-20", end="2026-07-21") -> int:
+    """Book a request as the signed-in person and fill in everything submit needs. Returns its id."""
+    response = pipeline.client.post(
+        "/pipeline/requests", json={"department_id": department.id, "start_date": start, "end_date": end}
+    )
+    assert response.status_code == 201, response.text
+    request_id = response.json()["id"]
+    url = f"/pipeline/requests/{request_id}"
+    assert pipeline.client.put(f"{url}/details", json=COMPLETE_DETAILS).status_code == 200
+    assert pipeline.client.put(f"{url}/briefs/design", json={"brief": COMPLETE_DESIGN}).status_code == 200
+    assert pipeline.client.put(f"{url}/briefs/logistics", json={"brief": COMPLETE_LOGISTICS}).status_code == 200
+    return request_id
+
+
+def submit(pipeline, request_id: int):
+    return pipeline.client.post(f"/pipeline/requests/{request_id}/submit")

@@ -194,6 +194,8 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "PUT /pipeline/requests/{request_id:int}/dates": "authenticated_guard",
     "PUT /pipeline/requests/{request_id:int}/details": "authenticated_guard",
     "DELETE /pipeline/requests/{request_id:int}": "authenticated_guard",
+    "PUT /pipeline/requests/{request_id:int}/briefs/{team}": "authenticated_guard",
+    "POST /pipeline/requests/{request_id:int}/submit": "authenticated_guard",
 }
 
 

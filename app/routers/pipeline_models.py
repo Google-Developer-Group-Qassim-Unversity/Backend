@@ -10,6 +10,7 @@ from app.DB.schema import (
     EventRequestLocationScope,
     EventRequestRegistration,
     EventRequestStage,
+    EventRequestTaskStatus,
     EventRequestType,
     EventRequestUndatedReason,
     PipelineTeam,
@@ -176,6 +177,16 @@ class EventRequestSummary(BaseModel):
     created_at: UtcDateTime
 
 
+class TaskResponse(BaseModel):
+    team: PipelineTeam
+    status: EventRequestTaskStatus
+    brief: dict | None
+    brief_version: int | None
+    opened_at: UtcDateTime | None
+    completed_at: UtcDateTime | None
+    completed_by: PersonRef | None
+
+
 class EventRequestDetail(EventRequestSummary):
     created_by: PersonRef
     details: EventDetails
@@ -186,6 +197,9 @@ class EventRequestDetail(EventRequestSummary):
     updated_at: UtcDateTime
     event_id: int | None
     can_edit: bool
+    tasks: list[TaskResponse]
+    # What submit still needs: "details.title", "design.idea", "logistics.venue", ...
+    missing: list[str]
     now: UtcDateTime
 
 
@@ -195,3 +209,9 @@ class PaginatedEventRequests(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class SaveBriefRequest(BaseModel):
+    """A draft brief, saved as it is. Its fields are the team's form (app/services/event_briefs.py)."""
+
+    brief: dict
