@@ -31,6 +31,7 @@ from app.DB.schema import (
     EventRequestUndatedReason,
     PipelineNotificationKind,
 )
+from app.services import event_pipeline
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail, send_pipeline_email_job
@@ -44,10 +45,11 @@ LOCK_NAME = "pipeline_sweep"
 @dataclass
 class SweepResult:
     expired_holds: int = 0
+    penalties_grown: int = 0
     emails: list[PendingEmail] = field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
-        return {"expired_holds": self.expired_holds}
+        return {"expired_holds": self.expired_holds, "penalties_grown": self.penalties_grown}
 
 
 def expire_holds(session: Session, now: datetime, result: SweepResult) -> None:
@@ -79,7 +81,26 @@ def expire_holds(session: Session, now: datetime, result: SweepResult) -> None:
     session.flush()
 
 
-RULES = [expire_holds]
+def grow_penalties(session: Session, now: datetime, result: SweepResult) -> None:
+    """A returned request still not fixed after its 12 hours: its penalty grows once per late day."""
+    rows = session.scalars(
+        select(EventRequests)
+        .where(
+            EventRequests.stage == EventRequestStage.RETURNED,
+            EventRequests.return_due_at.is_not(None),
+            EventRequests.return_due_at < now,
+        )
+        .with_for_update()
+    ).all()
+    for request in rows:
+        before = event_pipeline.get_penalty(session, request)
+        days_before = before.late_days if before else 0
+        penalty = event_pipeline.record_penalty(session, request, now)
+        if penalty is not None and penalty.late_days != days_before:
+            result.penalties_grown += 1
+
+
+RULES = [expire_holds, grow_penalties]
 
 
 def run_sweep(session: Session, now: datetime | None = None) -> SweepResult:

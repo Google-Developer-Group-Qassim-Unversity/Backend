@@ -1135,6 +1135,12 @@ class EventRequests(Base):
     submitted_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
+    # Design can return a request once, within two days of receiving it; the team then has 12 hours.
+    returned_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    return_count: Mapped[int] = mapped_column(TINYINT(unsigned=True), nullable=False, server_default=text("'0'"))
+    return_notes: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    return_due_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+
     department: Mapped["Departments"] = relationship("Departments")
     creator: Mapped["Members"] = relationship("Members")
     partners: Mapped[list["EventRequestPartners"]] = relationship(
@@ -1259,6 +1265,41 @@ class PipelineNotificationReads(Base):
     read_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+
+
+class PipelinePenalties(Base):
+    """Points a department loses for fixing a returned request late.
+
+    One row per request; the sweep grows ``late_days`` while the request stays
+    late. It is applied as a discount on the department's log for the real
+    event when the request is published (``applied_log_id``), not before.
+    """
+
+    __tablename__ = "pipeline_penalties"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["request_id"], ["event_requests.id"], name="fk_pipeline_penalties_request", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_pipeline_penalties_department", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(["applied_log_id"], ["logs.id"], name="fk_pipeline_penalties_log", ondelete="SET NULL"),
+        Index("uq_pipeline_penalties_request", "request_id", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    request_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    late_days: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    points: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    reason: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    )
+    applied_log_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
 
 # =============================================================================

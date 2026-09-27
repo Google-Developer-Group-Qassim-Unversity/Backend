@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
 from app.DB import department_permissions as permission_queries
-from app.DB.schema import PipelineTeam
+from app.DB.schema import EventRequests, PipelineTeam
 from app.dependencies import DB
 from app.exceptions import DepartmentForbidden, NotFound, PipelineConflict
 from app.helpers import super_admin_guard
@@ -18,6 +18,8 @@ from app.routers.pipeline_models import (
     CalendarDayRequest,
     CalendarDayResponse,
     CalendarResponse,
+    EventRequestSummary,
+    InboxItem,
     NotificationItem,
     NotificationRequest,
     PaginatedNotifications,
@@ -212,3 +214,27 @@ def run_pipeline_sweep(background_tasks: BackgroundTasks):
         return SweepResponse(ran=False)
     background_tasks.add_task(pipeline_sweep.send_emails, result)
     return SweepResponse(ran=True, **result.counts())
+
+
+@router.get("/inbox", status_code=status.HTTP_200_OK, response_model=list[InboxItem])
+def get_pipeline_inbox(session: DB, actor: Actor, team: Annotated[PipelineTeam | None, Query()] = None):
+    """Requests waiting on the caller's team(s), oldest first."""
+    _require_access(actor)
+    return [
+        InboxItem(request=_summary(request), team=task.team, status=task.status, opened_at=task.opened_at)
+        for request, task in pipeline_service.inbox(session, actor, team)
+    ]
+
+
+def _summary(request: EventRequests) -> EventRequestSummary:
+    return EventRequestSummary(
+        id=request.id,
+        department=PipelineDepartment.model_validate(request.department),
+        stage=request.stage,
+        title=request.title,
+        start_date=request.start_date,
+        end_date=request.end_date,
+        hold_expires_at=request.hold_expires_at,
+        undated_reason=request.undated_reason,
+        created_at=request.created_at,
+    )

@@ -190,6 +190,22 @@ class TaskResponse(BaseModel):
     completed_by: PersonRef | None
 
 
+class PenaltyResponse(BaseModel):
+    late_days: int
+    points: int
+    applied: bool
+
+
+class RequestActions(BaseModel):
+    """What the caller can do to this request right now."""
+
+    can_submit: bool
+    can_return: bool
+    can_resubmit: bool
+    complete: list[PipelineTeam]
+    can_publish: bool = False
+
+
 class EventRequestDetail(EventRequestSummary):
     created_by: PersonRef
     details: EventDetails
@@ -203,6 +219,14 @@ class EventRequestDetail(EventRequestSummary):
     tasks: list[TaskResponse]
     # What submit still needs: "details.title", "design.idea", "logistics.venue", ...
     missing: list[str]
+    returned_at: UtcDateTime | None
+    return_count: int
+    return_notes: str | None
+    return_due_at: UtcDateTime | None
+    # Until when Design can return it: two days after it was submitted.
+    return_deadline: UtcDateTime | None
+    penalty: PenaltyResponse | None
+    actions: RequestActions
     now: UtcDateTime
 
 
@@ -248,3 +272,15 @@ class PaginatedNotifications(BaseModel):
 class SweepResponse(BaseModel):
     ran: bool
     expired_holds: int = 0
+    penalties_grown: int = 0
+
+
+class ReturnRequest(BaseModel):
+    notes: str = Field(min_length=1, max_length=5000)
+
+
+class InboxItem(BaseModel):
+    request: EventRequestSummary
+    team: PipelineTeam
+    status: EventRequestTaskStatus
+    opened_at: UtcDateTime | None
