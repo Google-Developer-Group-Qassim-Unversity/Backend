@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Query, status
 from app.DB import event_pipeline as queries
 from app.DB.schema import EventRequests, EventRequestStage, PipelineTeam
 from app.dependencies import DB
+from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.pipeline_models import (
     BookRequest,
     EventDetails,
@@ -19,6 +20,7 @@ from app.routers.pipeline_models import (
     PaginatedEventRequests,
     PersonRef,
     PipelineDepartment,
+    PublishRequest,
     RedateRequest,
     SaveBriefRequest,
     TaskResponse,
@@ -66,6 +68,7 @@ def _actions(session, actor: PipelineActor, request: EventRequests) -> RequestAc
         can_return=service.can_return(session, actor, request),
         can_resubmit=requester and request.stage == EventRequestStage.RETURNED,
         complete=[t for t in service.ALL_TEAMS if service.can_complete(session, actor, request, t)],
+        can_publish=service.can_publish(actor, request),
     )
 
 
@@ -243,4 +246,18 @@ def complete_event_request_task(
     emails = service.complete(session, actor, request, team)
     session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
+    return detail(session, actor, request)
+
+
+@router.post("/{request_id:int}/publish", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def publish_event_request(request_id: int, body: PublishRequest, session: DB, actor: Actor):
+    """Turn a ready request into a real event in /events, created as a draft for admins to review."""
+    request = service.get_request_for(session, actor, request_id, lock=True)
+    service.publish(session, actor, request, body.department_action_id, body.member_action_id, body.image_url)
+    session.commit()
+    # Best-effort, as after POST /events/: the leaderboard app caches events.
+    try:
+        reset_leaderboard_cache()
+    except Exception as cache_error:
+        logger.error(cache_error)
     return detail(session, actor, request)

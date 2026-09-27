@@ -28,6 +28,7 @@ from app.routers.models import (
 )
 from app.helpers import CurrentMember, admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
+from app.services.events import create_full_event
 from app.services.google_client import set_form_publish_state
 from app.semesters import resolve_semester
 from time import perf_counter
@@ -156,31 +157,7 @@ def get_event_details(event_id: int, session: DB):
 def create_event(event_data: createEvent_model, session: DB):
     try:
         logger.info("Creating New Event and Associated Form")
-        # 1. create event
-        new_event = events_queries.create_event(session, event_data.event)
-        logger.info(f"Created Event [{new_event.id}]: {new_event.name}")
-
-        # 2. create associated form
-        new_form = form_queries.create_form(
-            session, Form_model(event_id=new_event.id, form_type=FormType(event_data.form_type))
-        )
-        logger.info(f"Created Form [{new_form.id}] for Event [{new_event.id}]")
-
-        # 3. create logs for event
-        department_log = log_queries.create_log(session, new_event.id, event_data.department_action_id)
-        # the member-type Logs row is looked up later by (event_id, action_id) via
-        # get_attendable_logs, not through this reference, so it is create-only here.
-        log_queries.create_log(session, new_event.id, event_data.member_action_id)
-
-        # 4. give department points for each day
-        days = (event_data.event.end_datetime - event_data.event.start_datetime).days + 1
-        for day in range(days):
-            logger.info(f"Giving department {event_data.department_id} points for day [{day + 1}]/[{days}]")
-            log_queries.create_department_log(session, event_data.department_id, department_log.id)
-
-        logger.info(
-            f"Created logs for event department: [{event_data.department_action_id}] and member: [{event_data.member_action_id}]"
-        )
+        new_event, _ = create_full_event(session, event_data)
         session.commit()
         session.refresh(new_event)
 

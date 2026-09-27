@@ -284,3 +284,11 @@ class InboxItem(BaseModel):
     team: PipelineTeam
     status: EventRequestTaskStatus
     opened_at: UtcDateTime | None
+
+
+class PublishRequest(BaseModel):
+    """The points tier: one of the composite (department, member) action pairs from ``GET /actions``."""
+
+    department_action_id: int = Field(gt=0)
+    member_action_id: int = Field(gt=0)
+    image_url: str | None = Field(default=None, max_length=500)
