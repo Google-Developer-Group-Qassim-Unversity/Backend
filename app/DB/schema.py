@@ -67,13 +67,6 @@ class DepartmentsType(str, enum.Enum):
     PRACTICAL = "practical"
 
 
-class ClubAssignmentRole(str, enum.Enum):
-    PRESIDENT = "president"
-    LEADER = "leader"
-    DEPUTY = "deputy"
-    MEMBER = "member"
-
-
 class EventsLocationType(str, enum.Enum):
     ONLINE = "online"
     ON_SITE = "on-site"
@@ -238,6 +231,7 @@ class Actions(Base):
 
 class Departments(Base):
     __tablename__ = "departments"
+    __table_args__ = (Index("uq_departments_club_leadership", "club_leadership_key", unique=True),)
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -250,7 +244,14 @@ class Departments(Base):
     active: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
     color: Mapped[str] = mapped_column(String(7), nullable=False, server_default=text("'#4285f4'"))
     icon: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'users'"))
-    leadership_enabled: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    # Left out of the department ranking when 0 (the Board, Leadership).
+    show_in_leaderboard: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    # The department whose leaders are the club's presidents. At most one:
+    # the generated key is NULL on every other row, and it is unique.
+    is_club_leadership: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    club_leadership_key: Mapped[Optional[int]] = mapped_column(
+        TINYINT(unsigned=True), Computed("CASE WHEN is_club_leadership = 1 THEN 1 END", persisted=True)
+    )
     # The creation date of departments that predate this feature is unknown.
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime, nullable=True, server_default=text("CURRENT_TIMESTAMP")
@@ -264,61 +265,142 @@ class Departments(Base):
     )
 
 
-class ClubAssignments(Base):
-    """Dated organizational roles; independent of application authorization.
+class ClubRoles(Base):
+    """A role someone can hold in a department for a semester: member, vp or leader.
 
-    Generated nullable keys enforce uniqueness only for current assignments.
-    President slots are equal seats, not ranks. Closing a period frees its seat
-    while retaining the member and actor references for tenure history.
+    Rows, not an enum, so a department-specific role later is a new row.
+    ``max_holders`` is the default seat limit per department per semester
+    (NULL = unlimited); ``DepartmentRoleLimits`` overrides it for one department.
     """
 
-    __tablename__ = "club_assignments"
+    __tablename__ = "club_roles"
+    __table_args__ = (Index("uq_club_roles_key", "key", unique=True),)
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    key: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    ar_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    max_holders: Mapped[Optional[int]] = mapped_column(TINYINT(unsigned=True))
+    sort_order: Mapped[int] = mapped_column(TINYINT(unsigned=True), nullable=False)
+
+
+class DepartmentRoleLimits(Base):
+    """A department's own seat limit for a role, e.g. Leadership allows two leaders."""
+
+    __tablename__ = "department_role_limits"
     __table_args__ = (
-        ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_club_assignments_member", ondelete="RESTRICT"),
         ForeignKeyConstraint(
-            ["department_id"], ["departments.id"], name="fk_club_assignments_department", ondelete="RESTRICT"
+            ["department_id"], ["departments.id"], name="fk_department_role_limits_department", ondelete="CASCADE"
         ),
-        CheckConstraint(
-            "(role = 'president' AND department_id IS NULL AND president_slot IS NOT NULL "
-            "AND president_slot IN (1, 2)) OR "
-            "(role IN ('leader', 'deputy', 'member') AND department_id IS NOT NULL AND president_slot IS NULL)",
-            name="ck_club_assignments_scope",
-        ),
-        CheckConstraint("ends_at IS NULL OR ends_at >= starts_at", name="ck_club_assignments_period"),
-        Index("uq_club_assignments_current_member", "current_scope_id", "member_id", unique=True),
-        Index("uq_club_assignments_current_leader", "current_scope_id", "current_leadership_role", unique=True),
-        Index("uq_club_assignments_current_president", "current_president_slot", unique=True),
-        Index("ix_club_assignments_department_period", "department_id", "ends_at"),
-        Index("ix_club_assignments_member_period", "member_id", "starts_at"),
+        ForeignKeyConstraint(["role_id"], ["club_roles.id"], name="fk_department_role_limits_role", ondelete="CASCADE"),
     )
 
-    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
-    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    department_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
-    role: Mapped[ClubAssignmentRole] = mapped_column(
-        Enum(ClubAssignmentRole, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    role_id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True)
+    max_holders: Mapped[Optional[int]] = mapped_column(TINYINT(unsigned=True))
+
+
+class SemesterDepartments(Base):
+    """A department that existed in a semester, with the name it had then (NULL = its current name)."""
+
+    __tablename__ = "semester_departments"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["semester_id"], ["semesters.id"], name="fk_semester_departments_semester", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_semester_departments_department", ondelete="RESTRICT"
+        ),
     )
-    president_slot: Mapped[Optional[int]] = mapped_column(TINYINT(unsigned=True))
-    starts_at: Mapped[datetime.datetime] = mapped_column(
+
+    semester_id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True)
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    name: Mapped[Optional[str]] = mapped_column(String(50))
+    ar_name: Mapped[Optional[str]] = mapped_column(VARCHAR(100, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+
+    department: Mapped["Departments"] = relationship("Departments")
+
+
+class ClubMemberships(Base):
+    """One role one person holds in one department for one semester.
+
+    A leader or VP also has a ``member`` row in the same department; the
+    service keeps the two in step. Seat limits are checked by the service
+    under a lock on the ``semester_departments`` row.
+    """
+
+    __tablename__ = "club_memberships"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["semester_id", "department_id"],
+            ["semester_departments.semester_id", "semester_departments.department_id"],
+            name="fk_club_memberships_semester_department",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_club_memberships_member", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["role_id"], ["club_roles.id"], name="fk_club_memberships_role", ondelete="RESTRICT"),
+        Index("uq_club_memberships_member_role", "semester_id", "department_id", "member_id", "role_id", unique=True),
+        Index("ix_club_memberships_member", "member_id", "semester_id"),
+        Index("ix_club_memberships_role", "semester_id", "department_id", "role_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    semester_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    role_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    # Clerk subject IDs are available even when an admin has no members row.
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
         DATETIME(fsp=6), nullable=False, server_default=text("CURRENT_TIMESTAMP(6)")
     )
-    ends_at: Mapped[Optional[datetime.datetime]] = mapped_column(DATETIME(fsp=6))
-    # Clerk subject IDs are available even when an admin has no members row.
-    changed_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    ended_by: Mapped[Optional[str]] = mapped_column(String(255))
-    current_scope_id: Mapped[Optional[int]] = mapped_column(
-        INTEGER(unsigned=True), Computed("CASE WHEN ends_at IS NULL THEN COALESCE(department_id, 0) END")
-    )
-    current_leadership_role: Mapped[Optional[str]] = mapped_column(
-        String(6), Computed("CASE WHEN ends_at IS NULL AND role IN ('leader', 'deputy') THEN role END")
-    )
-    current_president_slot: Mapped[Optional[int]] = mapped_column(
-        TINYINT(unsigned=True), Computed("CASE WHEN ends_at IS NULL THEN president_slot END")
+
+    member: Mapped["Members"] = relationship("Members")
+    role: Mapped["ClubRoles"] = relationship("ClubRoles")
+
+
+class ClubMembershipAction(str, enum.Enum):
+    ADDED = "added"
+    REMOVED = "removed"
+
+
+class ClubMembershipChanges(Base):
+    """Append-only: who added or removed which role, when."""
+
+    __tablename__ = "club_membership_changes"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["semester_id"], ["semesters.id"], name="fk_club_membership_changes_semester", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_club_membership_changes_department", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["member_id"], ["members.id"], name="fk_club_membership_changes_member", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["role_id"], ["club_roles.id"], name="fk_club_membership_changes_role", ondelete="RESTRICT"
+        ),
+        Index("ix_club_membership_changes_scope", "semester_id", "department_id", "created_at"),
+        Index("ix_club_membership_changes_member", "member_id", "created_at"),
     )
 
-    # No delete cascades: removing a referenced person/department must not erase tenure.
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    semester_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    role_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    action: Mapped[ClubMembershipAction] = mapped_column(
+        Enum(ClubMembershipAction, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    )
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DATETIME(fsp=6), nullable=False, server_default=text("CURRENT_TIMESTAMP(6)")
+    )
+
     member: Mapped["Members"] = relationship("Members")
-    department: Mapped[Optional["Departments"]] = relationship("Departments")
+    role: Mapped["ClubRoles"] = relationship("ClubRoles")
+    department: Mapped["Departments"] = relationship("Departments")
 
 
 class Events(Base):

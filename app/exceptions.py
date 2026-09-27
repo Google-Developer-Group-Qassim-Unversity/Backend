@@ -153,6 +153,15 @@ class SemesterHasEvents(KnownHttpException):
         )
 
 
+class SemesterHasRoster(KnownHttpException):
+    code = "semester_has_roster"
+
+    def __init__(self, name: str):
+        super().__init__(
+            status_code=409, detail=f"{name} has a club structure roster and cannot be deleted. Empty its roster first."
+        )
+
+
 class AttendanceTokenError(KnownHttpException):
     """The attendance token in a check-in request could not be accepted.
 

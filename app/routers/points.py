@@ -2,12 +2,10 @@ from fastapi import APIRouter, status, HTTPException, Query, Depends
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.DB import points as points_queries, semesters as semesters_queries
 
-from app.DB.schema import Semesters
-from sqlalchemy.orm import Session
 from app.routers.models import BaseClassModel
 from datetime import date, datetime
-from app.helpers import is_super_admin, optional_clerk_guard
-from app.semesters import current_semester, resolve_semester
+from app.helpers import optional_clerk_guard
+from app.semesters import current_semester, resolve_semester_for_caller
 from typing import Annotated
 from app.dependencies import DB
 
@@ -72,36 +70,6 @@ class Semesters_model(BaseClassModel):
     details: list[Semester_summary_model]
 
 
-# ============ helpers ============
-
-
-def _validate_semester_access(semester: Semesters, credentials: HTTPAuthorizationCredentials | None):
-    if not semester.is_public:
-        if not credentials or not is_super_admin(credentials):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Semester {semester.hijri_code} is not publicly accessible. Super admin credentials required.",
-            )
-
-
-def _resolve_requested_semester(
-    session: Session, hijri_code: int | None, credentials: HTTPAuthorizationCredentials | None
-) -> Semesters:
-    """Resolve the semester a request is asking for, or its default, and authorize it.
-
-    An explicit ``?semester`` is honoured as-is. When none is given the default is
-    the current semester - but a public caller must not start getting 403s just
-    because a super admin made the current semester private, so they get the
-    current *public* one, matching what ``/points/semesters`` advertises.
-    """
-    semester = resolve_semester(session, hijri_code)
-    if hijri_code is None and not semester.is_public and not (credentials and is_super_admin(credentials)):
-        semester = current_semester(session, public_only=True) or semester
-
-    _validate_semester_access(semester, credentials)
-    return semester
-
-
 # ============ routes ============
 
 
@@ -135,7 +103,7 @@ def get_all_members_points(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
     semester: Annotated[int | None, Query()] = None,
 ):
-    resolved = _resolve_requested_semester(session, semester, credentials)
+    resolved = resolve_semester_for_caller(session, semester, credentials)
     rows = points_queries.get_members_points_semester(session, resolved.id)
     return [Member_points_model.model_validate(row) for row in rows]
 
@@ -147,7 +115,7 @@ def get_member_points(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
     semester: Annotated[int | None, Query()] = None,
 ):
-    resolved = _resolve_requested_semester(session, semester, credentials)
+    resolved = resolve_semester_for_caller(session, semester, credentials)
 
     member_points = points_queries.get_member_points_by_id_semester(session, resolved.id, member_id)
     if member_points is None:
@@ -166,7 +134,7 @@ def get_all_departments_points(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
     semester: Annotated[int | None, Query()] = None,
 ):
-    resolved = _resolve_requested_semester(session, semester, credentials)
+    resolved = resolve_semester_for_caller(session, semester, credentials)
     departments_points = points_queries.get_departments_points_semester(session, resolved.id)
     return Response_department_points_model(
         administrative=[
@@ -191,7 +159,7 @@ def get_department_points(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
     semester: Annotated[int | None, Query()] = None,
 ):
-    resolved = _resolve_requested_semester(session, semester, credentials)
+    resolved = resolve_semester_for_caller(session, semester, credentials)
 
     department_points = points_queries.get_department_points_by_id_semester(session, resolved.id, department_id)
     if department_points is None:

@@ -125,9 +125,14 @@ def resolve_member(session: Session, credentials) -> Members:
     raise MemberNotFound(clerk_user_id)
 
 
+def _metadata(credentials) -> dict:
+    """Clerk public metadata, or {} - an unverifiable token on an optional guard has no decoded claims."""
+    decoded = credentials.model_dump().get("decoded") or {}
+    return decoded.get("metadata") or {}
+
+
 def is_admin(credentials) -> bool:
-    decoded = credentials.model_dump()["decoded"]
-    metadata = decoded.get("metadata", {})
+    metadata = _metadata(credentials)
     return (
         metadata.get("is_admin", False)
         or metadata.get("is_super_admin", False)
@@ -136,14 +141,12 @@ def is_admin(credentials) -> bool:
 
 
 def is_admin_points(credentials) -> bool:
-    decoded = credentials.model_dump()["decoded"]
-    metadata = decoded.get("metadata", {})
+    metadata = _metadata(credentials)
     return metadata.get("is_admin_points", False) or metadata.get("is_super_admin", False)
 
 
 def is_super_admin(credentials) -> bool:
-    decoded = credentials.model_dump()["decoded"]
-    metadata = decoded.get("metadata", {})
+    metadata = _metadata(credentials)
     return metadata.get("is_super_admin", False)
 
 

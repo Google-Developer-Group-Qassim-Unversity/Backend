@@ -1,32 +1,57 @@
-"""Exercise real guards and the Step 2 services through the HTTP boundary."""
+"""The club structure per semester, through the HTTP boundary with the real guards."""
 
-from datetime import datetime, timedelta
+from datetime import date
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from sqlalchemy import func, select
-from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
 
 from app.config import config
-from app.DB.schema import ClubAssignments, Departments, Members, Role
+from app.DB.schema import (
+    ClubMembershipChanges,
+    ClubMemberships,
+    Departments,
+    DepartmentsLogs,
+    DepartmentsType,
+    Events,
+    EventsLocationType,
+    EventsStatus,
+    Logs,
+    Members,
+    SemesterDepartments,
+    Semesters,
+    SemesterTerm,
+)
+from app.DB.semesters import get_semester_by_hijri_code
 from app.main import app
 from app.routers import club_structure as router
-from app.services import club_structure as service
+from tests.factories import make_member
 
 PREFIX = "/club-structure"
-SETTINGS = {"name": "Robotics", "ar_name": "الروبوتات", "type": "practical", "color": "#123abc", "icon": "bot"}
-READS = ["", "/departments/{department_id}", "/departments/{department_id}/roster", "/history"]
+SETTINGS = {
+    "name": "Robotics",
+    "ar_name": "الروبوتات",
+    "type": "practical",
+    "color": "#123abc",
+    "icon": "bot",
+    "show_in_leaderboard": True,
+}
+SCOPE = "/semesters/{semester}/departments/{department}"
+READS = ["", "/roles", "/departments/{department}", "/departments/{department}/roster", "/history"]
 WRITES = [
     ("POST", "/departments", SETTINGS),
-    ("PUT", "/departments/{department_id}", SETTINGS),
-    ("POST", "/departments/{department_id}/archive", None),
-    ("POST", "/departments/{department_id}/restore", None),
-    ("POST", "/departments/{department_id}/members", {"member_id": 1}),
-    ("DELETE", "/departments/{department_id}/members/{member_id}?expected_assignment_id=1", None),
-    ("PUT", "/departments/{department_id}/leadership/leader", {"member_id": 1, "expected_assignment_id": None}),
-    ("PUT", "/presidents/1", {"member_id": 1, "expected_assignment_id": None}),
+    ("PUT", "/departments/{department}", SETTINGS),
+    ("POST", "/departments/{department}/archive", None),
+    ("POST", "/departments/{department}/restore", None),
+    ("POST", SCOPE, None),
+    ("DELETE", SCOPE, None),
+    ("POST", SCOPE + "/members", {"member_id": 1}),
+    ("DELETE", SCOPE + "/members/{member}", None),
+    ("PUT", SCOPE + "/members/{member}/roles/leader", {}),
+    ("DELETE", SCOPE + "/members/{member}/roles/leader", None),
+    ("POST", "/semesters/{semester}/copy-from/{semester}", None),
 ]
 
 
@@ -59,104 +84,474 @@ def sign_in(client):
     app.dependency_overrides.pop(bearer, None)
 
 
-def url(path, refs):
-    return PREFIX + path.format(department_id=refs.dept_design.id, member_id=refs.ahmed.id)
+@pytest.fixture
+def club(db_session, seed_refs):
+    """The seeded departments as part of the current semester (475, with today pinned to 2026-07-15)."""
+    current = semester_by_code(db_session, 475)
+    leadership = db_session.scalar(select(Departments).where(Departments.is_club_leadership == 1))
+    for department in (seed_refs.dept_design, seed_refs.dept_business):
+        db_session.add(SemesterDepartments(semester_id=current.id, department_id=department.id))
+    db_session.flush()
+    return SimpleNamespace(
+        semester=current,
+        design=seed_refs.dept_design,
+        business=seed_refs.dept_business,
+        leadership=leadership,
+        ahmed=seed_refs.ahmed,
+        sara=seed_refs.sara,
+    )
 
 
-def add(client, department_id, member_id):
-    response = client.post(f"{PREFIX}/departments/{department_id}/members", json={"member_id": member_id})
+def semester_by_code(db_session, hijri_code: int) -> Semesters:
+    row = get_semester_by_hijri_code(db_session, hijri_code)
+    assert row is not None
+    return row
+
+
+def scope(club, department=None, semester=None):
+    return f"{PREFIX}/semesters/{(semester or club.semester).id}/departments/{(department or club.design).id}"
+
+
+def add(client, club, member, department=None, semester=None):
+    response = client.post(scope(club, department, semester) + "/members", json={"member_id": member.id})
     assert response.status_code == 201, response.text
     return response.json()
 
 
-def replace(client, path, member_id, expected=None):
-    return client.put(PREFIX + path, json={"member_id": member_id, "expected_assignment_id": expected})
+def grant(client, club, member, role="leader", department=None, replaces=None):
+    return client.put(
+        f"{scope(club, department)}/members/{member.id}/roles/{role}", json={"replaces_member_id": replaces}
+    )
+
+
+def roster(client, club, department=None, semester=None):
+    response = client.get(
+        f"{PREFIX}/departments/{(department or club.design).id}/roster",
+        params={"semester_id": (semester or club.semester).id},
+    )
+    assert response.status_code == 200, response.text
+    return {entry["member"]["id"]: sorted(entry["roles"]) for entry in response.json()}
+
+
+def url(path, club):
+    return PREFIX + path.format(semester=club.semester.id, department=club.design.id, member=club.ahmed.id)
+
+
+def make_person(db_session, name, n):
+    person = Members(**make_member(name=name, uni_id=f"club-{n}", email=f"club-{n}@example.com"))
+    db_session.add(person)
+    db_session.flush()
+    return person
+
+
+def make_fall_2026(db_session) -> Semesters:
+    semester = Semesters(
+        term=SemesterTerm.FIRST,
+        hijri_year=1448,
+        academic_year_start=2026,
+        start_date=date(2026, 8, 23),
+        end_date=date(2026, 12, 17),
+        is_public=True,
+    )
+    db_session.add(semester)
+    db_session.flush()
+    return semester
+
+
+# ---------- guards ----------
 
 
 @pytest.mark.parametrize("path", READS)
-def test_reads_reject_anonymous_callers(client, seed_refs, path):
-    assert client.get(url(path, seed_refs)).status_code == 403
+def test_reads_reject_anonymous_callers(client, club, path):
+    assert client.get(url(path, club)).status_code == 403
 
 
 @pytest.mark.parametrize("role", ["member", "admin", "points", "super"])
 @pytest.mark.parametrize("path", READS)
-def test_read_permissions_use_real_admin_guard(sign_in, seed_refs, path, role):
-    response = sign_in(role).get(url(path, seed_refs))
+def test_read_permissions_use_real_admin_guard(sign_in, club, path, role):
+    response = sign_in(role).get(url(path, club))
     assert response.status_code == (403 if role == "member" else 200), response.text
 
 
 @pytest.mark.parametrize("method,path,payload", WRITES)
-def test_writes_reject_anonymous_callers(client, seed_refs, method, path, payload):
-    assert client.request(method, url(path, seed_refs), json=payload).status_code == 403
+def test_writes_reject_anonymous_callers(client, club, method, path, payload):
+    assert client.request(method, url(path, club), json=payload).status_code == 403
 
 
 @pytest.mark.parametrize("role", ["member", "admin", "points"])
 @pytest.mark.parametrize("method,path,payload", WRITES)
-def test_writes_reject_non_super_admins(sign_in, seed_refs, role, method, path, payload, db_session):
-    response = sign_in(role).request(method, url(path, seed_refs), json=payload)
+def test_writes_reject_non_super_admins(sign_in, club, role, method, path, payload, db_session):
+    response = sign_in(role).request(method, url(path, club), json=payload)
     assert response.status_code == 403
-    assert db_session.scalar(select(func.count()).select_from(ClubAssignments)) == 0
+    assert db_session.scalar(select(func.count()).select_from(ClubMemberships)) == 0
 
 
-def test_empty_overview_has_two_equal_vacant_seats_and_zero_counts(sign_in, seed_refs):
+# ---------- overview ----------
+
+
+def test_overview_defaults_to_the_current_semester(sign_in, club):
     body = sign_in("admin").get(PREFIX).json()
-    assert body["presidents"] == [{"slot": 1, "assignment": None}, {"slot": 2, "assignment": None}]
+    assert body["semester"]["hijri_code"] == 475
+    assert body["semester"]["name"] == "Summer 2026"
+    assert {d["id"] for d in body["departments"]} == {club.design.id, club.business.id, club.leadership.id}
     assert body["total_members"] == 0
-    assert {d["id"] for d in body["departments"]} == {seed_refs.dept_design.id, seed_refs.dept_business.id}
-    assert all(d["member_count"] == 0 and d["leader"] is None and d["deputy"] is None for d in body["departments"])
+    assert [role["key"] for role in body["roles"]] == ["leader", "vp", "member"]
+    cards = {d["id"]: d for d in body["departments"]}
+    assert cards[club.design.id]["roles"] == [
+        {"key": "leader", "max_holders": 1, "holders": []},
+        {"key": "vp", "max_holders": 1, "holders": []},
+    ]
+    # Leadership's own seat limit: two leaders.
+    assert cards[club.leadership.id]["roles"][0]["max_holders"] == 2
+    assert cards[club.leadership.id]["is_club_leadership"] is True
+    assert cards[club.leadership.id]["show_in_leaderboard"] is False
 
 
-def test_public_structure_is_anonymous_active_and_display_only(sign_in, seed_refs, db_session):
+def test_overview_of_another_semester_is_separate(sign_in, club, db_session):
     client = sign_in()
-    design = seed_refs.dept_design
-    business = seed_refs.dept_business
-    design.name = "Operations"
-    design.ar_name = "قسم التشغيل"
-    design.color = "#22c55e"
-    design.icon = "users"
-    seed_refs.ahmed.name = "Ahmed Mohammed Ali"
-    seed_refs.sara.name = "Sara Abdullah Khalid"
+    add(client, club, club.ahmed)
+    spring = semester_by_code(db_session, 472)
+    body = client.get(PREFIX, params={"semester_id": spring.id}).json()
+    assert body["semester"]["hijri_code"] == 472
+    assert body["total_members"] == 0
+    assert club.design.id not in {d["id"] for d in body["departments"]}
+    assert club.design.id in {d["id"] for d in body["available_departments"]}
+
+
+def test_overview_shows_the_name_a_department_had_that_semester(sign_in, club, db_session):
+    row = db_session.get(SemesterDepartments, (club.semester.id, club.design.id))
+    row.name, row.ar_name = "Old Design", "التصميم القديم"
+    db_session.flush()
+    cards = {d["id"]: d for d in sign_in("admin").get(PREFIX).json()["departments"]}
+    assert cards[club.design.id]["name"] == "Design"
+    assert cards[club.design.id]["semester_name"] == "Old Design"
+    assert cards[club.design.id]["semester_ar_name"] == "التصميم القديم"
+
+
+def test_unknown_or_malformed_semester(sign_in, club):
+    client = sign_in("admin")
+    assert client.get(PREFIX, params={"semester_id": "00000000-0000-4000-8000-000000000000"}).status_code == 404
+    assert client.get(PREFIX, params={"semester_id": "475"}).status_code == 422
+
+
+# ---------- roster ----------
+
+
+def test_add_member_and_refuse_duplicates(sign_in, club):
+    client = sign_in(subject="clerk_without_member_row")
+    row = add(client, club, club.ahmed)
+    assert row["created_by"] == "clerk_without_member_row"
+    assert row["created_at"].endswith("Z")
+    assert roster(client, club) == {club.ahmed.id: ["member"]}
+    response = client.post(scope(club) + "/members", json={"member_id": club.ahmed.id})
+    assert response.status_code == 409
+
+
+def test_adding_an_unknown_member_is_404(sign_in, club):
+    response = sign_in().post(scope(club) + "/members", json={"member_id": 999999})
+    assert response.status_code == 404
+
+
+def test_department_must_be_part_of_the_semester(sign_in, club, db_session):
+    spring = semester_by_code(db_session, 472)
+    response = sign_in().post(scope(club, semester=spring) + "/members", json={"member_id": club.ahmed.id})
+    assert response.status_code == 409
+    assert "not part of this semester" in response.json()["detail"]
+
+
+def test_leader_is_also_a_member_explicitly(sign_in, club, db_session):
+    client = sign_in()
+    response = grant(client, club, club.sara)
+    assert response.status_code == 200, response.text
+    assert roster(client, club) == {club.sara.id: ["leader", "member"]}
+    rows = db_session.scalars(select(ClubMemberships).where(ClubMemberships.member_id == club.sara.id)).all()
+    assert sorted(row.role.key for row in rows) == ["leader", "member"]
+
+    body = client.get(PREFIX).json()
+    card = next(d for d in body["departments"] if d["id"] == club.design.id)
+    assert card["member_count"] == 1
+    assert card["roles"][0]["holders"] == [{"id": club.sara.id, "name": club.sara.name}]
+    assert body["total_members"] == 1
+
+
+def test_granting_a_held_role_again_changes_nothing(sign_in, club, db_session):
+    client = sign_in()
+    first = grant(client, club, club.sara).json()
+    assert grant(client, club, club.sara).json()["id"] == first["id"]
+    assert db_session.scalar(select(func.count()).select_from(ClubMemberships)) == 2
+
+
+def test_a_full_seat_is_refused_unless_the_holder_is_named(sign_in, club):
+    client = sign_in()
+    assert grant(client, club, club.sara).status_code == 200
+    refused = grant(client, club, club.ahmed)
+    assert refused.status_code == 409
+    assert "taken" in refused.json()["detail"]
+
+    stale = grant(client, club, club.ahmed, replaces=club.ahmed.id)
+    assert stale.status_code == 409
+
+    assert grant(client, club, club.ahmed, replaces=club.sara.id).status_code == 200
+    # The former leader stays a member.
+    assert roster(client, club) == {club.sara.id: ["member"], club.ahmed.id: ["leader", "member"]}
+
+
+def test_one_person_can_be_leader_and_vp_only_through_two_seats(sign_in, club):
+    client = sign_in()
+    assert grant(client, club, club.sara, "leader").status_code == 200
+    assert grant(client, club, club.sara, "vp").status_code == 200
+    assert roster(client, club) == {club.sara.id: ["leader", "member", "vp"]}
+
+
+def test_leadership_department_has_two_leader_seats(sign_in, club, db_session):
+    client = sign_in()
+    third = make_person(db_session, "Third Person", 3)
+    assert grant(client, club, club.ahmed, department=club.leadership).status_code == 200
+    assert grant(client, club, club.sara, department=club.leadership).status_code == 200
+    assert grant(client, club, third, department=club.leadership).status_code == 409
+
+
+def test_revoking_a_role_keeps_the_member(sign_in, club):
+    client = sign_in()
+    grant(client, club, club.sara, "vp")
+    response = client.delete(f"{scope(club)}/members/{club.sara.id}/roles/vp")
+    assert response.status_code == 200, response.text
+    assert roster(client, club) == {club.sara.id: ["member"]}
+    assert client.delete(f"{scope(club)}/members/{club.sara.id}/roles/vp").status_code == 409
+
+
+def test_member_role_is_managed_through_the_roster_only(sign_in, club):
+    client = sign_in()
+    add(client, club, club.ahmed)
+    assert grant(client, club, club.ahmed, "member").status_code == 422
+    assert client.delete(f"{scope(club)}/members/{club.ahmed.id}/roles/member").status_code == 422
+
+
+def test_unknown_role_is_404(sign_in, club):
+    assert grant(sign_in(), club, club.ahmed, "treasurer").status_code == 404
+
+
+def test_removing_a_member_removes_every_role_they_hold_there(sign_in, club):
+    client = sign_in()
+    grant(client, club, club.sara, "leader")
+    grant(client, club, club.sara, "vp")
+    add(client, club, club.sara, department=club.business)
+    response = client.delete(f"{scope(club)}/members/{club.sara.id}")
+    assert response.json() == {"removed": 3}
+    assert roster(client, club) == {}
+    # Other departments are untouched.
+    assert roster(client, club, department=club.business) == {club.sara.id: ["member"]}
+    assert client.delete(f"{scope(club)}/members/{club.sara.id}").status_code == 409
+
+
+def test_every_change_is_logged_with_its_actor(sign_in, club, db_session):
+    client = sign_in(subject="clerk_logger")
+    grant(client, club, club.sara)
+    client.delete(f"{scope(club)}/members/{club.sara.id}")
+    changes = db_session.scalars(select(ClubMembershipChanges).order_by(ClubMembershipChanges.created_at)).all()
+    assert sorted((c.action.value, c.role.key) for c in changes) == [
+        ("added", "leader"),
+        ("added", "member"),
+        ("removed", "leader"),
+        ("removed", "member"),
+    ]
+    assert {c.actor for c in changes} == {"clerk_logger"}
+
+    history = client.get(f"{PREFIX}/history", params={"semester_id": club.semester.id, "limit": 3}).json()
+    assert len(history["items"]) == 3 and history["has_more"] is True
+    assert history["items"][0]["member"]["id"] == club.sara.id
+
+
+# ---------- departments in a semester ----------
+
+
+def test_create_department_joins_the_semester(sign_in, club, db_session, cache_reset):
+    client = sign_in()
+    response = client.post(f"{PREFIX}/departments", json=SETTINGS)
+    assert response.status_code == 201, response.text
+    created = response.json()
+    assert created["active"] is True and created["show_in_leaderboard"] is True
+    assert created["created_at"].endswith("Z")
+    assert db_session.get(SemesterDepartments, (club.semester.id, created["id"])) is not None
+
+    response = client.put(
+        f"{PREFIX}/departments/{created['id']}", json={**SETTINGS, "name": "Robotics Lab", "show_in_leaderboard": False}
+    )
+    assert response.status_code == 200
+    assert response.json()["show_in_leaderboard"] is False
+    assert db_session.get(Departments, created["id"]).name == "Robotics Lab"
+    assert cache_reset.call_count == 2
+
+
+def test_update_requires_every_setting(sign_in, club):
+    settings = {key: value for key, value in SETTINGS.items() if key != "show_in_leaderboard"}
+    assert sign_in().put(f"{PREFIX}/departments/{club.design.id}", json=settings).status_code == 422
+
+
+def test_add_and_remove_a_department_for_a_semester(sign_in, club, db_session):
+    client = sign_in()
+    spring = semester_by_code(db_session, 472)
+    assert client.post(scope(club, semester=spring)).status_code == 201
+    assert client.post(scope(club, semester=spring)).status_code == 409
+    assert client.delete(scope(club, semester=spring)).status_code == 200
+    assert db_session.get(SemesterDepartments, (spring.id, club.design.id)) is None
+
+
+def test_an_archived_department_cannot_join_a_semester(sign_in, club, db_session):
+    client = sign_in()
+    spring = semester_by_code(db_session, 472)
+    assert client.post(f"{PREFIX}/departments/{club.design.id}/archive").status_code == 200
+    assert client.post(scope(club, semester=spring)).status_code == 409
+
+
+def test_a_department_with_a_roster_stays_in_the_semester(sign_in, club):
+    client = sign_in()
+    add(client, club, club.ahmed)
+    assert client.delete(scope(club)).status_code == 409
+
+
+def test_a_department_with_points_stays_in_the_semester(sign_in, club, db_session, seed_refs):
+    event = Events(
+        name="Workshop",
+        location_type=EventsLocationType.ON_SITE,
+        location="Hall",
+        start_datetime="2026-07-01 10:00:00",
+        end_datetime="2026-07-01 12:00:00",
+        status=EventsStatus.CLOSED,
+        semester_id=club.semester.id,
+    )
+    db_session.add(event)
+    db_session.flush()
+    log = Logs(action_id=seed_refs.dept_action.id, event_id=event.id)
+    db_session.add(log)
+    db_session.flush()
+    db_session.add(DepartmentsLogs(department_id=club.design.id, log_id=log.id))
+    db_session.flush()
+    response = sign_in().delete(scope(club))
+    assert response.status_code == 409
+    assert "points" in response.json()["detail"]
+
+
+# ---------- copying a semester ----------
+
+
+def test_copy_structure_into_an_empty_semester(sign_in, club, db_session):
+    client = sign_in(subject="clerk_copier")
+    grant(client, club, club.sara)
+    add(client, club, club.ahmed)
+    add(client, club, club.ahmed, department=club.business)
+    fall = make_fall_2026(db_session)
+
+    response = client.post(f"{PREFIX}/semesters/{fall.id}/copy-from/{club.semester.id}")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"copied": 4}
+    assert roster(client, club, semester=fall) == {club.sara.id: ["leader", "member"], club.ahmed.id: ["member"]}
+    assert roster(client, club, department=club.business, semester=fall) == {club.ahmed.id: ["member"]}
+    # The source is untouched, and editing the copy leaves it alone.
+    client.delete(f"{scope(club, semester=fall)}/members/{club.sara.id}")
+    assert roster(client, club) == {club.sara.id: ["leader", "member"], club.ahmed.id: ["member"]}
+
+    again = client.post(f"{PREFIX}/semesters/{fall.id}/copy-from/{club.semester.id}")
+    assert again.status_code == 409
+
+
+def test_copy_skips_archived_departments(sign_in, club, db_session):
+    client = sign_in()
+    add(client, club, club.ahmed, department=club.business)
+    add(client, club, club.sara)
+    client.post(f"{PREFIX}/departments/{club.business.id}/archive")
+    fall = make_fall_2026(db_session)
+    assert client.post(f"{PREFIX}/semesters/{fall.id}/copy-from/{club.semester.id}").json() == {"copied": 1}
+    assert db_session.get(SemesterDepartments, (fall.id, club.business.id)) is None
+
+
+def test_copy_from_itself_is_refused(sign_in, club):
+    response = sign_in().post(f"{PREFIX}/semesters/{club.semester.id}/copy-from/{club.semester.id}")
+    assert response.status_code == 422
+
+
+def test_a_semester_with_a_roster_cannot_be_deleted(sign_in, club, super_admin_client):
+    add(sign_in(), club, club.ahmed)
+    response = super_admin_client.delete(f"/semesters/{club.semester.id}")
+    assert response.status_code == 409
+    assert response.json()["code"] == "semester_has_roster"
+
+
+def test_deleting_an_empty_semester_takes_its_department_list(sign_in, club, db_session, super_admin_client):
+    fall = make_fall_2026(db_session)
+    client = sign_in()
+    assert client.post(scope(club, semester=fall)).status_code == 201
+    add(client, club, club.ahmed, semester=fall)
+    client.delete(f"{scope(club, semester=fall)}/members/{club.ahmed.id}")
+    assert super_admin_client.delete(f"/semesters/{fall.id}").status_code == 200
+
+
+# ---------- public ----------
+
+
+def test_public_structure_is_anonymous_and_display_only(sign_in, club, db_session):
+    client = sign_in()
+    club.design.name, club.design.ar_name, club.design.color = "Operations", "قسم التشغيل", "#22c55e"
+    club.ahmed.name = "Ahmed Mohammed Ali"
+    club.sara.name = "Sara Abdullah Khalid"
     board = Departments(
-        name="Board of Directors",
-        ar_name="مجلس الإدارة",
-        type=design.type,
-        color="#4285f4",
-        icon="users",
-        leadership_enabled=0,
+        name="Board of Directors", ar_name="مجلس الإدارة", type=DepartmentsType.ADMINISTRATIVE, show_in_leaderboard=0
     )
     db_session.add(board)
     db_session.flush()
+    client.post(scope(club, department=board))
 
-    add(client, design.id, seed_refs.ahmed.id)
-    assert replace(client, f"/departments/{design.id}/leadership/leader", seed_refs.sara.id).status_code == 200
-    add(client, business.id, seed_refs.sara.id)
-    add(client, board.id, seed_refs.ahmed.id)
-    assert replace(client, "/presidents/1", seed_refs.ahmed.id).status_code == 200
+    add(client, club, club.ahmed)
+    grant(client, club, club.sara)
+    add(client, club, club.sara, department=club.business)
+    add(client, club, club.ahmed, department=board)
+    grant(client, club, club.ahmed, department=club.leadership)
 
     app.dependency_overrides.pop(config.CLERK_GUARD, None)
     response = client.get(PREFIX + "/public")
     assert response.status_code == 200
     body = response.json()
+    assert body["semester"] == {"code": 475, "gregorian_code": 253, "name": "Summer 2026"}
     assert body["presidents"] == ["Ahmed Ali"]
     cards = {department["id"]: department for department in body["departments"]}
-    assert set(cards) == {design.id, business.id, board.id}
-    assert cards[design.id] == {
-        "id": design.id,
+    # Leadership is shown as the presidents, not as a department.
+    assert set(cards) == {club.design.id, club.business.id, board.id}
+    assert cards[club.design.id] == {
+        "id": club.design.id,
         "name": "Operations",
         "ar_name": "قسم التشغيل",
-        "type": design.type.value,
+        "type": "administrative",
         "color": "#22c55e",
         "icon": "users",
+        "show_in_leaderboard": True,
         "leadership_enabled": True,
         "leader": "Sara Khalid",
         "deputy": None,
+        # The leader's own member row does not list her twice.
         "members": ["Ahmed Ali"],
     }
-    assert cards[business.id]["members"] == ["Sara Khalid"]
-    # Only people with a members row appear - nobody is added by name.
+    assert cards[club.business.id]["members"] == ["Sara Khalid"]
+    assert cards[club.business.id]["leadership_enabled"] is False
+    assert cards[board.id]["show_in_leaderboard"] is False
     assert cards[board.id]["members"] == ["Ahmed Ali"]
-    for private_field in ("member_id", "role", "starts_at", "ends_at", "changed_by", "ended_by"):
+    for private_field in ("member_id", "role_id", "created_by", "created_at"):
         assert private_field not in response.text
+
+
+def test_public_structure_of_a_past_semester(sign_in, club, db_session):
+    anonymous = sign_in()
+    add(anonymous, club, club.ahmed)
+    spring = semester_by_code(db_session, 472)
+    db_session.add(SemesterDepartments(semester_id=spring.id, department_id=club.design.id, name="Design 2026"))
+    db_session.flush()
+    app.dependency_overrides.pop(config.CLERK_GUARD, None)
+    response = anonymous.get(PREFIX + "/public", params={"semester": 472})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["semester"]["code"] == 472
+    assert body["departments"][0]["name"] == "Design 2026"
+    assert body["departments"][0]["members"] == []
+    assert anonymous.get(PREFIX + "/public", params={"semester": 999}).status_code == 404
 
 
 @pytest.mark.parametrize(
@@ -170,330 +565,3 @@ def test_public_structure_is_anonymous_active_and_display_only(sign_in, seed_ref
 )
 def test_public_name_keeps_only_first_and_family_name(full_name, public_name):
     assert router._public_name(full_name) == public_name
-
-
-def test_super_admin_creates_and_updates_department_and_refreshes_public_cache(sign_in, db_session, cache_reset):
-    client = sign_in()
-    response = client.post(f"{PREFIX}/departments", json=SETTINGS)
-    assert response.status_code == 201, response.text
-    created = response.json()
-    assert created["active"] is created["leadership_enabled"] is True
-    assert created["created_at"].endswith("Z")
-    assert created["updated_at"].endswith("Z")
-    response = client.put(f"{PREFIX}/departments/{created['id']}", json={**SETTINGS, "name": "Robotics Lab"})
-    assert response.status_code == 200
-    assert response.json()["created_at"] == created["created_at"]
-    assert db_session.get(Departments, created["id"]).name == "Robotics Lab"
-    assert cache_reset.call_count == 2
-
-
-def test_assignment_actor_comes_from_clerk_without_creating_a_member(sign_in, seed_refs, db_session, monkeypatch):
-    client = sign_in(subject="clerk_without_member_row")
-    monkeypatch.setattr(service, "_now", lambda: datetime(2026, 1, 1, 12, 0, 0, 123456))
-    before = db_session.scalar(select(func.count()).select_from(Members))
-    assignment = add(client, seed_refs.dept_design.id, seed_refs.ahmed.id)
-    assert assignment["changed_by"] == "clerk_without_member_row"
-    assert assignment["starts_at"] == "2026-01-01T12:00:00.123456Z"
-    assert assignment["ends_at"] is assignment["ended_by"] is None
-    assert assignment["member"] == {"id": seed_refs.ahmed.id, "name": seed_refs.ahmed.name}
-    assert "current_scope_id" not in assignment
-    assert db_session.scalar(select(func.count()).select_from(Members)) == before
-    assert db_session.scalars(select(Role)).all() == []
-
-
-@pytest.mark.parametrize("role", ["leader", "deputy"])
-def test_leadership_replacement_retains_roster_and_detects_stale_request(sign_in, seed_refs, role):
-    client = sign_in()
-    department = seed_refs.dept_design.id
-    path = f"/departments/{department}/leadership/{role}"
-    first = replace(client, path, seed_refs.ahmed.id)
-    assert first.status_code == 200, first.text
-    old = first.json()
-    membership = add(client, department, seed_refs.sara.id)
-    sign_in(subject="clerk_replacing_admin")
-    replacement = replace(client, path, seed_refs.sara.id, old["id"])
-    assert replacement.status_code == 200, replacement.text
-    assert replace(client, path, seed_refs.ahmed.id, old["id"]).status_code == 409
-    assert replace(client, path, seed_refs.ahmed.id).status_code == 409
-    roster = client.get(f"{PREFIX}/departments/{department}/roster").json()
-    assert {(a["member_id"], a["role"]) for a in roster} == {(seed_refs.ahmed.id, "member"), (seed_refs.sara.id, role)}
-    history = client.get(f"{PREFIX}/history", params={"department_id": department}).json()["items"]
-    closed = {a["id"]: a for a in history if a["ends_at"] is not None}
-    assert closed[old["id"]]["ends_at"] == replacement.json()["starts_at"] == closed[membership["id"]]["ends_at"]
-    assert closed[old["id"]]["changed_by"] == "clerk_structure_admin"
-    assert closed[old["id"]]["ended_by"] == "clerk_replacing_admin"
-    cleared = replace(client, path, None, replacement.json()["id"])
-    assert cleared.status_code == 200 and cleared.json() is None
-    assert all(a["role"] == "member" for a in client.get(f"{PREFIX}/departments/{department}/roster").json())
-
-
-def test_removal_requires_exact_current_assignment_and_records_actor(sign_in, seed_refs):
-    client = sign_in()
-    department = seed_refs.dept_design.id
-    assignment = add(client, department, seed_refs.ahmed.id)
-    path = f"{PREFIX}/departments/{department}/members/{seed_refs.ahmed.id}"
-    assert client.delete(path).status_code == 422
-    assert client.delete(path, params={"expected_assignment_id": assignment["id"] + 1}).status_code == 409
-    response = client.delete(path, params={"expected_assignment_id": assignment["id"]})
-    assert response.status_code == 200
-    assert response.json()["ended_by"] == "clerk_structure_admin"
-    assert response.json()["ends_at"].endswith("Z")
-    rejoined = add(client, department, seed_refs.ahmed.id)
-    assert client.delete(path, params={"expected_assignment_id": assignment["id"]}).status_code == 409
-    assert rejoined["id"] != assignment["id"]
-
-
-def test_overview_counts_distinct_people_and_populates_leadership_cards(sign_in, seed_refs):
-    client = sign_in()
-    design, business = seed_refs.dept_design.id, seed_refs.dept_business.id
-    add(client, design, seed_refs.ahmed.id)
-    add(client, business, seed_refs.ahmed.id)
-    assert replace(client, f"/departments/{design}/leadership/deputy", seed_refs.sara.id).status_code == 200
-    assert replace(client, "/presidents/2", seed_refs.ahmed.id).status_code == 200
-    body = client.get(PREFIX).json()
-    cards = {d["id"]: d for d in body["departments"]}
-    assert body["total_members"] == 2
-    assert cards[design]["member_count"] == 2
-    assert cards[business]["member_count"] == 1
-    assert cards[design]["deputy"]["member"]["id"] == seed_refs.sara.id
-    assert body["presidents"][0]["assignment"] is None
-    assert body["presidents"][1]["assignment"]["member_id"] == seed_refs.ahmed.id
-
-
-def test_president_conflicts_rollback_and_board_membership_is_independent(sign_in, seed_refs, db_session):
-    client = sign_in()
-    board = seed_refs.dept_design
-    board.leadership_enabled = 0
-    db_session.flush()
-    membership = add(client, board.id, seed_refs.ahmed.id)
-    first = replace(client, "/presidents/1", seed_refs.ahmed.id).json()
-    second = replace(client, "/presidents/2", seed_refs.sara.id).json()
-    assert replace(client, "/presidents/1", seed_refs.sara.id).status_code == 409
-    conflict = replace(client, "/presidents/1", seed_refs.sara.id, first["id"])
-    assert conflict.status_code == 409
-    assert "already holds" in conflict.json()["detail"]
-    assert [s["assignment"]["id"] for s in client.get(PREFIX).json()["presidents"]] == [first["id"], second["id"]]
-    assert replace(client, "/presidents/2", None, first["id"]).status_code == 409
-    assert replace(client, "/presidents/1", None, first["id"]).status_code == 200
-    assert client.get(f"{PREFIX}/departments/{board.id}/roster").json()[0]["id"] == membership["id"]
-
-
-@pytest.mark.parametrize("role", ["leader", "deputy"])
-def test_disabled_leadership_uses_flag_and_settings_cannot_enable_it(sign_in, seed_refs, db_session, role):
-    department = seed_refs.dept_design
-    department.leadership_enabled = 0
-    department.created_at = None
-    db_session.flush()
-    client = sign_in()
-    path = f"/departments/{department.id}"
-    response = replace(client, path + f"/leadership/{role}", seed_refs.ahmed.id)
-    assert response.status_code == 409
-    assert "disabled" in response.json()["detail"]
-    assert client.put(PREFIX + path, json={**SETTINGS, "leadership_enabled": True}).status_code == 422
-    response = client.put(PREFIX + path, json=SETTINGS)
-    assert response.status_code == 200
-    assert response.json()["leadership_enabled"] is False
-    assert response.json()["created_at"] is None
-    add(client, department.id, seed_refs.ahmed.id)
-
-
-def test_archive_blocks_roster_mutations_but_preserves_reads_and_restores(sign_in, seed_refs, cache_reset):
-    client = sign_in()
-    department = seed_refs.dept_design.id
-    path = f"/departments/{department}"
-    original = replace(client, path + "/leadership/leader", seed_refs.ahmed.id).json()
-    response = client.post(PREFIX + path + "/archive")
-    assert response.status_code == 200 and response.json()["active"] is False
-    assert client.post(PREFIX + path + "/members", json={"member_id": seed_refs.sara.id}).status_code == 409
-    assert replace(client, path + "/leadership/leader", seed_refs.sara.id, original["id"]).status_code == 409
-    assert replace(client, path + "/leadership/leader", None, original["id"]).status_code == 409
-    assert (
-        client.delete(
-            PREFIX + path + f"/members/{seed_refs.ahmed.id}", params={"expected_assignment_id": original["id"]}
-        ).status_code
-        == 409
-    )
-    assert client.get(PREFIX + path).status_code == 200
-    assert client.get(PREFIX + path + "/roster").json()[0]["id"] == original["id"]
-    assert client.get(PREFIX + "/history", params={"department_id": department}).json()["items"][0]["ends_at"] is None
-    assert client.get(PREFIX).json()["total_members"] == 0
-    archived = client.get(PREFIX, params={"include_archived": True}).json()
-    assert archived["total_members"] == 1
-    assert next(d for d in archived["departments"] if d["id"] == department)["leader"]["id"] == original["id"]
-    restored = client.post(PREFIX + path + "/restore")
-    assert restored.status_code == 200 and restored.json()["active"] is True
-    assert replace(client, path + "/leadership/leader", seed_refs.sara.id, original["id"]).status_code == 200
-    assert cache_reset.call_count == 4
-
-
-def test_history_filters_and_pagination(sign_in, seed_refs):
-    client = sign_in()
-    department = seed_refs.dept_design.id
-    first = replace(client, f"/departments/{department}/leadership/leader", seed_refs.ahmed.id).json()
-    assert (
-        replace(client, f"/departments/{department}/leadership/leader", seed_refs.sara.id, first["id"]).status_code
-        == 200
-    )
-    assert replace(client, "/presidents/1", seed_refs.ahmed.id).status_code == 200
-    params = {"department_id": department, "limit": 2}
-    page = client.get(PREFIX + "/history", params=params).json()
-    assert len(page["items"]) == 2 and page["has_more"] is True
-    last = client.get(PREFIX + "/history", params={**params, "offset": 2}).json()
-    assert len(last["items"]) == 1 and last["has_more"] is False
-    assert {a["id"] for a in page["items"]}.isdisjoint(a["id"] for a in last["items"])
-    filtered = client.get(PREFIX + "/history", params={"member_id": seed_refs.ahmed.id, "role": "leader"}).json()
-    assert [a["id"] for a in filtered["items"]] == [first["id"]]
-    assert len(client.get(PREFIX + "/history", params={"role": "president"}).json()["items"]) == 1
-
-
-@pytest.mark.parametrize(
-    "params", [{"limit": 0}, {"limit": 101}, {"offset": -1}, {"department_id": 0}, {"member_id": 0}, {"role": "owner"}]
-)
-def test_history_validates_filters(sign_in, params):
-    assert sign_in().get(PREFIX + "/history", params=params).status_code == 422
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {},
-        {"member_id": 1},
-        {"expected_assignment_id": None},
-        {"member_id": True, "expected_assignment_id": None},
-        {"member_id": "1", "expected_assignment_id": None},
-        {"member_id": 1, "expected_assignment_id": False},
-        {"member_id": 1, "expected_assignment_id": None, "changed_by": "forged"},
-        {"member_id": 1, "expected_assignment_id": None, "starts_at": "2020-01-01"},
-    ],
-)
-def test_replacements_require_explicit_valid_ids_and_forbid_spoofing(sign_in, payload):
-    assert sign_in().put(PREFIX + "/presidents/1", json=payload).status_code == 422
-
-
-@pytest.mark.parametrize("payload", [{"member_id": 0}, {"member_id": True}, {"member_id": 1, "changed_by": "forged"}])
-def test_membership_payload_rejects_invalid_ids_and_actor_spoofing(sign_in, seed_refs, payload):
-    assert sign_in().post(f"{PREFIX}/departments/{seed_refs.dept_design.id}/members", json=payload).status_code == 422
-
-
-@pytest.mark.parametrize("subject", [None, "", " ", 123])
-def test_assignment_writes_require_valid_clerk_subject(sign_in, seed_refs, subject):
-    response = sign_in(subject=subject).post(
-        f"{PREFIX}/departments/{seed_refs.dept_design.id}/members", json={"member_id": seed_refs.ahmed.id}
-    )
-    assert response.status_code == 401
-
-
-def test_unknown_records_return_404_and_invalid_scopes_return_422(sign_in, seed_refs):
-    client = sign_in()
-    unknown = 4294967295
-    for suffix in ("", "/roster"):
-        assert client.get(f"{PREFIX}/departments/{unknown}{suffix}").status_code == 404
-    assert client.get(f"{PREFIX}/history", params={"department_id": unknown}).status_code == 404
-    assert client.get(f"{PREFIX}/history", params={"member_id": unknown}).status_code == 404
-    assert client.put(f"{PREFIX}/departments/{unknown}", json=SETTINGS).status_code == 404
-    assert client.post(f"{PREFIX}/departments/{unknown}/archive").status_code == 404
-    assert client.post(f"{PREFIX}/departments/{unknown}/restore").status_code == 404
-    assert (
-        client.post(f"{PREFIX}/departments/{unknown}/members", json={"member_id": seed_refs.ahmed.id}).status_code
-        == 404
-    )
-    assert (
-        client.post(f"{PREFIX}/departments/{seed_refs.dept_design.id}/members", json={"member_id": unknown}).status_code
-        == 404
-    )
-    assert replace(client, "/presidents/1", unknown).status_code == 404
-    assert replace(client, "/presidents/3", seed_refs.ahmed.id).status_code == 422
-    assert (
-        replace(client, f"/departments/{seed_refs.dept_design.id}/leadership/president", seed_refs.ahmed.id).status_code
-        == 422
-    )
-    assert client.get(f"{PREFIX}/departments/0/roster").status_code == 422
-
-
-def test_update_requires_full_settings_and_rejects_protected_fields(sign_in, seed_refs):
-    client = sign_in()
-    path = f"{PREFIX}/departments/{seed_refs.dept_design.id}"
-    assert client.put(path, json={"name": "Name", "ar_name": "اسم", "type": "practical"}).status_code == 422
-    for protected in ("id", "created_at", "updated_at", "active", "leadership_enabled"):
-        assert client.put(path, json={**SETTINGS, protected: 1}).status_code == 422
-
-
-def test_cache_failure_does_not_turn_committed_change_into_error(sign_in, seed_refs, db_session, cache_reset):
-    cache_reset.side_effect = RuntimeError("cache unavailable")
-    response = sign_in().post(f"{PREFIX}/departments/{seed_refs.dept_design.id}/archive")
-    assert response.status_code == 200 and response.json()["active"] is False
-    db_session.refresh(seed_refs.dept_design)
-    assert seed_refs.dept_design.active == 0
-
-
-def test_commit_failure_rolls_back_mutation_without_cache_refresh(sign_in, db_session, cache_reset, monkeypatch):
-    def failed_commit(session):
-        raise OperationalError("COMMIT", {}, Exception("connection lost"))
-
-    monkeypatch.setattr(Session, "commit", failed_commit)
-    response = sign_in().post(PREFIX + "/departments", json=SETTINGS)
-    assert response.status_code == 503
-    assert db_session.scalar(select(Departments).where(Departments.name == SETTINGS["name"])) is None
-    cache_reset.assert_not_called()
-
-
-def test_existing_public_departments_keep_original_payload(client, seed_refs):
-    for body in (client.get("/departments").json()[0], client.get(f"/departments/{seed_refs.dept_design.id}").json()):
-        assert set(body) == {"id", "name", "ar_name", "type"}
-
-
-def test_openapi_describes_required_replacement_fields_and_bounded_history(client):
-    schema = client.get("/openapi.json").json()
-    replacement = schema["components"]["schemas"]["ReplaceAssignmentRequest"]
-    assert set(replacement["required"]) == {"member_id", "expected_assignment_id"}
-    assert replacement["additionalProperties"] is False
-    history = schema["paths"]["/club-structure/history"]["get"]
-    limit = next(p for p in history["parameters"] if p["name"] == "limit")
-    assert limit["schema"]["maximum"] == 100
-
-
-def test_repeated_archive_restore_retains_points_and_assignment_history(sign_in, seed_refs, outbound):
-    """Club status must preserve both explicit tenure and legacy event points."""
-    from tests.factories import make_create_event_payload, make_event
-
-    client = sign_in()
-    department_id = seed_refs.dept_design.id
-    path = f"{PREFIX}/departments/{department_id}"
-    semesters = client.get("/points/semesters").json()
-    semester_id = semesters["current_semester"]
-    semester = next(s for s in semesters["details"] if s["id"] == semester_id)
-    event_date = (datetime.fromisoformat(semester["start_date"]) + timedelta(days=1)).isoformat()
-    original = replace(client, f"/departments/{department_id}/leadership/leader", seed_refs.ahmed.id).json()
-    response = client.post(
-        "/events/",
-        json=make_create_event_payload(
-            seed_refs,
-            event=make_event(status="open", start_datetime=event_date, end_datetime=event_date),
-            department_id=department_id,
-        ),
-    )
-    assert response.status_code == 201, response.text
-
-    def department_totals():
-        response = client.get("/points/departments/total", params={"semester": semester_id})
-        assert response.status_code == 200, response.text
-        return [row for rows in response.json().values() for row in rows]
-
-    points_before = next(row for row in department_totals() if row["department_id"] == department_id)
-    assert points_before["total_points"] == seed_refs.dept_action.points
-    event_history_before = client.get(f"/points/departments/{department_id}", params={"semester": semester_id}).json()
-    assert event_history_before["events"][0]["event_id"] == response.json()["id"]
-    tenure_before = client.get(f"{PREFIX}/history", params={"department_id": department_id}).json()
-
-    for _ in range(2):
-        assert client.post(path + "/archive").status_code == 200
-        assert all(row["department_id"] != department_id for row in department_totals())
-        assert client.get(path + "/roster").json() == [original]
-        assert client.get(f"{PREFIX}/history", params={"department_id": department_id}).json() == tenure_before
-        assert client.post(path + "/restore").status_code == 200
-        assert next(row for row in department_totals() if row["department_id"] == department_id) == points_before
-        assert (
-            client.get(f"/points/departments/{department_id}", params={"semester": semester_id}).json()
-            == event_history_before
-        )
-        assert client.get(path + "/roster").json() == [original]

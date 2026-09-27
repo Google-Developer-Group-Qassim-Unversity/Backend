@@ -5,6 +5,7 @@ JWT verification is replaced only in this test process; real permission guards,
 request schemas, services, transactions and queries run unchanged.
 """
 
+from datetime import date
 import json
 import os
 from pathlib import Path
@@ -24,7 +25,18 @@ from sqlalchemy.orm import Session
 import uvicorn
 
 from app.config import config
-from app.DB.schema import ClubAssignments, Departments, DepartmentsType, Members, Role
+from app.DB.schema import (
+    ClubMembershipAction,
+    ClubMembershipChanges,
+    ClubMemberships,
+    Departments,
+    DepartmentsType,
+    Members,
+    Role,
+    SemesterDepartments,
+    Semesters,
+    SemesterTerm,
+)
 from app.dependencies import get_db
 from app.main import app
 from app.routers import club_structure
@@ -36,19 +48,33 @@ def test_browser_manages_club_through_real_api(engine, seed_core_data, monkeypat
     frontend = Path(__file__).resolve().parents[2] / "Frontend"
     prefix = f"Browser-{uuid4().hex[:10]}"
     with Session(engine) as session:
+        current = session.scalar(select(Semesters).where(Semesters.hijri_code == 475))
+        # An empty semester far in the future, never current, for "copy structure".
+        future = Semesters(
+            term=SemesterTerm.SUMMER,
+            hijri_year=1460,
+            academic_year_start=2038,
+            start_date=date(2039, 6, 1),
+            end_date=date(2039, 8, 1),
+        )
         board = Departments(
-            name=f"{prefix} Board",
-            ar_name="مجلس الإدارة",
-            type=DepartmentsType.ADMINISTRATIVE,
-            leadership_enabled=False,
+            name=f"{prefix} Board", ar_name="مجلس الإدارة", type=DepartmentsType.ADMINISTRATIVE, show_in_leaderboard=0
         )
         people = [
             Members(**make_member(name=f"Browser {name}", email=f"{prefix}-{name}@example.com", uni_id=None))
             for name in ["Alice", "Bob", "Carol", "Dana"]
         ]
-        session.add_all([board, *people])
+        session.add_all([future, board, *people])
         session.flush()
-        refs = {"prefix": prefix, "board": board.id, "members": [{"id": p.id, "name": p.name} for p in people]}
+        session.add(SemesterDepartments(semester_id=current.id, department_id=board.id))
+        refs = {
+            "prefix": prefix,
+            "board": board.id,
+            "semester": {"id": current.id, "name": current.name},
+            "future": {"id": future.id, "name": future.name},
+            "members": [{"id": p.id, "name": p.name} for p in people],
+        }
+        future_id = future.id
         member_ids = [p.id for p in people]
         before_members = session.scalar(select(func.count()).select_from(Members))
         before_roles = session.scalar(select(func.count()).select_from(Role))
@@ -114,10 +140,11 @@ def test_browser_manages_club_through_real_api(engine, seed_core_data, monkeypat
         with Session(engine) as session:
             assert session.scalar(select(func.count()).select_from(Members)) == before_members
             assert session.scalar(select(func.count()).select_from(Role)) == before_roles
-            tenures = session.scalars(select(ClubAssignments).where(ClubAssignments.member_id.in_(member_ids))).all()
-            assert any(a.ends_at is not None for a in tenures)
-            assert all(a.changed_by == "browser-super_admin" for a in tenures)
-            assert all(a.ended_by == "browser-super_admin" for a in tenures if a.ends_at is not None)
+            changes = session.scalars(
+                select(ClubMembershipChanges).where(ClubMembershipChanges.member_id.in_(member_ids))
+            ).all()
+            assert any(change.action == ClubMembershipAction.REMOVED for change in changes)
+            assert {change.actor for change in changes} == {"browser-super_admin"}
     finally:
         if server is not None:
             server.should_exit = True
@@ -126,11 +153,16 @@ def test_browser_manages_club_through_real_api(engine, seed_core_data, monkeypat
         listener.close()
         with Session(engine) as session:
             department_ids = select(Departments.id).where(Departments.name.startswith(prefix))
-            session.execute(
-                delete(ClubAssignments).where(
-                    ClubAssignments.member_id.in_(member_ids) | ClubAssignments.department_id.in_(department_ids)
+            for table in (ClubMembershipChanges, ClubMemberships):
+                session.execute(
+                    delete(table).where(
+                        table.member_id.in_(member_ids)
+                        | table.department_id.in_(department_ids)
+                        | (table.semester_id == future_id)
+                    )
                 )
-            )
+            session.execute(delete(SemesterDepartments).where(SemesterDepartments.department_id.in_(department_ids)))
+            session.execute(delete(Semesters).where(Semesters.id == future_id))
             session.execute(delete(Departments).where(Departments.name.startswith(prefix)))
             session.execute(delete(Members).where(Members.id.in_(member_ids)))
             session.commit()
