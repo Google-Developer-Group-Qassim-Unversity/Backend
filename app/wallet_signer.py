@@ -105,7 +105,6 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
                 {"key": "institution", "label": "الكلية / الجهة", "value": uni_college},
                 {"key": "major", "label": "التخصص", "value": major},
                 {"key": "level", "label": "المستوى / المرحلة", "value": level},
-                {"key": "public_profile", "label": "رابط الصفحة الشخصية المعتمدة", "value": qr_target_url},
                 {"key": "club_name", "label": "النادي", "value": "Google Developer Group - Qassim"},
             ],
         },
@@ -283,10 +282,7 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
         ],
         "barcode": {"type": "QR_CODE", "value": qr_target_url, "alternateText": uuid[:8].upper() if uuid else "GDGQ"},
         "linksModuleData": {
-            "uris": [
-                {"uri": qr_target_url, "description": "صفحتك الشخصية المعتمدة", "id": "profile_link"},
-                {"uri": "https://gdg-q.com", "description": "مجتمع GDG Qassim", "id": "club_site"},
-            ]
+            "uris": [{"uri": "https://gdg-q.com", "description": "مجتمع GDG Qassim", "id": "club_site"}]
         },
     }
 
