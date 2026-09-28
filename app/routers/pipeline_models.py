@@ -1,5 +1,7 @@
 """Events pipeline API contracts."""
 
+from datetime import date
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.DB.schema import PipelineTeam
@@ -72,3 +74,29 @@ class DepartmentPermissionsResponse(BaseModel):
 
 class GrantPermissionRequest(BaseModel):
     member_id: int = Field(gt=0)
+
+
+class CalendarDayResponse(BaseModel):
+    date: date
+    # locked | banned | open
+    status: str
+    reason: str | None = None
+
+
+class CalendarResponse(BaseModel):
+    today: date
+    first_bookable_date: date
+    days: list[CalendarDayResponse]
+
+
+class BanDaysRequest(BaseModel):
+    dates: list[date] = Field(min_length=1, max_length=366)
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class UnbanDaysRequest(BaseModel):
+    dates: list[date] = Field(min_length=1, max_length=366)
+
+
+class BanResult(BaseModel):
+    count: int
