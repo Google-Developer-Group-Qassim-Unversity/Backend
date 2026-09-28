@@ -19,8 +19,17 @@ from sqlalchemy.orm import Session
 
 from app.DB import department_permissions as permission_queries
 from app.DB import event_pipeline as queries
-from app.DB.schema import Departments, EventRequests, EventRequestStage, EventRequestUndatedReason, PipelineTeam
-from app.exceptions import DepartmentForbidden, NotFound, PipelineConflict
+from app.DB.schema import (
+    Departments,
+    EventRequests,
+    EventRequestStage,
+    EventRequestTasks,
+    EventRequestTaskStatus,
+    EventRequestUndatedReason,
+    PipelineTeam,
+)
+from app.exceptions import DepartmentForbidden, IncompleteRequest, NotFound, PipelineConflict
+from app.services import event_briefs
 from app.services import event_pipeline_clock as clock
 from app.services.department_permissions import PipelineActor
 
@@ -360,3 +369,64 @@ def can_view(session: Session, actor: PipelineActor, request: EventRequests) -> 
 
 def visible_department_ids(actor: PipelineActor) -> set[int] | None:
     return None if actor.is_super_admin else actor.acting_department_ids
+
+
+# --------------------------------------------------------------------------- briefs and submit
+
+BRIEF_TEAMS = (PipelineTeam.DESIGN, PipelineTeam.LOGISTICS)
+
+
+def get_task(request: EventRequests, team: PipelineTeam) -> EventRequestTasks | None:
+    return next((task for task in request.tasks if task.team == team), None)
+
+
+def ensure_task(session: Session, request: EventRequests, team: PipelineTeam) -> EventRequestTasks:
+    task = get_task(request, team)
+    if task is None:
+        task = EventRequestTasks(request_id=request.id, team=team, status=EventRequestTaskStatus.BRIEF)
+        request.tasks.append(task)
+        session.flush()
+    return task
+
+
+def save_brief(session: Session, actor: PipelineActor, request: EventRequests, team: PipelineTeam, brief: dict) -> None:
+    """Save a draft brief as it is. Submit checks it."""
+    actor.require_act_for(request.department_id)
+    if team not in BRIEF_TEAMS:
+        raise PipelineConflict("no_brief", f"The {team.value} team has no brief", 422)
+    if not can_edit(actor, request):
+        raise PipelineConflict("not_editable", "The briefs are frozen once the request is submitted")
+    task = ensure_task(session, request, team)
+    task.brief = event_briefs.clean_brief(team, brief)
+    task.brief_version = event_briefs.BRIEF_VERSION
+    session.flush()
+
+
+def submit(session: Session, actor: PipelineActor, request: EventRequests) -> list[PipelineTeam]:
+    """Send a complete draft to Design and Logistics at the same moment.
+
+    From here on the dates stay taken without a hold. Returns the teams that
+    received it, so the caller can tell them.
+    """
+    actor.require_act_for(request.department_id)
+    if request.stage != EventRequestStage.DRAFT:
+        raise PipelineConflict("not_a_draft", "Only a draft can be submitted")
+    if not takes_its_days(request, clock.now()) and not (actor.is_super_admin and request.start_date is not None):
+        raise PipelineConflict("hold_expired", "The hold on your dates ran out; book dates again, then submit")
+    for team in BRIEF_TEAMS:
+        ensure_task(session, request, team)
+    missing = event_briefs.missing_fields(request)
+    if missing:
+        raise IncompleteRequest(missing)
+    now = clock.now()
+    request.stage = EventRequestStage.IN_REVIEW
+    request.submitted_at = now
+    request.hold_expires_at = None
+    request.undated_reason = None
+    for team in BRIEF_TEAMS:
+        task = ensure_task(session, request, team)
+        task.status = EventRequestTaskStatus.OPEN
+        task.opened_at = now
+    session.flush()
+    logger.info("Request %s submitted to Design and Logistics", request.id)
+    return list(BRIEF_TEAMS)

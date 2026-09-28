@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from app.DB import event_pipeline as queries
-from app.DB.schema import EventRequests, EventRequestStage
+from app.DB.schema import EventRequests, EventRequestStage, PipelineTeam
 from app.dependencies import DB
 from app.routers.pipeline_models import (
     BookRequest,
@@ -17,9 +17,12 @@ from app.routers.pipeline_models import (
     PersonRef,
     PipelineDepartment,
     RedateRequest,
+    SaveBriefRequest,
+    TaskResponse,
     UpdateDetailsRequest,
 )
 from app.routers.responses import DetailResponse
+from app.services import event_briefs
 from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
 from app.services.department_permissions import Actor, PipelineActor
@@ -70,6 +73,21 @@ def detail(session, actor: PipelineActor, request: EventRequests) -> EventReques
         updated_at=request.updated_at,
         event_id=request.event_id,
         can_edit=service.can_edit(actor, request),
+        tasks=[
+            TaskResponse(
+                team=task.team,
+                status=task.status,
+                brief=task.brief,
+                brief_version=task.brief_version,
+                opened_at=task.opened_at,
+                completed_at=task.completed_at,
+                completed_by=PersonRef(member_id=task.completer.id, name=task.completer.name)
+                if task.completer
+                else None,
+            )
+            for task in request.tasks
+        ],
+        missing=event_briefs.missing_fields(request) if request.stage == EventRequestStage.DRAFT else [],
         now=clock.now(),
     )
 
@@ -139,3 +157,21 @@ def cancel_event_request(request_id: int, session: DB, actor: Actor):
     session.commit()
     logger.info("Request %s cancelled", request_id)
     return DetailResponse(detail="Request cancelled")
+
+
+@router.put("/{request_id:int}/briefs/{team}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def save_event_request_brief(request_id: int, team: PipelineTeam, body: SaveBriefRequest, session: DB, actor: Actor):
+    """Save the Design or Logistics brief as a draft; submit checks it."""
+    request = service.get_request_for(session, actor, request_id, lock=True)
+    service.save_brief(session, actor, request, team, body.brief)
+    session.commit()
+    return detail(session, actor, request)
+
+
+@router.post("/{request_id:int}/submit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def submit_event_request(request_id: int, session: DB, actor: Actor):
+    """Send a complete request to Design and Logistics. A 422 lists every missing field."""
+    request = service.get_request_for(session, actor, request_id, lock=True)
+    service.submit(session, actor, request)
+    session.commit()
+    return detail(session, actor, request)

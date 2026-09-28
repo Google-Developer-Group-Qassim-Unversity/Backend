@@ -1140,6 +1140,9 @@ class EventRequests(Base):
     partners: Mapped[list["EventRequestPartners"]] = relationship(
         "EventRequestPartners", passive_deletes=True, cascade="all, delete-orphan"
     )
+    tasks: Mapped[list["EventRequestTasks"]] = relationship(
+        "EventRequestTasks", passive_deletes=True, cascade="all, delete-orphan", order_by="EventRequestTasks.id"
+    )
 
 
 class EventRequestPartners(Base):
@@ -1159,6 +1162,43 @@ class EventRequestPartners(Base):
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
 
     department: Mapped["Departments"] = relationship("Departments")
+
+
+class EventRequestTaskStatus(str, enum.Enum):
+    BRIEF = "brief"  # the requesting team is still writing the brief
+    OPEN = "open"  # the team has it
+    RETURNED = "returned"  # sent back to the requesting team
+    DONE = "done"
+
+
+class EventRequestTasks(Base):
+    """One team's part of a request: its brief (JSON, versioned by a Pydantic model in code) and its progress."""
+
+    __tablename__ = "event_request_tasks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["request_id"], ["event_requests.id"], name="fk_event_request_tasks_request", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["completed_by"], ["members.id"], name="fk_event_request_tasks_completed_by", ondelete="RESTRICT"
+        ),
+        Index("uq_event_request_tasks_team", "request_id", "team", unique=True),
+        Index("ix_event_request_tasks_team_status", "team", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    request_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    team: Mapped[PipelineTeam] = mapped_column(_enum(PipelineTeam), nullable=False)
+    status: Mapped[EventRequestTaskStatus] = mapped_column(
+        _enum(EventRequestTaskStatus), nullable=False, server_default=text("'brief'")
+    )
+    brief: Mapped[Optional[dict]] = mapped_column(JSON)
+    brief_version: Mapped[Optional[int]] = mapped_column(SMALLINT(unsigned=True))
+    opened_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    completed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    completed_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+
+    completer: Mapped[Optional["Members"]] = relationship("Members")
 
 
 # =============================================================================
