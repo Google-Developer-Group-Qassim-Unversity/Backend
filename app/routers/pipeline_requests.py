@@ -13,6 +13,9 @@ from app.routers.pipeline_models import (
     EventDetails,
     EventRequestDetail,
     EventRequestSummary,
+    PenaltyResponse,
+    RequestActions,
+    ReturnRequest,
     PaginatedEventRequests,
     PersonRef,
     PipelineDepartment,
@@ -44,6 +47,25 @@ def summary(request: EventRequests) -> EventRequestSummary:
         hold_expires_at=request.hold_expires_at,
         undated_reason=request.undated_reason,
         created_at=request.created_at,
+    )
+
+
+def _penalty(session, request: EventRequests) -> PenaltyResponse | None:
+    penalty = service.get_penalty(session, request)
+    if penalty is None:
+        return None
+    return PenaltyResponse(
+        late_days=penalty.late_days, points=penalty.points, applied=penalty.applied_log_id is not None
+    )
+
+
+def _actions(session, actor: PipelineActor, request: EventRequests) -> RequestActions:
+    requester = actor.can_act_for(request.department_id)
+    return RequestActions(
+        can_submit=requester and request.stage == EventRequestStage.DRAFT,
+        can_return=service.can_return(session, actor, request),
+        can_resubmit=requester and request.stage == EventRequestStage.RETURNED,
+        complete=[t for t in service.ALL_TEAMS if service.can_complete(session, actor, request, t)],
     )
 
 
@@ -88,7 +110,16 @@ def detail(session, actor: PipelineActor, request: EventRequests) -> EventReques
             )
             for task in request.tasks
         ],
-        missing=event_briefs.missing_fields(request) if request.stage == EventRequestStage.DRAFT else [],
+        missing=event_briefs.missing_fields(request)
+        if request.stage in (EventRequestStage.DRAFT, EventRequestStage.RETURNED)
+        else [],
+        returned_at=request.returned_at,
+        return_count=request.return_count,
+        return_notes=request.return_notes,
+        return_due_at=request.return_due_at,
+        return_deadline=service.return_deadline(request),
+        penalty=_penalty(session, request),
+        actions=_actions(session, actor, request),
         now=clock.now(),
     )
 
@@ -174,6 +205,42 @@ def submit_event_request(request_id: int, session: DB, actor: Actor, background_
     """Send a complete request to Design and Logistics. A 422 lists every missing field."""
     request = service.get_request_for(session, actor, request_id, lock=True)
     emails = service.submit(session, actor, request)
+    session.commit()
+    notifications.send_after_commit(session, background_tasks, emails)
+    return detail(session, actor, request)
+
+
+@router.post("/{request_id:int}/return", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def return_event_request(
+    request_id: int, body: ReturnRequest, session: DB, actor: Actor, background_tasks: BackgroundTasks
+):
+    """Design sends the request back with notes: once, within two days. The team has 12 hours."""
+    request = service.get_request_for(session, actor, request_id, lock=True)
+    email = service.return_request(session, actor, request, body.notes)
+    session.commit()
+    notifications.send_after_commit(session, background_tasks, [email])
+    return detail(session, actor, request)
+
+
+@router.post("/{request_id:int}/resubmit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def resubmit_event_request(request_id: int, session: DB, actor: Actor, background_tasks: BackgroundTasks):
+    """The team sends its fixed request back to Design. Late costs points, applied at publish."""
+    request = service.get_request_for(session, actor, request_id, lock=True)
+    email = service.resubmit(session, actor, request)
+    session.commit()
+    notifications.send_after_commit(session, background_tasks, [email])
+    return detail(session, actor, request)
+
+
+@router.post(
+    "/{request_id:int}/tasks/{team}/complete", status_code=status.HTTP_200_OK, response_model=EventRequestDetail
+)
+def complete_event_request_task(
+    request_id: int, team: PipelineTeam, session: DB, actor: Actor, background_tasks: BackgroundTasks
+):
+    """A team marks its part done."""
+    request = service.get_request_for(session, actor, request_id, lock=True)
+    emails = service.complete(session, actor, request, team)
     session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
     return detail(session, actor, request)

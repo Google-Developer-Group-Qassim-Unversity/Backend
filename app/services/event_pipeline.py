@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.DB import department_permissions as permission_queries
@@ -27,6 +28,7 @@ from app.DB.schema import (
     EventRequestTaskStatus,
     EventRequestUndatedReason,
     PipelineNotificationKind,
+    PipelinePenalties,
     PipelineTeam,
 )
 from app.exceptions import DepartmentForbidden, IncompleteRequest, NotFound, PipelineConflict
@@ -313,7 +315,8 @@ def cancel(session: Session, actor: PipelineActor, request: EventRequests) -> No
 
 # --------------------------------------------------------------------------- details
 
-EDITABLE_STAGES = {EventRequestStage.DRAFT}
+# A returned request is open to its team again until it is resubmitted.
+EDITABLE_STAGES = {EventRequestStage.DRAFT, EventRequestStage.RETURNED}
 
 
 def can_edit(actor: PipelineActor, request: EventRequests) -> bool:
@@ -466,3 +469,190 @@ def reach_team(
     department_id = team_department_id(session, team)
     notifications.notify(session, department_id, request, kind, {"team": team.value})
     return notifications.department_email(session, department_id, request, kind, actor.member, note)
+
+
+# --------------------------------------------------------------------------- review, return, done
+
+RETURN_WINDOW = timedelta(days=2)
+FIX_WINDOW = timedelta(hours=12)
+PENALTY_POINTS_PER_LATE_DAY = 1
+ALL_TEAMS = (PipelineTeam.DESIGN, PipelineTeam.LOGISTICS, PipelineTeam.MEDIA)
+
+
+def return_deadline(request: EventRequests) -> datetime | None:
+    return request.submitted_at + RETURN_WINDOW if request.submitted_at else None
+
+
+def can_return(session: Session, actor: PipelineActor, request: EventRequests) -> bool:
+    """Design can return a request once, within two days of receiving it. Super admins any time."""
+    if request.stage != EventRequestStage.IN_REVIEW:
+        return False
+    design = get_task(request, PipelineTeam.DESIGN)
+    if design is None or design.status != EventRequestTaskStatus.OPEN:
+        return False
+    if actor.is_super_admin:
+        return True
+    department_id = permission_queries.get_team_department_id(session, PipelineTeam.DESIGN)
+    deadline = return_deadline(request)
+    return (
+        department_id is not None
+        and actor.can_act_for(department_id)
+        and request.return_count == 0
+        and deadline is not None
+        and clock.now() <= deadline
+    )
+
+
+def return_request(session: Session, actor: PipelineActor, request: EventRequests, notes: str) -> PendingEmail | None:
+    if not can_return(session, actor, request):
+        require_team(session, actor, PipelineTeam.DESIGN)
+        raise PipelineConflict("cannot_return", "Design can return a request once, within two days of receiving it")
+    now = clock.now()
+    request.stage = EventRequestStage.RETURNED
+    request.returned_at = now
+    request.return_due_at = now + FIX_WINDOW
+    request.return_notes = notes
+    request.return_count += 1
+    task = get_task(request, PipelineTeam.DESIGN)
+    task.status = EventRequestTaskStatus.RETURNED  # type: ignore[union-attr]
+    notifications.notify(session, request.department_id, request, PipelineNotificationKind.RETURNED, {"notes": notes})
+    session.flush()
+    logger.info("Request %s returned by Design", request.id)
+    return notifications.department_email(
+        session, request.department_id, request, PipelineNotificationKind.RETURNED, actor.member, notes
+    )
+
+
+def late_days(due: datetime, now: datetime) -> int:
+    """Every started 24 hours after the due time is one late day."""
+    if now <= due:
+        return 0
+    seconds = (now - due).total_seconds()
+    return int(-(-seconds // 86400))
+
+
+def record_penalty(session: Session, request: EventRequests, now: datetime) -> PipelinePenalties | None:
+    """Create or grow the request's penalty to match how late it is. One row per request."""
+    if request.return_due_at is None:
+        return None
+    days = late_days(request.return_due_at, now)
+    if days == 0:
+        return None
+    penalty = session.scalar(
+        select(PipelinePenalties).where(PipelinePenalties.request_id == request.id).with_for_update()
+    )
+    if penalty is None:
+        penalty = PipelinePenalties(
+            request_id=request.id,
+            department_id=request.department_id,
+            late_days=days,
+            points=days * PENALTY_POINTS_PER_LATE_DAY,
+            reason=f"Returned request {request.id} fixed {days} day(s) late",
+        )
+        session.add(penalty)
+    elif penalty.late_days < days and penalty.applied_log_id is None:
+        penalty.late_days = days
+        penalty.points = days * PENALTY_POINTS_PER_LATE_DAY
+        penalty.reason = f"Returned request {request.id} fixed {days} day(s) late"
+    session.flush()
+    return penalty
+
+
+def get_penalty(session: Session, request: EventRequests) -> PipelinePenalties | None:
+    return session.scalar(select(PipelinePenalties).where(PipelinePenalties.request_id == request.id))
+
+
+def resubmit(session: Session, actor: PipelineActor, request: EventRequests) -> PendingEmail | None:
+    """The team fixed its returned request; it goes back to Design. Late costs points."""
+    actor.require_act_for(request.department_id)
+    if request.stage != EventRequestStage.RETURNED:
+        raise PipelineConflict("not_returned", "Only a returned request can be resubmitted")
+    missing = event_briefs.missing_fields(request)
+    if missing:
+        raise IncompleteRequest(missing)
+    now = clock.now()
+    record_penalty(session, request, now)
+    request.stage = EventRequestStage.IN_REVIEW
+    request.return_due_at = None
+    task = ensure_task(session, request, PipelineTeam.DESIGN)
+    task.status = EventRequestTaskStatus.OPEN
+    task.opened_at = now
+    session.flush()
+    logger.info("Request %s resubmitted to Design", request.id)
+    return reach_team(session, actor, request, PipelineTeam.DESIGN, PipelineNotificationKind.REQUEST_RECEIVED)
+
+
+def can_complete(session: Session, actor: PipelineActor, request: EventRequests, team: PipelineTeam) -> bool:
+    task = get_task(request, team)
+    if task is None or task.status != EventRequestTaskStatus.OPEN:
+        return False
+    if actor.is_super_admin:
+        return True
+    department_id = permission_queries.get_team_department_id(session, team)
+    return department_id is not None and actor.can_act_for(department_id)
+
+
+def complete(
+    session: Session, actor: PipelineActor, request: EventRequests, team: PipelineTeam
+) -> list[PendingEmail | None]:
+    """A team marks its part done. Design done sends the request to Media; all three done makes it ready."""
+    if not can_complete(session, actor, request, team):
+        require_team(session, actor, team)
+        raise PipelineConflict("cannot_complete", f"The {team.value} part is not open")
+    now = clock.now()
+    task = get_task(request, team)
+    task.status = EventRequestTaskStatus.DONE  # type: ignore[union-attr]
+    task.completed_at = now  # type: ignore[union-attr]
+    task.completed_by = actor.member.id  # type: ignore[union-attr]
+    notifications.notify(
+        session, request.department_id, request, PipelineNotificationKind.TASK_DONE, {"team": team.value}
+    )
+    emails: list[PendingEmail | None] = []
+
+    if team == PipelineTeam.DESIGN:
+        media = ensure_task(session, request, PipelineTeam.MEDIA)
+        media.status = EventRequestTaskStatus.OPEN
+        media.opened_at = now
+        if request.stage == EventRequestStage.IN_REVIEW:
+            request.stage = EventRequestStage.MEDIA
+        emails.append(reach_team(session, actor, request, PipelineTeam.MEDIA, PipelineNotificationKind.MEDIA_RECEIVED))
+
+    if all(
+        (t := get_task(request, team_)) is not None and t.status == EventRequestTaskStatus.DONE for team_ in ALL_TEAMS
+    ):
+        request.stage = EventRequestStage.READY
+        notifications.notify(session, request.department_id, request, PipelineNotificationKind.READY_TO_PUBLISH)
+        emails.append(
+            notifications.department_email(
+                session, request.department_id, request, PipelineNotificationKind.READY_TO_PUBLISH, actor.member
+            )
+        )
+    session.flush()
+    logger.info("Request %s: %s done", request.id, team.value)
+    return emails
+
+
+def inbox(
+    session: Session, actor: PipelineActor, team: PipelineTeam | None
+) -> list[tuple[EventRequests, EventRequestTasks]]:
+    """Open tasks for the teams the caller can act for (every team for a super admin)."""
+    team_departments = {row.team: row.department_id for row in permission_queries.get_teams(session)}
+    teams = [
+        t
+        for t in ALL_TEAMS
+        if (team is None or t == team)
+        and (actor.is_super_admin or (t in team_departments and actor.can_act_for(team_departments[t])))
+    ]
+    if not teams:
+        return []
+    rows = session.execute(
+        select(EventRequests, EventRequestTasks)
+        .join(EventRequestTasks, EventRequestTasks.request_id == EventRequests.id)
+        .where(
+            EventRequestTasks.team.in_(teams),
+            EventRequestTasks.status.in_([EventRequestTaskStatus.OPEN, EventRequestTaskStatus.RETURNED]),
+            EventRequests.stage.not_in([EventRequestStage.CANCELLED, EventRequestStage.PUBLISHED]),
+        )
+        .order_by(EventRequestTasks.opened_at)
+    ).all()
+    return [(r, t) for r, t in rows]
