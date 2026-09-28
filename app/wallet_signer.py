@@ -58,7 +58,9 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     """
     Generates a cryptographically signed Apple Wallet .pkpass binary buffer
     using Python cryptography PKCS#7 detached signature.
-    Uses 'eventTicket' pass type with full-bleed background.png to render the complete Figma card design.
+    Uses 'storeCard' pass type with full-bleed background.png to render the complete Figma card
+    design - background.png is only honored by PassKit for storeCard, so the 'eventTicket' style
+    used previously silently dropped it and fell back to Wallet's plain default rendering.
     """
     theme_id = card_data.get("themeId", DEFAULT_THEME)
     theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
@@ -79,7 +81,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     major = card_data.get("major") or ""
     level = card_data.get("studyYearOrLevel") or ""
 
-    # 1. Build pass.json with full-card eventTicket layout
+    # 1. Build pass.json with full-card storeCard layout
     pass_json = {
         "formatVersion": 1,
         "passTypeIdentifier": pass_type_id,
@@ -90,15 +92,12 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "foregroundColor": theme["fg_rgb"],
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
-        "suppressStripShine": True,
-        "eventTicket": {
+        "storeCard": {
+            # secondaryFields/auxiliaryFields are deliberately omitted: Apple renders
+            # them as an extra text row on the card face below primaryFields, which
+            # isn't part of the card artwork's design - that detail lives on the back
+            # (backFields) instead, reachable via the info button.
             "primaryFields": [{"key": "member_name", "label": theme["role_title"], "value": full_name}],
-            "secondaryFields": [
-                {"key": "uni_id", "label": "الرقم الجامعي", "value": str(card_data.get("uniId") or "عضو موثق")}
-            ],
-            "auxiliaryFields": [
-                {"key": "institution", "label": "الجهة", "value": f"{uni_college}{(' · ' + major) if major else ''}"}
-            ],
             "backFields": [
                 {"key": "uni_id", "label": "الرقم الجامعي", "value": str(card_data.get("uniId") or "")},
                 {"key": "email", "label": "البريد الإلكتروني", "value": card_data.get("email", "")},
