@@ -15,6 +15,7 @@ from app.routers.pipeline_models import (
     ActingDepartment,
     BanDaysRequest,
     BanResult,
+    CalendarDayRequest,
     CalendarDayResponse,
     CalendarResponse,
     UnbanDaysRequest,
@@ -102,15 +103,32 @@ def get_pipeline_calendar(
     return CalendarResponse(
         today=clock.today(),
         first_bookable_date=pipeline_service.first_bookable_day(),
-        days=[CalendarDayResponse(date=d.date, status=d.status.value, reason=d.reason) for d in days],
+        days=[
+            CalendarDayResponse(
+                date=d.date,
+                status=d.status.value,
+                reason=d.reason,
+                requests=[
+                    CalendarDayRequest(
+                        id=r.id,
+                        department=PipelineDepartment.model_validate(r.department),
+                        title=r.title,
+                        stage=r.stage,
+                    )
+                    for r in d.requests
+                ],
+            )
+            for d in days
+        ],
     )
 
 
 @router.put("/calendar/bans", status_code=status.HTTP_200_OK, response_model=BanResult)
 def ban_pipeline_days(body: BanDaysRequest, session: DB, actor: Actor):
     """Logistics closes days to bookings. A day already banned takes the new reason."""
-    days = pipeline_service.ban(session, actor, body.dates, body.reason)
-    session.commit()
+    with pipeline_service.booking_lock(session):
+        days, _undated = pipeline_service.ban(session, actor, body.dates, body.reason)
+        session.commit()
     return BanResult(count=len(days))
 
 

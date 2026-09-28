@@ -1,10 +1,19 @@
 """Events pipeline API contracts."""
 
-from datetime import date
+from datetime import date, time
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.DB.schema import PipelineTeam
+from app.DB.schema import (
+    EventRequestAudience,
+    EventRequestLocationScope,
+    EventRequestRegistration,
+    EventRequestStage,
+    EventRequestType,
+    EventRequestUndatedReason,
+    PipelineTeam,
+)
 from app.routers.club_structure_models import UtcDateTime
 
 MemberId = int
@@ -76,11 +85,19 @@ class GrantPermissionRequest(BaseModel):
     member_id: int = Field(gt=0)
 
 
+class CalendarDayRequest(BaseModel):
+    id: int
+    department: PipelineDepartment
+    title: str | None
+    stage: EventRequestStage
+
+
 class CalendarDayResponse(BaseModel):
     date: date
-    # locked | banned | open
+    # locked | banned | open | held | booked | published
     status: str
     reason: str | None = None
+    requests: list[CalendarDayRequest] = []
 
 
 class CalendarResponse(BaseModel):
@@ -100,3 +117,81 @@ class UnbanDaysRequest(BaseModel):
 
 class BanResult(BaseModel):
     count: int
+
+
+DayMode = Literal["on_site", "online"]
+
+
+class BookRequest(BaseModel):
+    department_id: int = Field(gt=0)
+    start_date: date
+    end_date: date
+
+
+class RedateRequest(BaseModel):
+    start_date: date
+    end_date: date
+
+
+class EventDetails(BaseModel):
+    """The event itself, filled in once by the requesting team. Everything is optional until submit."""
+
+    title: str | None = Field(default=None, max_length=150)
+    description: str | None = Field(default=None, max_length=5000)
+    event_type: EventRequestType | None = None
+    presenter_name: str | None = Field(default=None, max_length=100)
+    presenter_email: EmailStr | None = None
+    # One mode per booked day, keyed by the day.
+    day_modes: dict[date, DayMode] | None = None
+    daily_start_time: time | None = None
+    daily_end_time: time | None = None
+    is_official: bool | None = None
+    location_scope: EventRequestLocationScope | None = None
+    audience: EventRequestAudience | None = None
+    registration: EventRequestRegistration | None = None
+    expected_accepted: int | None = Field(default=None, ge=1, le=100000)
+    help_needed: str | None = Field(default=None, max_length=5000)
+
+
+class UpdateDetailsRequest(EventDetails):
+    """Only the fields sent are changed; send ``null`` to clear one."""
+
+    partner_department_ids: list[int] | None = None
+
+
+class PersonRef(BaseModel):
+    member_id: int
+    name: str
+
+
+class EventRequestSummary(BaseModel):
+    id: int
+    department: PipelineDepartment
+    stage: EventRequestStage
+    title: str | None
+    start_date: date | None
+    end_date: date | None
+    hold_expires_at: UtcDateTime | None
+    undated_reason: EventRequestUndatedReason | None
+    created_at: UtcDateTime
+
+
+class EventRequestDetail(EventRequestSummary):
+    created_by: PersonRef
+    details: EventDetails
+    partners: list[PipelineDepartment]
+    # Worked out from the dates and times: Sun-Thu, 08:00-15:00.
+    within_official_hours: bool | None
+    submitted_at: UtcDateTime | None
+    updated_at: UtcDateTime
+    event_id: int | None
+    can_edit: bool
+    now: UtcDateTime
+
+
+class PaginatedEventRequests(BaseModel):
+    items: list[EventRequestSummary]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int

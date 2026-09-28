@@ -34,6 +34,7 @@ from app.routers import (
     club_structure,
     department_permissions,
     pipeline,
+    pipeline_requests,
 )
 
 # `event_level=ERROR` is the sentry-sdk default, stated here because it is the
@@ -111,3 +112,4 @@ app.include_router(wallet.router)
 app.include_router(club_structure.router)
 app.include_router(department_permissions.router)
 app.include_router(pipeline.router)
+app.include_router(pipeline_requests.router)
