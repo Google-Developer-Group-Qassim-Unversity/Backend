@@ -938,6 +938,77 @@ class Semesters(Base):
     )
 
 
+class PipelineTeam(str, enum.Enum):
+    """The three departments every event request passes through."""
+
+    DESIGN = "design"
+    LOGISTICS = "logistics"
+    MEDIA = "media"
+
+
+class PipelineTeams(Base):
+    """Which department plays which part in the events pipeline. Set by a super admin."""
+
+    __tablename__ = "pipeline_teams"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_pipeline_teams_department", ondelete="RESTRICT"
+        ),
+        Index("uq_pipeline_teams_department", "department_id", unique=True),
+    )
+
+    team: Mapped[PipelineTeam] = mapped_column(
+        Enum(PipelineTeam, values_callable=lambda cls: [member.value for member in cls]), primary_key=True
+    )
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+
+    department: Mapped["Departments"] = relationship("Departments")
+
+
+class DepartmentPermissions(Base):
+    """A member a department's leader or VP allowed to act for the department in the pipeline.
+
+    Leaders and VPs act for their department without a row here; this table is
+    only the people they granted it to. Revoking keeps the row. At most one
+    active grant per member and department: the generated key is NULL once a
+    grant is revoked, and unique while it is not.
+    """
+
+    __tablename__ = "department_permissions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["member_id"], ["members.id"], name="fk_department_permissions_member", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_department_permissions_department", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["granted_by"], ["members.id"], name="fk_department_permissions_granted_by", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["revoked_by"], ["members.id"], name="fk_department_permissions_revoked_by", ondelete="RESTRICT"
+        ),
+        Index("uq_department_permissions_active", "member_id", "department_id", "active_key", unique=True),
+        Index("ix_department_permissions_department", "department_id"),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    granted_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    granted_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    revoked_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    revoked_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    active_key: Mapped[Optional[int]] = mapped_column(
+        TINYINT(unsigned=True), Computed("CASE WHEN revoked_at IS NULL THEN 1 END", persisted=True)
+    )
+
+    member: Mapped["Members"] = relationship("Members", foreign_keys=[member_id])
+    granter: Mapped["Members"] = relationship("Members", foreign_keys=[granted_by])
+
+
 # =============================================================================
 # Views (read-only, defined in DB migrations)
 # =============================================================================
