@@ -4,7 +4,7 @@ import logging
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
 from app.DB import department_permissions as permission_queries
 from app.DB.schema import PipelineTeam
@@ -26,10 +26,12 @@ from app.routers.pipeline_models import (
     PipelineMeResponse,
     PipelineTeamEntry,
     SetPipelineTeamsRequest,
+    SweepResponse,
 )
 from app.services import event_pipeline as pipeline_service
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
+from app.services import pipeline_sweep
 from app.services.department_permissions import Actor, PipelineActor
 
 logger = logging.getLogger(__name__)
@@ -198,3 +200,15 @@ def read_all_pipeline_notifications(session: DB, actor: Actor):
     count = notifications.mark_read(session, actor.member.id, [n.id for n in rows])
     session.commit()
     return BanResult(count=count)
+
+
+@router.post(
+    "/sweep", status_code=status.HTTP_200_OK, response_model=SweepResponse, dependencies=[Depends(super_admin_guard)]
+)
+def run_pipeline_sweep(background_tasks: BackgroundTasks):
+    """Run the timed chores now instead of waiting for the next tick. Safe to repeat."""
+    result = pipeline_sweep.sweep_once()
+    if result is None:
+        return SweepResponse(ran=False)
+    background_tasks.add_task(pipeline_sweep.send_emails, result)
+    return SweepResponse(ran=True, **result.counts())

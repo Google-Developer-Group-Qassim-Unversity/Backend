@@ -199,6 +199,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /pipeline/notifications": "authenticated_guard",
     "POST /pipeline/notifications/{notification_id:int}/read": "authenticated_guard",
     "POST /pipeline/notifications/read-all": "authenticated_guard",
+    "POST /pipeline/sweep": "super_admin_guard",
 }
 
 

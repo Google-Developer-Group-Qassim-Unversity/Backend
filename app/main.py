@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -9,11 +10,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from app.clients import close_http_client, open_http_client
-from app.config import config
+from app.config import config, get_settings
 from app.DB.main import get_engine
 from app.error_handlers import register_exception_handlers
 from app.logging_config import configure_logging
 from app.middleware import RequestContextMiddleware
+from app.services import pipeline_sweep
 from app.routers import (
     attendance,
     emails,
@@ -64,10 +66,17 @@ async def lifespan(app: FastAPI):
     config.DATABASE_URL
     config.CLERK_GUARD
     await open_http_client()
+    # The events pipeline's timer (app/services/pipeline_sweep.py). Not under
+    # the test suite, which runs the sweep by hand with a frozen clock.
+    sweeper = None
+    if get_settings().ENV.lower() != "testing":
+        sweeper = asyncio.create_task(pipeline_sweep.sweep_forever())
     logger.info("Startup complete")
 
     yield
 
+    if sweeper is not None:
+        sweeper.cancel()
     await close_http_client()
 
     # get_engine is lru_cached; calling it here when nothing ever built an

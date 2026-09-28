@@ -243,3 +243,8 @@ class PaginatedNotifications(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class SweepResponse(BaseModel):
+    ran: bool
+    expired_holds: int = 0
