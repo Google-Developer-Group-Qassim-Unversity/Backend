@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     MEMBER_APP_REVALIDATE_SECRET: Optional[str] = None
     SES_FROM_ADDRESS: Optional[str] = None
 
+    # Events pipeline. Off, a pipeline email goes only to the person whose
+    # action sent it, marked as a trial copy; on, it goes to the department.
+    PIPELINE_EMAILS_LIVE: bool = False
+    ADMIN_APP_URL: str = "https://admin.gdg-q.com"
+
     R2_ACCOUNT_ID: Optional[str] = None
     R2_ACCESS_KEY_ID: Optional[str] = None
     R2_SECRET_ACCESS_KEY: Optional[str] = None
@@ -205,6 +210,14 @@ class Config:
     @property
     def GOOGLE_FORMS_TOPIC_NAME(self) -> str:
         return env_or_except("GOOGLE_FORMS_TOPIC_NAME")
+
+    @property
+    def PIPELINE_EMAILS_LIVE(self) -> bool:
+        return get_settings().PIPELINE_EMAILS_LIVE
+
+    @property
+    def ADMIN_APP_URL(self) -> str:
+        return get_settings().ADMIN_APP_URL.rstrip("/")
 
     @property
     def GOOGLE_ALLOWED_EMAIL_DOMAINS(self) -> list[str]:

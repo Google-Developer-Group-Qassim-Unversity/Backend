@@ -3,7 +3,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, BackgroundTasks, Query, status
 
 from app.DB import event_pipeline as queries
 from app.DB.schema import EventRequests, EventRequestStage, PipelineTeam
@@ -25,6 +25,7 @@ from app.routers.responses import DetailResponse
 from app.services import event_briefs
 from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
+from app.services import pipeline_notifications as notifications
 from app.services.department_permissions import Actor, PipelineActor
 
 logger = logging.getLogger(__name__)
@@ -169,9 +170,10 @@ def save_event_request_brief(request_id: int, team: PipelineTeam, body: SaveBrie
 
 
 @router.post("/{request_id:int}/submit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def submit_event_request(request_id: int, session: DB, actor: Actor):
+def submit_event_request(request_id: int, session: DB, actor: Actor, background_tasks: BackgroundTasks):
     """Send a complete request to Design and Logistics. A 422 lists every missing field."""
     request = service.get_request_for(session, actor, request_id, lock=True)
-    service.submit(session, actor, request)
+    emails = service.submit(session, actor, request)
     session.commit()
+    notifications.send_after_commit(session, background_tasks, emails)
     return detail(session, actor, request)

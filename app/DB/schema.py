@@ -1201,6 +1201,66 @@ class EventRequestTasks(Base):
     completer: Mapped[Optional["Members"]] = relationship("Members")
 
 
+class PipelineNotificationKind(str, enum.Enum):
+    REQUEST_RECEIVED = "request_received"
+    DATES_BANNED = "dates_banned"
+    HOLD_EXPIRED = "hold_expired"
+    RETURNED = "returned"
+    TASK_DONE = "task_done"
+    MEDIA_RECEIVED = "media_received"
+    READY_TO_PUBLISH = "ready_to_publish"
+
+
+class PipelineNotifications(Base):
+    """Something that happened to a request, shown on the dashboards of one department's pipeline users."""
+
+    __tablename__ = "pipeline_notifications"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_pipeline_notifications_department", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["request_id"], ["event_requests.id"], name="fk_pipeline_notifications_request", ondelete="CASCADE"
+        ),
+        Index("ix_pipeline_notifications_department", "department_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    request_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    kind: Mapped[PipelineNotificationKind] = mapped_column(_enum(PipelineNotificationKind), nullable=False)
+    payload: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    department: Mapped["Departments"] = relationship("Departments")
+    request: Mapped["EventRequests"] = relationship("EventRequests")
+
+
+class PipelineNotificationReads(Base):
+    """Each person marks their own notifications read."""
+
+    __tablename__ = "pipeline_notification_reads"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["notification_id"],
+            ["pipeline_notifications.id"],
+            name="fk_pipeline_notification_reads_notification",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["member_id"], ["members.id"], name="fk_pipeline_notification_reads_member", ondelete="CASCADE"
+        ),
+    )
+
+    notification_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    read_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
 # =============================================================================
 # Views (read-only, defined in DB migrations)
 # =============================================================================

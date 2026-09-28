@@ -18,6 +18,9 @@ from app.routers.pipeline_models import (
     CalendarDayRequest,
     CalendarDayResponse,
     CalendarResponse,
+    NotificationItem,
+    NotificationRequest,
+    PaginatedNotifications,
     UnbanDaysRequest,
     PipelineDepartment,
     PipelineMeResponse,
@@ -26,6 +29,7 @@ from app.routers.pipeline_models import (
 )
 from app.services import event_pipeline as pipeline_service
 from app.services import event_pipeline_clock as clock
+from app.services import pipeline_notifications as notifications
 from app.services.department_permissions import Actor, PipelineActor
 
 logger = logging.getLogger(__name__)
@@ -138,3 +142,59 @@ def unban_pipeline_days(body: UnbanDaysRequest, session: DB, actor: Actor):
     removed = pipeline_service.unban(session, actor, body.dates)
     session.commit()
     return BanResult(count=removed)
+
+
+def _visible_departments(actor: PipelineActor) -> set[int] | None:
+    return None if actor.is_super_admin else actor.acting_department_ids
+
+
+@router.get("/notifications", status_code=status.HTTP_200_OK, response_model=PaginatedNotifications)
+def list_pipeline_notifications(
+    session: DB,
+    actor: Actor,
+    unread: Annotated[bool, Query()] = False,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    """The caller's departments' notifications, newest first. Read state is per person."""
+    _require_access(actor)
+    total, unread_count, rows, read = notifications.list_for(
+        session, _visible_departments(actor), actor.member.id, unread, page_size, (page - 1) * page_size
+    )
+    return PaginatedNotifications(
+        items=[
+            NotificationItem(
+                id=n.id,
+                kind=n.kind,
+                department=PipelineDepartment.model_validate(n.department),
+                request=NotificationRequest(id=n.request.id, title=n.request.title, stage=n.request.stage),
+                payload=n.payload,
+                created_at=n.created_at,
+                read=n.id in read,
+            )
+            for n in rows
+        ],
+        total=total,
+        unread=unread_count,
+        page=page,
+        page_size=page_size,
+        total_pages=(total + page_size - 1) // page_size,
+    )
+
+
+@router.post("/notifications/{notification_id:int}/read", status_code=status.HTTP_200_OK, response_model=BanResult)
+def read_pipeline_notification(notification_id: int, session: DB, actor: Actor):
+    _require_access(actor)
+    _, _, rows, _ = notifications.list_for(session, _visible_departments(actor), actor.member.id, True, 1000, 0)
+    count = notifications.mark_read(session, actor.member.id, [n.id for n in rows if n.id == notification_id])
+    session.commit()
+    return BanResult(count=count)
+
+
+@router.post("/notifications/read-all", status_code=status.HTTP_200_OK, response_model=BanResult)
+def read_all_pipeline_notifications(session: DB, actor: Actor):
+    _require_access(actor)
+    _, _, rows, _ = notifications.list_for(session, _visible_departments(actor), actor.member.id, True, 1000, 0)
+    count = notifications.mark_read(session, actor.member.id, [n.id for n in rows])
+    session.commit()
+    return BanResult(count=count)
