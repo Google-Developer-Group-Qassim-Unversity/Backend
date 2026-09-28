@@ -20,8 +20,10 @@ from sqlalchemy.orm import Session
 
 from app.DB import department_permissions as permission_queries
 from app.DB import event_pipeline as queries
+from app.DB import logs as log_queries
 from app.DB.schema import (
     Departments,
+    EventsLocationType,
     EventRequests,
     EventRequestStage,
     EventRequestTasks,
@@ -32,11 +34,13 @@ from app.DB.schema import (
     PipelineTeam,
 )
 from app.exceptions import DepartmentForbidden, IncompleteRequest, NotFound, PipelineConflict
+from app.routers.models import Events_model, createEvent_model
 from app.services import event_briefs
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail
 from app.services.department_permissions import PipelineActor
+from app.services.events import create_full_event
 
 logger = logging.getLogger(__name__)
 
@@ -656,3 +660,83 @@ def inbox(
         .order_by(EventRequestTasks.opened_at)
     ).all()
     return [(r, t) for r, t in rows]
+
+
+# --------------------------------------------------------------------------- publish
+
+PUBLISHABLE_BY_SUPER_ADMIN = {
+    EventRequestStage.IN_REVIEW,
+    EventRequestStage.RETURNED,
+    EventRequestStage.MEDIA,
+    EventRequestStage.READY,
+}
+
+
+def can_publish(actor: PipelineActor, request: EventRequests) -> bool:
+    if actor.is_super_admin:
+        return request.stage in PUBLISHABLE_BY_SUPER_ADMIN
+    return actor.can_act_for(request.department_id) and request.stage == EventRequestStage.READY
+
+
+def event_for(request: EventRequests, department_action_id: int, member_action_id: int, image_url: str | None):
+    """The ``POST /events/`` payload a ready request becomes.
+
+    Times are wall-clock Riyadh times, the way the event form stores them. A
+    day mix of on-site and online is published as on-site; the Meet link is
+    added from the event page like any other.
+    """
+    modes = set((request.day_modes or {}).values())
+    on_site = "on_site" in modes or not modes
+    logistics = get_task(request, PipelineTeam.LOGISTICS)
+    venue = (logistics.brief or {}).get("venue") if logistics else None
+    registration = request.registration.value if request.registration else "none"
+    return createEvent_model(
+        event=Events_model(
+            name=request.title or f"Event request {request.id}",
+            description=request.description,
+            location_type=EventsLocationType.ON_SITE if on_site else EventsLocationType.ONLINE,
+            location=(venue or "-")[:100] if on_site else "Online",
+            start_datetime=datetime.combine(request.start_date, request.daily_start_time or time(0, 0)),  # type: ignore[arg-type]
+            end_datetime=datetime.combine(request.end_date, request.daily_end_time or time(23, 59)),  # type: ignore[arg-type]
+            # A draft: admins review a published request before members can see it.
+            status="draft",
+            image_url=image_url,
+            is_official=int(bool(request.is_official)),
+        ),
+        form_type="none" if registration == "none" else "registration",
+        department_action_id=department_action_id,
+        member_action_id=member_action_id,
+        department_id=request.department_id,
+    )
+
+
+def publish(
+    session: Session,
+    actor: PipelineActor,
+    request: EventRequests,
+    department_action_id: int,
+    member_action_id: int,
+    image_url: str | None,
+) -> int:
+    """Create the real event, in the same transaction, the same way ``POST /events/`` does.
+
+    Any late penalty is taken off the department's log for the new event, once.
+    Returns the event id.
+    """
+    if not can_publish(actor, request):
+        actor.require_act_for(request.department_id)
+        raise PipelineConflict("not_ready", "Only a request every team has finished can be published")
+    if request.start_date is None:
+        raise PipelineConflict("no_dates", "This request has no dates")
+    event, department_log = create_full_event(
+        session, event_for(request, department_action_id, member_action_id, image_url)
+    )
+    penalty = get_penalty(session, request)
+    if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:
+        log_queries.create_modification(session, department_log.id, "discount", penalty.points)
+        penalty.applied_log_id = department_log.id
+    request.event_id = event.id
+    request.stage = EventRequestStage.PUBLISHED
+    session.flush()
+    logger.info("Request %s published as event %s", request.id, event.id)
+    return event.id
