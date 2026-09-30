@@ -73,7 +73,7 @@ def check_submission_exists(form_id: int, member: CurrentMember, session: DB):
 def accept_submission(submissions: list[submission_accept_model], session: DB, access: CurrentAccess):
     # Every submission's event must belong to a department the caller reviews registrations for.
     for form_id in submission_queries.get_form_ids(session, [s.submission_id for s in submissions]):
-        access.require_any(Perm.SUBMISSIONS_REVIEW, form_departments(form_id, session))
+        access.require_any(Perm.SUBMISSIONS_REVIEW, form_departments(session, {"form_id": form_id}))
     try:
         for submission in submissions:
             submission = submission_queries.update_is_accepted(

@@ -90,11 +90,11 @@ def test_a_super_admin_can_ban(pipeline, teams):
     assert pipeline.client.put("/pipeline/calendar/bans", json={"dates": ["2026-07-20"]}).status_code == 200
 
 
-def test_banning_needs_a_logistics_team(pipeline):
+def test_banning_is_a_permission_not_a_team(pipeline):
+    """A super admin bans days even before any department is set as Logistics."""
     pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
     response = pipeline.client.put("/pipeline/calendar/bans", json={"dates": ["2026-07-20"]})
-    assert response.status_code == 409
-    assert response.json()["code"] == "team_not_set"
+    assert response.status_code == 200, response.text
 
 
 def test_days_in_the_past_cannot_be_banned(pipeline, teams):
