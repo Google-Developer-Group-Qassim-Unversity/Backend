@@ -21,13 +21,15 @@ from app.DB import semesters as semesters_queries
 from app.DB.schema import Semesters, SemesterTerm
 
 from app.exceptions import SemesterHasEvents, SemesterHasRoster, SemesterNotFound
-from app.helpers import admin_guard, super_admin_guard
+
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.models import BaseClassModel
 from app.dependencies import DB
 from app.semesters import current_semester
 
 from app.routers.responses import DetailResponse
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.guards import Require, Staff
 
 
 logger = logging.getLogger(__name__)
@@ -121,16 +123,17 @@ def _reset_cache_best_effort() -> None:
 # ============ routes ============
 
 
-@router.get(
-    "", status_code=status.HTTP_200_OK, response_model=list[Semester_model], dependencies=[Depends(admin_guard)]
-)
+@router.get("", status_code=status.HTTP_200_OK, response_model=list[Semester_model], dependencies=[Depends(Staff)])
 def get_all_semesters(session: DB):
     current = current_semester(session)
     return [_to_model(semester, current) for semester in semesters_queries.get_semesters(session)]
 
 
 @router.post(
-    "", status_code=status.HTTP_201_CREATED, response_model=Semester_model, dependencies=[Depends(super_admin_guard)]
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Semester_model,
+    dependencies=[Depends(Require(Perm.SEMESTERS_MANAGE))],
 )
 def create_semester(payload: SemesterInput_model, session: DB):
     _validate(session, payload)
@@ -146,7 +149,7 @@ def create_semester(payload: SemesterInput_model, session: DB):
     "/{semester_id}",
     status_code=status.HTTP_200_OK,
     response_model=Semester_model,
-    dependencies=[Depends(super_admin_guard)],
+    dependencies=[Depends(Require(Perm.SEMESTERS_MANAGE))],
 )
 def update_semester(semester_id: UUID, payload: SemesterInput_model, session: DB):
     semester = _get_or_404(session, semester_id)
@@ -162,7 +165,7 @@ def update_semester(semester_id: UUID, payload: SemesterInput_model, session: DB
 @router.delete(
     "/{semester_id}",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(super_admin_guard)],
+    dependencies=[Depends(Require(Perm.SEMESTERS_MANAGE))],
     response_model=DetailResponse,
 )
 def delete_semester(semester_id: UUID, session: DB):

@@ -7,7 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 from app.DB import submissions as submission_queries
 from app.DB import form_sync_jobs as job_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.helpers import authenticated_guard, CurrentMember, admin_guard, resolve_member
+from app.helpers import authenticated_guard, CurrentMember, resolve_member
 from app.exceptions import NotFound
 from app.routers.models import submission_exists_model, submission_accept_model
 from app.services.form_responses import FormResponsesClient
@@ -15,6 +15,10 @@ from app.services.form_sync import resolve_form_access, sync_form_submissions
 from app.dependencies import DB
 
 from app.routers.responses import FormSyncJobModel, StatusResponse, SubmissionResponse, WebhookAckResponse
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.dependencies import CurrentAccess
+from app.services.permissions.departments import form_departments
+from app.services.permissions.guards import Require, Staff
 
 
 logger = logging.getLogger(__name__)
@@ -61,9 +65,15 @@ def check_submission_exists(form_id: int, member: CurrentMember, session: DB):
 
 
 @router.put(
-    "/accept", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)], response_model=StatusResponse
+    "/accept",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(Require(Perm.SUBMISSIONS_REVIEW))],
+    response_model=StatusResponse,
 )
-def accept_submission(submissions: list[submission_accept_model], session: DB):
+def accept_submission(submissions: list[submission_accept_model], session: DB, access: CurrentAccess):
+    # Every submission's event must belong to a department the caller reviews registrations for.
+    for form_id in submission_queries.get_form_ids(session, [s.submission_id for s in submissions]):
+        access.require_any(Perm.SUBMISSIONS_REVIEW, form_departments(form_id, session))
     try:
         for submission in submissions:
             submission = submission_queries.update_is_accepted(
@@ -94,7 +104,7 @@ def test_fetch_form_responses(google_form_id: str, session: DB, responses_client
     "/sync-jobs/{job_id:int}",
     status_code=status.HTTP_200_OK,
     response_model=FormSyncJobModel,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Staff)],
     responses={404: {"description": "Job not found"}},
 )
 def get_form_sync_job(job_id: int, session: DB):

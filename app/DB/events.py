@@ -142,6 +142,18 @@ def get_actions_by_event_id(session: Session, event_id: int):
     return [dict(row._mapping) for row in row]
 
 
+def get_event_department_ids(session: Session, event_id: int) -> set[int]:
+    """The departments an event belongs to: those on its department logs. Usually one."""
+    return set(
+        session.scalars(
+            select(DepartmentsLogs.department_id)
+            .join(Logs, Logs.id == DepartmentsLogs.log_id)
+            .where(Logs.event_id == event_id)
+            .distinct()
+        ).all()
+    )
+
+
 def get_event_by_id(session: Session, event_id: int):
     statement = select(Events).where(Events.id == event_id)
     event = session.scalars(statement).first()

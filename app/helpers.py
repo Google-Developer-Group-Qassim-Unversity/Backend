@@ -1,6 +1,6 @@
 import logging
 import sentry_sdk
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 from sqlalchemy.orm import Session
 from typing import Annotated
 from app.config import config
@@ -125,58 +125,11 @@ def resolve_member(session: Session, credentials) -> Members:
     raise MemberNotFound(clerk_user_id)
 
 
-def _metadata(credentials) -> dict:
-    """Clerk public metadata, or {} - an unverifiable token on an optional guard has no decoded claims."""
-    decoded = credentials.model_dump().get("decoded") or {}
-    return decoded.get("metadata") or {}
-
-
-def is_admin(credentials) -> bool:
-    metadata = _metadata(credentials)
-    return (
-        metadata.get("is_admin", False)
-        or metadata.get("is_super_admin", False)
-        or metadata.get("is_admin_points", False)
-    )
-
-
-def is_admin_points(credentials) -> bool:
-    metadata = _metadata(credentials)
-    return metadata.get("is_admin_points", False) or metadata.get("is_super_admin", False)
-
-
-def is_super_admin(credentials) -> bool:
-    metadata = _metadata(credentials)
-    return metadata.get("is_super_admin", False)
-
-
 def authenticated_guard(credentials=Depends(config.CLERK_GUARD)):
     return credentials
 
 
 def optional_clerk_guard(credentials=Depends(config.CLERK_GUARD_optional)):
-    return credentials
-
-
-def admin_guard(credentials=Depends(config.CLERK_GUARD)):
-    if not is_admin(credentials):
-        metadata = credentials.model_dump().get("decoded", {}).get("metadata", {})
-        logger.warning("Access denied, user metadata: %s", metadata)
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
-    return credentials
-
-
-def admin_points_guard(credentials=Depends(config.CLERK_GUARD)):
-    if not is_admin_points(credentials):
-        metadata = credentials.model_dump().get("decoded", {}).get("metadata", {})
-        logger.warning("Access denied, user metadata: %s", metadata)
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin Points privileges required")
-    return credentials
-
-
-def super_admin_guard(credentials=Depends(config.CLERK_GUARD)):
-    if not is_super_admin(credentials):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin privileges required")
     return credentials
 
 

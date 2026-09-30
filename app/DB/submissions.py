@@ -95,6 +95,13 @@ def get_submissions_by_event_id(session: Session, event_id: int):
     return submissions
 
 
+def get_form_ids(session: Session, submission_ids: list[int]) -> set[int]:
+    """The forms these submissions belong to."""
+    if not submission_ids:
+        return set()
+    return set(session.scalars(select(Submissions.form_id).where(Submissions.id.in_(submission_ids)).distinct()).all())
+
+
 def update_is_accepted(session: Session, submission_id: int, is_accepted: bool):
     submission = session.execute(select(Submissions).where(Submissions.id == submission_id)).scalar_one_or_none()
     if not submission:

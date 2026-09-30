@@ -27,15 +27,17 @@ from app.helpers import (
     CurrentMember,
     validate_attendance_token,
     resolve_member,
-    is_admin,
     get_effective_date,
-    admin_guard,
     optional_clerk_guard,
 )
 from datetime import datetime, timedelta
 from app.dependencies import DB
 
 from app.routers.responses import CountsResponse
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.dependencies import CurrentAccess
+from app.services.permissions.guards import Require
+from app.services.permissions.departments import event_departments
 
 
 logger = logging.getLogger(__name__)
@@ -162,7 +164,7 @@ def mark_attendance(
     "/{event_id}/backfill",
     status_code=status.HTTP_200_OK,
     response_model=BackfillAttendanceResponse,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.ATTENDANCE_BACKFILL, event_departments))],
 )
 def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, session: DB):
 
@@ -222,6 +224,7 @@ def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, sessi
 def get_event_attendance(
     event_id: int,
     session: DB,
+    access: CurrentAccess,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)] = None,
     type: Annotated[
         Literal["count", "detailed", "me"],
@@ -247,10 +250,7 @@ def get_event_attendance(
         return EventAttendanceResponse(attendance_count=len(attendance), attendance=None)
 
     if type == "detailed":
-        if not credentials or not is_admin(credentials):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required for detailed attendance"
-            )
+        access.require(Perm.EVENTS_VIEW)
         attendance = log_queries.get_event_attendance(session, event_id, day)
         return EventAttendanceResponse(attendance_count=len(attendance), attendance=attendance)
 
@@ -271,7 +271,7 @@ def get_event_attendance(
 @router.post(
     "/{event_id}/manual",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.ATTENDANCE_TAKE, event_departments))],
     response_model=CountsResponse,
 )
 def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB):
@@ -322,7 +322,7 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
 @router.post(
     "/{event_id}/scan",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.ATTENDANCE_TAKE, event_departments))],
     response_model=ScanAttendanceResponse,
 )
 def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB):
@@ -361,7 +361,7 @@ def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB):
 @router.delete(
     "/{event_id}/manual",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.ATTENDANCE_TAKE, event_departments))],
     response_model=CountsResponse,
 )
 def remove_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB):

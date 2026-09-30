@@ -27,6 +27,9 @@ from app.DB.schema import (
 from app.DB.semesters import get_semester_by_hijri_code
 from app.main import app
 from app.routers import club_structure as router
+from app.services.permissions.access import Access
+from app.services.permissions.dependencies import get_access
+from tests.access_doubles import ADMIN, POINTS_ADMIN, SUPER_ADMIN
 from tests.factories import make_member
 
 PREFIX = "/club-structure"
@@ -64,24 +67,21 @@ def cache_reset(monkeypatch):
 
 @pytest.fixture
 def sign_in(client):
-    """Override JWT verification only; the application's actual guards still run."""
+    """Override JWT verification and the caller's access; the application's guards still run."""
     bearer = config.CLERK_GUARD
 
     def sign_in_as(role="super", subject="clerk_structure_admin"):
-        metadata = {
-            "member": {},
-            "admin": {"is_admin": True},
-            "points": {"is_admin_points": True},
-            "super": {"is_super_admin": True},
-        }[role]
+        access = {"member": Access(), "admin": ADMIN, "points": POINTS_ADMIN, "super": SUPER_ADMIN}[role]
         credentials = HTTPAuthorizationCredentials(
-            scheme="Bearer", credentials="test-token", decoded={"sub": subject, "metadata": metadata}
+            scheme="Bearer", credentials="test-token", decoded={"sub": subject, "metadata": {}}
         )
         app.dependency_overrides[bearer] = lambda: credentials
+        app.dependency_overrides[get_access] = lambda: access
         return client
 
     yield sign_in_as
     app.dependency_overrides.pop(bearer, None)
+    app.dependency_overrides.pop(get_access, None)
 
 
 @pytest.fixture
@@ -168,7 +168,7 @@ def test_reads_reject_anonymous_callers(client, club, path):
 
 @pytest.mark.parametrize("role", ["member", "admin", "points", "super"])
 @pytest.mark.parametrize("path", READS)
-def test_read_permissions_use_real_admin_guard(sign_in, club, path, role):
+def test_reads_need_club_structure_view(sign_in, club, path, role):
     response = sign_in(role).get(url(path, club))
     assert response.status_code == (403 if role == "member" else 200), response.text
 

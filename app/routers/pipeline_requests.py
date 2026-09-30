@@ -8,7 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 from app.DB import event_pipeline as queries
 from app.DB.schema import EventRequests, EventRequestStage, PipelineTeam
 from app.dependencies import DB
-from app.helpers import admin_guard
+
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.pipeline_models import (
     BookRequest,
@@ -32,13 +32,15 @@ from app.services import event_briefs
 from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
-from app.services.pipeline_actor import Actor, PipelineActor
+from app.services.permissions.dependencies import Caller, CurrentCaller
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.guards import Require, Staff
 
 logger = logging.getLogger(__name__)
 
-# Admins only until the new permissions system lands: the pipeline's own department
-# checks still run, but a signed-in person with no admin role gets nothing here.
-router = APIRouter(prefix="/pipeline/requests", tags=["events pipeline"], dependencies=[Depends(admin_guard)])
+
+# Staff only. Each route then checks the pipeline permissions it needs in the service.
+router = APIRouter(prefix="/pipeline/requests", tags=["events pipeline"], dependencies=[Depends(Staff)])
 
 
 def summary(request: EventRequests) -> EventRequestSummary:
@@ -64,18 +66,18 @@ def _penalty(session, request: EventRequests) -> PenaltyResponse | None:
     )
 
 
-def _actions(session, actor: PipelineActor, request: EventRequests) -> RequestActions:
-    requester = actor.can_act_for(request.department_id)
+def _actions(session, caller: Caller, request: EventRequests) -> RequestActions:
+    requester = service.can_request_for(caller, request.department_id)
     return RequestActions(
         can_submit=requester and request.stage == EventRequestStage.DRAFT,
-        can_return=service.can_return(session, actor, request),
+        can_return=service.can_return(session, caller, request),
         can_resubmit=requester and request.stage == EventRequestStage.RETURNED,
-        complete=[t for t in service.ALL_TEAMS if service.can_complete(session, actor, request, t)],
-        can_publish=service.can_publish(actor, request),
+        complete=[t for t in service.ALL_TEAMS if service.can_complete(session, caller, request, t)],
+        can_publish=service.can_publish(caller, request),
     )
 
 
-def detail(session, actor: PipelineActor, request: EventRequests) -> EventRequestDetail:
+def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetail:
     session.refresh(request)
     return EventRequestDetail(
         **summary(request).model_dump(),
@@ -101,7 +103,7 @@ def detail(session, actor: PipelineActor, request: EventRequests) -> EventReques
         submitted_at=request.submitted_at,
         updated_at=request.updated_at,
         event_id=request.event_id,
-        can_edit=service.can_edit(actor, request),
+        can_edit=service.can_edit(caller, request),
         tasks=[
             TaskResponse(
                 team=task.team,
@@ -125,33 +127,33 @@ def detail(session, actor: PipelineActor, request: EventRequests) -> EventReques
         return_due_at=request.return_due_at,
         return_deadline=service.return_deadline(request),
         penalty=_penalty(session, request),
-        actions=_actions(session, actor, request),
+        actions=_actions(session, caller, request),
         now=clock.now(),
     )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=EventRequestDetail)
-def book_event_request(body: BookRequest, session: DB, actor: Actor):
+def book_event_request(body: BookRequest, session: DB, caller: CurrentCaller):
     """Book a date range: a new draft that holds those days for 24 hours."""
     with service.booking_lock(session):
-        request = service.book(session, actor, body.department_id, body.start_date, body.end_date)
+        request = service.book(session, caller, body.department_id, body.start_date, body.end_date)
         session.commit()
-    return detail(session, actor, request)
+    return detail(session, caller, request)
 
 
 @router.get("", status_code=status.HTTP_200_OK, response_model=PaginatedEventRequests)
 def list_event_requests(
     session: DB,
-    actor: Actor,
+    caller: CurrentCaller,
     department_id: Annotated[int | None, Query()] = None,
     stage: Annotated[EventRequestStage | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     """The requests of the departments the caller acts for (every department for a super admin)."""
-    visible = service.visible_department_ids(actor)
+    visible = service.visible_department_ids(session, caller)
     if department_id is not None:
-        actor.require_act_for(department_id)
+        service.require_request_for(caller, department_id)
         visible = {department_id}
     total, rows = queries.list_requests(session, visible, stage, page_size, (page - 1) * page_size)
     return PaginatedEventRequests(
@@ -164,103 +166,110 @@ def list_event_requests(
 
 
 @router.get("/{request_id:int}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def get_event_request(request_id: int, session: DB, actor: Actor):
-    return detail(session, actor, service.get_request_for(session, actor, request_id))
+def get_event_request(request_id: int, session: DB, caller: CurrentCaller):
+    return detail(session, caller, service.get_request_for(session, caller, request_id))
 
 
 @router.put("/{request_id:int}/dates", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def redate_event_request(request_id: int, body: RedateRequest, session: DB, actor: Actor):
+def redate_event_request(request_id: int, body: RedateRequest, session: DB, caller: CurrentCaller):
     """New dates for a request that lost its own; a draft gets a fresh 24-hour hold."""
     with service.booking_lock(session):
-        request = service.get_request_for(session, actor, request_id, lock=True)
-        service.redate(session, actor, request, body.start_date, body.end_date)
+        request = service.get_request_for(session, caller, request_id, lock=True)
+        service.redate(session, caller, request, body.start_date, body.end_date)
         session.commit()
-    return detail(session, actor, request)
+    return detail(session, caller, request)
 
 
 @router.put("/{request_id:int}/details", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def update_event_request_details(request_id: int, body: UpdateDetailsRequest, session: DB, actor: Actor):
+def update_event_request_details(request_id: int, body: UpdateDetailsRequest, session: DB, caller: CurrentCaller):
     """Save any of the event details; only the fields sent change."""
-    request = service.get_request_for(session, actor, request_id, lock=True)
-    service.update_details(session, actor, request, body.model_dump(exclude_unset=True))
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    service.update_details(session, caller, request, body.model_dump(exclude_unset=True))
     session.commit()
-    return detail(session, actor, request)
+    return detail(session, caller, request)
 
 
 @router.delete("/{request_id:int}", status_code=status.HTTP_200_OK, response_model=DetailResponse)
-def cancel_event_request(request_id: int, session: DB, actor: Actor):
+def cancel_event_request(request_id: int, session: DB, caller: CurrentCaller):
     """Drop a draft. Its dates, if it still held any, are free again."""
-    request = service.get_request_for(session, actor, request_id, lock=True)
-    service.cancel(session, actor, request)
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    service.cancel(session, caller, request)
     session.commit()
     logger.info("Request %s cancelled", request_id)
     return DetailResponse(detail="Request cancelled")
 
 
 @router.put("/{request_id:int}/briefs/{team}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def save_event_request_brief(request_id: int, team: PipelineTeam, body: SaveBriefRequest, session: DB, actor: Actor):
+def save_event_request_brief(
+    request_id: int, team: PipelineTeam, body: SaveBriefRequest, session: DB, caller: CurrentCaller
+):
     """Save the Design or Logistics brief as a draft; submit checks it."""
-    request = service.get_request_for(session, actor, request_id, lock=True)
-    service.save_brief(session, actor, request, team, body.brief)
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    service.save_brief(session, caller, request, team, body.brief)
     session.commit()
-    return detail(session, actor, request)
+    return detail(session, caller, request)
 
 
 @router.post("/{request_id:int}/submit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def submit_event_request(request_id: int, session: DB, actor: Actor, background_tasks: BackgroundTasks):
+def submit_event_request(request_id: int, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
     """Send a complete request to Design and Logistics. A 422 lists every missing field."""
-    request = service.get_request_for(session, actor, request_id, lock=True)
-    emails = service.submit(session, actor, request)
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    emails = service.submit(session, caller, request)
     session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
-    return detail(session, actor, request)
+    return detail(session, caller, request)
 
 
-@router.post("/{request_id:int}/return", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+@router.post(
+    "/{request_id:int}/return",
+    status_code=status.HTTP_200_OK,
+    response_model=EventRequestDetail,
+    dependencies=[Depends(Require(Perm.PIPELINE_DESIGN))],
+)
 def return_event_request(
-    request_id: int, body: ReturnRequest, session: DB, actor: Actor, background_tasks: BackgroundTasks
+    request_id: int, body: ReturnRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
 ):
     """Design sends the request back with notes: once, within two days. The team has 12 hours."""
-    request = service.get_request_for(session, actor, request_id, lock=True)
-    email = service.return_request(session, actor, request, body.notes)
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    email = service.return_request(session, caller, request, body.notes)
     session.commit()
     notifications.send_after_commit(session, background_tasks, [email])
-    return detail(session, actor, request)
+    return detail(session, caller, request)
 
 
 @router.post("/{request_id:int}/resubmit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def resubmit_event_request(request_id: int, session: DB, actor: Actor, background_tasks: BackgroundTasks):
+def resubmit_event_request(request_id: int, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
     """The team sends its fixed request back to Design. Late costs points, applied at publish."""
-    request = service.get_request_for(session, actor, request_id, lock=True)
-    email = service.resubmit(session, actor, request)
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    email = service.resubmit(session, caller, request)
     session.commit()
     notifications.send_after_commit(session, background_tasks, [email])
-    return detail(session, actor, request)
+    return detail(session, caller, request)
 
 
 @router.post(
     "/{request_id:int}/tasks/{team}/complete", status_code=status.HTTP_200_OK, response_model=EventRequestDetail
 )
 def complete_event_request_task(
-    request_id: int, team: PipelineTeam, session: DB, actor: Actor, background_tasks: BackgroundTasks
+    request_id: int, team: PipelineTeam, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
 ):
     """A team marks its part done."""
-    request = service.get_request_for(session, actor, request_id, lock=True)
-    emails = service.complete(session, actor, request, team)
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    emails = service.complete(session, caller, request, team)
     session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
-    return detail(session, actor, request)
+    return detail(session, caller, request)
 
 
 @router.post("/{request_id:int}/publish", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def publish_event_request(request_id: int, body: PublishRequest, session: DB, actor: Actor):
+def publish_event_request(request_id: int, body: PublishRequest, session: DB, caller: CurrentCaller):
     """Turn a ready request into a real event in /events, created as a draft for admins to review."""
-    request = service.get_request_for(session, actor, request_id, lock=True)
-    service.publish(session, actor, request, body.department_action_id, body.member_action_id, body.image_url)
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    service.publish(session, caller, request, body.department_action_id, body.member_action_id, body.image_url)
     session.commit()
     # Best-effort, as after POST /events/: the leaderboard app caches events.
     try:
         reset_leaderboard_cache()
     except Exception as cache_error:
         logger.error(cache_error)
-    return detail(session, actor, request)
+    return detail(session, caller, request)

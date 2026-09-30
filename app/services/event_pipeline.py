@@ -39,7 +39,8 @@ from app.services import event_briefs
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail
-from app.services.pipeline_actor import PipelineActor
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.dependencies import Caller
 from app.services.events import create_full_event
 
 logger = logging.getLogger(__name__)
@@ -142,10 +143,33 @@ def team_department_id(session: Session, team: PipelineTeam) -> int:
     return department_id
 
 
-def require_team(session: Session, actor: PipelineActor, team: PipelineTeam) -> int:
-    """The department playing ``team``, if the caller can act for it."""
+# The permission to work each team's requests.
+TEAM_PERMS = {
+    PipelineTeam.DESIGN: Perm.PIPELINE_DESIGN,
+    PipelineTeam.LOGISTICS: Perm.PIPELINE_LOGISTICS,
+    PipelineTeam.MEDIA: Perm.PIPELINE_MEDIA,
+}
+
+
+def can_request_for(caller: Caller, department_id: int) -> bool:
+    """Whether the caller books, fills in and publishes this department's requests."""
+    return caller.access.can(Perm.PIPELINE_REQUEST, department_id)
+
+
+def require_request_for(caller: Caller, department_id: int) -> None:
+    if not can_request_for(caller, department_id):
+        raise DepartmentForbidden(department_id)
+
+
+def has_pipeline_access(caller: Caller) -> bool:
+    """Whether the pipeline has anything for the caller: requesting for a department, or working a team."""
+    return caller.access.can(Perm.PIPELINE_REQUEST) or any(caller.access.can(p) for p in TEAM_PERMS.values())
+
+
+def require_team(session: Session, caller: Caller, team: PipelineTeam) -> int:
+    """The department playing ``team``, if the caller can work that team's requests."""
     department_id = team_department_id(session, team)
-    if not actor.can_act_for(department_id):
+    if not caller.access.can(TEAM_PERMS[team]):
         raise DepartmentForbidden(department_id)
     return department_id
 
@@ -164,7 +188,7 @@ def _check_ban_days(days: list[date]) -> list[date]:
 
 
 def ban(
-    session: Session, actor: PipelineActor, days: list[date], reason: str | None
+    session: Session, caller: Caller, days: list[date], reason: str | None
 ) -> tuple[list[date], list[EventRequests]]:
     """Close ``days`` and take them away from every request covering one of them.
 
@@ -172,9 +196,9 @@ def ban(
     else, loses its dates and says why. Returns the days and the requests that
     lost their dates, so the caller can tell their teams.
     """
-    require_team(session, actor, PipelineTeam.LOGISTICS)
+    caller.access.require(Perm.PIPELINE_BANS)
     unique = _check_ban_days(days)
-    queries.ban_days(session, unique, reason, actor.member.id)
+    queries.ban_days(session, unique, reason, caller.member.id)
     undated = []
     for request in queries.get_dated_requests(session, unique[0], unique[-1], lock=True):
         if request.stage == EventRequestStage.PUBLISHED:
@@ -200,8 +224,8 @@ def ban(
     return unique, undated
 
 
-def unban(session: Session, actor: PipelineActor, days: list[date]) -> int:
-    require_team(session, actor, PipelineTeam.LOGISTICS)
+def unban(session: Session, caller: Caller, days: list[date]) -> int:
+    caller.access.require(Perm.PIPELINE_BANS)
     unique = _check_ban_days(days)
     removed = queries.unban_days(session, unique)
     logger.info("Unbanned %d day(s)", removed)
@@ -228,9 +252,9 @@ def booking_lock(session: Session):
         queries.release_booking_lock(session)
 
 
-def _check_bookable(session: Session, actor: PipelineActor, start: date, end: date, ignore_id: int | None) -> None:
+def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: int | None) -> None:
     """Super admins have full authority: they skip every rule here but a sane range."""
-    if actor.is_super_admin:
+    if caller.access.is_super_admin:
         check_range(start, end, MAX_CALENDAR_DAYS)
         return
     check_range(start, end, MAX_BOOKING_DAYS)
@@ -256,17 +280,17 @@ def _check_one_live_hold(session: Session, department_id: int, ignore_id: int | 
         )
 
 
-def book(session: Session, actor: PipelineActor, department_id: int, start: date, end: date) -> EventRequests:
+def book(session: Session, caller: Caller, department_id: int, start: date, end: date) -> EventRequests:
     """Create a draft holding ``start``..``end`` for 24 hours. Call inside ``booking_lock``."""
-    actor.require_act_for(department_id)
+    require_request_for(caller, department_id)
     if session.get(Departments, department_id) is None:
         raise NotFound("Department", department_id)
-    if not actor.is_super_admin:
+    if not caller.access.is_super_admin:
         _check_one_live_hold(session, department_id)
-    _check_bookable(session, actor, start, end, None)
+    _check_bookable(session, caller, start, end, None)
     request = EventRequests(
         department_id=department_id,
-        created_by=actor.member.id,
+        created_by=caller.member.id,
         stage=EventRequestStage.DRAFT,
         start_date=start,
         end_date=end,
@@ -278,21 +302,21 @@ def book(session: Session, actor: PipelineActor, department_id: int, start: date
     return request
 
 
-def redate(session: Session, actor: PipelineActor, request: EventRequests, start: date, end: date) -> None:
+def redate(session: Session, caller: Caller, request: EventRequests, start: date, end: date) -> None:
     """Give a request that lost its dates new ones. Call inside ``booking_lock``.
 
     A draft gets a fresh 24-hour hold. A submitted request that lost its days
     to a ban takes the new ones outright, as its old ones were.
     """
-    actor.require_act_for(request.department_id)
+    require_request_for(caller, request.department_id)
     if request.stage in (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED):
         raise PipelineConflict("not_redatable", "This request can no longer change its dates")
-    if takes_its_days(request, clock.now()) and not actor.is_super_admin:
+    if takes_its_days(request, clock.now()) and not caller.access.is_super_admin:
         raise PipelineConflict("still_held", "This request still holds its dates")
     is_draft = request.stage == EventRequestStage.DRAFT
-    if is_draft and not actor.is_super_admin:
+    if is_draft and not caller.access.is_super_admin:
         _check_one_live_hold(session, request.department_id, ignore_id=request.id)
-    _check_bookable(session, actor, start, end, request.id)
+    _check_bookable(session, caller, start, end, request.id)
     request.start_date = start
     request.end_date = end
     request.hold_expires_at = clock.now() + HOLD if is_draft else None
@@ -305,11 +329,11 @@ def redate(session: Session, actor: PipelineActor, request: EventRequests, start
     logger.info("Request %s re-dated to %s..%s", request.id, start, end)
 
 
-def cancel(session: Session, actor: PipelineActor, request: EventRequests) -> None:
+def cancel(session: Session, caller: Caller, request: EventRequests) -> None:
     """A team drops its own draft. Its dates, if it still held any, are free again."""
-    actor.require_act_for(request.department_id)
+    require_request_for(caller, request.department_id)
     if request.stage != EventRequestStage.DRAFT and not (
-        actor.is_super_admin and request.stage != EventRequestStage.PUBLISHED
+        caller.access.is_super_admin and request.stage != EventRequestStage.PUBLISHED
     ):
         raise PipelineConflict("not_a_draft", "Only a draft can be cancelled")
     request.stage = EventRequestStage.CANCELLED
@@ -323,17 +347,17 @@ def cancel(session: Session, actor: PipelineActor, request: EventRequests) -> No
 EDITABLE_STAGES = {EventRequestStage.DRAFT, EventRequestStage.RETURNED}
 
 
-def can_edit(actor: PipelineActor, request: EventRequests) -> bool:
+def can_edit(caller: Caller, request: EventRequests) -> bool:
     """The team edits its draft; a super admin edits anything not yet published."""
-    if actor.is_super_admin:
+    if caller.access.is_super_admin:
         return request.stage not in (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED)
-    return actor.can_act_for(request.department_id) and request.stage in EDITABLE_STAGES
+    return can_request_for(caller, request.department_id) and request.stage in EDITABLE_STAGES
 
 
-def update_details(session: Session, actor: PipelineActor, request: EventRequests, fields: dict) -> None:
+def update_details(session: Session, caller: Caller, request: EventRequests, fields: dict) -> None:
     """Save any subset of the event details. Nothing is required until submit."""
-    actor.require_act_for(request.department_id)
-    if not can_edit(actor, request):
+    require_request_for(caller, request.department_id)
+    if not can_edit(caller, request):
         raise PipelineConflict("not_editable", "The details are frozen once the request is submitted")
 
     partners = fields.pop("partner_department_ids", None)
@@ -372,30 +396,33 @@ def within_official_hours(request: EventRequests) -> bool | None:
 # --------------------------------------------------------------------------- reading
 
 
-def get_request_for(session: Session, actor: PipelineActor, request_id: int, lock: bool = False) -> EventRequests:
+def get_request_for(session: Session, caller: Caller, request_id: int, lock: bool = False) -> EventRequests:
     request = queries.get_request(session, request_id, lock=lock)
     if request is None or request.stage == EventRequestStage.CANCELLED:
         raise NotFound("Event request", request_id)
-    if not can_view(session, actor, request):
+    if not can_view(session, caller, request):
         raise DepartmentForbidden(request.department_id, "see requests of")
     return request
 
 
-def can_view(session: Session, actor: PipelineActor, request: EventRequests) -> bool:
+def can_view(session: Session, caller: Caller, request: EventRequests) -> bool:
     """The requesting department, and every team the request has reached."""
-    if actor.can_act_for(request.department_id):
+    if can_request_for(caller, request.department_id):
         return True
-    team_departments = {row.team: row.department_id for row in team_queries.get_teams(session)}
     return any(
-        task.status != EventRequestTaskStatus.BRIEF
-        and task.team in team_departments
-        and actor.can_act_for(team_departments[task.team])
+        task.status != EventRequestTaskStatus.BRIEF and caller.access.can(TEAM_PERMS[task.team])
         for task in request.tasks
     )
 
 
-def visible_department_ids(actor: PipelineActor) -> set[int] | None:
-    return None if actor.is_super_admin else actor.acting_department_ids
+def visible_department_ids(session: Session, caller: Caller) -> set[int] | None:
+    """Whose requests and notifications the caller sees: the departments they request for,
+    and the department of every team they work. ``None`` means every department."""
+    requesting = caller.access.departments_for(Perm.PIPELINE_REQUEST)
+    if requesting is None:
+        return None
+    teams = {row.department_id for row in team_queries.get_teams(session) if caller.access.can(TEAM_PERMS[row.team])}
+    return set(requesting) | teams
 
 
 # --------------------------------------------------------------------------- briefs and submit
@@ -416,12 +443,12 @@ def ensure_task(session: Session, request: EventRequests, team: PipelineTeam) ->
     return task
 
 
-def save_brief(session: Session, actor: PipelineActor, request: EventRequests, team: PipelineTeam, brief: dict) -> None:
+def save_brief(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam, brief: dict) -> None:
     """Save a draft brief as it is. Submit checks it."""
-    actor.require_act_for(request.department_id)
+    require_request_for(caller, request.department_id)
     if team not in BRIEF_TEAMS:
         raise PipelineConflict("no_brief", f"The {team.value} team has no brief", 422)
-    if not can_edit(actor, request):
+    if not can_edit(caller, request):
         raise PipelineConflict("not_editable", "The briefs are frozen once the request is submitted")
     task = ensure_task(session, request, team)
     task.brief = event_briefs.clean_brief(team, brief)
@@ -429,16 +456,18 @@ def save_brief(session: Session, actor: PipelineActor, request: EventRequests, t
     session.flush()
 
 
-def submit(session: Session, actor: PipelineActor, request: EventRequests) -> list[PendingEmail | None]:
+def submit(session: Session, caller: Caller, request: EventRequests) -> list[PendingEmail | None]:
     """Send a complete draft to Design and Logistics at the same moment.
 
     From here on the dates stay taken without a hold. Both teams get a
     notification; returns their emails, to send once this commits.
     """
-    actor.require_act_for(request.department_id)
+    require_request_for(caller, request.department_id)
     if request.stage != EventRequestStage.DRAFT:
         raise PipelineConflict("not_a_draft", "Only a draft can be submitted")
-    if not takes_its_days(request, clock.now()) and not (actor.is_super_admin and request.start_date is not None):
+    if not takes_its_days(request, clock.now()) and not (
+        caller.access.is_super_admin and request.start_date is not None
+    ):
         raise PipelineConflict("hold_expired", "The hold on your dates ran out; book dates again, then submit")
     for team in BRIEF_TEAMS:
         ensure_task(session, request, team)
@@ -457,13 +486,13 @@ def submit(session: Session, actor: PipelineActor, request: EventRequests) -> li
     session.flush()
     logger.info("Request %s submitted to Design and Logistics", request.id)
     return [
-        reach_team(session, actor, request, team, PipelineNotificationKind.REQUEST_RECEIVED) for team in BRIEF_TEAMS
+        reach_team(session, caller, request, team, PipelineNotificationKind.REQUEST_RECEIVED) for team in BRIEF_TEAMS
     ]
 
 
 def reach_team(
     session: Session,
-    actor: PipelineActor,
+    caller: Caller,
     request: EventRequests,
     team: PipelineTeam,
     kind: PipelineNotificationKind,
@@ -472,7 +501,7 @@ def reach_team(
     """A request reached a team: notify its department and prepare its email."""
     department_id = team_department_id(session, team)
     notifications.notify(session, department_id, request, kind, {"team": team.value})
-    return notifications.department_email(session, department_id, request, kind, actor.member, note)
+    return notifications.department_email(session, department_id, request, kind, caller.member, note)
 
 
 # --------------------------------------------------------------------------- review, return, done
@@ -487,29 +516,27 @@ def return_deadline(request: EventRequests) -> datetime | None:
     return request.submitted_at + RETURN_WINDOW if request.submitted_at else None
 
 
-def can_return(session: Session, actor: PipelineActor, request: EventRequests) -> bool:
+def can_return(session: Session, caller: Caller, request: EventRequests) -> bool:
     """Design can return a request once, within two days of receiving it. Super admins any time."""
     if request.stage != EventRequestStage.IN_REVIEW:
         return False
     design = get_task(request, PipelineTeam.DESIGN)
     if design is None or design.status != EventRequestTaskStatus.OPEN:
         return False
-    if actor.is_super_admin:
+    if caller.access.is_super_admin:
         return True
-    department_id = team_queries.get_team_department_id(session, PipelineTeam.DESIGN)
     deadline = return_deadline(request)
     return (
-        department_id is not None
-        and actor.can_act_for(department_id)
+        caller.access.can(Perm.PIPELINE_DESIGN)
         and request.return_count == 0
         and deadline is not None
         and clock.now() <= deadline
     )
 
 
-def return_request(session: Session, actor: PipelineActor, request: EventRequests, notes: str) -> PendingEmail | None:
-    if not can_return(session, actor, request):
-        require_team(session, actor, PipelineTeam.DESIGN)
+def return_request(session: Session, caller: Caller, request: EventRequests, notes: str) -> PendingEmail | None:
+    if not can_return(session, caller, request):
+        require_team(session, caller, PipelineTeam.DESIGN)
         raise PipelineConflict("cannot_return", "Design can return a request once, within two days of receiving it")
     now = clock.now()
     request.stage = EventRequestStage.RETURNED
@@ -523,7 +550,7 @@ def return_request(session: Session, actor: PipelineActor, request: EventRequest
     session.flush()
     logger.info("Request %s returned by Design", request.id)
     return notifications.department_email(
-        session, request.department_id, request, PipelineNotificationKind.RETURNED, actor.member, notes
+        session, request.department_id, request, PipelineNotificationKind.RETURNED, caller.member, notes
     )
 
 
@@ -566,9 +593,9 @@ def get_penalty(session: Session, request: EventRequests) -> PipelinePenalties |
     return session.scalar(select(PipelinePenalties).where(PipelinePenalties.request_id == request.id))
 
 
-def resubmit(session: Session, actor: PipelineActor, request: EventRequests) -> PendingEmail | None:
+def resubmit(session: Session, caller: Caller, request: EventRequests) -> PendingEmail | None:
     """The team fixed its returned request; it goes back to Design. Late costs points."""
-    actor.require_act_for(request.department_id)
+    require_request_for(caller, request.department_id)
     if request.stage != EventRequestStage.RETURNED:
         raise PipelineConflict("not_returned", "Only a returned request can be resubmitted")
     missing = event_briefs.missing_fields(request)
@@ -583,31 +610,28 @@ def resubmit(session: Session, actor: PipelineActor, request: EventRequests) -> 
     task.opened_at = now
     session.flush()
     logger.info("Request %s resubmitted to Design", request.id)
-    return reach_team(session, actor, request, PipelineTeam.DESIGN, PipelineNotificationKind.REQUEST_RECEIVED)
+    return reach_team(session, caller, request, PipelineTeam.DESIGN, PipelineNotificationKind.REQUEST_RECEIVED)
 
 
-def can_complete(session: Session, actor: PipelineActor, request: EventRequests, team: PipelineTeam) -> bool:
+def can_complete(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> bool:
     task = get_task(request, team)
     if task is None or task.status != EventRequestTaskStatus.OPEN:
         return False
-    if actor.is_super_admin:
+    if caller.access.is_super_admin:
         return True
-    department_id = team_queries.get_team_department_id(session, team)
-    return department_id is not None and actor.can_act_for(department_id)
+    return caller.access.can(TEAM_PERMS[team])
 
 
-def complete(
-    session: Session, actor: PipelineActor, request: EventRequests, team: PipelineTeam
-) -> list[PendingEmail | None]:
+def complete(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> list[PendingEmail | None]:
     """A team marks its part done. Design done sends the request to Media; all three done makes it ready."""
-    if not can_complete(session, actor, request, team):
-        require_team(session, actor, team)
+    if not can_complete(session, caller, request, team):
+        require_team(session, caller, team)
         raise PipelineConflict("cannot_complete", f"The {team.value} part is not open")
     now = clock.now()
     task = get_task(request, team)
     task.status = EventRequestTaskStatus.DONE  # type: ignore[union-attr]
     task.completed_at = now  # type: ignore[union-attr]
-    task.completed_by = actor.member.id  # type: ignore[union-attr]
+    task.completed_by = caller.member.id  # type: ignore[union-attr]
     notifications.notify(
         session, request.department_id, request, PipelineNotificationKind.TASK_DONE, {"team": team.value}
     )
@@ -619,7 +643,7 @@ def complete(
         media.opened_at = now
         if request.stage == EventRequestStage.IN_REVIEW:
             request.stage = EventRequestStage.MEDIA
-        emails.append(reach_team(session, actor, request, PipelineTeam.MEDIA, PipelineNotificationKind.MEDIA_RECEIVED))
+        emails.append(reach_team(session, caller, request, PipelineTeam.MEDIA, PipelineNotificationKind.MEDIA_RECEIVED))
 
     if all(
         (t := get_task(request, team_)) is not None and t.status == EventRequestTaskStatus.DONE for team_ in ALL_TEAMS
@@ -628,7 +652,7 @@ def complete(
         notifications.notify(session, request.department_id, request, PipelineNotificationKind.READY_TO_PUBLISH)
         emails.append(
             notifications.department_email(
-                session, request.department_id, request, PipelineNotificationKind.READY_TO_PUBLISH, actor.member
+                session, request.department_id, request, PipelineNotificationKind.READY_TO_PUBLISH, caller.member
             )
         )
     session.flush()
@@ -636,17 +660,9 @@ def complete(
     return emails
 
 
-def inbox(
-    session: Session, actor: PipelineActor, team: PipelineTeam | None
-) -> list[tuple[EventRequests, EventRequestTasks]]:
+def inbox(session: Session, caller: Caller, team: PipelineTeam | None) -> list[tuple[EventRequests, EventRequestTasks]]:
     """Open tasks for the teams the caller can act for (every team for a super admin)."""
-    team_departments = {row.team: row.department_id for row in team_queries.get_teams(session)}
-    teams = [
-        t
-        for t in ALL_TEAMS
-        if (team is None or t == team)
-        and (actor.is_super_admin or (t in team_departments and actor.can_act_for(team_departments[t])))
-    ]
+    teams = [t for t in ALL_TEAMS if (team is None or t == team) and caller.access.can(TEAM_PERMS[t])]
     if not teams:
         return []
     rows = session.execute(
@@ -672,10 +688,10 @@ PUBLISHABLE_BY_SUPER_ADMIN = {
 }
 
 
-def can_publish(actor: PipelineActor, request: EventRequests) -> bool:
-    if actor.is_super_admin:
+def can_publish(caller: Caller, request: EventRequests) -> bool:
+    if caller.access.is_super_admin:
         return request.stage in PUBLISHABLE_BY_SUPER_ADMIN
-    return actor.can_act_for(request.department_id) and request.stage == EventRequestStage.READY
+    return can_request_for(caller, request.department_id) and request.stage == EventRequestStage.READY
 
 
 def event_for(request: EventRequests, department_action_id: int, member_action_id: int, image_url: str | None):
@@ -712,7 +728,7 @@ def event_for(request: EventRequests, department_action_id: int, member_action_i
 
 def publish(
     session: Session,
-    actor: PipelineActor,
+    caller: Caller,
     request: EventRequests,
     department_action_id: int,
     member_action_id: int,
@@ -723,8 +739,8 @@ def publish(
     Any late penalty is taken off the department's log for the new event, once.
     Returns the event id.
     """
-    if not can_publish(actor, request):
-        actor.require_act_for(request.department_id)
+    if not can_publish(caller, request):
+        require_request_for(caller, request.department_id)
         raise PipelineConflict("not_ready", "Only a request every team has finished can be published")
     if request.start_date is None:
         raise PipelineConflict("no_dates", "This request has no dates")

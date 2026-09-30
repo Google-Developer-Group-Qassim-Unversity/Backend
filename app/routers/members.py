@@ -18,9 +18,11 @@ from app.routers.models import (
     BatchCreateMembersResponse,
 )
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.helpers import CurrentMember, admin_guard, authenticated_guard, credentials_to_member_model, super_admin_guard
+from app.helpers import CurrentMember, authenticated_guard, credentials_to_member_model
 from typing import Annotated
 from app.dependencies import DB
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.guards import Require, SuperAdmin
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +65,7 @@ def update_current_member(updates: MemberUpdateModel, member: CurrentMember, ses
     "/",
     status_code=status.HTTP_200_OK,
     response_model=list[MemberWithActivity_model],
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.MEMBERS_VIEW))],
 )
 def get_all_members(session: DB):
     members = member_queries.get_members(session)
@@ -74,7 +76,7 @@ def get_all_members(session: DB):
     "/paginated",
     status_code=status.HTTP_200_OK,
     response_model=PaginatedMembers_model,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.MEMBERS_VIEW))],
 )
 def list_members_paginated(
     session: DB,
@@ -94,7 +96,10 @@ def list_members_paginated(
 
 
 @router.get(
-    "/stats", status_code=status.HTTP_200_OK, response_model=MemberStats_model, dependencies=[Depends(admin_guard)]
+    "/stats",
+    status_code=status.HTTP_200_OK,
+    response_model=MemberStats_model,
+    dependencies=[Depends(Require(Perm.MEMBERS_VIEW))],
 )
 def get_member_stats(session: DB):
     """Aggregate member counts for the page cards - one grouped COUNT query."""
@@ -106,7 +111,7 @@ def get_member_stats(session: DB):
     status_code=status.HTTP_201_CREATED,
     response_model=CreatedMemberModel,
     responses={409: {"model": ConflictResponse, "description": "Member already exists"}},
-    dependencies=[Depends(super_admin_guard)],
+    dependencies=[Depends(Require(Perm.MEMBERS_CREATE))],
 )
 def create_member_manual(member_data: ManualMemberCreateModel, session: DB):
     logger.info(f"Manually creating member with uni_id {member_data.uni_id}")
@@ -144,7 +149,7 @@ def create_member_manual(member_data: ManualMemberCreateModel, session: DB):
     "/batch",
     status_code=status.HTTP_200_OK,
     response_model=BatchCreateMembersResponse,
-    dependencies=[Depends(super_admin_guard)],
+    dependencies=[Depends(Require(Perm.MEMBERS_CREATE))],
 )
 def batch_create_members(request: BatchCreateMembersRequest, session: DB):
     created_count = 0
@@ -209,7 +214,7 @@ def batch_create_members(request: BatchCreateMembersRequest, session: DB):
     status_code=status.HTTP_200_OK,
     response_model=Member_model,
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.MEMBERS_VIEW))],
 )
 def get_member_by_uni_id(uni_id: str, session: DB):
     member = member_queries.get_member_by_uni_id(session, uni_id)
@@ -221,7 +226,7 @@ def get_member_by_uni_id(uni_id: str, session: DB):
     status_code=status.HTTP_200_OK,
     response_model=Member_model,
     responses={404: {"model": NotFoundResponse, "description": "Member not found"}},
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.MEMBERS_VIEW))],
 )
 def get_member_by_id(member_id: int, session: DB):
     member = member_queries.get_member_by_id(session, member_id)
@@ -265,7 +270,7 @@ def create_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(a
     "/roles",
     status_code=status.HTTP_200_OK,
     response_model=list[MemberWithRole_model],
-    dependencies=[Depends(super_admin_guard)],
+    dependencies=[Depends(SuperAdmin)],
 )
 def get_member_roles(session: DB):
     roles = member_queries.get_member_roles(session)
@@ -273,10 +278,7 @@ def get_member_roles(session: DB):
 
 
 @router.post(
-    "/roles",
-    status_code=status.HTTP_200_OK,
-    response_model=MemberWithRole_model,
-    dependencies=[Depends(super_admin_guard)],
+    "/roles", status_code=status.HTTP_200_OK, response_model=MemberWithRole_model, dependencies=[Depends(SuperAdmin)]
 )
 def update_member_roles(member_id: int, new_role: RoleType, session: DB):
     logger.info(f"Updating role for member_id {member_id} to {new_role.value}")

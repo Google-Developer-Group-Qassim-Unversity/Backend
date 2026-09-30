@@ -2,16 +2,18 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 import httpx
 
-from app.helpers import admin_guard
+
 from app.leaderboard_cache import reset_leaderboard_cache
 
 from app.routers.responses import CacheResetResponse
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.guards import Require
 
 
 logger = logging.getLogger(__name__)
 
 
-router = APIRouter(prefix="/cache", tags=["cache"], dependencies=[Depends(admin_guard)])
+router = APIRouter(prefix="/cache", tags=["cache"], dependencies=[Depends(Require(Perm.CACHE_RESET))])
 
 
 @router.post(

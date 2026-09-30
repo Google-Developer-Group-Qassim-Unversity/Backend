@@ -35,6 +35,22 @@ class InvalidClubStructure(KnownHttpException):
         super().__init__(status_code=422, detail=detail)
 
 
+class PermissionDenied(KnownHttpException):
+    """The caller lacks a permission (app/services/permissions). ``detail`` names it, so the UI can say what is missing."""
+
+    code = "permission_denied"
+
+    def __init__(self, permission: str):
+        super().__init__(status_code=403, detail=f"You need the '{permission}' permission for this")
+
+
+class SuperAdminRequired(KnownHttpException):
+    code = "super_admin_required"
+
+    def __init__(self):
+        super().__init__(status_code=403, detail="Only super admins can do this")
+
+
 class DepartmentForbidden(KnownHttpException):
     """The caller cannot act for this department in the events pipeline."""
 

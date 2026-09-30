@@ -4,7 +4,8 @@ import pytest
 from sqlalchemy import select
 
 from app.DB.club_structure import get_role_by_key
-from app.DB.schema import ClubMemberships
+from app.DB.schema import ClubMemberships, PermissionGrants
+from app.services.permissions.catalogue import Perm
 
 
 @pytest.fixture
@@ -75,6 +76,34 @@ def test_non_super_admin_cannot_set_teams(pipeline, dept):
     "path",
     ["/pipeline/me", "/pipeline/calendar?from=2026-07-01&to=2026-07-31", "/pipeline/requests", "/pipeline/inbox"],
 )
-def test_a_signed_in_non_admin_is_refused_even_as_a_leader(pipeline, dept, path):
-    pipeline.sign_in(pipeline.officer(dept), admin=False)
-    assert pipeline.client.get(path).status_code == 403
+def test_someone_off_this_semesters_roster_is_refused(pipeline, dept, path):
+    pipeline.sign_in(pipeline.person())
+    response = pipeline.client.get(path)
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"
+
+
+def test_a_member_granted_design_works_designs_inbox(pipeline, dept):
+    design = pipeline.department("Design team")
+    pipeline.teams(design, pipeline.department("Logistics team"), pipeline.department("Media team"))
+    leader = pipeline.officer(design)
+    member = pipeline.join(pipeline.person(), design)
+    pipeline.session.add(
+        PermissionGrants(
+            semester_id=pipeline.semester_id,
+            department_id=design.id,
+            member_id=member.id,
+            permission=Perm.PIPELINE_DESIGN.value,
+            granted_by=leader.id,
+        )
+    )
+    pipeline.sign_in(member)
+
+    me = pipeline.client.get("/pipeline/me").json()
+    assert me["has_access"] is True
+    assert pipeline.client.get("/pipeline/inbox").status_code == 200
+    # Working Design's inbox is not requesting events for Design.
+    booking = pipeline.client.post(
+        "/pipeline/requests", json={"department_id": design.id, "start_date": "2026-07-20", "end_date": "2026-07-20"}
+    )
+    assert booking.status_code == 403

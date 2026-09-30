@@ -10,6 +10,7 @@ from app.config import config
 from app.DB.club_structure import get_role_by_key
 from app.DB.schema import (
     ClubMemberships,
+    DepartmentPermissions,
     Departments,
     DepartmentsType,
     Members,
@@ -17,9 +18,11 @@ from app.DB.schema import (
     PipelineTeam,
     PipelineTeams,
     SemesterDepartments,
+    SuperAdmins,
 )
 from app.DB.semesters import get_semester_by_hijri_code
 from app.main import app
+from app.services.permissions.catalogue import Perm
 
 # A Wednesday in Riyadh, inside the seeded Summer 2026 (475) the suite pins as current.
 FROZEN_NOW = datetime(2026, 7, 15, 9, 0, 0)  # 12:00 in Riyadh
@@ -86,26 +89,32 @@ class Pipeline:
         for row in self.session.scalars(select(PipelineTeams)).all():
             self.session.delete(row)
         self.session.flush()
-        for team, department in (
-            (PipelineTeam.DESIGN, design),
-            (PipelineTeam.LOGISTICS, logistics),
-            (PipelineTeam.MEDIA, media),
+        for team, department, perms in (
+            (PipelineTeam.DESIGN, design, (Perm.PIPELINE_DESIGN,)),
+            (PipelineTeam.LOGISTICS, logistics, (Perm.PIPELINE_LOGISTICS, Perm.PIPELINE_BANS)),
+            (PipelineTeam.MEDIA, media, (Perm.PIPELINE_MEDIA,)),
         ):
             self.session.add(PipelineTeams(team=team, department_id=department.id))
+            # What the permissions migration seeds for each team's department.
+            for perm in perms:
+                self.session.add(DepartmentPermissions(department_id=department.id, permission=perm.value))
         self.session.flush()
 
-    def sign_in(self, member: Members | None, super_admin: bool = False, admin: bool = True) -> None:
+    def sign_in(self, member: Members | None, super_admin: bool = False) -> None:
         """Sign in as ``member`` through the real guards; only JWT verification is replaced.
 
-        The pipeline is admins only for now, so everyone signs in as an admin
-        unless a test says otherwise.
+        Access comes from the database like in production: the roster, and
+        ``super_admins`` when ``super_admin`` is set.
         """
-        metadata = {"is_super_admin": True} if super_admin else {"is_admin": True} if admin else {}
+        if super_admin and member is not None and self.session.get(SuperAdmins, member.id) is None:
+            self.session.add(SuperAdmins(member_id=member.id))
+            self.session.flush()
         subject = member.clerk_user_id if member else "clerk_nobody"
         credentials = HTTPAuthorizationCredentials(
-            scheme="Bearer", credentials="test-token", decoded={"sub": subject, "metadata": metadata}
+            scheme="Bearer", credentials="test-token", decoded={"sub": subject, "metadata": {}}
         )
         app.dependency_overrides[config.CLERK_GUARD] = lambda: credentials
+        app.dependency_overrides[config.CLERK_GUARD_optional] = lambda: credentials
         self.session.commit()
 
 
@@ -116,6 +125,7 @@ def pipeline(db_session, client, monkeypatch, outbound):
     helper.outbound = outbound
     yield helper
     app.dependency_overrides.pop(config.CLERK_GUARD, None)
+    app.dependency_overrides.pop(config.CLERK_GUARD_optional, None)
 
 
 COMPLETE_DETAILS = {

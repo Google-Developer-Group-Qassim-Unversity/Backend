@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.DB import permissions as queries
 from app.DB.schema import Members
+from app.exceptions import PermissionDenied
 from app.semesters import current_semester
 from app.services.permissions.catalogue import CATALOGUE, OFFICER_ROLES, STAFF_BASICS, Perm, parse
 
@@ -61,6 +62,24 @@ class Access:
         if department_id is not None and CATALOGUE[perm].scope == "dept":
             return perm in self.held.get(department_id, frozenset())
         return any(perm in perms for perms in self.held.values())
+
+    def can_any(self, perm: Perm, department_ids: frozenset[int]) -> bool:
+        """Whether the caller has ``perm`` for at least one of ``department_ids``.
+
+        For a thing that belongs to departments, such as an event. A thing that
+        belongs to none is for super admins only.
+        """
+        if self.is_super_admin:
+            return True
+        return any(self.can(perm, department_id) for department_id in department_ids)
+
+    def require(self, perm: Perm, department_id: int | None = None) -> None:
+        if not self.can(perm, department_id):
+            raise PermissionDenied(perm.value)
+
+    def require_any(self, perm: Perm, department_ids: frozenset[int]) -> None:
+        if not self.can_any(perm, department_ids):
+            raise PermissionDenied(perm.value)
 
     def departments_for(self, perm: Perm) -> frozenset[int] | None:
         """The departments the caller has ``perm`` for, to filter a list by. ``None`` means every department."""
