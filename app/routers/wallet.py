@@ -9,12 +9,13 @@ from app.DB.schema import Members
 from app.DB.wallet import (
     get_or_create_member_profile,
     get_public_profile_by_uuid,
-    is_member_admin,
+    is_member_staff,
     update_member_profile,
 )
 from app.helpers import MemberOrGuest, authenticated_guard
 from app.wallet_signer import generate_apple_pkpass, generate_google_wallet_pass_url
 from app.dependencies import DB
+from app.services.permissions.access import resolve_access
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,7 @@ def _member_card_data(session: Session, member: Members, card_data: Dict[str, An
     """A pass for a registered member: the database wins, the payload fills gaps."""
     profile = get_or_create_member_profile(session, member.id)
     session.commit()
-    is_admin = is_member_admin(member)
+    is_admin = is_member_staff(session, member)
 
     return {
         "uuid": profile.uuid,
@@ -279,8 +280,10 @@ def get_wallet_me(session: DB, member: MemberOrGuest, credentials=Depends(authen
     profile = get_or_create_member_profile(session, member.id)
     session.commit()
 
-    is_admin = is_member_admin(member)
-    role_names = [r.role.value for r in member.role] if member.role else []
+    access = resolve_access(session, member)
+    is_admin = access.is_staff
+    # This semester's club roles (leader, vp, member), across departments.
+    role_names = sorted(set().union(*access.roles.values()))
 
     effective_name = profile.custom_name or member.name
     effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
@@ -341,7 +344,7 @@ def update_wallet_me(
             detail=f"عضو غير مسجل في قاعدة البيانات الأساسية بعد ({uni_id or 'حساب جديد'}).",
         )
 
-    is_admin = is_member_admin(member)
+    is_admin = is_member_staff(session, member)
 
     # Check theme authorization
     if payload.theme_id == ADMIN_THEME and not is_admin:
