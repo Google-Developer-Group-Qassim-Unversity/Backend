@@ -360,3 +360,15 @@ def test_super_admin_routes_want_a_super_admin_from_the_database(club):
     assert club.sign_in(leader, metadata={"is_super_admin": True}).get("/members/roles").status_code == 403
 
     assert club.sign_in(club.super_admin(club.person())).get("/members/roles").status_code == 200
+
+
+def test_access_for_an_event_follows_its_department(club, seed_refs):
+    ai, robotics = club.department("AI"), club.department("Robotics")
+    ai_event, robotics_event = club.event(ai, seed_refs), club.event(robotics, seed_refs)
+    client = club.sign_in(club.join(club.person(), ai, "leader"))
+
+    mine = set(client.get(f"/access/events/{ai_event}").json()["permissions"])
+    theirs = set(client.get(f"/access/events/{robotics_event}").json()["permissions"])
+    assert Perm.EVENTS_EDIT.value in mine
+    assert Perm.EVENTS_EDIT.value not in theirs
+    assert Perm.EVENTS_VIEW.value in theirs
