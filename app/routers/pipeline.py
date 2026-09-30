@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
-from app.DB import department_permissions as permission_queries
+from app.DB import pipeline_teams as team_queries
 from app.DB.schema import EventRequests, PipelineTeam
 from app.dependencies import DB
 from app.exceptions import DepartmentForbidden, NotFound, PipelineConflict
@@ -34,7 +34,7 @@ from app.services import event_pipeline as pipeline_service
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
 from app.services import pipeline_sweep
-from app.services.department_permissions import Actor, PipelineActor
+from app.services.pipeline_actor import Actor, PipelineActor
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def _require_access(actor: PipelineActor) -> None:
 def _team_entries(session) -> list[PipelineTeamEntry]:
     return [
         PipelineTeamEntry(team=row.team, department=PipelineDepartment.model_validate(row.department))
-        for row in sorted(permission_queries.get_teams(session), key=lambda r: list(PipelineTeam).index(r.team))
+        for row in sorted(team_queries.get_teams(session), key=lambda r: list(PipelineTeam).index(r.team))
     ]
 
 
@@ -64,7 +64,7 @@ def get_pipeline_me(session: DB, actor: Actor):
         teams_by_department.setdefault(entry.department.id, []).append(entry.team)
 
     ids = None if actor.is_super_admin else actor.acting_department_ids
-    departments = permission_queries.get_departments(session, ids) if ids is None or ids else []
+    departments = team_queries.get_departments(session, ids) if ids is None or ids else []
     return PipelineMeResponse(
         member_id=actor.member.id,
         name=actor.member.name,
@@ -74,7 +74,6 @@ def get_pipeline_me(session: DB, actor: Actor):
             ActingDepartment(
                 **PipelineDepartment.model_validate(department).model_dump(),
                 is_officer=department.id in actor.officer_of,
-                can_grant=actor.can_grant(department.id),
                 teams=teams_by_department.get(department.id, []),
             )
             for department in departments
@@ -95,9 +94,9 @@ def set_pipeline_teams(body: SetPipelineTeamsRequest, session: DB):
     if len(chosen) != len(set(chosen)):
         raise PipelineConflict("team_department_reused", "One department cannot play two teams", 422)
     for department_id in chosen:
-        if not permission_queries.get_departments(session, {department_id}):
+        if not team_queries.get_departments(session, {department_id}):
             raise NotFound("Department", department_id)
-    permission_queries.set_teams(session, mapping)
+    team_queries.set_teams(session, mapping)
     session.commit()
     logger.info("Pipeline teams set: %s", {t.value: d for t, d in mapping.items()})
     return _team_entries(session)

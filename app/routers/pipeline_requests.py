@@ -32,7 +32,7 @@ from app.services import event_briefs
 from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
-from app.services.department_permissions import Actor, PipelineActor
+from app.services.pipeline_actor import Actor, PipelineActor
 
 logger = logging.getLogger(__name__)
 

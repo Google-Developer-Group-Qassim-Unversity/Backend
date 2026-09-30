@@ -40,7 +40,6 @@ class ActingDepartment(PipelineDepartment):
     """A department the caller can act for, and how."""
 
     is_officer: bool
-    can_grant: bool
     teams: list[PipelineTeam]
 
 
@@ -57,34 +56,6 @@ class SetPipelineTeamsRequest(BaseModel):
     design: int | None = None
     logistics: int | None = None
     media: int | None = None
-
-
-class PermissionPerson(BaseModel):
-    member_id: int
-    name: str
-
-
-class PermissionOfficer(PermissionPerson):
-    role: str
-
-
-class PermissionGrant(PermissionPerson):
-    id: int
-    granted_by: PermissionPerson
-    granted_at: UtcDateTime
-
-
-class DepartmentPermissionsResponse(BaseModel):
-    department: PipelineDepartment
-    can_grant: bool
-    officers: list[PermissionOfficer]
-    grants: list[PermissionGrant]
-    # Current members of the department who could be granted access.
-    candidates: list[PermissionPerson]
-
-
-class GrantPermissionRequest(BaseModel):
-    member_id: int = Field(gt=0)
 
 
 class CalendarDayRequest(BaseModel):

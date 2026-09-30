@@ -939,6 +939,117 @@ class Semesters(Base):
     )
 
 
+class SuperAdmins(Base):
+    """A member who can do anything, to any department. Anyone can be one; super admins add each other."""
+
+    __tablename__ = "super_admins"
+    __table_args__ = (
+        ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_super_admins_member", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["added_by"], ["members.id"], name="fk_super_admins_added_by", ondelete="SET NULL"),
+    )
+
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True, autoincrement=False)
+    # NULL when added by scripts/add_super_admin.py, or when the adder's row is gone.
+    added_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    added_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    member: Mapped["Members"] = relationship("Members", foreign_keys=[member_id])
+
+
+class SharedPermissions(Base):
+    """A permission every leader and VP has, whatever their department.
+
+    ``permission`` is a key from ``app/services/permissions/catalogue.py``.
+    """
+
+    __tablename__ = "shared_permissions"
+    __table_args__ = (
+        ForeignKeyConstraint(["added_by"], ["members.id"], name="fk_shared_permissions_added_by", ondelete="SET NULL"),
+    )
+
+    permission: Mapped[str] = mapped_column(String(64), primary_key=True)
+    added_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    added_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
+class DepartmentPermissions(Base):
+    """A permission one department's leaders and VPs have because of that department's job."""
+
+    __tablename__ = "department_permissions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_department_permissions_department", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["added_by"], ["members.id"], name="fk_department_permissions_added_by", ondelete="SET NULL"
+        ),
+    )
+
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    permission: Mapped[str] = mapped_column(String(64), primary_key=True)
+    added_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    added_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
+class PermissionGrants(Base):
+    """A permission a leader or VP gave one member of their department, for one semester.
+
+    Only counts while the semester is current and the member is still on that
+    department's roster. Revoking keeps the row. At most one active grant per
+    semester, department, member and permission: the generated key is NULL
+    once a grant is revoked, and unique while it is not.
+    """
+
+    __tablename__ = "permission_grants"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["semester_id"], ["semesters.id"], name="fk_permission_grants_semester", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_permission_grants_department", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_permission_grants_member", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["granted_by"], ["members.id"], name="fk_permission_grants_granted_by", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["revoked_by"], ["members.id"], name="fk_permission_grants_revoked_by", ondelete="RESTRICT"
+        ),
+        Index(
+            "uq_permission_grants_active",
+            "semester_id",
+            "department_id",
+            "member_id",
+            "permission",
+            "active_key",
+            unique=True,
+        ),
+        Index("ix_permission_grants_member", "member_id", "semester_id"),
+        Index("ix_permission_grants_department", "department_id"),
+    )
+
+    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    semester_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    permission: Mapped[str] = mapped_column(String(64), nullable=False)
+    granted_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    granted_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    revoked_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    revoked_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    active_key: Mapped[Optional[int]] = mapped_column(
+        TINYINT(unsigned=True), Computed("CASE WHEN revoked_at IS NULL THEN 1 END", persisted=True)
+    )
+
+
 class PipelineTeam(str, enum.Enum):
     """The three departments every event request passes through."""
 
@@ -964,50 +1075,6 @@ class PipelineTeams(Base):
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
 
     department: Mapped["Departments"] = relationship("Departments")
-
-
-class DepartmentPermissions(Base):
-    """A member a department's leader or VP allowed to act for the department in the pipeline.
-
-    Leaders and VPs act for their department without a row here; this table is
-    only the people they granted it to. Revoking keeps the row. At most one
-    active grant per member and department: the generated key is NULL once a
-    grant is revoked, and unique while it is not.
-    """
-
-    __tablename__ = "department_permissions"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["member_id"], ["members.id"], name="fk_department_permissions_member", ondelete="CASCADE"
-        ),
-        ForeignKeyConstraint(
-            ["department_id"], ["departments.id"], name="fk_department_permissions_department", ondelete="CASCADE"
-        ),
-        ForeignKeyConstraint(
-            ["granted_by"], ["members.id"], name="fk_department_permissions_granted_by", ondelete="RESTRICT"
-        ),
-        ForeignKeyConstraint(
-            ["revoked_by"], ["members.id"], name="fk_department_permissions_revoked_by", ondelete="RESTRICT"
-        ),
-        Index("uq_department_permissions_active", "member_id", "department_id", "active_key", unique=True),
-        Index("ix_department_permissions_department", "department_id"),
-    )
-
-    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
-    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    granted_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    granted_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
-    )
-    revoked_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
-    revoked_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
-    active_key: Mapped[Optional[int]] = mapped_column(
-        TINYINT(unsigned=True), Computed("CASE WHEN revoked_at IS NULL THEN 1 END", persisted=True)
-    )
-
-    member: Mapped["Members"] = relationship("Members", foreign_keys=[member_id])
-    granter: Mapped["Members"] = relationship("Members", foreign_keys=[granted_by])
 
 
 class BookingBans(Base):

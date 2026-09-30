@@ -24,8 +24,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import config
-from app.DB import department_permissions as permission_queries
+from app.DB import club_structure as club_queries
 from app.DB import email_jobs as job_queries
+from app.DB import pipeline_teams as team_queries
 from app.DB import emails as email_queries
 from app.DB.schema import (
     EmailJobsType,
@@ -66,7 +67,7 @@ def department_members(session: Session, department_id: int) -> list[Members]:
     if semester is None:
         return []
     people: dict[int, Members] = {}
-    for row in permission_queries.get_department_roster(session, semester.id, department_id):
+    for row in club_queries.get_memberships(session, semester.id, department_id):
         people.setdefault(row.member_id, row.member)
     return list(people.values())
 
@@ -141,7 +142,7 @@ def department_email(
     note: str | None = None,
 ) -> PendingEmail | None:
     """The email for ``department_id`` - or, in trial mode, its copy for ``triggered_by``."""
-    departments = permission_queries.get_departments(session, {department_id})
+    departments = team_queries.get_departments(session, {department_id})
     department_name = departments[0].name if departments else str(department_id)
     members = [m for m in department_members(session, department_id) if m.email]
     subject, _, _ = _COPY[kind]

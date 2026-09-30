@@ -18,7 +18,7 @@ from enum import Enum
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.DB import department_permissions as permission_queries
+from app.DB import pipeline_teams as team_queries
 from app.DB import event_pipeline as queries
 from app.DB import logs as log_queries
 from app.DB.schema import (
@@ -39,7 +39,7 @@ from app.services import event_briefs
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail
-from app.services.department_permissions import PipelineActor
+from app.services.pipeline_actor import PipelineActor
 from app.services.events import create_full_event
 
 logger = logging.getLogger(__name__)
@@ -136,7 +136,7 @@ def calendar(session: Session, start: date, end: date) -> list[CalendarDay]:
 
 
 def team_department_id(session: Session, team: PipelineTeam) -> int:
-    department_id = permission_queries.get_team_department_id(session, team)
+    department_id = team_queries.get_team_department_id(session, team)
     if department_id is None:
         raise PipelineConflict("team_not_set", f"No department is set as the {team.value} team yet")
     return department_id
@@ -353,7 +353,7 @@ def update_details(session: Session, actor: PipelineActor, request: EventRequest
     if partners is not None:
         if request.department_id in partners:
             raise PipelineConflict("self_partner", "A department cannot partner with itself", 422)
-        if partners and len(permission_queries.get_departments(session, set(partners))) != len(set(partners)):
+        if partners and len(team_queries.get_departments(session, set(partners))) != len(set(partners)):
             raise PipelineConflict("unknown_department", "A partner department does not exist", 422)
         queries.set_partners(session, request, partners)
     session.flush()
@@ -385,7 +385,7 @@ def can_view(session: Session, actor: PipelineActor, request: EventRequests) -> 
     """The requesting department, and every team the request has reached."""
     if actor.can_act_for(request.department_id):
         return True
-    team_departments = {row.team: row.department_id for row in permission_queries.get_teams(session)}
+    team_departments = {row.team: row.department_id for row in team_queries.get_teams(session)}
     return any(
         task.status != EventRequestTaskStatus.BRIEF
         and task.team in team_departments
@@ -496,7 +496,7 @@ def can_return(session: Session, actor: PipelineActor, request: EventRequests) -
         return False
     if actor.is_super_admin:
         return True
-    department_id = permission_queries.get_team_department_id(session, PipelineTeam.DESIGN)
+    department_id = team_queries.get_team_department_id(session, PipelineTeam.DESIGN)
     deadline = return_deadline(request)
     return (
         department_id is not None
@@ -592,7 +592,7 @@ def can_complete(session: Session, actor: PipelineActor, request: EventRequests,
         return False
     if actor.is_super_admin:
         return True
-    department_id = permission_queries.get_team_department_id(session, team)
+    department_id = team_queries.get_team_department_id(session, team)
     return department_id is not None and actor.can_act_for(department_id)
 
 
@@ -640,7 +640,7 @@ def inbox(
     session: Session, actor: PipelineActor, team: PipelineTeam | None
 ) -> list[tuple[EventRequests, EventRequestTasks]]:
     """Open tasks for the teams the caller can act for (every team for a super admin)."""
-    team_departments = {row.team: row.department_id for row in permission_queries.get_teams(session)}
+    team_departments = {row.team: row.department_id for row in team_queries.get_teams(session)}
     teams = [
         t
         for t in ALL_TEAMS

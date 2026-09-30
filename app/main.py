@@ -34,7 +34,7 @@ from app.routers import (
     cache,
     wallet,
     club_structure,
-    department_permissions,
+    access,
     pipeline,
     pipeline_requests,
 )
@@ -119,6 +119,6 @@ app.include_router(upload.router)
 app.include_router(cache.router)
 app.include_router(wallet.router)
 app.include_router(club_structure.router)
-app.include_router(department_permissions.router)
+app.include_router(access.router)
 app.include_router(pipeline.router)
 app.include_router(pipeline_requests.router)

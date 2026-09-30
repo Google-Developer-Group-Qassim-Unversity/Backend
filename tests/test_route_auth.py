@@ -178,11 +178,10 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "PUT /semesters/{semester_id}": "super_admin_guard",
     "PUT /submissions/accept": "admin_guard",
     "PUT /wallet/me": "authenticated_guard",
+    # Answers "not staff" for anyone signed in who is not; see app/services/permissions.
+    "GET /access/me": "authenticated_guard",
     # Events pipeline: admins only (the admin_guard is on the routers), then every
-    # route checks the caller's departments in app/services/department_permissions.py.
-    "GET /departments/{department_id:int}/permissions": "admin_guard",
-    "POST /departments/{department_id:int}/permissions": "admin_guard",
-    "DELETE /departments/{department_id:int}/permissions/{grant_id:int}": "admin_guard",
+    # route checks the caller's departments in app/services/pipeline_actor.py.
     "GET /pipeline/me": "admin_guard",
     "PUT /pipeline/teams": "super_admin_guard",
     "GET /pipeline/calendar": "admin_guard",

@@ -14,7 +14,7 @@ def world(pipeline):
     design, logistics, media = (pipeline.department(n) for n in ("Design", "Logistics", "Media"))
     pipeline.teams(design, logistics, media)
     ai = pipeline.department("AI")
-    designers = [pipeline.officer(design, name="Designer"), pipeline.join(pipeline.person("Designer"), design)]
+    designers = [pipeline.officer(design, name="Designer"), pipeline.officer(design, "vp", name="Designer")]
     logistics_team = [pipeline.officer(logistics, name="Logistics")]
     return {
         "ai": ai,
@@ -113,9 +113,7 @@ def test_reads_are_per_person(pipeline, world):
     submit(pipeline, book_complete(pipeline, world["ai"]))
 
     first, second = world["designers"]
-    # The second designer is a plain member; their leader gives them access.
     pipeline.sign_in(first)
-    pipeline.client.post(f"/departments/{world['design'].id}/permissions", json={"member_id": second.id})
 
     notification_id = pipeline.client.get("/pipeline/notifications").json()["items"][0]["id"]
     assert pipeline.client.post(f"/pipeline/notifications/{notification_id}/read").json()["count"] == 1
