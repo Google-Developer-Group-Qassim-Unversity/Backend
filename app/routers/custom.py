@@ -11,19 +11,21 @@ from app.DB import (
 )
 
 from app.routers.models import Events_model, BaseClassModel
-from app.helpers import admin_guard
+
 from datetime import datetime
 from app.DB.schema import EventsLocationType
 from app.dependencies import DB
 from app.exceptions import DataIntegrityError
 
 from app.routers.responses import CustomPointsCreatedResponse, MessageResponse
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.guards import Require
 
 
 logger = logging.getLogger(__name__)
 
 
-router = APIRouter(prefix="/custom", tags=["custom"], dependencies=[Depends(admin_guard)])
+router = APIRouter(prefix="/custom", tags=["custom"], dependencies=[Depends(Require(Perm.POINTS_CUSTOM))])
 
 
 class DepartmentPointDetails(BaseClassModel):

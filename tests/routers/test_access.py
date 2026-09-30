@@ -23,8 +23,11 @@ from app.DB.schema import (
 )
 from app.DB.semesters import get_semester_by_hijri_code
 from app.main import app
+from app.routers.models import createEvent_model
+from app.services.events import create_full_event
 from app.services.permissions.access import resolve_access
 from app.services.permissions.catalogue import STAFF_BASICS, Perm
+from tests.factories import make_create_event_payload
 
 SHARED = {Perm.EVENTS_EDIT, Perm.PIPELINE_REQUEST, Perm.PERMISSIONS_GRANT}
 
@@ -114,8 +117,8 @@ class Club:
     def access(self, member: Members | None):
         return resolve_access(self.session, member)
 
-    def me(self, member: Members | None, metadata: dict | None = None) -> dict:
-        """``GET /access/me`` signed in as ``member`` (``None``: a Clerk user with no member row)."""
+    def sign_in(self, member: Members | None, metadata: dict | None = None):
+        """Sign in as ``member`` (``None``: a Clerk user with no member row); only JWT verification is replaced."""
         subject = member.clerk_user_id if member else "clerk_no_row"
         credentials = HTTPAuthorizationCredentials(
             scheme="Bearer", credentials="test-token", decoded={"sub": subject, "metadata": metadata or {}}
@@ -123,7 +126,17 @@ class Club:
         app.dependency_overrides[config.CLERK_GUARD] = lambda: credentials
         app.dependency_overrides[config.CLERK_GUARD_optional] = lambda: credentials
         self.session.commit()
-        response = self.client.get("/access/me")
+        return self.client
+
+    def event(self, department: Departments, seed_refs) -> int:
+        payload = createEvent_model.model_validate(make_create_event_payload(seed_refs, department_id=department.id))
+        event, _log = create_full_event(self.session, payload)
+        self.session.flush()
+        return event.id
+
+    def me(self, member: Members | None, metadata: dict | None = None) -> dict:
+        """``GET /access/me`` signed in as ``member``."""
+        response = self.sign_in(member, metadata).get("/access/me")
         assert response.status_code == 200, response.text
         return response.json()
 
@@ -299,3 +312,51 @@ def test_the_migration_seeds_the_shared_permissions(db_session):
     seeded = set(db_session.scalars(select(SharedPermissions.permission)).all())
     assert {Perm.EVENTS_EDIT.value, Perm.PIPELINE_REQUEST.value, Perm.PERMISSIONS_GRANT.value} <= seeded
     assert db_session.scalars(select(SuperAdmins)).all() == []
+
+
+# ---------- the guards, through real routes ----------
+
+
+def test_a_leader_edits_their_departments_event_and_not_anothers(club, seed_refs):
+    ai, robotics = club.department("AI"), club.department("Robotics")
+    ai_event, robotics_event = club.event(ai, seed_refs), club.event(robotics, seed_refs)
+    client = club.sign_in(club.join(club.person(), ai, "leader"))
+
+    assert client.put(f"/events/{ai_event}/status", json={"status": "open"}).status_code == 200
+    refused = client.put(f"/events/{robotics_event}/status", json={"status": "open"})
+    assert refused.status_code == 403
+    assert refused.json()["code"] == "permission_denied"
+
+
+def test_a_missing_event_is_404_not_403(club):
+    client = club.sign_in(club.join(club.person(), club.department("AI"), "leader"))
+    assert client.put("/events/987654/status", json={"status": "open"}).status_code == 404
+
+
+def test_a_leader_cannot_create_an_event_for_another_department(club, seed_refs):
+    ai, robotics = club.department("AI"), club.department("Robotics")
+    client = club.sign_in(club.join(club.person(), ai, "leader"))
+
+    refused = client.post("/events/", json=make_create_event_payload(seed_refs, department_id=robotics.id))
+    assert refused.status_code == 403
+
+
+def test_a_plain_member_passes_the_staff_door_but_not_a_permission(club):
+    client = club.sign_in(club.join(club.person(), club.department("AI")))
+
+    assert client.get("/semesters").status_code == 200
+    assert client.get("/members/paginated").status_code == 403
+
+
+def test_a_regular_user_is_refused_everywhere_in_the_admin_api(club):
+    client = club.sign_in(club.person())
+
+    assert client.get("/semesters").status_code == 403
+    assert client.get("/events/paginated").status_code == 403
+
+
+def test_super_admin_routes_want_a_super_admin_from_the_database(club):
+    leader = club.join(club.person(), club.department("AI"), "leader")
+    assert club.sign_in(leader, metadata={"is_super_admin": True}).get("/members/roles").status_code == 403
+
+    assert club.sign_in(club.super_admin(club.person())).get("/members/roles").status_code == 200

@@ -135,13 +135,11 @@ def test_delete_with_unknown_replacement_is_404(admin_points_client: TestClient)
     assert "Replacement" in response.json()["detail"]
 
 
-def test_used_action_cannot_be_deleted_without_a_replacement(
-    admin_points_client: TestClient, admin_client: TestClient, seed_refs
-):
+def test_used_action_cannot_be_deleted_without_a_replacement(admin_points_client: TestClient, seed_refs):
     """Creating an event writes log rows against its actions, which is what
     "used" means here. Going through the real endpoint keeps the test from
     depending on whatever else happens to be in the database."""
-    assert_2xx(admin_client.post("/events", json=make_create_event_payload(seed_refs)))
+    assert_2xx(admin_points_client.post("/events", json=make_create_event_payload(seed_refs)))
 
     response = admin_points_client.delete(f"/actions/{seed_refs.dept_action.id}")
 
@@ -149,11 +147,9 @@ def test_used_action_cannot_be_deleted_without_a_replacement(
     assert "replacement_id" in response.json()["detail"]
 
 
-def test_used_action_can_be_deleted_with_a_replacement(
-    admin_points_client: TestClient, admin_client: TestClient, seed_refs
-):
+def test_used_action_can_be_deleted_with_a_replacement(admin_points_client: TestClient, seed_refs):
     """The replacement takes over the existing log rows rather than losing them."""
-    assert_2xx(admin_client.post("/events", json=make_create_event_payload(seed_refs)))
+    assert_2xx(admin_points_client.post("/events", json=make_create_event_payload(seed_refs)))
     replacement = create(admin_points_client, action_name="stand-in")
 
     before = {a["id"]: a["usage_count"] for a in admin_points_client.get("/actions/all").json()}

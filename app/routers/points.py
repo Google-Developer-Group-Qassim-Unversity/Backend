@@ -1,13 +1,12 @@
-from fastapi import APIRouter, status, HTTPException, Query, Depends
-from fastapi_clerk_auth import HTTPAuthorizationCredentials
+from fastapi import APIRouter, status, HTTPException, Query
 from app.DB import points as points_queries, semesters as semesters_queries
 
 from app.routers.models import BaseClassModel
 from datetime import date, datetime
-from app.helpers import optional_clerk_guard
 from app.semesters import current_semester, resolve_semester_for_caller
 from typing import Annotated
 from app.dependencies import DB
+from app.services.permissions.dependencies import CurrentAccess
 
 router = APIRouter(prefix="/points", tags=["Points"])
 
@@ -98,24 +97,17 @@ def get_semesters(session: DB):
 
 
 @router.get("/members/total", status_code=status.HTTP_200_OK, response_model=list[Member_points_model])
-def get_all_members_points(
-    session: DB,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
-    semester: Annotated[int | None, Query()] = None,
-):
-    resolved = resolve_semester_for_caller(session, semester, credentials)
+def get_all_members_points(session: DB, access: CurrentAccess, semester: Annotated[int | None, Query()] = None):
+    resolved = resolve_semester_for_caller(session, semester, access.is_super_admin)
     rows = points_queries.get_members_points_semester(session, resolved.id)
     return [Member_points_model.model_validate(row) for row in rows]
 
 
 @router.get("/members/{member_id:int}", status_code=status.HTTP_200_OK, response_model=Member_event_history_model)
 def get_member_points(
-    member_id: int,
-    session: DB,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
-    semester: Annotated[int | None, Query()] = None,
+    member_id: int, session: DB, access: CurrentAccess, semester: Annotated[int | None, Query()] = None
 ):
-    resolved = resolve_semester_for_caller(session, semester, credentials)
+    resolved = resolve_semester_for_caller(session, semester, access.is_super_admin)
 
     member_points = points_queries.get_member_points_by_id_semester(session, resolved.id, member_id)
     if member_points is None:
@@ -129,12 +121,8 @@ def get_member_points(
 
 
 @router.get("/departments/total", status_code=status.HTTP_200_OK, response_model=Response_department_points_model)
-def get_all_departments_points(
-    session: DB,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
-    semester: Annotated[int | None, Query()] = None,
-):
-    resolved = resolve_semester_for_caller(session, semester, credentials)
+def get_all_departments_points(session: DB, access: CurrentAccess, semester: Annotated[int | None, Query()] = None):
+    resolved = resolve_semester_for_caller(session, semester, access.is_super_admin)
     departments_points = points_queries.get_departments_points_semester(session, resolved.id)
     return Response_department_points_model(
         administrative=[
@@ -154,12 +142,9 @@ def get_all_departments_points(
     "/departments/{department_id:int}", status_code=status.HTTP_200_OK, response_model=Department_points_history_model
 )
 def get_department_points(
-    department_id: int,
-    session: DB,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
-    semester: Annotated[int | None, Query()] = None,
+    department_id: int, session: DB, access: CurrentAccess, semester: Annotated[int | None, Query()] = None
 ):
-    resolved = resolve_semester_for_caller(session, semester, credentials)
+    resolved = resolve_semester_for_caller(session, semester, access.is_super_admin)
 
     department_points = points_queries.get_department_points_by_id_semester(session, resolved.id, department_id)
     if department_points is None:

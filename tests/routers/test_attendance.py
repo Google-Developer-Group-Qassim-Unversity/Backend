@@ -135,10 +135,11 @@ def test_attendance_count_public(admin_client: TestClient):
 def test_attendance_detailed_forbidden_for_member(admin_client: TestClient):
     event_id = create_attendance_ready_event(admin_client)
     from app.main import app
-    from app.helpers import optional_clerk_guard
-    from tests.conftest import FAKE_CLERK_CREDENTIALS
+    from app.services.permissions.access import Access
+    from app.services.permissions.dependencies import get_access
 
-    app.dependency_overrides[optional_clerk_guard] = lambda: FAKE_CLERK_CREDENTIALS
+    # A signed-in regular user: not on this semester's roster.
+    app.dependency_overrides[get_access] = lambda: Access()
     response = admin_client.get(f"/attendance/{event_id}?type=detailed")
     assert_forbidden(response)
 

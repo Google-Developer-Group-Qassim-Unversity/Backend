@@ -40,6 +40,9 @@ from app.DB.schema import (
 from app.dependencies import get_db
 from app.main import app
 from app.routers import club_structure
+from app.services.permissions.access import Access
+from app.services.permissions.dependencies import get_access
+from tests.access_doubles import ADMIN, POINTS_ADMIN, SUPER_ADMIN
 from tests.factories import make_member
 
 
@@ -102,8 +105,16 @@ def test_browser_manages_club_through_real_api(engine, seed_core_data, monkeypat
             scheme="Bearer", credentials=token, decoded={"sub": token, "metadata": roles[token]}
         )
 
+    def access(request: Request):
+        """What each test identity can do; the permission model itself is tested in tests/routers/test_access.py."""
+        token = request.headers.get("authorization", "").removeprefix("Bearer ")
+        return {"browser-super_admin": SUPER_ADMIN, "browser-admin": ADMIN, "browser-admin_points": POINTS_ADMIN}.get(
+            token, Access()
+        )
+
     monkeypatch.setitem(app.dependency_overrides, get_db, database)
     monkeypatch.setitem(app.dependency_overrides, config.CLERK_GUARD, identity)
+    monkeypatch.setitem(app.dependency_overrides, get_access, access)
     cache_reset = Mock(return_value={"revalidated": True})
     monkeypatch.setattr(club_structure, "reset_leaderboard_cache", cache_reset)
     listener = socket.socket()

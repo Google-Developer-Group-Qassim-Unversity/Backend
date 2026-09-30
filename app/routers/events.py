@@ -26,7 +26,7 @@ from app.routers.models import (
     UpdateEventStatus_model,
     UpdateEventMeetingUrl_model,
 )
-from app.helpers import CurrentMember, admin_guard
+from app.helpers import CurrentMember
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.services.events import create_full_event
 from app.services.google_client import set_form_publish_state
@@ -39,6 +39,10 @@ from sqlalchemy.orm import Session
 from app.DB.schema import EventsLocationType, EventsStatus, FormType
 
 from app.routers.responses import DetailResponse
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.dependencies import CurrentAccess
+from app.services.permissions.guards import Require
+from app.services.permissions.departments import event_departments
 
 
 logger = logging.getLogger(__name__)
@@ -76,7 +80,7 @@ def get_all_events(session: DB, semester: Annotated[int | str, Query()] = "all")
     "/paginated",
     status_code=status.HTTP_200_OK,
     response_model=PaginatedEvents_model,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EVENTS_VIEW))],
 )
 def list_events_paginated(
     session: DB,
@@ -136,7 +140,7 @@ def get_my_events(member: CurrentMember, session: DB):
     "/{event_id:int}/details",
     status_code=status.HTTP_200_OK,
     response_model=EventDetailsModel,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EVENTS_VIEW))],
 )
 def get_event_details(event_id: int, session: DB):
     """return an event + its associated actions, this is needed by the frontend to populate the update event form with the current event data and associated actions"""
@@ -152,9 +156,10 @@ def get_event_details(event_id: int, session: DB):
     status_code=status.HTTP_201_CREATED,
     response_model=Events_model,
     responses={409: {"model": ConflictResponse, "description": "Event already exists"}},
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EVENTS_CREATE))],
 )
-def create_event(event_data: createEvent_model, session: DB):
+def create_event(event_data: createEvent_model, session: DB, access: CurrentAccess):
+    access.require(Perm.EVENTS_CREATE, event_data.department_id)
     try:
         logger.info("Creating New Event and Associated Form")
         new_event, _ = create_full_event(session, event_data)
@@ -182,7 +187,7 @@ def create_event(event_data: createEvent_model, session: DB):
         409: {"model": ConflictResponse, "description": "Event already exists"},
         500: {"model": InternalServerErrorResponse, "description": "Internal server error"},
     },
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
 )
 def update_event(event_id: int, event_data: UpdateEventModel, session: DB):
     try:
@@ -307,7 +312,7 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB):
         404: {"model": NotFoundResponse, "description": "Event not found"},
         400: {"description": "Only draft events can be deleted"},
     },
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EVENTS_DELETE, event_departments))],
     response_model=DetailResponse,
 )
 def delete_event(event_id: int, session: DB):
@@ -334,7 +339,7 @@ def delete_event(event_id: int, session: DB):
     status_code=status.HTTP_200_OK,
     response_model=Events_model,
     responses={404: {"model": NotFoundResponse, "description": "Event not found"}},
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
 )
 def update_event_status(event_id: int, status_data: UpdateEventStatus_model, session: DB):
     event = events_queries.get_event_by_id(session, event_id)
@@ -383,7 +388,7 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, ses
     status_code=status.HTTP_200_OK,
     response_model=Events_model,
     responses={404: {"model": NotFoundResponse, "description": "Event not found"}},
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
 )
 def update_event_meeting_url(event_id: int, meeting_url_data: UpdateEventMeetingUrl_model, session: DB):
     """Set or clear the join link shown to members on a remote event."""
@@ -412,7 +417,7 @@ def update_event_meeting_url(event_id: int, meeting_url_data: UpdateEventMeeting
     "/submissions/{event_id:int}",
     status_code=status.HTTP_200_OK,
     response_model=list[Get_Submission_model],
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.SUBMISSIONS_REVIEW, event_departments))],
 )
 def get_submissions_by_event(event_id: int, session: DB):
     try:

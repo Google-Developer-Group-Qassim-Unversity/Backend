@@ -10,10 +10,13 @@ from app.services.form_responses import FormAccess, FormResponsesClient
 from app.DB import forms as form_queries
 from app.DB.schema import FormType
 
-from app.helpers import admin_guard
+
 from app.exceptions import FormNotFoundById, FormNotAttached
 from app.dependencies import DB
 from app.config import config
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.guards import Require
+from app.services.permissions.departments import event_departments, form_departments
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +51,7 @@ def get_form_by_id(form_id: int, session: DB):
         404: {"model": NotFoundResponse, "description": "Form not found"},
         409: {"model": NotFoundResponse, "description": "Form with event_id already exists"},
     },
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.FORMS_MANAGE, form_departments))],
 )
 def update_form(form_id: int, form: Form_model, session: DB):
     try:
@@ -69,7 +72,7 @@ def update_form(form_id: int, form: Form_model, session: DB):
     status_code=status.HTTP_200_OK,
     response_model=Form_model,
     responses={404: {"model": NotFoundResponse, "description": "Event or form not found"}},
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.FORMS_MANAGE, event_departments))],
 )
 def attach_form(event_id: int, body: AttachFormRequest, session: DB):
     """Attach a Google Form to an event and invite an admin to edit it.
@@ -151,7 +154,7 @@ def attach_form(event_id: int, body: AttachFormRequest, session: DB):
     status_code=status.HTTP_200_OK,
     response_model=Form_model,
     responses={404: {"model": NotFoundResponse, "description": "Event or form not found"}},
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.FORMS_MANAGE, event_departments))],
 )
 def unattach_form(event_id: int, session: DB):
     """Revoke every admin's access, delete the Forms watch, and reset the form row.
@@ -220,7 +223,7 @@ def unattach_form(event_id: int, session: DB):
     status_code=status.HTTP_200_OK,
     response_model=dict,
     responses={404: {"model": NotFoundResponse, "description": "Form not found"}},
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.SUBMISSIONS_REVIEW, form_departments))],
 )
 def get_form_schema(form_id: int, session: DB, responses_client: FormResponsesClient):
     form = form_queries.get_form_by_id(session, form_id)
@@ -235,7 +238,7 @@ def get_form_schema(form_id: int, session: DB, responses_client: FormResponsesCl
     "/watches/renew",
     status_code=status.HTTP_200_OK,
     response_model=WatchRenewalResponse,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.FORMS_ADMIN))],
     description=(
         "Renew every registered Google Forms watch for another seven days, recreating any that "
         "have already expired. Google expires watches seven days after creation or last renewal, "

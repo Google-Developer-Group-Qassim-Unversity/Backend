@@ -49,7 +49,8 @@ uv run alembic revision -m "desc"              # new empty migration (write manu
 - **`app/DB/schema.py`** – SQLAlchemy ORM models (source of truth for DB schema). Alembic uses `Base.metadata` from here
 - **`app/DB/main.py`** – `SessionLocal` and `engine` creation
 - **`app/routers/`** – API route handlers, one file per domain (events, members, points, etc.)
-- **`app/helpers.py`** – shared utilities and auth guards (`authenticated_guard`, `admin_guard`, `super_admin_guard`)
+- **`app/helpers.py`** – shared utilities and the Clerk guards (`authenticated_guard`, `optional_clerk_guard`)
+- **`app/services/permissions/`** – who can do what: the `Perm` catalogue, `resolve_access`, and the route guards (`Staff`, `Require`, `SuperAdmin`)
 - **`alembic/env.py`** – migration env; excludes DB views listed in `VIEWS` set via `include_object`
 - **Source of truth for DB**: `app/DB/schema.py` + existing migration files
 - **Do not use `--autogenerate`** for new migrations. Create empty revisions with `alembic revision -m "desc"` and write them manually

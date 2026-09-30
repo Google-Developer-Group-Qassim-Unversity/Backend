@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, status, HTTPException, Query
 from app.DB import actions as actions_queries
 
 from app.dependencies import DB
-from app.helpers import admin_points_guard
+
 from app.routers.models import (
     Categorized_action,
     CreateAction_model,
@@ -14,6 +14,8 @@ from app.routers.models import (
 )
 
 from app.routers.responses import MessageResponse
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.guards import Require
 
 
 router = APIRouter(prefix="/actions", tags=["actions"])
@@ -87,7 +89,10 @@ def get_all_actions(session: DB):
 
 
 @router.post(
-    "", status_code=status.HTTP_201_CREATED, response_model=Action_model, dependencies=[Depends(admin_points_guard)]
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Action_model,
+    dependencies=[Depends(Require(Perm.POINTS_CATALOGUE))],
 )
 def create_action(payload: CreateAction_model, session: DB):
     new_action = actions_queries.create_action(
@@ -103,7 +108,7 @@ def create_action(payload: CreateAction_model, session: DB):
     "/{action_id:int}",
     status_code=status.HTTP_200_OK,
     response_model=Action_model,
-    dependencies=[Depends(admin_points_guard)],
+    dependencies=[Depends(Require(Perm.POINTS_CATALOGUE))],
 )
 def update_action(action_id: int, payload: UpdateAction_model, session: DB):
     updated_action = actions_queries.update_action(
@@ -125,7 +130,7 @@ def update_action(action_id: int, payload: UpdateAction_model, session: DB):
 @router.put(
     "/reorder",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_points_guard)],
+    dependencies=[Depends(Require(Perm.POINTS_CATALOGUE))],
     response_model=MessageResponse,
 )
 def reorder_actions(payload: ReorderActions_model, session: DB):
@@ -137,7 +142,7 @@ def reorder_actions(payload: ReorderActions_model, session: DB):
 @router.delete(
     "/{action_id:int}",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_points_guard)],
+    dependencies=[Depends(Require(Perm.POINTS_CATALOGUE))],
     response_model=MessageResponse,
 )
 def delete_action(action_id: int, session: DB, replacement_id: Annotated[Optional[int], Query()] = None):

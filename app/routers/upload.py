@@ -10,15 +10,17 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.clients import R2Client
 from app.config import config
-from app.helpers import admin_guard
+
 
 from app.routers.responses import AttachmentUploadResponse, UploadResponse
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.guards import Require
 
 
 logger = logging.getLogger(__name__)
 
 
-router = APIRouter(prefix="/upload", tags=["upload"], dependencies=[Depends(admin_guard)])
+router = APIRouter(prefix="/upload", tags=["upload"], dependencies=[Depends(Require(Perm.UPLOADS))])
 
 ALLOWED_ATTACHMENT_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"}
 MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024

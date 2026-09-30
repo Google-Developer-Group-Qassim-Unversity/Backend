@@ -16,7 +16,7 @@ from app.DB import members as members_queries
 import app.DB.submissions as submissions_queries
 from app.DB.schema import EmailLogsEmailType, EmailLogsFromAddress, EmailProvider, Events
 from app.config import config
-from app.helpers import CurrentMember, admin_guard
+from app.helpers import CurrentMember
 from app.routers.responses import MessageResponse
 from app.routers.email_models import (
     EmailJobModel,
@@ -77,6 +77,9 @@ import json
 from datetime import datetime
 from typing import Annotated, Optional, Any
 from app.dependencies import DB
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.guards import Require, Staff
+from app.services.permissions.departments import event_departments
 
 
 # endregion
@@ -152,7 +155,7 @@ def sse_poll_loop(
 @router.post(
     "/{event_id:int}",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_EVENT, event_departments))],
     response_model=EmailJobResponse,
 )
 def send_certificates(event_id: int, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB):
@@ -187,7 +190,7 @@ def send_certificates(event_id: int, requesting_member: CurrentMember, backgroun
 @router.post(
     "/manual-certificate",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.CERTIFICATES_MANUAL))],
     response_model=EmailJobResponse,
 )
 def send_manual_certificate(
@@ -209,7 +212,7 @@ def send_manual_certificate(
 @router.post(
     "/custom/{event_id:int}",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_EVENT, event_departments))],
     response_model=EmailJobResponse,
 )
 def send_custom_email(
@@ -239,7 +242,7 @@ def send_custom_email(
 @router.post(
     "/custom/{event_id:int}/test",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_EVENT, event_departments))],
     response_model=EmailTestResponse,
 )
 async def send_custom_email_test(event_id: int, request: CustomEmailTestRequest, session: DB):
@@ -285,7 +288,10 @@ async def send_custom_email_test(event_id: int, request: CustomEmailTestRequest,
 
 
 @router.post(
-    "/direct", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)], response_model=EmailJobResponse
+    "/direct",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(Require(Perm.EMAILS_DIRECT))],
+    response_model=EmailJobResponse,
 )
 def send_direct_email(
     request: DirectEmailRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
@@ -313,7 +319,7 @@ def send_direct_email(
 @router.get(
     "/certificate-event/eligible-count/{event_id:int}",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_EVENT, event_departments))],
     response_model=CertificateEligibleCountResponse,
 )
 def get_certificate_eligible_count(event_id: int, session: DB):
@@ -336,7 +342,7 @@ def get_certificate_eligible_count(event_id: int, session: DB):
     "/certificate-event/logs/stream/{event_id:int}",
     status_code=status.HTTP_200_OK,
     response_class=EventSourceResponse,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_EVENT, event_departments))],
 )
 def get_certificate_event_logs(event_id: int, last_event_id: Annotated[int | None, Header()] = None):
     def fetch_batch(after_id: int, batch_size: int) -> list[CertificateEventEmailLog]:
@@ -348,7 +354,10 @@ def get_certificate_event_logs(event_id: int, last_event_id: Annotated[int | Non
 
 
 @router.get(
-    "/stats", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)], response_model=EmailStatsResponse
+    "/stats",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(Require(Perm.EMAILS_LOGS))],
+    response_model=EmailStatsResponse,
 )
 def get_email_stats(
     session: DB,
@@ -362,7 +371,10 @@ def get_email_stats(
 
 
 @router.get(
-    "/logs", status_code=status.HTTP_200_OK, response_model=list[EmailLogs], dependencies=[Depends(admin_guard)]
+    "/logs",
+    status_code=status.HTTP_200_OK,
+    response_model=list[EmailLogs],
+    dependencies=[Depends(Require(Perm.EMAILS_LOGS))],
 )
 def get_email_logs(
     session: DB,
@@ -377,7 +389,7 @@ def get_email_logs(
     "/logs/event/{event_id:int}",
     status_code=status.HTTP_200_OK,
     response_model=list[EmailLogs],
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_EVENT, event_departments))],
 )
 def get_email_logs_by_event_id(event_id: int, session: DB):
     logs = email_queries.get_email_logs_by_event_id(session, event_id)
@@ -388,7 +400,7 @@ def get_email_logs_by_event_id(event_id: int, session: DB):
     "/logs/member/{member_id:int}",
     status_code=status.HTTP_200_OK,
     response_model=list[EmailLogs],
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_LOGS))],
 )
 def get_email_logs_by_member_id(member_id: int, session: DB):
     logs = email_queries.get_email_logs_by_member_id(session, member_id)
@@ -399,7 +411,7 @@ def get_email_logs_by_member_id(member_id: int, session: DB):
     "/logs/enriched",
     status_code=status.HTTP_200_OK,
     response_model=list[EnrichedEmailLog],
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_LOGS))],
 )
 def get_enriched_email_logs(
     session: DB,
@@ -428,7 +440,7 @@ def get_enriched_email_logs(
     "/logs/enriched/stream",
     status_code=status.HTTP_200_OK,
     response_class=EventSourceResponse,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_LOGS))],
 )
 def stream_enriched_email_logs(
     last_event_id: Annotated[int | None, Header()] = None,
@@ -465,10 +477,7 @@ def stream_enriched_email_logs(
 
 
 @router.get(
-    "/stats/dashboard",
-    status_code=status.HTTP_200_OK,
-    response_model=DashboardStats,
-    dependencies=[Depends(admin_guard)],
+    "/stats/dashboard", status_code=status.HTTP_200_OK, response_model=DashboardStats, dependencies=[Depends(Staff)]
 )
 def get_dashboard_stats(session: DB, period: Annotated[int, Query(description="Time period in days")] = 1):
     addresses = {}
@@ -540,7 +549,7 @@ def download_certificate(
 @router.post(
     "/acceptance/blasts/{event_id:int}",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_EVENT, event_departments))],
     response_model=AcceptanceQueuedResponse,
 )
 async def send_acceptance_blasts(
@@ -641,7 +650,7 @@ async def send_acceptance_blasts(
 @router.post(
     "/acceptance/test",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_EVENT))],
     response_model=EmailTestResponse,
 )
 async def send_acceptance_test(
@@ -671,7 +680,10 @@ async def send_acceptance_test(
 
 
 @router.post(
-    "/blast", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)], response_model=BlastQueuedResponse
+    "/blast",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(Require(Perm.EMAILS_BLAST))],
+    response_model=BlastQueuedResponse,
 )
 def send_blast(
     request: BlastSendRequest, requesting_member: CurrentMember, background_tasks: BackgroundTasks, session: DB
@@ -726,7 +738,10 @@ def send_blast(
 
 
 @router.post(
-    "/blast/test", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_guard)], response_model=EmailTestResponse
+    "/blast/test",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(Require(Perm.EMAILS_BLAST))],
+    response_model=EmailTestResponse,
 )
 async def send_blast_test(request: BlastTestRequest):
     logger.info("Sending blast test email")
@@ -750,7 +765,7 @@ async def send_blast_test(request: BlastTestRequest):
 @router.get(
     "/blast/eligible-count",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_BLAST))],
     response_model=BlastEligibleCountResponse,
 )
 def get_blast_eligible_count(
@@ -773,7 +788,7 @@ def get_blast_eligible_count(
 @router.get(
     "/blast/templates",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_BLAST))],
     response_model=list[EmailTemplateOut],
 )
 def list_email_templates(session: DB):
@@ -784,7 +799,7 @@ def list_email_templates(session: DB):
 @router.post(
     "/blast/templates",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_BLAST))],
     response_model=EmailTemplateOut,
 )
 def create_email_template(request: EmailTemplateIn, requesting_member: CurrentMember, session: DB):
@@ -803,7 +818,7 @@ def create_email_template(request: EmailTemplateIn, requesting_member: CurrentMe
 @router.put(
     "/blast/templates/{template_id:int}",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_BLAST))],
     response_model=EmailTemplateOut,
 )
 def update_email_template(template_id: int, request: EmailTemplateIn, session: DB):
@@ -822,7 +837,7 @@ def update_email_template(template_id: int, request: EmailTemplateIn, session: D
 @router.delete(
     "/blast/templates/{template_id:int}",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_BLAST))],
     response_model=MessageResponse,
 )
 def delete_email_template(template_id: int, session: DB):
@@ -841,7 +856,7 @@ def delete_email_template(template_id: int, session: DB):
     "/jobs",
     status_code=status.HTTP_200_OK,
     response_model=list[EmailJobModel],
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.EMAILS_LOGS))],
     description="Recent background email sends and how they ended.",
 )
 def list_email_jobs(
@@ -857,7 +872,7 @@ def list_email_jobs(
     "/jobs/unfinished",
     status_code=status.HTTP_200_OK,
     response_model=list[EmailJobModel],
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Staff)],
     description="Jobs still queued or running. A worker restart strands these, since nothing resumes a BackgroundTask.",
 )
 def list_unfinished_email_jobs(session: DB):
@@ -868,7 +883,7 @@ def list_unfinished_email_jobs(session: DB):
     "/jobs/{job_id:int}",
     status_code=status.HTTP_200_OK,
     response_model=EmailJobModel,
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Staff)],
     responses={404: {"description": "Job not found"}},
 )
 def get_email_job(job_id: int, session: DB):

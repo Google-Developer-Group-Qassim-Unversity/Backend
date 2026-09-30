@@ -20,7 +20,7 @@ from app.DB import semesters as semesters_queries
 from app.DB.schema import ClubMemberships, Departments, Members, Semesters
 from app.dependencies import DB
 from app.exceptions import MemberNotFound, NoSemestersDefined, NotFound, SemesterNotFound
-from app.helpers import admin_guard, optional_clerk_guard, super_admin_guard
+from app.helpers import authenticated_guard
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.club_structure_models import (
     AddMemberRequest,
@@ -46,6 +46,10 @@ from app.routers.club_structure_models import (
 )
 from app.semesters import current_semester, resolve_semester_for_caller
 from app.services import club_structure as service
+from app.services.permissions.catalogue import Perm
+from app.services.permissions.guards import Require
+from app.services.permissions.departments import path_departments
+from app.services.permissions.dependencies import CurrentAccess
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/club-structure", tags=["Club structure"])
@@ -54,7 +58,7 @@ RoleKey = Annotated[str, Path(min_length=1, max_length=32, pattern=r"^[a-z_]+$")
 SCOPE = "/semesters/{semester_id}/departments/{department_id:int}"
 
 
-def _management_actor(credentials: Annotated[HTTPAuthorizationCredentials, Depends(super_admin_guard)]) -> str:
+def _management_actor(credentials: Annotated[HTTPAuthorizationCredentials, Depends(authenticated_guard)]) -> str:
     subject = (credentials.decoded or {}).get("sub")
     if not isinstance(subject, str) or not subject.strip() or len(subject) > 255:
         raise HTTPException(status_code=401, detail="A valid Clerk subject is required.")
@@ -120,13 +124,9 @@ def _by_department(memberships) -> dict[int, list[ClubMemberships]]:
 
 
 @router.get("/public", response_model=PublicClubStructureResponse)
-def get_public_club_structure(
-    session: DB,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_clerk_guard)],
-    semester: int | None = None,
-):
+def get_public_club_structure(session: DB, access: CurrentAccess, semester: int | None = None):
     """Display-only roster for a semester (default: the current public one). No admin or audit fields."""
-    resolved = resolve_semester_for_caller(session, semester, credentials)
+    resolved = resolve_semester_for_caller(session, semester, access.is_super_admin)
     rosters = _by_department(queries.get_memberships(session, resolved.id))
 
     presidents: list[str] = []
@@ -173,7 +173,7 @@ def get_public_club_structure(
 # ---------- admin reads ----------
 
 
-@router.get("", response_model=ClubOverviewResponse, dependencies=[Depends(admin_guard)])
+@router.get("", response_model=ClubOverviewResponse, dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_VIEW))])
 def get_club_overview(session: DB, semester_id: UUID | None = None):
     semester = _admin_semester(session, semester_id)
     roles = queries.get_roles(session)
@@ -219,13 +219,15 @@ def get_club_overview(session: DB, semester_id: UUID | None = None):
     )
 
 
-@router.get("/roles", response_model=list[ClubRoleResponse], dependencies=[Depends(admin_guard)])
+@router.get("/roles", response_model=list[ClubRoleResponse], dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_VIEW))])
 def get_club_roles(session: DB):
     return queries.get_roles(session)
 
 
 @router.get(
-    "/departments/{department_id:int}", response_model=ClubDepartmentResponse, dependencies=[Depends(admin_guard)]
+    "/departments/{department_id:int}",
+    response_model=ClubDepartmentResponse,
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_VIEW))],
 )
 def get_club_department(department_id: DatabaseId, session: DB):
     return _get_department(session, department_id)
@@ -234,7 +236,7 @@ def get_club_department(department_id: DatabaseId, session: DB):
 @router.get(
     "/departments/{department_id:int}/roster",
     response_model=list[RosterEntryResponse],
-    dependencies=[Depends(admin_guard)],
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_VIEW))],
 )
 def get_club_department_roster(department_id: DatabaseId, session: DB, semester_id: UUID | None = None):
     """Everyone on the department's roster that semester, each with all the roles they hold there."""
@@ -253,7 +255,7 @@ def get_club_department_roster(department_id: DatabaseId, session: DB, semester_
     return list(entries.values())
 
 
-@router.get("/history", response_model=ClubChangesResponse, dependencies=[Depends(admin_guard)])
+@router.get("/history", response_model=ClubChangesResponse, dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_VIEW))])
 def get_club_history(
     session: DB,
     semester_id: UUID | None = None,
@@ -289,7 +291,10 @@ def get_club_history(
 
 
 @router.post(
-    "/departments", status_code=201, response_model=ClubDepartmentResponse, dependencies=[Depends(super_admin_guard)]
+    "/departments",
+    status_code=201,
+    response_model=ClubDepartmentResponse,
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE))],
 )
 def create_club_department(payload: service.DepartmentSettings, session: DB, semester_id: UUID | None = None):
     """Create a department; it becomes part of ``semester_id`` (default: the current semester)."""
@@ -299,7 +304,9 @@ def create_club_department(payload: service.DepartmentSettings, session: DB, sem
 
 
 @router.put(
-    "/departments/{department_id:int}", response_model=ClubDepartmentResponse, dependencies=[Depends(super_admin_guard)]
+    "/departments/{department_id:int}",
+    response_model=ClubDepartmentResponse,
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE))],
 )
 def update_club_department(department_id: DatabaseId, payload: UpdateDepartmentRequest, session: DB):
     department = service.update_department_settings(session, department_id, payload)
@@ -309,7 +316,7 @@ def update_club_department(department_id: DatabaseId, payload: UpdateDepartmentR
 @router.post(
     "/departments/{department_id:int}/archive",
     response_model=ClubDepartmentResponse,
-    dependencies=[Depends(super_admin_guard)],
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE))],
 )
 def archive_club_department(department_id: DatabaseId, session: DB):
     department = service.set_department_active(session, department_id, active=False)
@@ -319,7 +326,7 @@ def archive_club_department(department_id: DatabaseId, session: DB):
 @router.post(
     "/departments/{department_id:int}/restore",
     response_model=ClubDepartmentResponse,
-    dependencies=[Depends(super_admin_guard)],
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE))],
 )
 def restore_club_department(department_id: DatabaseId, session: DB):
     department = service.set_department_active(session, department_id, active=True)
@@ -329,20 +336,30 @@ def restore_club_department(department_id: DatabaseId, session: DB):
 # ---------- the structure of one semester ----------
 
 
-@router.post(SCOPE, status_code=201, response_model=ClubDepartmentResponse, dependencies=[Depends(super_admin_guard)])
+@router.post(
+    SCOPE,
+    status_code=201,
+    response_model=ClubDepartmentResponse,
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE))],
+)
 def add_club_department_to_semester(semester_id: UUID, department_id: DatabaseId, session: DB):
     scope = service.add_department_to_semester(session, str(semester_id), department_id)
     return _commit_department(session, scope.department)
 
 
-@router.delete(SCOPE, response_model=RemovedResponse, dependencies=[Depends(super_admin_guard)])
+@router.delete(SCOPE, response_model=RemovedResponse, dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE))])
 def remove_club_department_from_semester(semester_id: UUID, department_id: DatabaseId, session: DB):
     service.remove_department_from_semester(session, str(semester_id), department_id)
     _commit_and_refresh(session)
     return RemovedResponse(removed=1)
 
 
-@router.post(SCOPE + "/members", status_code=201, response_model=MembershipResponse)
+@router.post(
+    SCOPE + "/members",
+    status_code=201,
+    response_model=MembershipResponse,
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE_ROSTER, path_departments))],
+)
 def add_club_member(
     semester_id: UUID, department_id: DatabaseId, payload: AddMemberRequest, session: DB, actor: ManagementActor
 ):
@@ -352,7 +369,11 @@ def add_club_member(
     return result
 
 
-@router.delete(SCOPE + "/members/{member_id:int}", response_model=RemovedResponse)
+@router.delete(
+    SCOPE + "/members/{member_id:int}",
+    response_model=RemovedResponse,
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE_ROSTER, path_departments))],
+)
 def remove_club_member(
     semester_id: UUID, department_id: DatabaseId, member_id: DatabaseId, session: DB, actor: ManagementActor
 ):
@@ -362,7 +383,11 @@ def remove_club_member(
     return RemovedResponse(removed=removed)
 
 
-@router.put(SCOPE + "/members/{member_id:int}/roles/{role_key}", response_model=MembershipResponse)
+@router.put(
+    SCOPE + "/members/{member_id:int}/roles/{role_key}",
+    response_model=MembershipResponse,
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE_ROSTER, path_departments))],
+)
 def grant_club_role(
     semester_id: UUID,
     department_id: DatabaseId,
@@ -387,7 +412,11 @@ def grant_club_role(
     return result
 
 
-@router.delete(SCOPE + "/members/{member_id:int}/roles/{role_key}", response_model=RemovedResponse)
+@router.delete(
+    SCOPE + "/members/{member_id:int}/roles/{role_key}",
+    response_model=RemovedResponse,
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE_ROSTER, path_departments))],
+)
 def revoke_club_role(
     semester_id: UUID,
     department_id: DatabaseId,
@@ -402,7 +431,11 @@ def revoke_club_role(
     return RemovedResponse(removed=1)
 
 
-@router.post("/semesters/{semester_id}/copy-from/{source_semester_id}", response_model=CopySemesterResponse)
+@router.post(
+    "/semesters/{semester_id}/copy-from/{source_semester_id}",
+    response_model=CopySemesterResponse,
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_MANAGE))],
+)
 def copy_club_structure(semester_id: UUID, source_semester_id: UUID, session: DB, actor: ManagementActor):
     """Start an empty semester from another semester's departments and roster."""
     copied = service.copy_semester(session, str(semester_id), str(source_semester_id), actor=actor)
