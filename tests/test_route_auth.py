@@ -205,6 +205,17 @@ EXPECTED_AUTH: dict[str, str | None] = {
     # Answers "not staff" for anyone signed in who is not; see app/services/permissions.
     "GET /access/me": "authenticated_guard",
     "GET /access/events/{event_id:int}": "admin.access",
+    # The permissions screens.
+    "GET /permissions/catalogue": "admin.access",
+    "GET /permissions/assignments": "permissions.manage",
+    "PUT /permissions/shared": "permissions.manage",
+    "PUT /permissions/departments/{department_id:int}": "permissions.manage",
+    "GET /permissions/super-admins": "super_admin",
+    "POST /permissions/super-admins": "super_admin",
+    "DELETE /permissions/super-admins/{member_id:int}": "super_admin",
+    "GET /permissions/departments/{department_id:int}/grants": "permissions.grant for department",
+    "POST /permissions/departments/{department_id:int}/grants": "permissions.grant for department",
+    "DELETE /permissions/departments/{department_id:int}/grants/{grant_id:int}": "permissions.grant for department",
     # Events pipeline: staff at the door; the routes marked admin.access check the
     # pipeline permissions for the request's department in app/services/event_pipeline.py.
     "GET /pipeline/me": "admin.access",

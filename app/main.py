@@ -35,6 +35,7 @@ from app.routers import (
     wallet,
     club_structure,
     access,
+    permissions,
     pipeline,
     pipeline_requests,
 )
@@ -120,5 +121,6 @@ app.include_router(cache.router)
 app.include_router(wallet.router)
 app.include_router(club_structure.router)
 app.include_router(access.router)
+app.include_router(permissions.router)
 app.include_router(pipeline.router)
 app.include_router(pipeline_requests.router)

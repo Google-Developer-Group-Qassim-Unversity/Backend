@@ -1049,6 +1049,10 @@ class PermissionGrants(Base):
         TINYINT(unsigned=True), Computed("CASE WHEN revoked_at IS NULL THEN 1 END", persisted=True)
     )
 
+    member: Mapped["Members"] = relationship("Members", foreign_keys=[member_id])
+    granter: Mapped["Members"] = relationship("Members", foreign_keys=[granted_by])
+    revoker: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[revoked_by])
+
 
 class PipelineTeam(str, enum.Enum):
     """The three departments every event request passes through."""
