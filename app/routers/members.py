@@ -1,7 +1,7 @@
 import logging
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from app.DB import members as member_queries
-from app.DB.schema import Members, RoleType
+from app.DB.schema import Members
 
 from app.routers.models import (
     Member_model,
@@ -9,7 +9,6 @@ from app.routers.models import (
     NotFoundResponse,
     ConflictResponse,
     CreatedMemberModel,
-    MemberWithRole_model,
     PaginatedMembers_model,
     MemberStats_model,
     MemberUpdateModel,
@@ -22,7 +21,7 @@ from app.helpers import CurrentMember, authenticated_guard, credentials_to_membe
 from typing import Annotated
 from app.dependencies import DB
 from app.services.permissions.catalogue import Perm
-from app.services.permissions.guards import Require, SuperAdmin
+from app.services.permissions.guards import Require
 
 logger = logging.getLogger(__name__)
 
@@ -264,24 +263,3 @@ def create_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(a
             logger.info(f"member {new_member.uni_id} {'Created' if not already_exist else 'Updated'} successfully")
         else:
             logger.debug("request body: %s", credentials.model_dump())
-
-
-@router.get(
-    "/roles",
-    status_code=status.HTTP_200_OK,
-    response_model=list[MemberWithRole_model],
-    dependencies=[Depends(SuperAdmin)],
-)
-def get_member_roles(session: DB):
-    roles = member_queries.get_member_roles(session)
-    return roles
-
-
-@router.post(
-    "/roles", status_code=status.HTTP_200_OK, response_model=MemberWithRole_model, dependencies=[Depends(SuperAdmin)]
-)
-def update_member_roles(member_id: int, new_role: RoleType, session: DB):
-    logger.info(f"Updating role for member_id {member_id} to {new_role.value}")
-    updated_member = member_queries.update_member_role(session, member_id, new_role=new_role)
-    session.commit()
-    return updated_member

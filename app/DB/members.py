@@ -2,8 +2,8 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, func, or_, asc, desc, case
-from app.DB.schema import Members, MembersLogs, Role, RoleType
-from app.exceptions import DataIntegrityError, MemberNotFound
+from app.DB.schema import Members, MembersLogs
+from app.exceptions import MemberNotFound
 from app.routers.models import Member_model
 from datetime import datetime
 
@@ -211,71 +211,6 @@ def update_member(session: Session, member: Member_model, is_authenticated: bool
     session.flush()
     logger.info("Updated member %s", existing_member.id)
     return existing_member
-
-
-def get_member_roles(session: Session):
-    query = session.query(
-        Members.id,
-        Members.name,
-        Members.email,
-        Members.phone_number,
-        Members.uni_id,
-        Members.gender,
-        Members.uni_level,
-        Members.uni_college,
-        Members.is_authenticated,
-        Members.created_at,
-        Members.updated_at,
-        Role.role,
-    ).join(Role, Members.id == Role.member_id)
-
-    return [row._asdict() for row in query.all()]
-
-
-def update_member_role(session: Session, member_id: int, new_role: RoleType):
-    existing_member = session.scalar(select(Members).where(Members.id == member_id))
-    if not existing_member:
-        raise MemberNotFound(member_id)
-
-    # Check if member already has a role
-    existing_role = session.scalar(select(Role).where(Role.member_id == member_id))
-
-    if existing_role:
-        # Update existing role
-        existing_role.role = new_role
-    else:
-        # Create new role entry
-        new_role_entry = Role(member_id=member_id, role=new_role)
-        session.add(new_role_entry)
-
-    session.flush()
-
-    # Return member with role using the same query structure as get_member_roles
-    result = (
-        session.query(
-            Members.id,
-            Members.name,
-            Members.email,
-            Members.phone_number,
-            Members.uni_id,
-            Members.gender,
-            Members.uni_level,
-            Members.uni_college,
-            Members.is_authenticated,
-            Members.created_at,
-            Members.updated_at,
-            Role.role,
-        )
-        .join(Role, Members.id == Role.member_id)
-        .filter(Members.id == member_id)
-        .first()
-    )
-    if result is None:
-        # Should be unreachable: existing_member was just confirmed to exist and
-        # the role row above was either updated or created and flushed.
-        raise DataIntegrityError(f"Member [{member_id}] has no role row immediately after one was assigned")
-
-    return result._asdict()
 
 
 def set_member_clerk_user_id(session: Session, member: Members, clerk_user_id: str) -> Members:

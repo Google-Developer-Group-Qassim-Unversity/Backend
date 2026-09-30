@@ -45,15 +45,18 @@ def make_member(session, *, clerk_user_id=None, uni_id=None, email="wallet@examp
         session.add(department)
         session.flush()
         semester = get_semester_by_hijri_code(session, 475)
+        assert semester is not None
         session.add(SemesterDepartments(semester_id=semester.id, department_id=department.id))
         session.flush()
         for key in ("member", "leader"):
+            role = get_role_by_key(session, key)
+            assert role is not None
             session.add(
                 ClubMemberships(
                     semester_id=semester.id,
                     department_id=department.id,
                     member_id=member.id,
-                    role_id=get_role_by_key(session, key).id,
+                    role_id=role.id,
                     created_by="test",
                 )
             )

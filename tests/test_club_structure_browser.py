@@ -32,7 +32,7 @@ from app.DB.schema import (
     Departments,
     DepartmentsType,
     Members,
-    Role,
+    SuperAdmins,
     SemesterDepartments,
     Semesters,
     SemesterTerm,
@@ -80,7 +80,7 @@ def test_browser_manages_club_through_real_api(engine, seed_core_data, monkeypat
         future_id = future.id
         member_ids = [p.id for p in people]
         before_members = session.scalar(select(func.count()).select_from(Members))
-        before_roles = session.scalar(select(func.count()).select_from(Role))
+        before_super_admins = session.scalar(select(func.count()).select_from(SuperAdmins))
         session.commit()
 
     def database():
@@ -150,7 +150,8 @@ def test_browser_manages_club_through_real_api(engine, seed_core_data, monkeypat
         assert cache_reset.call_count >= 5  # create, edit, archive/restore cycles
         with Session(engine) as session:
             assert session.scalar(select(func.count()).select_from(Members)) == before_members
-            assert session.scalar(select(func.count()).select_from(Role)) == before_roles
+            # Roster changes never make anyone a super admin.
+            assert session.scalar(select(func.count()).select_from(SuperAdmins)) == before_super_admins
             changes = session.scalars(
                 select(ClubMembershipChanges).where(ClubMembershipChanges.member_id.in_(member_ids))
             ).all()

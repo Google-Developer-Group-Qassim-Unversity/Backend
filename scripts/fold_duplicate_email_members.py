@@ -12,8 +12,6 @@ Canonical selection per duplicate-email group (in order):
   3. earliest created_at wins
 
 Merge rules, non-canonical -> canonical:
-  - role: moved only if canonical has no role row yet, otherwise the
-    non-canonical role row is dropped (canonical's role wins)
   - members_logs: moved unless canonical already has a row for the same
     log_id, in which case the non-canonical row is dropped (dedupe to one
     credit instead of double-counting points for the same action)
@@ -36,7 +34,7 @@ sys.path.insert(0, str(script_dir.parent))
 
 from sqlalchemy import func, select
 from app.DB.main import db_session
-from app.DB.schema import EmailLogs, EmailTemplates, Members, MembersLogs, Role, Submissions
+from app.DB.schema import EmailLogs, EmailTemplates, Members, MembersLogs, Submissions
 
 
 def find_duplicate_groups(session) -> list[list[Members]]:
@@ -85,7 +83,7 @@ def merge_group(session, members: list[Members], report: list[str]) -> dict:
     canonical = pick_canonical(session, members)
     duplicates = [m for m in members if m.id != canonical.id]
 
-    stats = {"role_moved": 0, "role_dropped": 0, "logs_moved": 0, "logs_deduped": 0, "subs_moved": 0, "subs_deduped": 0}
+    stats = {"logs_moved": 0, "logs_deduped": 0, "subs_moved": 0, "subs_deduped": 0}
 
     report.append(
         f"\n=== {canonical.email} : keeping member {canonical.id} "
@@ -97,18 +95,6 @@ def merge_group(session, members: list[Members], report: list[str]) -> dict:
             f"  folding member {dup.id} ({dup.name!r}, uni_id={dup.uni_id}, "
             f"is_authenticated={dup.is_authenticated}) into {canonical.id}"
         )
-
-        canonical_role = session.scalar(select(Role).where(Role.member_id == canonical.id))
-        for role_row in session.scalars(select(Role).where(Role.member_id == dup.id)).all():
-            if canonical_role is None:
-                role_row.member_id = canonical.id
-                canonical_role = role_row
-                stats["role_moved"] += 1
-                report.append(f"    role {role_row.role}: moved (canonical had none)")
-            else:
-                report.append(f"    role {role_row.role}: dropped (canonical already has role {canonical_role.role})")
-                session.delete(role_row)
-                stats["role_dropped"] += 1
 
         canonical_log_ids = set(
             session.scalars(select(MembersLogs.log_id).where(MembersLogs.member_id == canonical.id)).all()

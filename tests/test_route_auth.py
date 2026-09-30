@@ -44,8 +44,8 @@ def _guards(dependant) -> set[str]:
     label = getattr(call, "auth_label", None)
     if label:
         found.add(label)
-    elif getattr(call, "__name__", None) in CLERK_GUARDS:
-        found.add(call.__name__)
+    elif (name := getattr(call, "__name__", None)) in CLERK_GUARDS:
+        found.add(name)
     for sub in dependant.dependencies:
         found |= _guards(sub)
     return found
@@ -136,7 +136,6 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /members/": "members.view",
     "GET /members/me": "authenticated_guard",
     "GET /members/paginated": "members.view",
-    "GET /members/roles": "super_admin",
     "GET /members/stats": "members.view",
     "GET /members/uni-id/{uni_id}": "members.view",
     "GET /members/{member_id:int}": "members.view",
@@ -180,7 +179,6 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "POST /members/": "authenticated_guard",
     "POST /members/batch": "members.create",
     "POST /members/manual": "members.create",
-    "POST /members/roles": "super_admin",
     "POST /semesters": "semesters.manage",
     "POST /submissions/google/webhook": None,
     "POST /submissions/{form_id:int}": "authenticated_guard",

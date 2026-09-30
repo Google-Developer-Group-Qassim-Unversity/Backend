@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from tests.utils import assert_2xx, assert_forbidden, assert_not_found, assert_unprocessable
-from app.DB.schema import Members, MembersGender, Role, RoleType
+from app.DB.schema import Members, MembersGender
 
 
 def test_create_member(clerk_client: TestClient):
@@ -208,100 +208,6 @@ def test_get_member_by_id_not_found(admin_client: TestClient):
 
 def test_unauthorized_get_member_by_id(clerk_client: TestClient):
     response = clerk_client.get("/members/1")
-    assert_forbidden(response)
-
-
-# === Member Role Tests ===
-
-
-def test_update_member_role_success(super_admin_client: TestClient):
-    # 1. create member (self)
-    create_response = super_admin_client.post("/members/")
-    assert_2xx(create_response)
-    member_id = create_response.json()["member"]["id"]
-
-    # 2. update member role to "admin"
-    response = super_admin_client.post("/members/roles", params={"member_id": member_id, "new_role": "admin"})
-    assert_2xx(response)
-    body = response.json()
-    assert body["role"] == "admin"
-    assert body["id"] == member_id
-
-
-def test_update_role_member_not_found(super_admin_client: TestClient):
-    response = super_admin_client.post("/members/roles", params={"member_id": 9999, "new_role": "admin"})
-    assert_not_found(response)
-
-
-def test_update_member_role_member_unauthorized(clerk_client: TestClient):
-    # 1. create member (self)
-    create_response = clerk_client.post("/members/")
-    assert_2xx(create_response)
-    member_id = create_response.json()["member"]["id"]
-
-    # 2. attempt to update member role to "admin"
-    response = clerk_client.post("/members/roles", params={"member_id": member_id, "new_role": "admin"})
-    assert_forbidden(response)
-
-
-def test_update_member_role_admin_unauthorized(admin_client: TestClient):
-    # 1. create member (self)
-    create_response = admin_client.post("/members/")
-    assert_2xx(create_response)
-    member_id = create_response.json()["member"]["id"]
-
-    # 2. update admin role to "super_admin"
-    response = admin_client.post("/members/roles", params={"member_id": member_id, "new_role": "super_admin"})
-    assert_forbidden(response)
-
-
-def test_update_member_role_invalid_role(super_admin_client: TestClient):
-    # 1. create member (self)
-    create_response = super_admin_client.post("/members/")
-    assert_2xx(create_response)
-    member_id = create_response.json()["member"]["id"]
-
-    # 2. attempt to update member role to invalid role "invalid_role"
-    response = super_admin_client.post("/members/roles", params={"member_id": member_id, "new_role": "invalid_role"})
-    assert_unprocessable(response)
-
-
-def test_update_member_role_from_existing(super_admin_client: TestClient, db_session, seed_refs):
-    db_session.add(Role(member_id=seed_refs.ahmed.id, role=RoleType.ADMIN))
-    db_session.commit()
-
-    response = super_admin_client.post(
-        "/members/roles", params={"member_id": seed_refs.ahmed.id, "new_role": "super_admin"}
-    )
-    assert_2xx(response)
-    body = response.json()
-    assert body["role"] == "super_admin"
-
-
-# === GET /roles Tests ===
-
-
-def test_get_member_roles(super_admin_client: TestClient, db_session, seed_refs):
-    db_session.add(Role(member_id=seed_refs.ahmed.id, role=RoleType.ADMIN))
-    db_session.commit()
-
-    response = super_admin_client.get("/members/roles")
-    assert_2xx(response)
-    roles = response.json()
-    assert len(roles) >= 1, f"Expected at least 1 role but got {len(roles)}"
-    admin_role = next((r for r in roles if r["id"] == seed_refs.ahmed.id), None)
-    assert admin_role is not None, f"Expected to find role for member {seed_refs.ahmed.id}"
-    assert admin_role["role"] == "admin"
-
-
-def test_get_member_roles_empty(super_admin_client: TestClient):
-    response = super_admin_client.get("/members/roles")
-    assert_2xx(response)
-    assert response.json() == []
-
-
-def test_unauthorized_get_member_roles(admin_client: TestClient):
-    response = admin_client.get("/members/roles")
     assert_forbidden(response)
 
 

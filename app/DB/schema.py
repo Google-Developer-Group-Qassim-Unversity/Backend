@@ -98,13 +98,6 @@ class ModificationsType(str, enum.Enum):
     DISCOUNT = "discount"
 
 
-class RoleType(str, enum.Enum):
-    ADMIN = "admin"
-    SUPER_ADMIN = "super_admin"
-    ADMIN_POINTS = "admin_points"
-    NONE = "none"
-
-
 class MemberProfilesNameLanguage(str, enum.Enum):
     AR = "ar"
     EN = "en"
@@ -478,7 +471,6 @@ class Members(Base):
     email: Mapped[Optional[str]] = mapped_column(String(100))
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
 
-    role: Mapped[list["Role"]] = relationship("Role", back_populates="member", passive_deletes=True)
     profile: Mapped[Optional["MemberProfiles"]] = relationship(
         "MemberProfiles", back_populates="member", uselist=False, passive_deletes=True
     )
@@ -572,24 +564,6 @@ class Logs(Base):
     modifications: Mapped[list["Modifications"]] = relationship(
         "Modifications", back_populates="log", passive_deletes=True
     )
-
-
-class Role(Base):
-    __tablename__ = "role"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["member_id"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_role_member"
-        ),
-        Index("fk_role_member", "member_id"),
-    )
-
-    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
-    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    role: Mapped[RoleType] = mapped_column(
-        Enum(RoleType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
-    )
-
-    member: Mapped["Members"] = relationship("Members", back_populates="role")
 
 
 class MemberProfiles(Base):
