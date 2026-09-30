@@ -61,7 +61,7 @@ def test_only_plain_members_of_that_department_can_be_granted(club, ai):
 def test_granting_twice_is_a_conflict_and_revoking_keeps_history(club, ai):
     department, leader, member = ai
     client = club.sign_in(leader)
-    payload = {"member_id": member.id, "permission": "attendance.take"}
+    payload = {"member_id": member.id, "permission": "events.edit"}
     grant_id = client.post(GRANTS.format(department.id), json=payload).json()["id"]
     assert client.post(GRANTS.format(department.id), json=payload).json()["code"] == "already_granted"
 
@@ -69,7 +69,7 @@ def test_granting_twice_is_a_conflict_and_revoking_keeps_history(club, ai):
     assert client.get(GRANTS.format(department.id)).json()["grants"] == []
     history = client.get(GRANTS.format(department.id), params={"history": True}).json()["grants"]
     assert history[0]["revoked_by"]["member_id"] == leader.id
-    assert club.access(member).can(Perm.ATTENDANCE_TAKE, department.id) is False
+    assert club.access(member).can(Perm.EVENTS_EDIT, department.id) is False
     assert client.post(GRANTS.format(department.id), json=payload).status_code == 201
 
 

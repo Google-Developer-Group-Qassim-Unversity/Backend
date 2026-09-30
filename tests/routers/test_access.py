@@ -221,9 +221,9 @@ def test_a_regular_user_is_refused_everywhere_in_the_admin_api(club):
 
 def test_super_admin_routes_want_a_super_admin_from_the_database(club):
     leader = club.join(club.person(), club.department("AI"), "leader")
-    assert club.sign_in(leader, metadata={"is_super_admin": True}).get("/members/roles").status_code == 403
+    assert club.sign_in(leader, metadata={"is_super_admin": True}).get("/permissions/super-admins").status_code == 403
 
-    assert club.sign_in(club.super_admin(club.person())).get("/members/roles").status_code == 200
+    assert club.sign_in(club.super_admin(club.person())).get("/permissions/super-admins").status_code == 200
 
 
 def test_access_for_an_event_follows_its_department(club, seed_refs):
