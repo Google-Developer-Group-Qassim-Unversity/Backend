@@ -26,3 +26,9 @@ class AccessMe(BaseModel):
     departments: list[AccessDepartment]
     # Every permission the caller has somewhere. A super admin has them all.
     permissions: list[str]
+
+
+class AccessForEvent(BaseModel):
+    event_id: int
+    # The permissions the caller has for this event: department-scoped ones checked against its department(s).
+    permissions: list[str]

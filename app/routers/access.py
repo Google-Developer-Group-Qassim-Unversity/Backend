@@ -6,9 +6,11 @@ from app.DB import permissions as queries
 from app.DB.schema import Semesters
 from app.dependencies import DB
 from app.helpers import authenticated_guard
-from app.routers.access_models import AccessDepartment, AccessMe, AccessSemester
-from app.services.permissions.catalogue import CATALOGUE
+from app.routers.access_models import AccessDepartment, AccessForEvent, AccessMe, AccessSemester
+from app.services.permissions.catalogue import CATALOGUE, Perm
+from app.services.permissions.departments import event_departments
 from app.services.permissions.dependencies import CurrentAccess
+from app.services.permissions.guards import Staff
 
 router = APIRouter(prefix="/access", tags=["access"])
 
@@ -35,4 +37,21 @@ def get_my_access(session: DB, access: CurrentAccess):
             for department in departments
         ],
         permissions=sorted(access.permissions()),
+    )
+
+
+@router.get(
+    "/events/{event_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=AccessForEvent,
+    dependencies=[Depends(Staff)],
+)
+def get_my_access_for_event(event_id: int, session: DB, access: CurrentAccess):
+    """What the caller can do to one event, so a page can show only the buttons that will work."""
+    departments = event_departments(session, {"event_id": event_id})
+    return AccessForEvent(
+        event_id=event_id,
+        permissions=sorted(
+            p for p in Perm if (access.can_any(p, departments) if CATALOGUE[p].scope == "dept" else access.can(p))
+        ),
     )

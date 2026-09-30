@@ -204,6 +204,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "PUT /wallet/me": "authenticated_guard",
     # Answers "not staff" for anyone signed in who is not; see app/services/permissions.
     "GET /access/me": "authenticated_guard",
+    "GET /access/events/{event_id:int}": "admin.access",
     # Events pipeline: staff at the door; the routes marked admin.access check the
     # pipeline permissions for the request's department in app/services/event_pipeline.py.
     "GET /pipeline/me": "admin.access",
