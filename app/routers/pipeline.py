@@ -10,7 +10,7 @@ from app.DB import department_permissions as permission_queries
 from app.DB.schema import EventRequests, PipelineTeam
 from app.dependencies import DB
 from app.exceptions import DepartmentForbidden, NotFound, PipelineConflict
-from app.helpers import super_admin_guard
+from app.helpers import admin_guard, super_admin_guard
 from app.routers.pipeline_models import (
     ActingDepartment,
     BanDaysRequest,
@@ -38,7 +38,9 @@ from app.services.department_permissions import Actor, PipelineActor
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/pipeline", tags=["events pipeline"])
+# Admins only until the new permissions system lands: the pipeline's own department
+# checks still run, but a signed-in person with no admin role gets nothing here.
+router = APIRouter(prefix="/pipeline", tags=["events pipeline"], dependencies=[Depends(admin_guard)])
 
 
 def _require_access(actor: PipelineActor) -> None:

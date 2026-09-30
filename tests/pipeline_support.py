@@ -94,9 +94,13 @@ class Pipeline:
             self.session.add(PipelineTeams(team=team, department_id=department.id))
         self.session.flush()
 
-    def sign_in(self, member: Members | None, super_admin: bool = False) -> None:
-        """Sign in as ``member`` through the real guards; only JWT verification is replaced."""
-        metadata = {"is_super_admin": True} if super_admin else {}
+    def sign_in(self, member: Members | None, super_admin: bool = False, admin: bool = True) -> None:
+        """Sign in as ``member`` through the real guards; only JWT verification is replaced.
+
+        The pipeline is admins only for now, so everyone signs in as an admin
+        unless a test says otherwise.
+        """
+        metadata = {"is_super_admin": True} if super_admin else {"is_admin": True} if admin else {}
         subject = member.clerk_user_id if member else "clerk_nobody"
         credentials = HTTPAuthorizationCredentials(
             scheme="Bearer", credentials="test-token", decoded={"sub": subject, "metadata": metadata}

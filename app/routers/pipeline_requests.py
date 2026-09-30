@@ -3,11 +3,12 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
 from app.DB import event_pipeline as queries
 from app.DB.schema import EventRequests, EventRequestStage, PipelineTeam
 from app.dependencies import DB
+from app.helpers import admin_guard
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.pipeline_models import (
     BookRequest,
@@ -35,7 +36,9 @@ from app.services.department_permissions import Actor, PipelineActor
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/pipeline/requests", tags=["events pipeline"])
+# Admins only until the new permissions system lands: the pipeline's own department
+# checks still run, but a signed-in person with no admin role gets nothing here.
+router = APIRouter(prefix="/pipeline/requests", tags=["events pipeline"], dependencies=[Depends(admin_guard)])
 
 
 def summary(request: EventRequests) -> EventRequestSummary:
