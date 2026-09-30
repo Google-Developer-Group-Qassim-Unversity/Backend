@@ -2,12 +2,13 @@
 
 import logging
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, status
 
 from app.DB import department_permissions as queries
 from app.DB.schema import DepartmentPermissions, Departments
 from app.dependencies import DB
 from app.exceptions import NotFound
+from app.helpers import admin_guard
 from app.routers.pipeline_models import (
     DepartmentPermissionsResponse,
     GrantPermissionRequest,
@@ -23,7 +24,11 @@ from app.services.department_permissions import OFFICER_ROLES, Actor
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/departments/{department_id:int}/permissions", tags=["events pipeline"])
+# Admins only until the new permissions system lands: the pipeline's own department
+# checks still run, but a signed-in person with no admin role gets nothing here.
+router = APIRouter(
+    prefix="/departments/{department_id:int}/permissions", tags=["events pipeline"], dependencies=[Depends(admin_guard)]
+)
 
 
 def _grant_response(grant: DepartmentPermissions) -> PermissionGrant:

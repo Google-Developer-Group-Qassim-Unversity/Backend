@@ -153,3 +153,13 @@ def test_permissions_list_shows_officers_grants_and_candidates(pipeline, dept):
     assert [g["member_id"] for g in body["grants"]] == [granted.id]
     assert [c["member_id"] for c in body["candidates"]] == [candidate.id]
     assert body["can_grant"] is True
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/pipeline/me", "/pipeline/calendar?from=2026-07-01&to=2026-07-31", "/pipeline/requests", "/pipeline/inbox"],
+)
+def test_a_signed_in_non_admin_is_refused_even_as_a_leader(pipeline, dept, path):
+    pipeline.sign_in(pipeline.officer(dept), admin=False)
+    assert pipeline.client.get(path).status_code == 403
+    assert pipeline.client.get(permissions_url(dept.id)).status_code == 403
