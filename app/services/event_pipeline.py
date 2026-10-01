@@ -16,6 +16,7 @@ from datetime import date, datetime, time, timedelta
 from enum import Enum
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.DB import pipeline_teams as team_queries
@@ -249,14 +250,20 @@ def _undate(request: EventRequests, reason: EventRequestUndatedReason) -> None:
 # --------------------------------------------------------------------------- booking
 
 
+# MySQL's "Lock wait timeout exceeded" (innodb_lock_wait_timeout, 50s by default).
+LOCK_WAIT_TIMEOUT = 1205
+
+
 @contextmanager
 def booking_lock(session: Session):
-    """Hold the booking lock for a change to who holds which day. Commit inside it."""
-    queries.acquire_booking_lock(session)
+    """Hold the booking lock for a change to who holds which day. Commit inside it; the commit releases it."""
     try:
-        yield
-    finally:
-        queries.release_booking_lock(session)
+        queries.lock_pipeline(session, "booking")
+    except OperationalError as error:
+        if error.orig is not None and error.orig.args and error.orig.args[0] == LOCK_WAIT_TIMEOUT:
+            raise PipelineConflict("busy", "The calendar is busy. Try again in a moment.", 503) from error
+        raise
+    yield
 
 
 def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: int | None) -> None:

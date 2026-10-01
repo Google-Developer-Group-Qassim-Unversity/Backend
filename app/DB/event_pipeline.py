@@ -3,10 +3,10 @@
 from collections.abc import Sequence
 from datetime import date, datetime
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.DB.schema import BookingBans, EventRequestPartners, EventRequests, EventRequestStage
+from app.DB.schema import BookingBans, EventRequestPartners, EventRequests, EventRequestStage, PipelineLocks
 
 
 def get_bans(session: Session, start: date, end: date, lock: bool = False) -> Sequence[BookingBans]:
@@ -113,17 +113,15 @@ def set_partners(session: Session, request: EventRequests, department_ids: list[
     session.flush()
 
 
-def acquire_booking_lock(session: Session) -> None:
-    """Serialize every change to who holds which day, across the four workers.
+def lock_pipeline(session: Session, name: str, wait: bool = True) -> bool:
+    """Lock the ``pipeline_locks`` row ``name`` until this transaction ends.
 
-    A named MySQL lock rather than row locks: two teams booking the same free
-    day have no row in common to lock. It belongs to the connection, so the
-    caller releases it after committing.
+    Serializes work across the four workers, such as every change to who holds
+    which day: two teams booking the same free day have no other row in common
+    to lock. The commit or rollback releases it, whatever connection the pool
+    hands out next. With ``wait=False`` it returns False at once if another
+    transaction holds it.
     """
-    got = session.scalar(text("SELECT GET_LOCK('pipeline_booking', 10)"))
-    if got != 1:
-        raise TimeoutError("Timed out waiting for the booking lock")
-
-
-def release_booking_lock(session: Session) -> None:
-    session.execute(text("SELECT RELEASE_LOCK('pipeline_booking')"))
+    statement = select(PipelineLocks.name).where(PipelineLocks.name == name)
+    statement = statement.with_for_update() if wait else statement.with_for_update(skip_locked=True)
+    return session.scalar(statement) is not None

@@ -1036,6 +1036,18 @@ class PipelineTeam(str, enum.Enum):
     MEDIA = "media"
 
 
+class PipelineLocks(Base):
+    """One row per lock the pipeline takes with ``SELECT ... FOR UPDATE``: ``booking`` and ``sweep``.
+
+    A row lock ends with its transaction, unlike a named ``GET_LOCK``, which
+    belongs to a pooled connection and could outlive the commit.
+    """
+
+    __tablename__ = "pipeline_locks"
+
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
+
+
 class BookingBans(Base):
     """A day Logistics closed to bookings, e.g. exams. Every team sees the reason."""
 
