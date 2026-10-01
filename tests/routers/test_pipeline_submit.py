@@ -139,6 +139,7 @@ def test_a_blank_title_counts_as_missing(pipeline, world):
 
 def test_submit_says_which_team_has_no_department(pipeline, world):
     world["design"].name = "Graphics"
+    pipeline.session.commit()
     request_id = book_complete(pipeline, world["ai"])
 
     response = submit(pipeline, request_id)

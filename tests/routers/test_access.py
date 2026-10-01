@@ -38,7 +38,7 @@ def test_a_plain_member_is_staff_with_the_basics_only(club):
 
 @pytest.mark.parametrize("role", ["leader", "vp"])
 def test_leader_and_vp_get_shared_and_their_departments_permissions(club, role):
-    logistics = club.department("Logistics")
+    logistics = club.department("Transport")
     club.department_permission(logistics, Perm.PIPELINE_BANS)
     officer = club.join(club.person(), logistics, role)
     access = club.access(officer)
@@ -49,7 +49,7 @@ def test_leader_and_vp_get_shared_and_their_departments_permissions(club, role):
 
 
 def test_department_permissions_stay_with_their_department(club):
-    logistics, ai = club.department("Logistics"), club.department("AI")
+    logistics, ai = club.department("Transport"), club.department("AI")
     club.department_permission(logistics, Perm.PIPELINE_BANS)
     ai_leader = club.join(club.person(), ai, "leader")
 
