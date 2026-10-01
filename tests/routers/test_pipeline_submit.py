@@ -10,7 +10,6 @@ from tests.pipeline_support import COMPLETE_DESIGN, book_complete, submit
 @pytest.fixture
 def world(pipeline):
     design, logistics, media = (pipeline.department(n) for n in ("Design", "Logistics", "Media"))
-    pipeline.teams(design, logistics, media)
     ai = pipeline.department("AI")
     leader = pipeline.officer(ai)
     pipeline.sign_in(leader)
@@ -98,3 +97,52 @@ def test_media_has_no_brief(pipeline, world):
     request_id = book_complete(pipeline, world["ai"])
     response = pipeline.client.put(f"/pipeline/requests/{request_id}/briefs/media", json={"brief": {}})
     assert response.status_code == 422
+
+
+def test_a_draft_keeps_everything_typed_when_reopened(pipeline, world):
+    request_id = pipeline.client.post(
+        "/pipeline/requests",
+        json={"department_id": world["ai"].id, "start_date": "2026-07-20", "end_date": "2026-07-20"},
+    ).json()["id"]
+    pipeline.client.put(f"/pipeline/requests/{request_id}/details", json={"title": "Intro to ML", "help_needed": "x"})
+    pipeline.client.put(f"/pipeline/requests/{request_id}/briefs/design", json={"brief": {"idea": "A robot"}})
+    pipeline.client.put(f"/pipeline/requests/{request_id}/briefs/logistics", json={"brief": {"notes": "Projector"}})
+
+    # A fresh read, as when the team comes back to the draft later.
+    body = pipeline.client.get(f"/pipeline/requests/{request_id}").json()
+    assert body["details"]["title"] == "Intro to ML"
+    assert body["details"]["help_needed"] == "x"
+    briefs = {t["team"]: t["brief"] for t in body["tasks"]}
+    assert briefs["design"] == {"idea": "A robot"}
+    assert briefs["logistics"] == {"notes": "Projector"}
+
+
+def test_a_half_typed_email_saves_but_blocks_submit(pipeline, world):
+    request_id = book_complete(pipeline, world["ai"])
+    url = f"/pipeline/requests/{request_id}/details"
+
+    response = pipeline.client.put(url, json={"presenter_email": "ali@", "title": "Kept"})
+    assert response.status_code == 200, response.text
+    assert response.json()["details"]["title"] == "Kept"
+    assert "details.presenter_email" in response.json()["missing"]
+    assert submit(pipeline, request_id).status_code == 422
+
+    body = pipeline.client.put(url, json={"presenter_email": "ali@example.com"}).json()
+    assert "details.presenter_email" not in body["missing"]
+
+
+def test_a_blank_title_counts_as_missing(pipeline, world):
+    request_id = book_complete(pipeline, world["ai"])
+    body = pipeline.client.put(f"/pipeline/requests/{request_id}/details", json={"title": "   "}).json()
+    assert "details.title" in body["missing"]
+
+
+def test_submit_says_which_team_has_no_department(pipeline, world):
+    world["design"].name = "Graphics"
+    pipeline.session.commit()
+    request_id = book_complete(pipeline, world["ai"])
+
+    response = submit(pipeline, request_id)
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "team_not_set"
+    assert "'design'" in response.json()["detail"]

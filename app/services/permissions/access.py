@@ -8,6 +8,8 @@ Clerk only says who someone is. Everything else comes from four places:
 4. the permission assignments: ``shared_permissions`` (every leader and VP),
    ``department_permissions`` (one department's leaders and VPs) and
    ``permission_grants`` (one member, one department, one semester)
+5. the events pipeline's teams, found by department name
+   (``app/DB/pipeline_teams.py``)
 
 The rules:
 
@@ -15,7 +17,8 @@ The rules:
 - Anyone on the current roster is **staff**: they can open the admin app and
   have the staff basics.
 - A **leader or VP** of department D has, for D, the shared permissions plus
-  D's department permissions.
+  D's department permissions, plus its team's permissions when D is the
+  pipeline's Design, Logistics or Media team (``TEAM_PERMISSIONS``).
 - A **member** of D has, for D, what they were granted for D this semester.
   A grant stops counting when the semester ends or they leave D's roster.
 - Everyone else is a regular user, with nothing here.
@@ -26,10 +29,11 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from app.DB import permissions as queries
+from app.DB import pipeline_teams as team_queries
 from app.DB.schema import Members
 from app.exceptions import PermissionDenied
 from app.semesters import current_semester
-from app.services.permissions.catalogue import CATALOGUE, OFFICER_ROLES, STAFF_BASICS, Perm, parse
+from app.services.permissions.catalogue import CATALOGUE, OFFICER_ROLES, STAFF_BASICS, TEAM_PERMISSIONS, Perm, parse
 
 
 @dataclass(frozen=True)
@@ -112,13 +116,17 @@ def resolve_access(session: Session, member: Members | None) -> Access:
     officer_of = {d for d, keys in roles.items() if keys & OFFICER_ROLES}
     shared = parse(queries.get_shared_permissions(session)) if officer_of else frozenset()
     by_department = queries.get_department_permissions(session, officer_of)
+    teams = team_queries.get_teams(session) if officer_of else {}
+    by_team: dict[int, set[Perm]] = {}
+    for team, department in teams.items():
+        by_team.setdefault(department.id, set()).update(TEAM_PERMISSIONS[team])
     grants = queries.get_active_grants(session, semester.id, member.id)
 
     held: dict[int, frozenset[Perm]] = {}
     for department_id in roles:
         perms = set(parse(grants.get(department_id, ())))
         if department_id in officer_of:
-            perms |= shared | parse(by_department.get(department_id, ()))
+            perms |= shared | parse(by_department.get(department_id, ())) | by_team.get(department_id, set())
         held[department_id] = frozenset(perms)
 
     return Access(

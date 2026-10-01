@@ -15,8 +15,11 @@ plan and every decision are on Notion (GDG → Features → Events pipeline).
 `app/services/department_permissions.py`. A department's current-semester
 leader and VPs act for it and can grant that to its members; super admins act
 for every department and skip the time rules (lockout, bans, taken days, the
-4-day limit, the return window). Which department is Design / Logistics /
-Media is the `pipeline_teams` table, set from `/pipeline/team`.
+4-day limit, the return window). Design, Logistics and Media are the
+departments on the current semester's roster whose names contain those words,
+ignoring case (`app/DB/pipeline_teams.py`); none or two matches leaves the team
+unset, and submit says so. Their leaders and VPs get the team's permissions
+from `TEAM_PERMISSIONS` in `app/services/permissions/catalogue.py`.
 
 ## Time
 

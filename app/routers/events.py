@@ -1,6 +1,7 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
+from app.DB import event_pipeline as pipeline_queries
 from app.DB import (
     events as events_queries,
     forms as form_queries,
@@ -33,7 +34,7 @@ from app.services.google_client import set_form_publish_state
 from app.semesters import resolve_semester
 from time import perf_counter
 from typing import Annotated, Literal
-from app.exceptions import DataIntegrityError
+from app.exceptions import DataIntegrityError, PipelineConflict
 from app.dependencies import DB
 from sqlalchemy.orm import Session
 from app.DB.schema import EventsLocationType, EventsStatus, FormType
@@ -326,6 +327,15 @@ def delete_event(event_id: int, session: DB):
     if event.status != "draft":
         logger.error(f"HTTP 400: Cannot delete event [{event_id}] with status [{event.status}]")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only draft events can be deleted")
+
+    # Deleting it would leave the request published with its days taken, and drop
+    # any late penalty with the event's logs (pipeline bug #6).
+    request = pipeline_queries.get_request_by_event_id(session, event_id)
+    if request is not None:
+        raise PipelineConflict(
+            "published_by_pipeline",
+            f"This event was published from events pipeline request #{request.id}, so it can't be deleted",
+        )
 
     event_name = event.name
     events_queries.delete_event(session, event_id)

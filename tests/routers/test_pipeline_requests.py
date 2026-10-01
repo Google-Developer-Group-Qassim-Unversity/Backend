@@ -11,7 +11,6 @@ from app.DB.schema import EventRequests, EventRequestStage
 @pytest.fixture
 def world(pipeline):
     design, logistics, media = (pipeline.department(n) for n in ("Design", "Logistics", "Media"))
-    pipeline.teams(design, logistics, media)
     ai = pipeline.department("AI")
     cyber = pipeline.department("Cyber")
     return {

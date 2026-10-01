@@ -13,7 +13,6 @@ from tests.pipeline_support import book_complete, submit
 @pytest.fixture
 def world(pipeline):
     design, logistics, media = (pipeline.department(n) for n in ("Design", "Logistics", "Media"))
-    pipeline.teams(design, logistics, media)
     ai = pipeline.department("AI")
     people = {
         "ai": pipeline.officer(ai),

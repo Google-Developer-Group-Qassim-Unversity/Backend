@@ -18,11 +18,12 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
 
 from app.DB import email_jobs as job_queries
+from app.DB import event_pipeline as pipeline_queries
 from app.DB.main import db_session
 from app.DB.schema import (
     EmailJobsType,
@@ -39,7 +40,7 @@ from app.services.pipeline_notifications import PendingEmail, send_pipeline_emai
 logger = logging.getLogger(__name__)
 
 SWEEP_EVERY_SECONDS = 300
-LOCK_NAME = "pipeline_sweep"
+LOCK_NAME = "sweep"
 
 
 @dataclass
@@ -115,17 +116,15 @@ def run_sweep(session: Session, now: datetime | None = None) -> SweepResult:
 def sweep_once() -> SweepResult | None:
     """One sweep in its own session, if no other worker is sweeping. None when another one is."""
     with db_session() as session:
-        if session.scalar(text(f"SELECT GET_LOCK('{LOCK_NAME}', 0)")) != 1:
+        # Held until the commit below; another worker sweeping skips this round.
+        if not pipeline_queries.lock_pipeline(session, LOCK_NAME, wait=False):
             return None
-        try:
-            result = run_sweep(session)
-            session.commit()
-            for email in result.emails:
-                job = job_queries.create_job(session, EmailJobsType.BLAST, email.sent_by_id, total=len(email.emails))
-                email.data["job_id"] = job.id
-            session.commit()
-        finally:
-            session.execute(text(f"SELECT RELEASE_LOCK('{LOCK_NAME}')"))
+        result = run_sweep(session)
+        session.commit()
+        for email in result.emails:
+            job = job_queries.create_job(session, EmailJobsType.BLAST, email.sent_by_id, total=len(email.emails))
+            email.data["job_id"] = job.id
+        session.commit()
     logger.info("Pipeline sweep: %s", result.counts())
     return result
 

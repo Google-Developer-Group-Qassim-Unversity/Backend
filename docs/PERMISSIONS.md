@@ -9,7 +9,7 @@ database says **what they can do**. Nothing reads Clerk metadata for access.
 | --- | --- |
 | A regular user (not on this semester's roster) | nothing here - gdg.com only |
 | Anyone on the **current semester's roster** (`club_memberships`) | **staff**: the admin app, and the staff basics (`admin.access`, `events.view`, `club_structure.view`, `uploads`) |
-| A **leader or VP** of department D | for D: the **shared** permissions + **D's own** permissions |
+| A **leader or VP** of department D | for D: the **shared** permissions + **D's own** permissions, + its **team's** permissions if D is the pipeline's Design, Logistics or Media (found by name) |
 | A plain **member** of D | for D: what a leader or VP of D **granted** them this semester |
 | A **super admin** (`super_admins`) | everything, everywhere, roster or not |
 

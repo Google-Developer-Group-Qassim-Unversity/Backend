@@ -217,7 +217,6 @@ EXPECTED_AUTH: dict[str, str | None] = {
     # Events pipeline: staff at the door; the routes marked admin.access check the
     # pipeline permissions for the request's department in app/services/event_pipeline.py.
     "GET /pipeline/me": "admin.access",
-    "PUT /pipeline/teams": "pipeline.teams",
     "GET /pipeline/calendar": "admin.access",
     "PUT /pipeline/calendar/bans": "pipeline.bans",
     "DELETE /pipeline/calendar/bans": "pipeline.bans",

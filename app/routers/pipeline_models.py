@@ -3,7 +3,7 @@
 from datetime import date, time
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.DB.schema import (
     EventRequestAudience,
@@ -50,12 +50,6 @@ class PipelineMeResponse(BaseModel):
     has_access: bool
     departments: list[ActingDepartment]
     teams: list[PipelineTeamEntry]
-
-
-class SetPipelineTeamsRequest(BaseModel):
-    design: int | None = None
-    logistics: int | None = None
-    media: int | None = None
 
 
 class CalendarDayRequest(BaseModel):
@@ -115,7 +109,8 @@ class EventDetails(BaseModel):
     description: str | None = Field(default=None, max_length=5000)
     event_type: EventRequestType | None = None
     presenter_name: str | None = Field(default=None, max_length=100)
-    presenter_email: EmailStr | None = None
+    # A plain string so a half-typed address still saves with the draft; submit checks it is an email.
+    presenter_email: str | None = Field(default=None, max_length=150)
     # One mode per booked day, keyed by the day.
     day_modes: dict[date, DayMode] | None = None
     daily_start_time: time | None = None
@@ -124,7 +119,8 @@ class EventDetails(BaseModel):
     location_scope: EventRequestLocationScope | None = None
     audience: EventRequestAudience | None = None
     registration: EventRequestRegistration | None = None
-    expected_accepted: int | None = Field(default=None, ge=1, le=100000)
+    # 0 saves with the draft like any half-filled field; submit needs at least 1.
+    expected_accepted: int | None = Field(default=None, ge=0, le=100000)
     help_needed: str | None = Field(default=None, max_length=5000)
 
 

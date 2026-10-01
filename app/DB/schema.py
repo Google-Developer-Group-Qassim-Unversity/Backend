@@ -1036,23 +1036,16 @@ class PipelineTeam(str, enum.Enum):
     MEDIA = "media"
 
 
-class PipelineTeams(Base):
-    """Which department plays which part in the events pipeline. Set by a super admin."""
+class PipelineLocks(Base):
+    """One row per lock the pipeline takes with ``SELECT ... FOR UPDATE``: ``booking`` and ``sweep``.
 
-    __tablename__ = "pipeline_teams"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["department_id"], ["departments.id"], name="fk_pipeline_teams_department", ondelete="RESTRICT"
-        ),
-        Index("uq_pipeline_teams_department", "department_id", unique=True),
-    )
+    A row lock ends with its transaction, unlike a named ``GET_LOCK``, which
+    belongs to a pooled connection and could outlive the commit.
+    """
 
-    team: Mapped[PipelineTeam] = mapped_column(
-        Enum(PipelineTeam, values_callable=lambda cls: [member.value for member in cls]), primary_key=True
-    )
-    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    __tablename__ = "pipeline_locks"
 
-    department: Mapped["Departments"] = relationship("Departments")
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
 
 
 class BookingBans(Base):

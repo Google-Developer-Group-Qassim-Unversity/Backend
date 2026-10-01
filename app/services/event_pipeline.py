@@ -16,10 +16,12 @@ from datetime import date, datetime, time, timedelta
 from enum import Enum
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.DB import pipeline_teams as team_queries
 from app.DB import event_pipeline as queries
+from app.DB import actions as action_queries
 from app.DB import logs as log_queries
 from app.DB.schema import (
     Departments,
@@ -137,10 +139,17 @@ def calendar(session: Session, start: date, end: date) -> list[CalendarDay]:
 
 
 def team_department_id(session: Session, team: PipelineTeam) -> int:
-    department_id = team_queries.get_team_department_id(session, team)
-    if department_id is None:
-        raise PipelineConflict("team_not_set", f"No department is set as the {team.value} team yet")
-    return department_id
+    """The department playing ``team`` this semester: the one whose name contains the team's name."""
+    found = team_queries.get_team_candidates(session)[team]
+    if len(found) == 1:
+        return found[0].id
+    if not found:
+        detail = f"No department this semester has '{team.value}' in its name"
+    else:
+        detail = f"More than one department this semester has '{team.value}' in its name: " + ", ".join(
+            d.name for d in found
+        )
+    raise PipelineConflict("team_not_set", f"{detail}. Rename one in Club structure.")
 
 
 # The permission to work each team's requests.
@@ -242,14 +251,20 @@ def _undate(request: EventRequests, reason: EventRequestUndatedReason) -> None:
 # --------------------------------------------------------------------------- booking
 
 
+# MySQL's "Lock wait timeout exceeded" (innodb_lock_wait_timeout, 50s by default).
+LOCK_WAIT_TIMEOUT = 1205
+
+
 @contextmanager
 def booking_lock(session: Session):
-    """Hold the booking lock for a change to who holds which day. Commit inside it."""
-    queries.acquire_booking_lock(session)
+    """Hold the booking lock for a change to who holds which day. Commit inside it; the commit releases it."""
     try:
-        yield
-    finally:
-        queries.release_booking_lock(session)
+        queries.lock_pipeline(session, "booking")
+    except OperationalError as error:
+        if error.orig is not None and error.orig.args and error.orig.args[0] == LOCK_WAIT_TIMEOUT:
+            raise PipelineConflict("busy", "The calendar is busy. Try again in a moment.", 503) from error
+        raise
+    yield
 
 
 def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: int | None) -> None:
@@ -421,7 +436,7 @@ def visible_department_ids(session: Session, caller: Caller) -> set[int] | None:
     requesting = caller.access.departments_for(Perm.PIPELINE_REQUEST)
     if requesting is None:
         return None
-    teams = {row.department_id for row in team_queries.get_teams(session) if caller.access.can(TEAM_PERMS[row.team])}
+    teams = {d.id for team, d in team_queries.get_teams(session).items() if caller.access.can(TEAM_PERMS[team])}
     return set(requesting) | teams
 
 
@@ -613,7 +628,14 @@ def resubmit(session: Session, caller: Caller, request: EventRequests) -> Pendin
     return reach_team(session, caller, request, PipelineTeam.DESIGN, PipelineNotificationKind.REQUEST_RECEIVED)
 
 
+# While the teams are working on it. A request published early by a super admin
+# can have a task left open; it stays open, and completing it changes nothing.
+WORKING_STAGES = {EventRequestStage.IN_REVIEW, EventRequestStage.RETURNED, EventRequestStage.MEDIA}
+
+
 def can_complete(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> bool:
+    if request.stage not in WORKING_STAGES:
+        return False
     task = get_task(request, team)
     if task is None or task.status != EventRequestTaskStatus.OPEN:
         return False
@@ -626,6 +648,10 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
     """A team marks its part done. Design done sends the request to Media; all three done makes it ready."""
     if not can_complete(session, caller, request, team):
         require_team(session, caller, team)
+        if request.stage not in WORKING_STAGES:
+            raise PipelineConflict(
+                "cannot_complete", f"The request is {request.stage.value}; there is nothing to mark done"
+            )
         raise PipelineConflict("cannot_complete", f"The {team.value} part is not open")
     now = clock.now()
     task = get_task(request, team)
@@ -736,7 +762,9 @@ def publish(
 ) -> int:
     """Create the real event, in the same transaction, the same way ``POST /events/`` does.
 
-    Any late penalty is taken off the department's log for the new event, once.
+    Any late penalty is taken off the department once, on a log of its own for
+    the new event, the way custom points are: the event's department log has a
+    row per event day, so a discount on it would count once per day (bug #4).
     Returns the event id.
     """
     if not can_publish(caller, request):
@@ -744,13 +772,15 @@ def publish(
         raise PipelineConflict("not_ready", "Only a request every team has finished can be published")
     if request.start_date is None:
         raise PipelineConflict("no_dates", "This request has no dates")
-    event, department_log = create_full_event(
+    event, _department_log = create_full_event(
         session, event_for(request, department_action_id, member_action_id, image_url)
     )
     penalty = get_penalty(session, request)
     if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:
-        log_queries.create_modification(session, department_log.id, "discount", penalty.points)
-        penalty.applied_log_id = department_log.id
+        penalty_log = log_queries.create_log(session, event.id, action_queries.get_discount_action(session).id)
+        log_queries.create_modification(session, penalty_log.id, "discount", penalty.points)
+        log_queries.create_department_log(session, request.department_id, penalty_log.id)
+        penalty.applied_log_id = penalty_log.id
     request.event_id = event.id
     request.stage = EventRequestStage.PUBLISHED
     session.flush()

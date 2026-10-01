@@ -10,7 +10,6 @@ from tests.pipeline_support import FROZEN_NOW
 @pytest.fixture
 def teams(pipeline):
     design, logistics, media = (pipeline.department(n) for n in ("Design", "Logistics", "Media"))
-    pipeline.teams(design, logistics, media)
     return {"design": design, "logistics": logistics, "media": media}
 
 

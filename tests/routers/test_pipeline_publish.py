@@ -5,14 +5,13 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.DB.schema import Events, Forms, Logs, Modifications, PipelinePenalties
+from app.DB.schema import DepartmentsLogs, Events, Forms, Logs, Modifications, PipelinePenalties
 from tests.pipeline_support import book_complete, submit
 
 
 @pytest.fixture
 def world(pipeline, seed_refs):
     design, logistics, media = (pipeline.department(n) for n in ("Design", "Logistics", "Media"))
-    pipeline.teams(design, logistics, media)
     ai = pipeline.department("AI")
     leader = pipeline.officer(ai)
     admin = pipeline.person("Admin")
@@ -89,16 +88,23 @@ def test_a_late_penalty_is_taken_off_once(pipeline, world):
     finish_all(pipeline, world)
 
     event_id = publish(pipeline, world).json()["event_id"]
-    department_log = pipeline.session.scalar(
-        select(Logs).where(Logs.event_id == event_id, Logs.action_id == world["actions"]["department_action_id"])
-    )
-    mods = pipeline.session.scalars(select(Modifications).where(Modifications.log_id == department_log.id)).all()
-    assert [(m.type.value, m.value) for m in mods] == [("discount", 2)]
     penalty = pipeline.session.scalar(
         select(PipelinePenalties).where(PipelinePenalties.request_id == world["request_id"])
     )
     pipeline.session.refresh(penalty)
-    assert penalty.applied_log_id == department_log.id
+    mods = pipeline.session.scalars(select(Modifications).where(Modifications.log_id == penalty.applied_log_id)).all()
+    assert [(m.type.value, m.value) for m in mods] == [("discount", 2)]
+    assert pipeline.session.get(Logs, penalty.applied_log_id).event_id == event_id
+    # Bug #4: the event lasts two days, so its department log has a row per day.
+    # The penalty sits on its own log with one row, so it counts once, not twice.
+    penalty_rows = pipeline.session.scalars(
+        select(DepartmentsLogs).where(DepartmentsLogs.log_id == penalty.applied_log_id)
+    ).all()
+    assert [row.department_id for row in penalty_rows] == [world["ai"].id]
+    department_log = pipeline.session.scalar(
+        select(Logs).where(Logs.event_id == event_id, Logs.action_id == world["actions"]["department_action_id"])
+    )
+    assert pipeline.session.scalars(select(Modifications).where(Modifications.log_id == department_log.id)).all() == []
 
     assert publish(pipeline, world).status_code == 409  # already published: nothing twice
 
@@ -108,3 +114,36 @@ def test_another_department_cannot_publish(pipeline, world):
     other = pipeline.department("Cyber")
     pipeline.sign_in(pipeline.officer(other))
     assert publish(pipeline, world).status_code == 403
+
+
+def test_a_team_finishing_after_an_early_publish_does_not_reopen_it(pipeline, world):
+    """Bug #5: a super admin publishes before Media is done; Media's "Mark done" must not make a second event."""
+    pipeline.sign_in(world["admin"], super_admin=True)
+    url = f"/pipeline/requests/{world['request_id']}"
+    for team in ("design", "logistics"):
+        assert pipeline.client.post(f"{url}/tasks/{team}/complete").status_code == 200
+    published = publish(pipeline, world)
+    assert published.status_code == 200, published.text
+    assert published.json()["stage"] == "published"
+
+    late = pipeline.client.post(f"{url}/tasks/media/complete")
+    assert late.status_code == 409
+    assert late.json()["code"] == "cannot_complete"
+    body = pipeline.client.get(url).json()
+    assert body["stage"] == "published"
+    assert body["actions"]["complete"] == []
+    assert publish(pipeline, world).status_code == 409
+    events = pipeline.session.scalars(select(Events).where(Events.name == "Intro to ML")).all()
+    assert len(events) == 1
+
+
+def test_an_event_published_by_the_pipeline_cannot_be_deleted(pipeline, world):
+    """Bug #6: deleting it left the request published with its days taken, and dropped the penalty."""
+    finish_all(pipeline, world)
+    event_id = publish(pipeline, world).json()["event_id"]
+    pipeline.sign_in(world["admin"], super_admin=True)
+
+    response = pipeline.client.delete(f"/events/{event_id}")
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "published_by_pipeline"
+    assert pipeline.session.get(Events, event_id) is not None
