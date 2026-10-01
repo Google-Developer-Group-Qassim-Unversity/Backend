@@ -128,3 +128,15 @@ def test_a_team_finishing_after_an_early_publish_does_not_reopen_it(pipeline, wo
     assert publish(pipeline, world).status_code == 409
     events = pipeline.session.scalars(select(Events).where(Events.name == "Intro to ML")).all()
     assert len(events) == 1
+
+
+def test_an_event_published_by_the_pipeline_cannot_be_deleted(pipeline, world):
+    """Bug #6: deleting it left the request published with its days taken, and dropped the penalty."""
+    finish_all(pipeline, world)
+    event_id = publish(pipeline, world).json()["event_id"]
+    pipeline.sign_in(world["admin"], super_admin=True)
+
+    response = pipeline.client.delete(f"/events/{event_id}")
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "published_by_pipeline"
+    assert pipeline.session.get(Events, event_id) is not None

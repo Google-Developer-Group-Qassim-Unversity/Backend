@@ -113,6 +113,11 @@ def set_partners(session: Session, request: EventRequests, department_ids: list[
     session.flush()
 
 
+def get_request_by_event_id(session: Session, event_id: int) -> EventRequests | None:
+    """The request that published this event, if it came from the pipeline."""
+    return session.scalar(select(EventRequests).where(EventRequests.event_id == event_id))
+
+
 def lock_pipeline(session: Session, name: str, wait: bool = True) -> bool:
     """Lock the ``pipeline_locks`` row ``name`` until this transaction ends.
 
