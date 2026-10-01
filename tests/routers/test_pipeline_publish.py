@@ -107,3 +107,24 @@ def test_another_department_cannot_publish(pipeline, world):
     other = pipeline.department("Cyber")
     pipeline.sign_in(pipeline.officer(other))
     assert publish(pipeline, world).status_code == 403
+
+
+def test_a_team_finishing_after_an_early_publish_does_not_reopen_it(pipeline, world):
+    """Bug #5: a super admin publishes before Media is done; Media's "Mark done" must not make a second event."""
+    pipeline.sign_in(world["admin"], super_admin=True)
+    url = f"/pipeline/requests/{world['request_id']}"
+    for team in ("design", "logistics"):
+        assert pipeline.client.post(f"{url}/tasks/{team}/complete").status_code == 200
+    published = publish(pipeline, world)
+    assert published.status_code == 200, published.text
+    assert published.json()["stage"] == "published"
+
+    late = pipeline.client.post(f"{url}/tasks/media/complete")
+    assert late.status_code == 409
+    assert late.json()["code"] == "cannot_complete"
+    body = pipeline.client.get(url).json()
+    assert body["stage"] == "published"
+    assert body["actions"]["complete"] == []
+    assert publish(pipeline, world).status_code == 409
+    events = pipeline.session.scalars(select(Events).where(Events.name == "Intro to ML")).all()
+    assert len(events) == 1

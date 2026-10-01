@@ -627,7 +627,14 @@ def resubmit(session: Session, caller: Caller, request: EventRequests) -> Pendin
     return reach_team(session, caller, request, PipelineTeam.DESIGN, PipelineNotificationKind.REQUEST_RECEIVED)
 
 
+# While the teams are working on it. A request published early by a super admin
+# can have a task left open; it stays open, and completing it changes nothing.
+WORKING_STAGES = {EventRequestStage.IN_REVIEW, EventRequestStage.RETURNED, EventRequestStage.MEDIA}
+
+
 def can_complete(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> bool:
+    if request.stage not in WORKING_STAGES:
+        return False
     task = get_task(request, team)
     if task is None or task.status != EventRequestTaskStatus.OPEN:
         return False
@@ -640,6 +647,10 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
     """A team marks its part done. Design done sends the request to Media; all three done makes it ready."""
     if not can_complete(session, caller, request, team):
         require_team(session, caller, team)
+        if request.stage not in WORKING_STAGES:
+            raise PipelineConflict(
+                "cannot_complete", f"The request is {request.stage.value}; there is nothing to mark done"
+            )
         raise PipelineConflict("cannot_complete", f"The {team.value} part is not open")
     now = clock.now()
     task = get_task(request, team)
