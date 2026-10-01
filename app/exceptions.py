@@ -44,6 +44,14 @@ class PermissionDenied(KnownHttpException):
         super().__init__(status_code=403, detail=f"You need the '{permission}' permission for this")
 
 
+class PermissionConflict(KnownHttpException):
+    """A permissions change the rules refuse. ``code`` says which rule."""
+
+    def __init__(self, code: str, detail: str, status_code: int = 409):
+        super().__init__(status_code=status_code, detail=detail)
+        self.code = code
+
+
 class SuperAdminRequired(KnownHttpException):
     code = "super_admin_required"
 

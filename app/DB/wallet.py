@@ -5,14 +5,13 @@ from typing import Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.DB.schema import MemberProfiles, MemberProfilesNameLanguage, Members, RoleType
+from app.DB.schema import MemberProfiles, MemberProfilesNameLanguage, Members
+from app.services.permissions.access import resolve_access
 
 
-def is_member_admin(member: Members) -> bool:
-    """Checks if a member has admin or super_admin privileges in the database."""
-    if not member or not member.role:
-        return False
-    return any(r.role in (RoleType.ADMIN, RoleType.SUPER_ADMIN) for r in member.role)
+def is_member_staff(session: Session, member: Members) -> bool:
+    """Whether the member gets the admin card: staff, i.e. on this semester's roster or a super admin."""
+    return resolve_access(session, member).is_staff
 
 
 def get_or_create_member_profile(session: Session, member_id: int) -> MemberProfiles:
@@ -61,17 +60,13 @@ def get_public_profile_by_uuid(session: Session, profile_uuid: str) -> Optional[
     Retrieves a member and their profile by public UUID.
     Returns (member, profile, is_admin) or None if not found.
     """
-    stmt = (
-        select(MemberProfiles)
-        .options(joinedload(MemberProfiles.member).joinedload(Members.role))
-        .where(MemberProfiles.uuid == profile_uuid)
-    )
+    stmt = select(MemberProfiles).options(joinedload(MemberProfiles.member)).where(MemberProfiles.uuid == profile_uuid)
     profile = session.scalars(stmt).first()
     if not profile or not profile.member:
         return None
 
     member = profile.member
-    is_admin = is_member_admin(member)
+    is_admin = is_member_staff(session, member)
     return member, profile, is_admin
 
 

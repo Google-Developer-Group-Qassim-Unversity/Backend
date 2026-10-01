@@ -11,7 +11,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
 
-from app.DB.schema import Members, MembersGender, Role, RoleType
+from app.DB.club_structure import get_role_by_key
+from app.DB.schema import ClubMemberships, Departments, DepartmentsType, Members, MembersGender, SemesterDepartments
+from app.DB.semesters import get_semester_by_hijri_code
 from app.exceptions import MemberNotFound
 from app.helpers import resolve_member
 from fastapi_clerk_auth import HTTPAuthorizationCredentials as ClerkHTTPAuthorizationCredentials
@@ -38,7 +40,26 @@ def make_member(session, *, clerk_user_id=None, uni_id=None, email="wallet@examp
     session.add(member)
     session.flush()
     if admin:
-        session.add(Role(member_id=member.id, role=RoleType.ADMIN))
+        # The admin card is for staff: on this semester's roster (or a super admin).
+        department = Departments(name="Wallet Dept", ar_name="قسم المحفظة", type=DepartmentsType.PRACTICAL)
+        session.add(department)
+        session.flush()
+        semester = get_semester_by_hijri_code(session, 475)
+        assert semester is not None
+        session.add(SemesterDepartments(semester_id=semester.id, department_id=department.id))
+        session.flush()
+        for key in ("member", "leader"):
+            role = get_role_by_key(session, key)
+            assert role is not None
+            session.add(
+                ClubMemberships(
+                    semester_id=semester.id,
+                    department_id=department.id,
+                    member_id=member.id,
+                    role_id=role.id,
+                    created_by="test",
+                )
+            )
     session.commit()
     return member
 
@@ -181,13 +202,13 @@ def test_wallet_me_still_needs_a_token(client: TestClient):
     assert client.get("/wallet/me").status_code == 403
 
 
-def test_wallet_me_reports_admin_roles(clerk_client: TestClient, db_session):
+def test_wallet_me_reports_staff_and_club_roles(clerk_client: TestClient, db_session):
     make_member(db_session, clerk_user_id=CLERK_SUB, admin=True)
 
     body = clerk_client.get("/wallet/me").json()
 
     assert body["is_admin"] is True
-    assert body["roles"] == ["admin"]
+    assert body["roles"] == ["leader", "member"]
 
 
 # ====================== PUT /wallet/me ======================

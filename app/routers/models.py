@@ -5,7 +5,7 @@ from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
 from app.config import config
-from app.DB.schema import EventsLocationType, MembersGender, RoleType, FormType
+from app.DB.schema import EventsLocationType, MembersGender, FormType
 
 # A bare Google Meet code, e.g. "abc-defg-hij" - no scheme, no domain.
 _MEET_CODE_RE = re.compile(r"^[a-zA-Z]{2,5}-[a-zA-Z]{2,5}-[a-zA-Z]{2,5}$")
@@ -196,10 +196,6 @@ class MemberWithActivity_model(Member_model):
 class CreatedMemberModel(BaseClassModel):
     member: Member_model
     already_exists: bool
-
-
-class MemberWithRole_model(Member_model):
-    role: RoleType
 
 
 class MemberStats_model(BaseClassModel):
