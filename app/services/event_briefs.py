@@ -12,7 +12,8 @@ what submit still needs, so the page can show a checklist all along.
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, validate_email
+from pydantic_core import PydanticCustomError
 
 from app.DB.schema import EventRequestAudience, EventRequestRegistration, EventRequests, PipelineTeam
 
@@ -93,10 +94,19 @@ def _booked_days(request: EventRequests) -> list[str]:
     return days
 
 
+def _is_email(value: str) -> bool:
+    try:
+        validate_email(value.strip())
+    except PydanticCustomError:
+        return False
+    return True
+
+
 def details_missing(request: EventRequests) -> list[str]:
     missing = []
     for field in ("title", "description", "event_type", "presenter_name", "location_scope", "audience", "registration"):
-        if not getattr(request, field):
+        value = getattr(request, field)
+        if not value or (isinstance(value, str) and not value.strip()):
             missing.append(f"details.{field}")
     if request.is_official is None:
         missing.append("details.is_official")
@@ -111,7 +121,9 @@ def details_missing(request: EventRequests) -> list[str]:
         missing.append("dates")
     elif set(days) - set((request.day_modes or {}).keys()):
         missing.append("details.day_modes")
-    if "online" in _modes(request) and not request.presenter_email:
+    if request.presenter_email and not _is_email(request.presenter_email):
+        missing.append("details.presenter_email")
+    elif "online" in _modes(request) and not request.presenter_email:
         missing.append("details.presenter_email")
     if request.registration == EventRequestRegistration.ACCEPTANCE and not request.expected_accepted:
         missing.append("details.expected_accepted")
