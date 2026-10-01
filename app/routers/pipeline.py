@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 from app.DB import pipeline_teams as team_queries
 from app.DB.schema import EventRequests, PipelineTeam
 from app.dependencies import DB
-from app.exceptions import DepartmentForbidden, NotFound, PipelineConflict
+from app.exceptions import DepartmentForbidden
 
 from app.routers.pipeline_models import (
     ActingDepartment,
@@ -27,7 +27,6 @@ from app.routers.pipeline_models import (
     PipelineDepartment,
     PipelineMeResponse,
     PipelineTeamEntry,
-    SetPipelineTeamsRequest,
     SweepResponse,
 )
 from app.services import event_pipeline as pipeline_service
@@ -51,9 +50,11 @@ def _require_access(caller: Caller) -> None:
 
 
 def _team_entries(session) -> list[PipelineTeamEntry]:
+    teams = team_queries.get_teams(session)
     return [
-        PipelineTeamEntry(team=row.team, department=PipelineDepartment.model_validate(row.department))
-        for row in sorted(team_queries.get_teams(session), key=lambda r: list(PipelineTeam).index(r.team))
+        PipelineTeamEntry(team=team, department=PipelineDepartment.model_validate(teams[team]))
+        for team in PipelineTeam
+        if team in teams
     ]
 
 
@@ -82,26 +83,6 @@ def get_pipeline_me(session: DB, caller: CurrentCaller):
         ],
         teams=teams,
     )
-
-
-@router.put(
-    "/teams",
-    status_code=status.HTTP_200_OK,
-    response_model=list[PipelineTeamEntry],
-    dependencies=[Depends(Require(Perm.PIPELINE_TEAMS))],
-)
-def set_pipeline_teams(body: SetPipelineTeamsRequest, session: DB):
-    mapping = {PipelineTeam.DESIGN: body.design, PipelineTeam.LOGISTICS: body.logistics, PipelineTeam.MEDIA: body.media}
-    chosen = [d for d in mapping.values() if d is not None]
-    if len(chosen) != len(set(chosen)):
-        raise PipelineConflict("team_department_reused", "One department cannot play two teams", 422)
-    for department_id in chosen:
-        if not team_queries.get_departments(session, {department_id}):
-            raise NotFound("Department", department_id)
-    team_queries.set_teams(session, mapping)
-    session.commit()
-    logger.info("Pipeline teams set: %s", {t.value: d for t, d in mapping.items()})
-    return _team_entries(session)
 
 
 @router.get("/calendar", status_code=status.HTTP_200_OK, response_model=CalendarResponse)

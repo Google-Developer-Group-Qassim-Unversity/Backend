@@ -52,12 +52,6 @@ class PipelineMeResponse(BaseModel):
     teams: list[PipelineTeamEntry]
 
 
-class SetPipelineTeamsRequest(BaseModel):
-    design: int | None = None
-    logistics: int | None = None
-    media: int | None = None
-
-
 class CalendarDayRequest(BaseModel):
     id: int
     department: PipelineDepartment

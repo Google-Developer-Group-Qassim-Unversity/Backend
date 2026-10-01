@@ -1,28 +1,26 @@
-"""Shared set-up for the events pipeline tests: people, rosters, teams, sign-in and a frozen clock."""
+"""Shared set-up for the events pipeline tests: people, rosters, sign-in and a frozen clock.
+
+A department whose name contains "Design", "Logistics" or "Media" is that team.
+"""
 
 from datetime import datetime
 
 import pytest
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from sqlalchemy import select
 
 from app.config import config
 from app.DB.club_structure import get_role_by_key
 from app.DB.schema import (
     ClubMemberships,
-    DepartmentPermissions,
     Departments,
     DepartmentsType,
     Members,
     MembersGender,
-    PipelineTeam,
-    PipelineTeams,
     SemesterDepartments,
     SuperAdmins,
 )
 from app.DB.semesters import get_semester_by_hijri_code
 from app.main import app
-from app.services.permissions.catalogue import Perm
 
 # A Wednesday in Riyadh, inside the seeded Summer 2026 (475) the suite pins as current.
 FROZEN_NOW = datetime(2026, 7, 15, 9, 0, 0)  # 12:00 in Riyadh
@@ -84,21 +82,6 @@ class Pipeline:
 
     def officer(self, department: Departments, role: str = "leader", name: str = "Leader") -> Members:
         return self.join(self.person(name), department, role)
-
-    def teams(self, design: Departments, logistics: Departments, media: Departments) -> None:
-        for row in self.session.scalars(select(PipelineTeams)).all():
-            self.session.delete(row)
-        self.session.flush()
-        for team, department, perms in (
-            (PipelineTeam.DESIGN, design, (Perm.PIPELINE_DESIGN,)),
-            (PipelineTeam.LOGISTICS, logistics, (Perm.PIPELINE_LOGISTICS, Perm.PIPELINE_BANS)),
-            (PipelineTeam.MEDIA, media, (Perm.PIPELINE_MEDIA,)),
-        ):
-            self.session.add(PipelineTeams(team=team, department_id=department.id))
-            # What the permissions migration seeds for each team's department.
-            for perm in perms:
-                self.session.add(DepartmentPermissions(department_id=department.id, permission=perm.value))
-        self.session.flush()
 
     def sign_in(self, member: Members | None, super_admin: bool = False) -> None:
         """Sign in as ``member`` through the real guards; only JWT verification is replaced.

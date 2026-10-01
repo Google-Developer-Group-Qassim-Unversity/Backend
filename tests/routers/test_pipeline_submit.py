@@ -10,7 +10,6 @@ from tests.pipeline_support import COMPLETE_DESIGN, book_complete, submit
 @pytest.fixture
 def world(pipeline):
     design, logistics, media = (pipeline.department(n) for n in ("Design", "Logistics", "Media"))
-    pipeline.teams(design, logistics, media)
     ai = pipeline.department("AI")
     leader = pipeline.officer(ai)
     pipeline.sign_in(leader)
@@ -136,3 +135,13 @@ def test_a_blank_title_counts_as_missing(pipeline, world):
     request_id = book_complete(pipeline, world["ai"])
     body = pipeline.client.put(f"/pipeline/requests/{request_id}/details", json={"title": "   "}).json()
     assert "details.title" in body["missing"]
+
+
+def test_submit_says_which_team_has_no_department(pipeline, world):
+    world["design"].name = "Graphics"
+    request_id = book_complete(pipeline, world["ai"])
+
+    response = submit(pipeline, request_id)
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "team_not_set"
+    assert "'design'" in response.json()["detail"]

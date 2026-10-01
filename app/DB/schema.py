@@ -1036,25 +1036,6 @@ class PipelineTeam(str, enum.Enum):
     MEDIA = "media"
 
 
-class PipelineTeams(Base):
-    """Which department plays which part in the events pipeline. Set by a super admin."""
-
-    __tablename__ = "pipeline_teams"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["department_id"], ["departments.id"], name="fk_pipeline_teams_department", ondelete="RESTRICT"
-        ),
-        Index("uq_pipeline_teams_department", "department_id", unique=True),
-    )
-
-    team: Mapped[PipelineTeam] = mapped_column(
-        Enum(PipelineTeam, values_callable=lambda cls: [member.value for member in cls]), primary_key=True
-    )
-    department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-
-    department: Mapped["Departments"] = relationship("Departments")
-
-
 class BookingBans(Base):
     """A day Logistics closed to bookings, e.g. exams. Every team sees the reason."""
 

@@ -18,7 +18,6 @@ SUPER_ADMIN_ONLY_BEFORE = frozenset(
         Perm.SEMESTERS_MANAGE,
         Perm.MEMBERS_CREATE,
         Perm.PERMISSIONS_MANAGE,
-        Perm.PIPELINE_TEAMS,
         Perm.POINTS_CATALOGUE,
         Perm.ATTENDANCE_COPY,
     }

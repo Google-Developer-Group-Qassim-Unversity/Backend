@@ -137,10 +137,17 @@ def calendar(session: Session, start: date, end: date) -> list[CalendarDay]:
 
 
 def team_department_id(session: Session, team: PipelineTeam) -> int:
-    department_id = team_queries.get_team_department_id(session, team)
-    if department_id is None:
-        raise PipelineConflict("team_not_set", f"No department is set as the {team.value} team yet")
-    return department_id
+    """The department playing ``team`` this semester: the one whose name contains the team's name."""
+    found = team_queries.get_team_candidates(session)[team]
+    if len(found) == 1:
+        return found[0].id
+    if not found:
+        detail = f"No department this semester has '{team.value}' in its name"
+    else:
+        detail = f"More than one department this semester has '{team.value}' in its name: " + ", ".join(
+            d.name for d in found
+        )
+    raise PipelineConflict("team_not_set", f"{detail}. Rename one in Club structure.")
 
 
 # The permission to work each team's requests.
@@ -421,7 +428,7 @@ def visible_department_ids(session: Session, caller: Caller) -> set[int] | None:
     requesting = caller.access.departments_for(Perm.PIPELINE_REQUEST)
     if requesting is None:
         return None
-    teams = {row.department_id for row in team_queries.get_teams(session) if caller.access.can(TEAM_PERMS[row.team])}
+    teams = {d.id for team, d in team_queries.get_teams(session).items() if caller.access.can(TEAM_PERMS[team])}
     return set(requesting) | teams
 
 

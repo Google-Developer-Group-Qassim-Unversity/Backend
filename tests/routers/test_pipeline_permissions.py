@@ -4,7 +4,8 @@ import pytest
 from sqlalchemy import select
 
 from app.DB.club_structure import get_role_by_key
-from app.DB.schema import ClubMemberships, PermissionGrants
+from app.DB.schema import ClubMemberships, Departments, DepartmentsType, PermissionGrants
+from app.services.permissions.access import resolve_access
 from app.services.permissions.catalogue import Perm
 
 
@@ -45,31 +46,70 @@ def test_a_leader_whose_role_ended_loses_access(pipeline, dept):
     assert me["departments"] == []
 
 
-def test_super_admin_acts_for_every_department_and_sets_the_teams(pipeline, dept):
-    design, logistics, media = (pipeline.department(n) for n in ("Design team", "Logistics team", "Media team"))
+def test_super_admin_acts_for_every_department(pipeline, dept):
     pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
 
     me = pipeline.client.get("/pipeline/me").json()
     assert me["is_super_admin"] is True
     assert dept.id in {d["id"] for d in me["departments"]}
 
-    response = pipeline.client.put(
-        "/pipeline/teams", json={"design": design.id, "logistics": logistics.id, "media": media.id}
+
+def test_the_teams_are_this_semesters_departments_named_after_them(pipeline, dept):
+    design, logistics, media = (
+        pipeline.department(n) for n in ("UI/UX design", "Programs and Logistics", "Media & PR")
     )
-    assert response.status_code == 200, response.text
-    assert [(t["team"], t["department"]["id"]) for t in response.json()] == [
+    pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
+
+    me = pipeline.client.get("/pipeline/me").json()
+    assert [(t["team"], t["department"]["id"]) for t in me["teams"]] == [
         ("design", design.id),
         ("logistics", logistics.id),
         ("media", media.id),
     ]
 
-    reused = pipeline.client.put("/pipeline/teams", json={"design": design.id, "logistics": design.id})
-    assert reused.status_code == 422
+
+def test_a_department_off_this_semester_is_not_a_team(pipeline, dept):
+    old_design = Departments(name="Design", ar_name="التصميم", type=DepartmentsType.PRACTICAL)
+    pipeline.session.add(old_design)
+    pipeline.session.flush()
+    pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
+
+    assert pipeline.client.get("/pipeline/me").json()["teams"] == []
 
 
-def test_non_super_admin_cannot_set_teams(pipeline, dept):
-    pipeline.sign_in(pipeline.officer(dept))
-    assert pipeline.client.put("/pipeline/teams", json={"design": dept.id}).status_code == 403
+def test_two_departments_with_the_name_leave_the_team_unset(pipeline, dept):
+    pipeline.department("Design")
+    pipeline.department("Graphic Design")
+    pipeline.department("Logistics")
+    pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
+
+    # Design is ambiguous; Logistics, with one match, is unaffected.
+    assert [t["team"] for t in pipeline.client.get("/pipeline/me").json()["teams"]] == ["logistics"]
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Design", {Perm.PIPELINE_DESIGN}),
+        ("Logistics", {Perm.PIPELINE_LOGISTICS, Perm.PIPELINE_BANS}),
+        ("Media", {Perm.PIPELINE_MEDIA, Perm.EMAILS_DIRECT, Perm.EMAILS_BLAST, Perm.EMAILS_LOGS}),
+    ],
+)
+def test_a_team_departments_leader_gets_the_teams_permissions(pipeline, name, expected):
+    team = pipeline.department(name)
+    leader = pipeline.officer(team)
+    member = pipeline.join(pipeline.person(), team)
+
+    assert expected <= resolve_access(pipeline.session, leader).permissions()
+    # Plain members of the team get them only through a grant.
+    assert not expected & resolve_access(pipeline.session, member).permissions()
+
+
+def test_a_department_that_is_no_team_gets_no_team_permissions(pipeline, dept):
+    pipeline.department("Design")
+    leader = pipeline.officer(dept)
+
+    assert Perm.PIPELINE_DESIGN not in resolve_access(pipeline.session, leader).permissions()
 
 
 @pytest.mark.parametrize(
@@ -85,7 +125,6 @@ def test_someone_off_this_semesters_roster_is_refused(pipeline, dept, path):
 
 def test_a_member_granted_design_works_designs_inbox(pipeline, dept):
     design = pipeline.department("Design team")
-    pipeline.teams(design, pipeline.department("Logistics team"), pipeline.department("Media team"))
     leader = pipeline.officer(design)
     member = pipeline.join(pipeline.person(), design)
     pipeline.session.add(

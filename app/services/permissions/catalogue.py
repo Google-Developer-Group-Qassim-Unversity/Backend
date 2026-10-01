@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
+from app.DB.schema import PipelineTeam
+
 Scope = Literal["club", "dept"]
 
 
@@ -56,7 +58,6 @@ class Perm(StrEnum):
     PIPELINE_DESIGN = "pipeline.design"
     PIPELINE_LOGISTICS = "pipeline.logistics"
     PIPELINE_MEDIA = "pipeline.media"
-    PIPELINE_TEAMS = "pipeline.teams"
     # System
     UPLOADS = "uploads"
     CACHE_RESET = "cache.reset"
@@ -106,7 +107,6 @@ CATALOGUE: dict[Perm, PermInfo] = {
     Perm.PIPELINE_DESIGN: PermInfo("club", "Work Design's requests", "العمل على طلبات التصميم"),
     Perm.PIPELINE_LOGISTICS: PermInfo("club", "Work Logistics' requests", "العمل على طلبات اللوجستيات"),
     Perm.PIPELINE_MEDIA: PermInfo("club", "Work Media's requests", "العمل على طلبات الإعلام"),
-    Perm.PIPELINE_TEAMS: PermInfo("club", "Choose the pipeline's teams", "تحديد فرق مسار الفعاليات"),
     Perm.UPLOADS: PermInfo("club", "Upload images and files", "رفع الصور والملفات"),
     Perm.CACHE_RESET: PermInfo("club", "Reset the leaderboard's cache", "تحديث ذاكرة لوحة الصدارة"),
     Perm.FORMS_ADMIN: PermInfo("club", "Maintain Google Forms syncing", "صيانة مزامنة نماذج Google"),
@@ -118,6 +118,14 @@ STAFF_BASICS: frozenset[Perm] = frozenset({Perm.ADMIN_ACCESS, Perm.EVENTS_VIEW, 
 
 # The roles that get shared and department permissions. Plain members get grants.
 OFFICER_ROLES: frozenset[str] = frozenset({"leader", "vp"})
+
+# What the leaders and VPs of each pipeline team's department get, on top of the
+# shared and department permissions. The team is found by name (app/DB/pipeline_teams.py).
+TEAM_PERMISSIONS: dict[PipelineTeam, frozenset[Perm]] = {
+    PipelineTeam.DESIGN: frozenset({Perm.PIPELINE_DESIGN}),
+    PipelineTeam.LOGISTICS: frozenset({Perm.PIPELINE_LOGISTICS, Perm.PIPELINE_BANS}),
+    PipelineTeam.MEDIA: frozenset({Perm.PIPELINE_MEDIA, Perm.EMAILS_DIRECT, Perm.EMAILS_BLAST, Perm.EMAILS_LOGS}),
+}
 
 
 def parse(keys) -> frozenset[Perm]:
