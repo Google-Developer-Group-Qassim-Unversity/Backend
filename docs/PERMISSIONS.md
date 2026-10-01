@@ -70,7 +70,8 @@ If the department is in the body, take `access: CurrentAccess` and call
 `access.require(Perm.X, body.department_id)` in the handler.
 
 **Add a permission.** Add it to `Perm` and `CATALOGUE` (scope, English and
-Arabic label), and to `PERMS` / `DEPARTMENT_SCOPED` in `Frontend/lib/access.ts`.
+Arabic label), and to `PERMS` / `DEPARTMENT_SCOPED` / `PERM_GROUPS` (the
+section it shows under on `/permissions`) in `Frontend/lib/access.ts`.
 Nobody holds it until a super admin assigns it on `/permissions` (or a
 migration seeds it).
 
