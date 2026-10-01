@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.DB.schema import Events, Forms, Logs, Modifications, PipelinePenalties
+from app.DB.schema import DepartmentsLogs, Events, Forms, Logs, Modifications, PipelinePenalties
 from tests.pipeline_support import book_complete, submit
 
 
@@ -88,16 +88,23 @@ def test_a_late_penalty_is_taken_off_once(pipeline, world):
     finish_all(pipeline, world)
 
     event_id = publish(pipeline, world).json()["event_id"]
-    department_log = pipeline.session.scalar(
-        select(Logs).where(Logs.event_id == event_id, Logs.action_id == world["actions"]["department_action_id"])
-    )
-    mods = pipeline.session.scalars(select(Modifications).where(Modifications.log_id == department_log.id)).all()
-    assert [(m.type.value, m.value) for m in mods] == [("discount", 2)]
     penalty = pipeline.session.scalar(
         select(PipelinePenalties).where(PipelinePenalties.request_id == world["request_id"])
     )
     pipeline.session.refresh(penalty)
-    assert penalty.applied_log_id == department_log.id
+    mods = pipeline.session.scalars(select(Modifications).where(Modifications.log_id == penalty.applied_log_id)).all()
+    assert [(m.type.value, m.value) for m in mods] == [("discount", 2)]
+    assert pipeline.session.get(Logs, penalty.applied_log_id).event_id == event_id
+    # Bug #4: the event lasts two days, so its department log has a row per day.
+    # The penalty sits on its own log with one row, so it counts once, not twice.
+    penalty_rows = pipeline.session.scalars(
+        select(DepartmentsLogs).where(DepartmentsLogs.log_id == penalty.applied_log_id)
+    ).all()
+    assert [row.department_id for row in penalty_rows] == [world["ai"].id]
+    department_log = pipeline.session.scalar(
+        select(Logs).where(Logs.event_id == event_id, Logs.action_id == world["actions"]["department_action_id"])
+    )
+    assert pipeline.session.scalars(select(Modifications).where(Modifications.log_id == department_log.id)).all() == []
 
     assert publish(pipeline, world).status_code == 409  # already published: nothing twice
 

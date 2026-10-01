@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.DB import pipeline_teams as team_queries
 from app.DB import event_pipeline as queries
+from app.DB import actions as action_queries
 from app.DB import logs as log_queries
 from app.DB.schema import (
     Departments,
@@ -761,7 +762,9 @@ def publish(
 ) -> int:
     """Create the real event, in the same transaction, the same way ``POST /events/`` does.
 
-    Any late penalty is taken off the department's log for the new event, once.
+    Any late penalty is taken off the department once, on a log of its own for
+    the new event, the way custom points are: the event's department log has a
+    row per event day, so a discount on it would count once per day (bug #4).
     Returns the event id.
     """
     if not can_publish(caller, request):
@@ -769,13 +772,15 @@ def publish(
         raise PipelineConflict("not_ready", "Only a request every team has finished can be published")
     if request.start_date is None:
         raise PipelineConflict("no_dates", "This request has no dates")
-    event, department_log = create_full_event(
+    event, _department_log = create_full_event(
         session, event_for(request, department_action_id, member_action_id, image_url)
     )
     penalty = get_penalty(session, request)
     if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:
-        log_queries.create_modification(session, department_log.id, "discount", penalty.points)
-        penalty.applied_log_id = department_log.id
+        penalty_log = log_queries.create_log(session, event.id, action_queries.get_discount_action(session).id)
+        log_queries.create_modification(session, penalty_log.id, "discount", penalty.points)
+        log_queries.create_department_log(session, request.department_id, penalty_log.id)
+        penalty.applied_log_id = penalty_log.id
     request.event_id = event.id
     request.stage = EventRequestStage.PUBLISHED
     session.flush()
