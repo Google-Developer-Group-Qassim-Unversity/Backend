@@ -16,7 +16,8 @@ created with auto-increment integers and are switched, keeping every row:
     pipeline_penalties
     permission_grants
 
-Each row gets a fresh UUID and every reference is remapped to it, before any
+Each row gets a time-ordered UUID (v7, in the old ids' order, so sorting by id
+still means creation order) and every reference is remapped to it, before any
 column is dropped. Links that carry an old number (an email sent during the
 trial, a bookmarked /pipeline/requests/12) stop working.
 
@@ -27,6 +28,9 @@ MySQL cannot roll back DDL. The checks run after the backfill and before the
 first DROP, so a failed check leaves only the extra, unused columns behind.
 """
 
+import secrets
+import time
+import uuid
 from typing import Sequence, Union
 
 from alembic import op
@@ -69,14 +73,45 @@ UNIQUE_INDEXES = (
 )
 
 
-def _swap(old_type: str, new_type: str, fill_id: str) -> None:
+def _uuid7(ms: int) -> str:
+    """A time-ordered UUID (version 7), as app/DB/ids.py makes them, for the millisecond ``ms``."""
+    rand = secrets.randbits(74)
+    value = (ms << 80) | (0x7 << 76) | ((rand >> 62) << 64) | (0b10 << 62) | (rand & ((1 << 62) - 1))
+    return str(uuid.UUID(int=value))
+
+
+def _fill_uuids(conn, table: str) -> None:
+    """Time-ordered UUIDs in the old ids' order, so sorting by id still means "in the order they were made".
+
+    One millisecond apart, ending now: the order holds, and ids made after the
+    deploy sort after these.
+    """
+    old_ids = conn.execute(sa.text(f"SELECT id FROM {table} ORDER BY id")).scalars().all()
+    start = time.time_ns() // 1_000_000 - len(old_ids)
+    for n, old_id in enumerate(old_ids):
+        conn.execute(
+            sa.text(f"UPDATE {table} SET new_id = :new WHERE id = :old"), {"new": _uuid7(start + n), "old": old_id}
+        )
+
+
+def _fill_integers(conn, table: str) -> None:
+    """1..n in id order (UUIDv7 ids sort by creation)."""
+    conn.execute(
+        sa.text(
+            f"UPDATE {table} t JOIN (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS n FROM {table}) x "
+            "ON x.id = t.id SET t.new_id = x.n"
+        )
+    )
+
+
+def _swap(old_type: str, new_type: str, fill, id_extra: str = "") -> None:
     conn = op.get_bind()
 
     # 1. New columns next to the old ones, filled in. Own ids first, then each
     #    reference through a join on the old ids, which still exist.
     for table in TABLES:
         op.execute(f"ALTER TABLE {table} ADD COLUMN new_id {new_type} NULL")
-        op.execute(fill_id.format(table=table))
+        fill(conn, table)
     for table, column, target, _fk in REFERENCES:
         op.execute(f"ALTER TABLE {table} ADD COLUMN new_{column} {new_type} NULL")
         op.execute(f"UPDATE {table} c JOIN {target} t ON t.id = c.{column} SET c.new_{column} = t.new_id")
@@ -108,7 +143,9 @@ def _swap(old_type: str, new_type: str, fill_id: str) -> None:
     for table in TABLES:
         op.execute(f"ALTER TABLE {table} MODIFY COLUMN id {old_type} NOT NULL")
         op.execute(f"ALTER TABLE {table} DROP PRIMARY KEY, DROP COLUMN id")
-        op.execute(f"ALTER TABLE {table} CHANGE COLUMN new_id id {new_type} NOT NULL FIRST, ADD PRIMARY KEY (id)")
+        op.execute(
+            f"ALTER TABLE {table} CHANGE COLUMN new_id id {new_type} NOT NULL {id_extra} FIRST, ADD PRIMARY KEY (id)"
+        )
 
     # 4. Rebuild the keys, indexes and foreign keys as they were.
     for table, columns in PRIMARY_KEYS.items():
@@ -120,19 +157,11 @@ def _swap(old_type: str, new_type: str, fill_id: str) -> None:
 
 
 def upgrade() -> None:
-    _swap(INT_SQL, UUID_SQL, fill_id="UPDATE {table} SET new_id = UUID()")
+    _swap(INT_SQL, UUID_SQL, _fill_uuids)
 
 
 def downgrade() -> None:
     # Back to numbers 1..n per table, in id order. The integers the rows had
-    # before the upgrade are gone; the links between rows are kept.
-    _swap(
-        UUID_SQL,
-        INT_SQL,
-        fill_id=(
-            "UPDATE {table} t JOIN (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS n FROM {table}) x "
-            "ON x.id = t.id SET t.new_id = x.n"
-        ),
-    )
-    for table in TABLES:
-        op.execute(f"ALTER TABLE {table} MODIFY COLUMN id {INT_SQL} NOT NULL AUTO_INCREMENT")
+    # before the upgrade are gone; the links between rows are kept. AUTO_INCREMENT
+    # goes on with the new primary key, before the foreign keys point at it again.
+    _swap(UUID_SQL, INT_SQL, _fill_integers, id_extra="AUTO_INCREMENT")

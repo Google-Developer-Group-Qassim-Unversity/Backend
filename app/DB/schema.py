@@ -23,6 +23,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.mysql import CHAR, DATETIME, INTEGER, LONGTEXT, SMALLINT, TEXT, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from app.DB.ids import new_id
+
 
 class Base(DeclarativeBase):
     pass
@@ -1008,7 +1010,7 @@ class PermissionGrants(Base):
         Index("ix_permission_grants_department", "department_id"),
     )
 
-    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
     semester_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
@@ -1135,7 +1137,7 @@ class EventRequests(Base):
         Index("ix_event_requests_stage", "stage"),
     )
 
-    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     created_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     stage: Mapped[EventRequestStage] = mapped_column(
@@ -1230,7 +1232,7 @@ class EventRequestTasks(Base):
         Index("ix_event_request_tasks_team_status", "team", "status"),
     )
 
-    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
     request_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
     team: Mapped[PipelineTeam] = mapped_column(_enum(PipelineTeam), nullable=False)
     status: Mapped[EventRequestTaskStatus] = mapped_column(
@@ -1269,7 +1271,7 @@ class PipelineNotifications(Base):
         Index("ix_pipeline_notifications_department", "department_id", "created_at"),
     )
 
-    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     request_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
     kind: Mapped[PipelineNotificationKind] = mapped_column(_enum(PipelineNotificationKind), nullable=False)
@@ -1325,7 +1327,7 @@ class PipelinePenalties(Base):
         Index("uq_pipeline_penalties_request", "request_id", unique=True),
     )
 
-    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
     request_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     late_days: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
