@@ -38,7 +38,7 @@ def unban_days(session: Session, days: list[date]) -> int:
 ACTIVE_STAGES_EXCLUDED = (EventRequestStage.CANCELLED,)
 
 
-def get_request(session: Session, request_id: int, lock: bool = False) -> EventRequests | None:
+def get_request(session: Session, request_id: str, lock: bool = False) -> EventRequests | None:
     statement = (
         select(EventRequests)
         .where(EventRequests.id == request_id)

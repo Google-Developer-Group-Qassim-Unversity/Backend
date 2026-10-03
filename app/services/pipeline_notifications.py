@@ -234,7 +234,7 @@ def list_for(
     return total, unread_count, rows, read
 
 
-def mark_read(session: Session, member_id: int, notification_ids: list[int]) -> int:
+def mark_read(session: Session, member_id: int, notification_ids: list[str]) -> int:
     if not notification_ids:
         return 0
     already = set(

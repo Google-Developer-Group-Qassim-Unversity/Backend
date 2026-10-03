@@ -165,13 +165,13 @@ def list_event_requests(
     )
 
 
-@router.get("/{request_id:int}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def get_event_request(request_id: int, session: DB, caller: CurrentCaller):
+@router.get("/{request_id}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def get_event_request(request_id: str, session: DB, caller: CurrentCaller):
     return detail(session, caller, service.get_request_for(session, caller, request_id))
 
 
-@router.put("/{request_id:int}/dates", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def redate_event_request(request_id: int, body: RedateRequest, session: DB, caller: CurrentCaller):
+@router.put("/{request_id}/dates", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def redate_event_request(request_id: str, body: RedateRequest, session: DB, caller: CurrentCaller):
     """New dates for a request that lost its own; a draft gets a fresh 24-hour hold."""
     with service.booking_lock(session):
         request = service.get_request_for(session, caller, request_id, lock=True)
@@ -180,8 +180,8 @@ def redate_event_request(request_id: int, body: RedateRequest, session: DB, call
     return detail(session, caller, request)
 
 
-@router.put("/{request_id:int}/details", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def update_event_request_details(request_id: int, body: UpdateDetailsRequest, session: DB, caller: CurrentCaller):
+@router.put("/{request_id}/details", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def update_event_request_details(request_id: str, body: UpdateDetailsRequest, session: DB, caller: CurrentCaller):
     """Save any of the event details; only the fields sent change."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.update_details(session, caller, request, body.model_dump(exclude_unset=True))
@@ -189,8 +189,8 @@ def update_event_request_details(request_id: int, body: UpdateDetailsRequest, se
     return detail(session, caller, request)
 
 
-@router.delete("/{request_id:int}", status_code=status.HTTP_200_OK, response_model=DetailResponse)
-def cancel_event_request(request_id: int, session: DB, caller: CurrentCaller):
+@router.delete("/{request_id}", status_code=status.HTTP_200_OK, response_model=DetailResponse)
+def cancel_event_request(request_id: str, session: DB, caller: CurrentCaller):
     """Drop a draft. Its dates, if it still held any, are free again."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.cancel(session, caller, request)
@@ -199,9 +199,9 @@ def cancel_event_request(request_id: int, session: DB, caller: CurrentCaller):
     return DetailResponse(detail="Request cancelled")
 
 
-@router.put("/{request_id:int}/briefs/{team}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+@router.put("/{request_id}/briefs/{team}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
 def save_event_request_brief(
-    request_id: int, team: PipelineTeam, body: SaveBriefRequest, session: DB, caller: CurrentCaller
+    request_id: str, team: PipelineTeam, body: SaveBriefRequest, session: DB, caller: CurrentCaller
 ):
     """Save the Design or Logistics brief as a draft; submit checks it."""
     request = service.get_request_for(session, caller, request_id, lock=True)
@@ -210,8 +210,8 @@ def save_event_request_brief(
     return detail(session, caller, request)
 
 
-@router.post("/{request_id:int}/submit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def submit_event_request(request_id: int, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
+@router.post("/{request_id}/submit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def submit_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
     """Send a complete request to Design and Logistics. A 422 lists every missing field."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     emails = service.submit(session, caller, request)
@@ -221,13 +221,13 @@ def submit_event_request(request_id: int, session: DB, caller: CurrentCaller, ba
 
 
 @router.post(
-    "/{request_id:int}/return",
+    "/{request_id}/return",
     status_code=status.HTTP_200_OK,
     response_model=EventRequestDetail,
     dependencies=[Depends(Require(Perm.PIPELINE_DESIGN))],
 )
 def return_event_request(
-    request_id: int, body: ReturnRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
+    request_id: str, body: ReturnRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
 ):
     """Design sends the request back with notes: once, within two days. The team has 12 hours."""
     request = service.get_request_for(session, caller, request_id, lock=True)
@@ -237,8 +237,8 @@ def return_event_request(
     return detail(session, caller, request)
 
 
-@router.post("/{request_id:int}/resubmit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def resubmit_event_request(request_id: int, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
+@router.post("/{request_id}/resubmit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def resubmit_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
     """The team sends its fixed request back to Design. Late costs points, applied at publish."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     email = service.resubmit(session, caller, request)
@@ -247,11 +247,9 @@ def resubmit_event_request(request_id: int, session: DB, caller: CurrentCaller, 
     return detail(session, caller, request)
 
 
-@router.post(
-    "/{request_id:int}/tasks/{team}/complete", status_code=status.HTTP_200_OK, response_model=EventRequestDetail
-)
+@router.post("/{request_id}/tasks/{team}/complete", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
 def complete_event_request_task(
-    request_id: int, team: PipelineTeam, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
+    request_id: str, team: PipelineTeam, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
 ):
     """A team marks its part done."""
     request = service.get_request_for(session, caller, request_id, lock=True)
@@ -261,8 +259,8 @@ def complete_event_request_task(
     return detail(session, caller, request)
 
 
-@router.post("/{request_id:int}/publish", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def publish_event_request(request_id: int, body: PublishRequest, session: DB, caller: CurrentCaller):
+@router.post("/{request_id}/publish", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def publish_event_request(request_id: str, body: PublishRequest, session: DB, caller: CurrentCaller):
     """Turn a ready request into a real event in /events, created as a draft for admins to review."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.publish(session, caller, request, body.department_action_id, body.member_action_id, body.image_url)

@@ -96,7 +96,7 @@ def grant(session: Session, access: Access, by: int, department_id: int, member_
     return queries.create_grant(session, semester.id, department_id, member_id, perm.value, by)
 
 
-def revoke(session: Session, by: int, department_id: int, grant_id: int) -> None:
+def revoke(session: Session, by: int, department_id: int, grant_id: str) -> None:
     row = session.get(PermissionGrants, grant_id)
     if row is None or row.department_id != department_id or row.revoked_at is not None:
         raise PermissionConflict("grant_not_found", f"No active grant {grant_id} in department {department_id}", 404)

@@ -251,12 +251,12 @@ def grant_permission(department_id: int, body: GrantRequest, session: DB, caller
 
 
 @router.delete(
-    "/departments/{department_id:int}/grants/{grant_id:int}",
+    "/departments/{department_id:int}/grants/{grant_id}",
     status_code=status.HTTP_200_OK,
     response_model=DetailResponse,
     dependencies=[GrantHere],
 )
-def revoke_permission(department_id: int, grant_id: int, session: DB, caller: CurrentCaller):
+def revoke_permission(department_id: int, grant_id: str, session: DB, caller: CurrentCaller):
     management.revoke(session, caller.member.id, department_id, grant_id)
     session.commit()
     logger.info("Grant %s revoked in department %s", grant_id, department_id)

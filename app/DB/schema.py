@@ -1008,7 +1008,7 @@ class PermissionGrants(Base):
         Index("ix_permission_grants_department", "department_id"),
     )
 
-    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
     semester_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
@@ -1135,7 +1135,7 @@ class EventRequests(Base):
         Index("ix_event_requests_stage", "stage"),
     )
 
-    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     created_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     stage: Mapped[EventRequestStage] = mapped_column(
@@ -1185,7 +1185,7 @@ class EventRequests(Base):
         "EventRequestPartners", passive_deletes=True, cascade="all, delete-orphan"
     )
     tasks: Mapped[list["EventRequestTasks"]] = relationship(
-        "EventRequestTasks", passive_deletes=True, cascade="all, delete-orphan", order_by="EventRequestTasks.id"
+        "EventRequestTasks", passive_deletes=True, cascade="all, delete-orphan", order_by="EventRequestTasks.team"
     )
 
 
@@ -1202,7 +1202,7 @@ class EventRequestPartners(Base):
         ),
     )
 
-    request_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    request_id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True)
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
 
     department: Mapped["Departments"] = relationship("Departments")
@@ -1230,8 +1230,8 @@ class EventRequestTasks(Base):
         Index("ix_event_request_tasks_team_status", "team", "status"),
     )
 
-    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
-    request_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    request_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
     team: Mapped[PipelineTeam] = mapped_column(_enum(PipelineTeam), nullable=False)
     status: Mapped[EventRequestTaskStatus] = mapped_column(
         _enum(EventRequestTaskStatus), nullable=False, server_default=text("'brief'")
@@ -1269,9 +1269,9 @@ class PipelineNotifications(Base):
         Index("ix_pipeline_notifications_department", "department_id", "created_at"),
     )
 
-    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    request_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    request_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
     kind: Mapped[PipelineNotificationKind] = mapped_column(_enum(PipelineNotificationKind), nullable=False)
     payload: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime.datetime] = mapped_column(
@@ -1298,7 +1298,7 @@ class PipelineNotificationReads(Base):
         ),
     )
 
-    notification_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    notification_id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True)
     member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     read_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
@@ -1325,8 +1325,8 @@ class PipelinePenalties(Base):
         Index("uq_pipeline_penalties_request", "request_id", unique=True),
     )
 
-    id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
-    request_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=lambda: str(uuid.uuid4()))
+    request_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     late_days: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     points: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)

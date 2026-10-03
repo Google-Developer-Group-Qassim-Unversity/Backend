@@ -129,7 +129,7 @@ COMPLETE_DESIGN = {"design_type": "poster", "idea": "A robot", "content_status":
 COMPLETE_LOGISTICS = {"meet_link_by_logistics": True, "venue": "التيك فالي (60)", "buses_needed": False}
 
 
-def book_complete(pipeline, department, start="2026-07-20", end="2026-07-21") -> int:
+def book_complete(pipeline, department, start="2026-07-20", end="2026-07-21") -> str:
     """Book a request as the signed-in person and fill in everything submit needs. Returns its id."""
     response = pipeline.client.post(
         "/pipeline/requests", json={"department_id": department.id, "start_date": start, "end_date": end}
@@ -143,5 +143,5 @@ def book_complete(pipeline, department, start="2026-07-20", end="2026-07-21") ->
     return request_id
 
 
-def submit(pipeline, request_id: int):
+def submit(pipeline, request_id: str):
     return pipeline.client.post(f"/pipeline/requests/{request_id}/submit")

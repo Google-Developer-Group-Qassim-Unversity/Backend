@@ -334,7 +334,7 @@ def delete_event(event_id: int, session: DB):
     if request is not None:
         raise PipelineConflict(
             "published_by_pipeline",
-            f"This event was published from events pipeline request #{request.id}, so it can't be deleted",
+            f"This event was published from the events pipeline (request {request.id}), so it can't be deleted",
         )
 
     event_name = event.name

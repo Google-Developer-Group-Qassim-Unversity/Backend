@@ -53,7 +53,7 @@ class PipelineMeResponse(BaseModel):
 
 
 class CalendarDayRequest(BaseModel):
-    id: int
+    id: str
     department: PipelineDepartment
     title: str | None
     stage: EventRequestStage
@@ -136,7 +136,7 @@ class PersonRef(BaseModel):
 
 
 class EventRequestSummary(BaseModel):
-    id: int
+    id: str
     department: PipelineDepartment
     stage: EventRequestStage
     title: str | None
@@ -212,13 +212,13 @@ class SaveBriefRequest(BaseModel):
 
 
 class NotificationRequest(BaseModel):
-    id: int
+    id: str
     title: str | None
     stage: EventRequestStage
 
 
 class NotificationItem(BaseModel):
-    id: int
+    id: str
     kind: PipelineNotificationKind
     department: PipelineDepartment
     request: NotificationRequest
