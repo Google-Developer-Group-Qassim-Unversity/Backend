@@ -204,6 +204,8 @@ def get_member_access(member_id: int, session: DB):
                 department_id=d.id,
                 name=d.name,
                 ar_name=d.ar_name,
+                color=d.color,
+                icon=d.icon,
                 roles=sorted(explanation.roles[d.id]),
                 permissions=held(d.id),
             )

@@ -83,6 +83,9 @@ class MemberDepartmentAccess(BaseModel):
     department_id: int
     name: str
     ar_name: str
+    # The department's own colour (#rrggbb) and Lucide icon key, as on the club structure page.
+    color: str
+    icon: str
     roles: list[str]
     permissions: list[HeldPermission]
 
