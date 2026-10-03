@@ -172,6 +172,7 @@ def test_member_access_says_where_each_permission_comes_from(club, ai):
 
     ai_row = _department(body, department.id)
     assert ai_row["roles"] == ["leader", "member"]
+    assert ai_row["color"] == department.color and ai_row["icon"] == department.icon
     sources = _sources(ai_row)
     assert sources["events.edit"] == ["department", "shared"]
     assert sources["points.custom"] == ["department"]
