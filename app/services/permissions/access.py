@@ -25,6 +25,7 @@ The rules:
 """
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from sqlalchemy.orm import Session
 
@@ -100,14 +101,47 @@ class Access:
         return STAFF_BASICS.union(*self.held.values())
 
 
+# Why a department's leader, VP or member holds a permission there.
+Source = Literal["shared", "department", "team", "grant"]
+
+
+@dataclass(frozen=True)
+class Explanation:
+    """Everything ``resolve_access`` worked out, with where each permission came from.
+
+    ``Access`` is built from this, so the member-lookup screen and the real
+    checks cannot disagree.
+    """
+
+    member_id: int | None = None
+    is_super_admin: bool = False
+    semester_id: str | None = None
+    roles: dict[int, frozenset[str]] = field(default_factory=dict)
+    # {department id: {permission: why}}. Every roster department is a key, even with nothing held.
+    sources: dict[int, dict[Perm, frozenset[Source]]] = field(default_factory=dict)
+
+    def access(self) -> Access:
+        return Access(
+            member_id=self.member_id,
+            is_super_admin=self.is_super_admin,
+            semester_id=self.semester_id,
+            roles=self.roles,
+            held={d: frozenset(perms) for d, perms in self.sources.items()},
+        )
+
+
 def resolve_access(session: Session, member: Members | None) -> Access:
+    return explain_access(session, member).access()
+
+
+def explain_access(session: Session, member: Members | None) -> Explanation:
     if member is None:
-        return Access()
+        return Explanation()
 
     super_admin = queries.is_super_admin(session, member.id)
     semester = current_semester(session)
     if semester is None:
-        return Access(member_id=member.id, is_super_admin=super_admin)
+        return Explanation(member_id=member.id, is_super_admin=super_admin)
 
     roles: dict[int, set[str]] = {}
     for department_id, role_key in queries.get_roster_roles(session, semester.id, member.id):
@@ -122,17 +156,25 @@ def resolve_access(session: Session, member: Members | None) -> Access:
         by_team.setdefault(department.id, set()).update(TEAM_PERMISSIONS[team])
     grants = queries.get_active_grants(session, semester.id, member.id)
 
-    held: dict[int, frozenset[Perm]] = {}
+    sources: dict[int, dict[Perm, frozenset[Source]]] = {}
     for department_id in roles:
-        perms = set(parse(grants.get(department_id, ())))
-        if department_id in officer_of:
-            perms |= shared | parse(by_department.get(department_id, ())) | by_team.get(department_id, set())
-        held[department_id] = frozenset(perms)
+        found: dict[Perm, set[Source]] = {}
 
-    return Access(
+        def add(perms, source: Source) -> None:
+            for perm in perms:
+                found.setdefault(perm, set()).add(source)
+
+        add(parse(grants.get(department_id, ())), "grant")
+        if department_id in officer_of:
+            add(shared, "shared")
+            add(parse(by_department.get(department_id, ())), "department")
+            add(by_team.get(department_id, ()), "team")
+        sources[department_id] = {perm: frozenset(why) for perm, why in found.items()}
+
+    return Explanation(
         member_id=member.id,
         is_super_admin=super_admin,
         semester_id=semester.id,
         roles={d: frozenset(keys) for d, keys in roles.items()},
-        held=held,
+        sources=sources,
     )

@@ -8,8 +8,9 @@ import logging
 from fastapi import APIRouter, Depends, status
 
 from app.DB import permissions as queries
-from app.DB.schema import Members, PermissionGrants
+from app.DB.schema import Members, PermissionGrants, Semesters
 from app.dependencies import DB
+from app.exceptions import MemberNotFound
 from app.routers.permissions_models import (
     AddSuperAdminRequest,
     AssignmentsResponse,
@@ -18,13 +19,18 @@ from app.routers.permissions_models import (
     DepartmentGrantsResponse,
     GrantEntry,
     GrantRequest,
+    HeldPermission,
+    MemberAccessResponse,
+    MemberDepartmentAccess,
+    MemberSemester,
     PermissionKeys,
     PersonRef,
     SuperAdminEntry,
 )
 from app.routers.responses import DetailResponse
 from app.services.permissions import management
-from app.services.permissions.catalogue import CATALOGUE, Perm
+from app.services.permissions.access import explain_access
+from app.services.permissions.catalogue import CATALOGUE, STAFF_BASICS, Perm
 from app.services.permissions.dependencies import CurrentCaller
 from app.services.permissions.departments import path_departments
 from app.services.permissions.guards import Require, Staff, SuperAdmin
@@ -149,6 +155,62 @@ def remove_super_admin(member_id: int, session: DB, caller: CurrentCaller):
     session.commit()
     logger.info("Member %s is no longer a super admin, removed by %s", member_id, caller.member.id)
     return list_super_admins(session)
+
+
+# ---------- one member ----------
+
+
+@router.get(
+    "/members/{member_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=MemberAccessResponse,
+    dependencies=[Depends(SuperAdmin)],
+)
+def get_member_access(member_id: int, session: DB):
+    """What ``member_id`` can do in the admin app, department by department, and where each permission comes from."""
+    member = session.get(Members, member_id)
+    if member is None:
+        raise MemberNotFound(member_id)
+    explanation = explain_access(session, member)
+    access = explanation.access()
+    semester = session.get(Semesters, explanation.semester_id) if explanation.semester_id else None
+    grants = {
+        (row.department_id, row.permission): row
+        for row in (queries.list_member_grants(session, semester.id, member_id) if semester else ())
+    }
+
+    def held(department_id: int) -> list[HeldPermission]:
+        out = []
+        for perm, why in sorted(explanation.sources[department_id].items()):
+            grant = grants.get((department_id, perm.value)) if "grant" in why else None
+            out.append(
+                HeldPermission(
+                    permission=perm.value,
+                    sources=sorted(why),
+                    granted_by=_person(grant.granter) if grant else None,
+                    granted_at=grant.granted_at if grant else None,
+                )
+            )
+        return out
+
+    return MemberAccessResponse(
+        member=PersonRef(member_id=member.id, name=member.name),
+        is_super_admin=access.is_super_admin,
+        is_staff=access.is_staff,
+        semester=MemberSemester(id=semester.id, name=semester.name) if semester else None,
+        basics=sorted(STAFF_BASICS) if explanation.roles else [],
+        departments=[
+            MemberDepartmentAccess(
+                department_id=d.id,
+                name=d.name,
+                ar_name=d.ar_name,
+                roles=sorted(explanation.roles[d.id]),
+                permissions=held(d.id),
+            )
+            for d in queries.get_departments(session, set(explanation.roles))
+        ],
+        permissions=sorted(access.permissions()),
+    )
 
 
 # ---------- grants ----------
