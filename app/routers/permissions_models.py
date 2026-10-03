@@ -41,7 +41,7 @@ class AddSuperAdminRequest(BaseModel):
 
 
 class GrantEntry(BaseModel):
-    id: int
+    id: str
     member: PersonRef
     permission: str
     granted_by: PersonRef

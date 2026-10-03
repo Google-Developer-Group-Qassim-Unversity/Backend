@@ -267,7 +267,7 @@ def booking_lock(session: Session):
     yield
 
 
-def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: int | None) -> None:
+def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: str | None) -> None:
     """Super admins have full authority: they skip every rule here but a sane range."""
     if caller.access.is_super_admin:
         check_range(start, end, MAX_CALENDAR_DAYS)
@@ -285,7 +285,7 @@ def _check_bookable(session: Session, caller: Caller, start: date, end: date, ig
             raise PipelineConflict("day_taken", "One of these days is already taken")
 
 
-def _check_one_live_hold(session: Session, department_id: int, ignore_id: int | None = None) -> None:
+def _check_one_live_hold(session: Session, department_id: int, ignore_id: str | None = None) -> None:
     held = [
         r for r in queries.get_department_drafts_with_hold(session, department_id, clock.now()) if r.id != ignore_id
     ]
@@ -411,7 +411,7 @@ def within_official_hours(request: EventRequests) -> bool | None:
 # --------------------------------------------------------------------------- reading
 
 
-def get_request_for(session: Session, caller: Caller, request_id: int, lock: bool = False) -> EventRequests:
+def get_request_for(session: Session, caller: Caller, request_id: str, lock: bool = False) -> EventRequests:
     request = queries.get_request(session, request_id, lock=lock)
     if request is None or request.stage == EventRequestStage.CANCELLED:
         raise NotFound("Event request", request_id)
