@@ -10,6 +10,10 @@ goes with the event, and with it its tasks, partners, notifications and penalty
 (all CASCADE from ``event_requests``). The event's points and the penalty's
 discount already went with the event's logs. A day is taken only while a live
 request covers it, so the days are free again.
+
+Events deleted before this left orphans: requests still ``published`` with no
+event (publish sets both together, so nothing else looks like that). They are
+deleted here, the same as the cascade would have done.
 """
 
 from typing import Sequence, Union
@@ -26,6 +30,7 @@ FK = "fk_event_requests_event"
 
 
 def upgrade() -> None:
+    op.execute("DELETE FROM event_requests WHERE stage = 'published' AND event_id IS NULL")
     op.drop_constraint(FK, "event_requests", type_="foreignkey")
     op.create_foreign_key(FK, "event_requests", "events", ["event_id"], ["id"], ondelete="CASCADE")
 
