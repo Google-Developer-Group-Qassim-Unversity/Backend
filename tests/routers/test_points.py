@@ -4,12 +4,22 @@ Everything here is reachable without a token - the leaderboard app reads it -
 so the interesting behaviour is which semester an anonymous caller is shown.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 from fastapi.testclient import TestClient
 
 import app.semesters
-from app.DB.schema import DepartmentsLogs, Events, EventsLocationType, EventsStatus, Logs, SemesterDepartments
+from app.DB.schema import (
+    Actions,
+    ActionsActionType,
+    DepartmentsLogs,
+    Events,
+    EventsLocationType,
+    EventsStatus,
+    Logs,
+    MembersLogs,
+    SemesterDepartments,
+)
 from app.DB.semesters import get_semester_by_hijri_code
 
 from tests.utils import assert_2xx, assert_not_found, semester_id_on
@@ -215,3 +225,98 @@ def test_ranking_uses_the_name_a_department_had_that_semester(client, db_session
     ranking = _department_points(client, 472)[seed_refs.dept_design.id]
     assert (ranking["department_name"], ranking["ar_department_name"]) == ("Old Design", "التصميم القديم")
     assert _department_points(client, 475) == {}
+
+
+# ---------- bonus_only: which history rows point at a real event page ----------
+
+
+def _add_department_log(db_session, event_id: int, action_id: int, department_id: int) -> None:
+    log = Logs(action_id=action_id, event_id=event_id)
+    db_session.add(log)
+    db_session.flush()
+    db_session.add(DepartmentsLogs(department_id=department_id, log_id=log.id))
+    db_session.flush()
+
+
+def test_department_history_flags_bonus_only_events(client, db_session, seed_refs):
+    """A real event and a pure bonus event, side by side. The bonus flag is what
+    makes the leaderboard app keep the second one plain text (GDG-31)."""
+    day = "2026-07-01"
+    semester_id = semester_id_on(db_session, day)
+    bonus_action = Actions(
+        action_name="Bonus", ar_action_name="Bonus", action_type=ActionsActionType.BONUS, points=0, order=99
+    )
+    db_session.add(bonus_action)
+    db_session.flush()
+
+    real = Events(
+        name="Real workshop",
+        location_type=EventsLocationType.ON_SITE,
+        location="Hall",
+        start_datetime=f"{day} 10:00:00",
+        end_datetime=f"{day} 12:00:00",
+        status=EventsStatus.CLOSED,
+        semester_id=semester_id,
+    )
+    bonus = Events(
+        name="بونس تميز",
+        location_type=EventsLocationType.NONE,
+        location="none",
+        start_datetime=f"{day} 13:00:00",
+        end_datetime=f"{day} 14:00:00",
+        status=EventsStatus.CLOSED,
+        semester_id=semester_id,
+    )
+    db_session.add_all([real, bonus])
+    db_session.flush()
+
+    _add_department_log(db_session, real.id, seed_refs.dept_action.id, seed_refs.dept_design.id)
+    _add_department_log(db_session, bonus.id, bonus_action.id, seed_refs.dept_design.id)
+
+    rows = {e["event_name"]: e for e in client.get(f"/points/departments/{seed_refs.dept_design.id}").json()["events"]}
+    assert rows["Real workshop"]["bonus_only"] is False
+    assert rows["بونس تميز"]["bonus_only"] is True
+
+
+def test_member_history_flags_bonus_only_events(client, db_session, seed_refs):
+    """The member history groups per event, so the flag there is
+    "every log of this event is a bonus action", not a per-row one (GDG-31)."""
+    day = "2026-07-01"
+    semester_id = semester_id_on(db_session, day)
+    bonus_action = Actions(
+        action_name="Bonus", ar_action_name="Bonus", action_type=ActionsActionType.BONUS, points=0, order=99
+    )
+    db_session.add(bonus_action)
+    db_session.flush()
+
+    mixed = Events(
+        name="Mixed event",
+        location_type=EventsLocationType.ON_SITE,
+        location="Hall",
+        start_datetime=f"{day} 10:00:00",
+        end_datetime=f"{day} 12:00:00",
+        status=EventsStatus.CLOSED,
+        semester_id=semester_id,
+    )
+    bonus = Events(
+        name="بونس",
+        location_type=EventsLocationType.NONE,
+        location="none",
+        start_datetime=f"{day} 13:00:00",
+        end_datetime=f"{day} 14:00:00",
+        status=EventsStatus.CLOSED,
+        semester_id=semester_id,
+    )
+    db_session.add_all([mixed, bonus])
+    db_session.flush()
+
+    for event, action_id in ((mixed, seed_refs.member_action.id), (mixed, bonus_action.id), (bonus, bonus_action.id)):
+        log = Logs(action_id=action_id, event_id=event.id)
+        db_session.add(log)
+        db_session.flush()
+        db_session.add(MembersLogs(member_id=seed_refs.ahmed.id, log_id=log.id, date=datetime(2026, 7, 1, 10, 0, 0)))
+        db_session.flush()
+
+    rows = {e["event_name"]: e for e in client.get(f"/points/members/{seed_refs.ahmed.id}").json()["events"]}
+    assert rows["Mixed event"]["bonus_only"] is False
+    assert rows["بونس"]["bonus_only"] is True
