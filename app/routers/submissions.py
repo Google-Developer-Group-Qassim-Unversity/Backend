@@ -8,7 +8,8 @@ from app.DB import submissions as submission_queries
 from app.DB import form_sync_jobs as job_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import authenticated_guard, CurrentMember, resolve_member
-from app.exceptions import NotFound
+from app.DB.schema import EventsStatus
+from app.exceptions import NotFound, RegistrationClosed, SubmissionNotFound
 from app.routers.models import submission_exists_model, submission_accept_model
 from app.services.form_responses import FormResponsesClient
 from app.services.form_sync import resolve_form_access, sync_form_submissions
@@ -62,6 +63,25 @@ def check_submission_exists(form_id: int, member: CurrentMember, session: DB):
         return {"submission_status": True, "submission_timestamp": submission.submitted_at}
     except Exception:
         raise
+
+
+@router.delete("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=StatusResponse)
+def cancel_submission(form_id: int, member: CurrentMember, session: DB):
+    """Cancel the caller's own registration, while the event is still taking registrations.
+
+    Accepted registrations can be cancelled too - that frees the seat. Once the
+    event leaves `open` (it is running or over) the registration is part of the
+    record and stays.
+    """
+    submission = submission_queries.get_submission_by_form_and_member(session, form_id, member.id)
+    if submission is None:
+        raise SubmissionNotFound(form_id)
+    if submission.form.event.status != EventsStatus.OPEN:
+        raise RegistrationClosed(form_id)
+    submission_queries.delete_submission(session, submission)
+    session.commit()
+    logger.info(f"member [{member.id}] cancelled submission [{submission.id}] for form [{form_id}]")
+    return {"status": "success"}
 
 
 @router.put(

@@ -151,6 +151,20 @@ class FormNotAttached(KnownHttpException):
         super().__init__(status_code=409, detail=f"Form {form_id} is not attached to a Google Form yet")
 
 
+class SubmissionNotFound(NotFound):
+    def __init__(self, form_id: int):
+        super().__init__("Submission for form", form_id)
+
+
+class RegistrationClosed(KnownHttpException):
+    """A member tried to cancel a registration after the event stopped taking registrations."""
+
+    code = "registration_closed"
+
+    def __init__(self, form_id: int):
+        super().__init__(status_code=409, detail=f"Registration for form {form_id} is closed and can't be cancelled")
+
+
 class EventNotFound(NotFound):
     def __init__(self, id: str | int):
         super().__init__("Event", id)

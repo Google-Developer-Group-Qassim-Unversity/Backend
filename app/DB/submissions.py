@@ -29,6 +29,11 @@ def get_submission_by_form_and_member(session: Session, form_id: int, member_id:
     return submission
 
 
+def delete_submission(session: Session, submission: Submissions) -> None:
+    session.delete(submission)
+    session.flush()
+
+
 # ====================== Google Sync Functions ======================
 def create_google_submission(
     session: Session,
