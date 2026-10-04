@@ -11,6 +11,7 @@ from typing import Any, Dict
 import jwt
 
 from app.config import config
+from app.wallet_band import render_name_band
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives import hashes
@@ -33,6 +34,7 @@ THEMES_CONFIG = {
     "gdg-blue": {
         "bg_rgb": "rgb(191, 242, 255)",
         "fg_rgb": "rgb(17, 24, 39)",
+        "text_rgb": (17, 24, 39),
         "label_rgb": "rgb(51, 65, 85)",
         "badge_color": "#BFF2FF",
         "role_title": "عضو نادي قوقل للطلبة المطورين",
@@ -40,6 +42,7 @@ THEMES_CONFIG = {
     "gdg-red": {
         "bg_rgb": "rgb(255, 217, 220)",
         "fg_rgb": "rgb(17, 24, 39)",
+        "text_rgb": (17, 24, 39),
         "label_rgb": "rgb(75, 85, 99)",
         "badge_color": "#FFD9DC",
         "role_title": "عضو نادي قوقل للطلبة المطورين",
@@ -47,6 +50,7 @@ THEMES_CONFIG = {
     "gdg-gold-admin": {
         "bg_rgb": "rgb(0, 0, 0)",
         "fg_rgb": "rgb(255, 255, 255)",
+        "text_rgb": (255, 255, 255),
         "label_rgb": "rgb(209, 213, 219)",
         "badge_color": "#000000",
         "role_title": "إداري نادي قوقل للطلبة المطورين",
@@ -58,12 +62,18 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     """
     Generates a cryptographically signed Apple Wallet .pkpass binary buffer
     using Python cryptography PKCS#7 detached signature.
-    Uses 'storeCard' pass type with full-bleed background.png to render the complete Figma card
-    design - background.png is only honored by PassKit for storeCard, so the 'eventTicket' style
-    used previously silently dropped it and fell back to Wallet's plain default rendering.
+
+    The pass face is a 'storeCard' whose strip carries the card art with the member's
+    role and name drawn into it (see app/wallet_band.py). PassKit gives a pass no
+    sharp full-card image before iOS 27 - background.png is eventTicket-only and
+    always blurred - so the strip is the one place the card's own art and type can
+    appear. iOS 27 reads the 'posterGeneric' block instead and draws the full-bleed
+    artwork; older versions ignore it.
     """
     theme_id = card_data.get("themeId", DEFAULT_THEME)
-    theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
+    if theme_id not in THEMES_CONFIG:
+        theme_id = DEFAULT_THEME
+    theme = THEMES_CONFIG[theme_id]
 
     pass_type_id = config.APPLE_PASS_TYPE_ID
     team_id = config.APPLE_TEAM_ID
@@ -81,31 +91,46 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     major = card_data.get("major") or ""
     level = card_data.get("studyYearOrLevel") or ""
 
-    # 1. Build pass.json with full-card storeCard layout
+    role_title = theme["role_title"]
+    name_field = {"key": "member_name", "label": role_title, "value": full_name}
+    back_fields = [
+        name_field,
+        {"key": "uni_id", "label": "الرقم الجامعي", "value": str(card_data.get("uniId") or "")},
+        {"key": "email", "label": "البريد الإلكتروني", "value": card_data.get("email", "")},
+        {"key": "institution", "label": "الكلية / الجهة", "value": uni_college},
+        {"key": "major", "label": "التخصص", "value": major},
+        {"key": "level", "label": "المستوى / المرحلة", "value": level},
+        {"key": "club_name", "label": "النادي", "value": "Google Developer Group - Qassim"},
+    ]
+
+    name_band = render_name_band(theme_id, role_title, full_name, theme["text_rgb"])
+    if name_band is not None:
+        # The name is already in the strip; any front field would be drawn on top of it.
+        store_card: Dict[str, Any] = {"backFields": back_fields}
+    else:
+        # No baked text: show the name below the bare strip, where Wallet honours
+        # foregroundColor. A primary field would sit on the strip in forced white.
+        store_card = {
+            "secondaryFields": [{**name_field, "textAlignment": "PKTextAlignmentRight"}],
+            "backFields": back_fields[1:],
+        }
+
+    # 1. Build pass.json
     pass_json = {
         "formatVersion": 1,
         "passTypeIdentifier": pass_type_id,
         "teamIdentifier": team_id,
         "organizationName": "GDG Qassim",
         "serialNumber": serial_number,
-        "description": theme["role_title"],
+        "description": role_title,
         "foregroundColor": theme["fg_rgb"],
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
-        "storeCard": {
-            # secondaryFields/auxiliaryFields are deliberately omitted: Apple renders
-            # them as an extra text row on the card face below primaryFields, which
-            # isn't part of the card artwork's design - that detail lives on the back
-            # (backFields) instead, reachable via the info button.
-            "primaryFields": [{"key": "member_name", "label": theme["role_title"], "value": full_name}],
-            "backFields": [
-                {"key": "uni_id", "label": "الرقم الجامعي", "value": str(card_data.get("uniId") or "")},
-                {"key": "email", "label": "البريد الإلكتروني", "value": card_data.get("email", "")},
-                {"key": "institution", "label": "الكلية / الجهة", "value": uni_college},
-                {"key": "major", "label": "التخصص", "value": major},
-                {"key": "level", "label": "المستوى / المرحلة", "value": level},
-                {"key": "club_name", "label": "النادي", "value": "Google Developer Group - Qassim"},
-            ],
+        "storeCard": store_card,
+        "posterGeneric": {
+            # A first primary field with no label is drawn as the poster's title.
+            "primaryFields": [{"key": "member_name", "value": full_name}, {"key": "role", "value": role_title}],
+            "backFields": back_fields[1:],
         },
         "barcodes": [
             {
@@ -126,22 +151,26 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     files_to_pack: Dict[str, bytes] = {}
     files_to_pack["pass.json"] = json.dumps(pass_json, ensure_ascii=False, indent=2).encode("utf-8")
 
-    # Pack logos and icons
-    for img_name in ["icon.png", "icon@2x.png", "icon@3x.png", "logo.png", "logo@2x.png", "logo@3x.png"]:
-        img_path = os.path.join(ASSETS_DIR, img_name)
-        if os.path.exists(img_path):
-            with open(img_path, "rb") as f:
-                files_to_pack[img_name] = f.read()
+    # Pack the static images, preferring a theme's own variant (the admin card's
+    # logo has a white wordmark for its black surface). `strip` is the bare band,
+    # replaced below when the name could be drawn into it.
+    for dest, source in [
+        ("icon", "icon"),
+        ("logo", "logo"),
+        ("primaryLogo", "primaryLogo"),
+        ("artwork", "artwork"),
+        ("strip", "band"),
+    ]:
+        for suffix in ["", "@2x", "@3x"]:
+            themed_path = os.path.join(ASSETS_DIR, f"{source}-{theme_id}{suffix}.png")
+            default_path = os.path.join(ASSETS_DIR, f"{source}{suffix}.png")
+            img_path = themed_path if os.path.exists(themed_path) else default_path
+            if os.path.exists(img_path):
+                with open(img_path, "rb") as f:
+                    files_to_pack[f"{dest}{suffix}.png"] = f.read()
 
-    # Pack full-bleed background images for the complete Figma card design
-    for suffix in ["", "@2x", "@3x"]:
-        bg_dest = f"background{suffix}.png"
-        themed_bg = os.path.join(ASSETS_DIR, f"background-{theme_id}{suffix}.png")
-        default_bg = os.path.join(ASSETS_DIR, f"background{suffix}.png")
-        bg_path = themed_bg if os.path.exists(themed_bg) else default_bg
-        if os.path.exists(bg_path):
-            with open(bg_path, "rb") as f:
-                files_to_pack[bg_dest] = f.read()
+    for suffix, image in (name_band or {}).items():
+        files_to_pack[f"strip{suffix}.png"] = image
 
     # Generate fallback transparent images if any missing
     for required in ["icon.png", "icon@2x.png", "logo.png", "logo@2x.png"]:
