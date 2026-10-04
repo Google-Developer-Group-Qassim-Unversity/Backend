@@ -1,7 +1,7 @@
 """record who is responsible for each event, and who created it
 
-Revision ID: 8e6f7a8b9c0d
-Revises: 7d5e6f7a8b9c
+Revision ID: 9f7a8b9c0d1e
+Revises: 8e6f7a8b9c0d
 Create Date: 2026-10-04 18:00:00.000000
 
 Two columns on events, both pointing at members.id:
@@ -25,8 +25,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
 
-revision: str = "8e6f7a8b9c0d"
-down_revision: Union[str, Sequence[str], None] = "7d5e6f7a8b9c"
+revision: str = "9f7a8b9c0d1e"
+down_revision: Union[str, Sequence[str], None] = "8e6f7a8b9c0d"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
