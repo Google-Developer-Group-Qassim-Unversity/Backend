@@ -272,15 +272,22 @@ def test_department_history_flags_bonus_only_events(client, db_session, seed_ref
 
     _add_department_log(db_session, real.id, seed_refs.dept_action.id, seed_refs.dept_design.id)
     _add_department_log(db_session, bonus.id, bonus_action.id, seed_refs.dept_design.id)
+    # A bonus payment hung on the real event afterwards: its row still belongs
+    # to a real event, so it must stay clickable (GDG-31 review).
+    _add_department_log(db_session, real.id, bonus_action.id, seed_refs.dept_design.id)
 
-    rows = {e["event_name"]: e for e in client.get(f"/points/departments/{seed_refs.dept_design.id}").json()["events"]}
-    assert rows["Real workshop"]["bonus_only"] is False
-    assert rows["بونس تميز"]["bonus_only"] is True
+    rows = client.get(f"/points/departments/{seed_refs.dept_design.id}").json()["events"]
+    flags = {}
+    for row in rows:
+        flags.setdefault(row["event_name"], []).append(row["bonus_only"])
+    # The event appears once per action; a "real event" flag agrees across them.
+    assert flags["Real workshop"] == [False, False]
+    assert flags["بونس تميز"] == [True]
 
 
 def test_member_history_flags_bonus_only_events(client, db_session, seed_refs):
-    """The member history groups per event, so the flag there is
-    "every log of this event is a bonus action", not a per-row one (GDG-31)."""
+    """The flag belongs to the event, not to the member's own logs: a member
+    who only received a bonus on a real event still gets the link (GDG-31)."""
     day = "2026-07-01"
     semester_id = semester_id_on(db_session, day)
     bonus_action = Actions(
@@ -320,3 +327,18 @@ def test_member_history_flags_bonus_only_events(client, db_session, seed_refs):
     rows = {e["event_name"]: e for e in client.get(f"/points/members/{seed_refs.ahmed.id}").json()["events"]}
     assert rows["Mixed event"]["bonus_only"] is False
     assert rows["بونس"]["bonus_only"] is True
+
+    # Sara only has a bonus on the mixed event - the event is still real, so
+    # her row must be clickable too (GDG-31 review: caller's logs decide wrongly).
+    sara_bonus_log = Logs(action_id=bonus_action.id, event_id=mixed.id)
+    db_session.add(sara_bonus_log)
+    db_session.flush()
+    db_session.add(
+        MembersLogs(member_id=seed_refs.sara.id, log_id=sara_bonus_log.id, date=datetime(2026, 7, 1, 11, 0, 0))
+    )
+    db_session.flush()
+
+    sara_rows = client.get(f"/points/members/{seed_refs.sara.id}").json()["events"]
+    assert len(sara_rows) == 1
+    assert sara_rows[0]["event_name"] == "Mixed event"
+    assert sara_rows[0]["bonus_only"] is False

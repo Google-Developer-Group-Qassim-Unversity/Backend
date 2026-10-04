@@ -67,7 +67,11 @@ def get_member_points_history_semester(session: Session, semester_id: str, membe
             e.end_datetime AS end_datetime,
             e.location_type AS location_type,
             SUM((COALESCE(a.points, 0) + COALESCE(lm.mod_value_sum, 0))) AS points,
-            SUM(CASE WHEN a.action_type <> 'bonus' THEN 1 ELSE 0 END) = 0 AS bonus_only,
+            NOT EXISTS (
+                SELECT 1 FROM logs l2
+                JOIN actions a2 ON a2.id = l2.action_id
+                WHERE l2.event_id = e.id AND a2.action_type <> 'bonus'
+            ) AS bonus_only,
             GROUP_CONCAT(DISTINCT a.action_name ORDER BY a.action_name ASC SEPARATOR ', ') AS action_name,
             GROUP_CONCAT(DISTINCT a.ar_action_name ORDER BY a.action_name ASC SEPARATOR ', ') AS ar_action_name
         FROM members m
@@ -160,7 +164,11 @@ def get_department_points_history_semester(session: Session, semester_id: str, d
             e.status AS status,
             a.action_name AS action_name,
             a.ar_action_name AS ar_action_name,
-            a.action_type = 'bonus' AS bonus_only,
+            NOT EXISTS (
+                SELECT 1 FROM logs l2
+                JOIN actions a2 ON a2.id = l2.action_id
+                WHERE l2.event_id = l.event_id AND a2.action_type <> 'bonus'
+            ) AS bonus_only,
             e.location_type AS location_type,
             SUM((COALESCE(a.points, 0) + COALESCE(mods.mod_value_sum, 0))) AS points
         FROM departments_logs dl
