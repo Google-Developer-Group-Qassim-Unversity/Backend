@@ -109,6 +109,19 @@ def test_a_late_penalty_is_taken_off_once(pipeline, world):
     assert publish(pipeline, world).status_code == 409  # already published: nothing twice
 
 
+def test_the_requester_is_responsible_and_the_publisher_is_recorded(pipeline, world):
+    finish_all(pipeline, world)
+    pipeline.sign_in(world["admin"], super_admin=True)
+    event_id = publish(pipeline, world).json()["event_id"]
+
+    event = pipeline.session.get(Events, event_id)
+    assert event.responsible_member_id == world["leader"].id
+    assert event.created_by == world["admin"].id
+    details = pipeline.client.get(f"/events/{event_id}/details").json()
+    assert details["responsible"] == {"member_id": world["leader"].id, "name": world["leader"].name}
+    assert details["created_by"] == {"member_id": world["admin"].id, "name": world["admin"].name}
+
+
 def test_another_department_cannot_publish(pipeline, world):
     finish_all(pipeline, world)
     other = pipeline.department("Cyber")

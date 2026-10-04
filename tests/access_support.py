@@ -128,7 +128,8 @@ class Club:
 
     def event(self, department: Departments, seed_refs) -> int:
         payload = createEvent_model.model_validate(make_create_event_payload(seed_refs, department_id=department.id))
-        event, _log = create_full_event(self.session, payload)
+        creator = self.person()
+        event, _log = create_full_event(self.session, payload, responsible_member_id=creator.id, created_by=creator.id)
         self.session.flush()
         return event.id
 

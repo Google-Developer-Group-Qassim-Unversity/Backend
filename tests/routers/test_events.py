@@ -13,6 +13,29 @@ def test_authorized_create_event(admin_client: TestClient):
     assert body["name"] == "my event", f"Expected event name 'my event' but got '{body['name']}'"
 
 
+def test_creating_an_event_records_the_caller_as_responsible_and_creator(admin_client: TestClient, db_session):
+    event_id = admin_client.post("/events", json=make_create_event_payload()).json()["id"]
+    me = admin_client.get("/members/me").json()
+
+    details = admin_client.get(f"/events/{event_id}/details").json()
+    person = {"member_id": me["id"], "name": me["name"]}
+    assert details["responsible"] == person
+    assert details["created_by"] == person
+    # The public event route, which the leaderboard app reads, names nobody.
+    assert "responsible" not in admin_client.get(f"/events/{event_id}").json()
+
+
+def test_an_event_without_a_recorded_creator_shows_nobody(admin_client: TestClient, db_session):
+    event_id = admin_client.post("/events", json=make_create_event_payload()).json()["id"]
+    event = db_session.get(Events, event_id)
+    event.responsible_member_id = event.created_by = None
+    db_session.flush()
+
+    details = admin_client.get(f"/events/{event_id}/details").json()
+    assert details["responsible"] is None
+    assert details["created_by"] is None
+
+
 def test_unauthorized_create_event(clerk_client: TestClient):
     response = clerk_client.post("/events", json=make_create_event_payload())
     assert_forbidden(response)

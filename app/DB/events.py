@@ -162,7 +162,7 @@ def get_event_by_id(session: Session, event_id: int):
     return event
 
 
-def create_event(session: Session, event_data: Events_model):
+def create_event(session: Session, event_data: Events_model, responsible_member_id: int, created_by: int):
     new_event = Events(
         name=event_data.name,
         location_type=event_data.location_type,
@@ -176,6 +176,8 @@ def create_event(session: Session, event_data: Events_model):
         meeting_url=event_data.meeting_url,
         semester_id=semester_for_event(session, event_data.end_datetime, event_data.semester_id).id,
         created_at=datetime.now(),
+        responsible_member_id=responsible_member_id,
+        created_by=created_by,
     )
     session.add(new_event)
     session.flush()

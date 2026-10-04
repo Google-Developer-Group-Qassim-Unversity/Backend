@@ -37,7 +37,7 @@ from typing import Annotated, Literal
 from app.exceptions import DataIntegrityError, PipelineConflict
 from app.dependencies import DB
 from sqlalchemy.orm import Session
-from app.DB.schema import EventsLocationType, EventsStatus, FormType
+from app.DB.schema import EventsLocationType, EventsStatus, FormType, Members
 
 from app.routers.responses import DetailResponse
 from app.services.permissions.catalogue import Perm
@@ -149,7 +149,16 @@ def get_event_details(event_id: int, session: DB):
     actions = events_queries.get_actions_by_event_id(session, event_id)
     if not event or not actions:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-    return {"event": event, "actions": actions}
+    return {
+        "event": event,
+        "actions": actions,
+        "responsible": _person(event.responsible_member),
+        "created_by": _person(event.creator),
+    }
+
+
+def _person(member: Members | None) -> dict | None:
+    return {"member_id": member.id, "name": member.name} if member else None
 
 
 @router.post(
@@ -159,11 +168,11 @@ def get_event_details(event_id: int, session: DB):
     responses={409: {"model": ConflictResponse, "description": "Event already exists"}},
     dependencies=[Depends(Require(Perm.EVENTS_CREATE))],
 )
-def create_event(event_data: createEvent_model, session: DB, access: CurrentAccess):
+def create_event(event_data: createEvent_model, session: DB, member: CurrentMember, access: CurrentAccess):
     access.require(Perm.EVENTS_CREATE, event_data.department_id)
     try:
-        logger.info("Creating New Event and Associated Form")
-        new_event, _ = create_full_event(session, event_data)
+        logger.info("Member [%s] creating New Event and Associated Form", member.id)
+        new_event, _ = create_full_event(session, event_data, responsible_member_id=member.id, created_by=member.id)
         session.commit()
         session.refresh(new_event)
 
