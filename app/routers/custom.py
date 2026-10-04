@@ -15,6 +15,7 @@ from app.routers.models import Events_model, BaseClassModel
 from datetime import datetime
 from app.DB.schema import EventsLocationType
 from app.dependencies import DB
+from app.helpers import CurrentMember
 from app.exceptions import DataIntegrityError
 
 from app.routers.responses import CustomPointsCreatedResponse, MessageResponse
@@ -93,7 +94,7 @@ class CustomMemberPointsResponse(BaseClassModel):
 
 
 @router.post("/departments", status_code=status.HTTP_201_CREATED, response_model=CustomPointsCreatedResponse)
-def give_department_custom_points(body: CustomDepartmentPointsRequest, session: DB):
+def give_department_custom_points(body: CustomDepartmentPointsRequest, session: DB, member: CurrentMember):
     try:
         logger.info("Custom Department Points")
         # [1] validate events
@@ -118,7 +119,7 @@ def give_department_custom_points(body: CustomDepartmentPointsRequest, session: 
                 is_official=0,
             )
 
-            event = events_queries.create_event(session, new_event_model)
+            event = events_queries.create_event(session, new_event_model, member.id, member.id)
             if not event:
                 raise DataIntegrityError("Failed to create event")
 
@@ -304,7 +305,7 @@ def update_department_custom_points(log_id: int, body: DepartmentPointDetails, s
 
 
 @router.post("/members", status_code=status.HTTP_201_CREATED, response_model=CustomPointsCreatedResponse)
-def give_member_custom_points(body: CustomMemberPointsRequest, session: DB):
+def give_member_custom_points(body: CustomMemberPointsRequest, session: DB, member: CurrentMember):
     try:
         logger.info("Custom Member Points")
         if body.event_id:
@@ -326,7 +327,7 @@ def give_member_custom_points(body: CustomMemberPointsRequest, session: DB):
                 image_url=None,
                 is_official=0,
             )
-            event = events_queries.create_event(session, new_event_model)
+            event = events_queries.create_event(session, new_event_model, member.id, member.id)
             if not event:
                 raise DataIntegrityError("Failed to create event")
 

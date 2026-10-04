@@ -782,7 +782,10 @@ def publish(
     if request.start_date is None:
         raise PipelineConflict("no_dates", "This request has no dates")
     event, _department_log = create_full_event(
-        session, event_for(request, department_action_id, member_action_id, image_url)
+        session,
+        event_for(request, department_action_id, member_action_id, image_url),
+        responsible_member_id=request.created_by,
+        created_by=caller.member.id,
     )
     penalty = get_penalty(session, request)
     if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:
@@ -793,5 +796,5 @@ def publish(
     request.event_id = event.id
     request.stage = EventRequestStage.PUBLISHED
     session.flush()
-    logger.info("Request %s published as event %s", request.id, event.id)
+    logger.info("Request %s published as event %s by member %s", request.id, event.id, caller.member.id)
     return event.id

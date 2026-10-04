@@ -91,9 +91,17 @@ class event_actions_model(BaseClassModel):
     department_ar_name: str | None = None
 
 
+class EventPerson_model(BaseClassModel):
+    member_id: int
+    name: str
+
+
 class EventDetailsModel(BaseClassModel):
     event: Events_model
     actions: conlist(event_actions_model, min_length=1)  # pyright: ignore[reportInvalidTypeForm]
+    # Null on events created before these were recorded, or if the member was deleted.
+    responsible: EventPerson_model | None = None
+    created_by: EventPerson_model | None = None
 
 
 class UpdateEventModel(BaseClassModel):

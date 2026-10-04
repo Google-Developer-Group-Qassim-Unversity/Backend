@@ -403,9 +403,15 @@ class Events(Base):
     __tablename__ = "events"
     __table_args__ = (
         ForeignKeyConstraint(["semester_id"], ["semesters.id"], ondelete="RESTRICT", name="fk_events_semester"),
+        ForeignKeyConstraint(
+            ["responsible_member_id"], ["members.id"], ondelete="SET NULL", name="fk_events_responsible_member"
+        ),
+        ForeignKeyConstraint(["created_by"], ["members.id"], ondelete="SET NULL", name="fk_events_created_by"),
         Index("event_name", "name"),
         Index("events_id_IDX", "id", "name"),
         Index("ix_events_semester_start", "semester_id", "start_datetime"),
+        Index("fk_events_responsible_member", "responsible_member_id"),
+        Index("fk_events_created_by", "created_by"),
     )
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
@@ -437,8 +443,16 @@ class Events(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+    # Who answers for the event: the member who requested it in the pipeline, or
+    # whoever created it directly. Null on events made before this was recorded.
+    responsible_member_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    # Who actually created the row: the POST /events/ caller, or whoever published
+    # the pipeline request. Often not the responsible member.
+    created_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
     semester: Mapped["Semesters"] = relationship("Semesters")
+    responsible_member: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[responsible_member_id])
+    creator: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[created_by])
     forms: Mapped[list["Forms"]] = relationship("Forms", back_populates="event", passive_deletes=True)
     logs: Mapped[list["Logs"]] = relationship("Logs", back_populates="event", passive_deletes=True)
     email_logs: Mapped[list["EmailLogs"]] = relationship("EmailLogs", back_populates="event", passive_deletes=True)
