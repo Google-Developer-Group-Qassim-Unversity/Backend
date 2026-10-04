@@ -1,4 +1,5 @@
 import logging
+from app.leaderboard_cache import refresh_member_names_cache
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from app.DB import members as member_queries
 from app.DB.schema import Members
@@ -54,9 +55,12 @@ def update_current_member(updates: MemberUpdateModel, member: CurrentMember, ses
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail=f"Member with email {updates.email} already exists"
             )
+    public_name_changed = updates.public_name is not None and updates.public_name != member.public_name
     updated_member = member_queries.update_member_by_id(session, member.id, updates.model_dump(exclude_none=True))
     logger.info(f"Member with id {member.id} updated successfully")
     session.commit()
+    if public_name_changed:
+        refresh_member_names_cache()
     return updated_member
 
 

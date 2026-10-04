@@ -4,6 +4,7 @@ from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist, Con
 from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
+from app.member_names import validate_member_name
 from app.config import config
 from app.DB.schema import EventsLocationType, MembersGender, FormType
 
@@ -170,6 +171,7 @@ def _validate_optional_uni_id(value: str | None) -> str | None:
 class Member_model(BaseClassModel):
     id: int | None = None
     name: str
+    public_name: str | None = None
     email: EmailStr
     phone_number: str | None
     uni_id: str | None = None
@@ -422,6 +424,13 @@ class customeDepartmentsPoints_model(BaseClassModel):
 
 class MemberUpdateModel(BaseModel):
     name: str | None = None
+    public_name: str | None = None
+
+    @field_validator("name", "public_name", mode="before")
+    @classmethod
+    def validate_names(cls, value, info):
+        return validate_member_name(value, max_length=50 if info.field_name == "name" else 150)
+
     email: EmailStr | None = None
     phone_number: str | None = None
     gender: Literal["Male", "Female"] | None = None

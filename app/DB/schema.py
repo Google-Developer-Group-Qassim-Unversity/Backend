@@ -1,3 +1,4 @@
+from app.member_names import default_public_name
 from typing import Optional
 import datetime
 import enum
@@ -468,6 +469,9 @@ class Members(Base):
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
+    public_name: Mapped[str] = mapped_column(
+        VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False, default=default_public_name
+    )
     uni_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     clerk_user_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     gender: Mapped[MembersGender] = mapped_column(

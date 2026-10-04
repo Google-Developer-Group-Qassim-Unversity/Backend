@@ -2,7 +2,9 @@ import logging
 import uuid as uuid_lib
 from typing import Annotated, Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response, status, Body
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from app.member_names import validate_member_name
+from app.leaderboard_cache import refresh_member_names_cache
 
 from app.config import config
 from app.DB.schema import Members
@@ -48,6 +50,7 @@ class WalletMeResponse(BaseModel):
     member_id: int | None = None
     name: str
     official_name: str
+    public_name: str | None = None
     custom_name: str | None = None
     uni_id: str | None = None
     email: str | None = None
@@ -63,6 +66,8 @@ class WalletMeResponse(BaseModel):
 class WalletUpdateResponse(BaseModel):
     success: bool
     name: str
+    official_name: str
+    public_name: str
     email: str | None = None
     phone_number: str | None = None
     profile: WalletProfile
@@ -120,6 +125,14 @@ class ProfileVisibility(BaseModel):
 
 
 class UpdateWalletMePayload(BaseModel):
+    official_name: str | None = None
+    public_name: str | None = None
+
+    @field_validator("official_name", "public_name", mode="before")
+    @classmethod
+    def validate_names(cls, value, info):
+        return validate_member_name(value, max_length=50 if info.field_name == "official_name" else 150)
+
     custom_name: Optional[str] = Field(default=None, description="Preferred display name on card")
     theme_id: Optional[str] = Field(default=None, description="Theme ID (gdg-blue, gdg-red, gdg-gold-admin)")
     name_language: Optional[str] = Field(default=None, description="Name language label preference: ar or en")
@@ -296,6 +309,7 @@ def get_wallet_me(session: DB, member: MemberOrGuest, credentials=Depends(authen
         "member_id": member.id,
         "name": effective_name,
         "official_name": member.name,
+        "public_name": member.public_name,
         "custom_name": profile.custom_name,
         "uni_id": member.uni_id,
         "email": member.email,
@@ -358,6 +372,12 @@ def update_wallet_me(
     )
     visibility_dict = payload.visibility.model_dump() if payload.visibility is not None else None
 
+    public_name_changed = payload.public_name is not None and payload.public_name != member.public_name
+    if payload.official_name is not None:
+        member.name = payload.official_name
+    if payload.public_name is not None:
+        member.public_name = payload.public_name
+
     if payload.email is not None:
         member.email = str(payload.email)
     if payload.phone_number is not None:
@@ -379,12 +399,16 @@ def update_wallet_me(
         visibility=visibility_dict,
     )
     session.commit()
+    if public_name_changed:
+        refresh_member_names_cache()
 
     effective_name = updated_profile.custom_name or member.name
 
     return {
         "success": True,
         "name": effective_name,
+        "official_name": member.name,
+        "public_name": member.public_name,
         "email": member.email,
         "phone_number": member.phone_number,
         "profile": {
@@ -474,7 +498,7 @@ def get_public_profile(uuid: str, session: DB):
     show_academic = bool(vis.get("showAcademic", True))
     show_bio = bool(vis.get("showBio", True))
 
-    effective_name = profile.custom_name or member.name
+    effective_name = member.public_name or "Member"
     effective_institution = profile.institution or member.uni_college or "جامعة القصيم"
     effective_major = profile.major or member.uni_college or "علوم حاسب"
     effective_level = profile.study_year_or_level or (

@@ -68,15 +68,6 @@ def _management_actor(credentials: Annotated[HTTPAuthorizationCredentials, Depen
 ManagementActor = Annotated[str, Depends(_management_actor)]
 
 
-def _public_name(full_name: str) -> str:
-    """Limit public names to the first and final whitespace-delimited parts."""
-    parts = full_name.split()
-    if len(parts) <= 2:
-        return " ".join(parts)
-    family_name = parts[-2:] if parts[-1] == "الله" else parts[-1:]
-    return " ".join([parts[0], *family_name])
-
-
 def _get_department(session: Session, department_id: int) -> Departments:
     department = department_queries.get_department_by_id(session, department_id)
     if department is None:
@@ -134,8 +125,8 @@ def get_public_club_structure(session: DB, access: CurrentAccess, semester: int 
     for scope in queries.get_semester_departments(session, resolved.id):
         department = scope.department
         roster = rosters.get(department.id, [])
-        leaders = [_public_name(row.member.name) for row in roster if row.role.key == "leader"]
-        vps = [_public_name(row.member.name) for row in roster if row.role.key == "vp"]
+        leaders = [row.member.public_name or "Member" for row in roster if row.role.key == "leader"]
+        vps = [row.member.public_name or "Member" for row in roster if row.role.key == "vp"]
         if department.is_club_leadership:
             # The club's presidents are this department's leaders; it is not listed as a department.
             presidents = leaders
@@ -154,7 +145,7 @@ def get_public_club_structure(session: DB, access: CurrentAccess, semester: int 
                 leader=leaders[0] if leaders else None,
                 deputy=vps[0] if vps else None,
                 members=[
-                    _public_name(row.member.name)
+                    row.member.public_name or "Member"
                     for row in roster
                     if row.role.key == service.MEMBER_ROLE and row.member_id not in officers
                 ],
