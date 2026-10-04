@@ -27,6 +27,7 @@ class Event_model(BaseClassModel):
     points: int
     action_name: str
     ar_action_name: str | None = None
+    bonus_only: bool
 
 
 class Member_event_history_model(BaseClassModel):
