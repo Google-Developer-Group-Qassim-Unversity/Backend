@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from app.DB.schema import EventRequests, EventRequestStage
+from app.DB.schema import Departments, DepartmentsType, EventRequests, EventRequestStage
 
 
 @pytest.fixture
@@ -190,6 +190,21 @@ def test_details_save_partially_and_validate_day_modes(pipeline, world):
     assert bad.json()["code"] == "mode_outside_dates"
 
     assert pipeline.client.put(url, json={"partner_department_ids": [world["ai"].id]}).status_code == 422
+
+
+def test_a_partner_must_be_a_department_of_this_semester(pipeline, world):
+    pipeline.sign_in(world["ai_leader"])
+    request_id = book(pipeline, world["ai"]).json()["id"]
+    url = f"/pipeline/requests/{request_id}/details"
+    # A department of an older semester only: it exists, but is not on this semester's roster.
+    old = Departments(name="Old club", ar_name="قديم", type=DepartmentsType.PRACTICAL)
+    pipeline.session.add(old)
+    pipeline.session.flush()
+
+    response = pipeline.client.put(url, json={"partner_department_ids": [old.id]})
+    assert response.status_code == 422
+    assert response.json()["code"] == "partner_not_this_semester"
+    assert pipeline.client.put(url, json={"partner_department_ids": [world["cyber"].id]}).status_code == 200
 
 
 def test_list_shows_only_my_departments_requests(pipeline, world):
