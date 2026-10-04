@@ -1130,7 +1130,7 @@ class EventRequests(Base):
             ["department_id"], ["departments.id"], name="fk_event_requests_department", ondelete="RESTRICT"
         ),
         ForeignKeyConstraint(["created_by"], ["members.id"], name="fk_event_requests_created_by", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_event_requests_event", ondelete="SET NULL"),
+        ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_event_requests_event", ondelete="CASCADE"),
         CheckConstraint("end_date >= start_date", name="ck_event_requests_dates"),
         Index("ix_event_requests_dates", "start_date", "end_date"),
         Index("ix_event_requests_department_stage", "department_id", "stage"),
