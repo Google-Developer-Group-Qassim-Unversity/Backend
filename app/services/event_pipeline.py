@@ -11,6 +11,7 @@ counts as free here, even before anything has marked it.
 
 import logging
 from contextlib import contextmanager
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import Enum
@@ -20,6 +21,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.DB import pipeline_teams as team_queries
+from app.DB import departments as department_queries
 from app.DB import event_pipeline as queries
 from app.DB import actions as action_queries
 from app.DB import logs as log_queries
@@ -44,6 +46,7 @@ from app.services.pipeline_notifications import PendingEmail
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.dependencies import Caller
 from app.services.events import create_full_event
+from app.semesters import current_semester
 
 logger = logging.getLogger(__name__)
 
@@ -369,6 +372,12 @@ def can_edit(caller: Caller, request: EventRequests) -> bool:
     return can_request_for(caller, request.department_id) and request.stage in EDITABLE_STAGES
 
 
+def partner_options(session: Session) -> Sequence[Departments]:
+    """The departments a request can partner with: this semester's, as an event's departments are picked."""
+    semester = current_semester(session)
+    return [] if semester is None else department_queries.get_semester_departments(session, semester.id)
+
+
 def update_details(session: Session, caller: Caller, request: EventRequests, fields: dict) -> None:
     """Save any subset of the event details. Nothing is required until submit."""
     require_request_for(caller, request.department_id)
@@ -392,8 +401,8 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
     if partners is not None:
         if request.department_id in partners:
             raise PipelineConflict("self_partner", "A department cannot partner with itself", 422)
-        if partners and len(team_queries.get_departments(session, set(partners))) != len(set(partners)):
-            raise PipelineConflict("unknown_department", "A partner department does not exist", 422)
+        if not set(partners) <= {d.id for d in partner_options(session)}:
+            raise PipelineConflict("partner_not_this_semester", "A partner must be a department of this semester", 422)
         queries.set_partners(session, request, partners)
     session.flush()
 
