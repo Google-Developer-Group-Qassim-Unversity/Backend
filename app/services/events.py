@@ -17,11 +17,23 @@ from app.routers.models import Form_model, createEvent_model
 logger = logging.getLogger(__name__)
 
 
-def create_full_event(session: Session, event_data: createEvent_model) -> tuple[Events, Logs]:
-    """Returns the event and its department log (where department points and discounts go)."""
+def create_full_event(
+    session: Session, event_data: createEvent_model, *, responsible_member_id: int, created_by: int
+) -> tuple[Events, Logs]:
+    """Returns the event and its department log (where department points and discounts go).
+
+    ``responsible_member_id`` is who answers for the event, ``created_by`` who is
+    creating it now; the same member on ``POST /events/``, often not in the pipeline.
+    """
     # 1. create event
-    new_event = events_queries.create_event(session, event_data.event)
-    logger.info(f"Created Event [{new_event.id}]: {new_event.name}")
+    new_event = events_queries.create_event(session, event_data.event, responsible_member_id, created_by)
+    logger.info(
+        "Created Event [%s]: %s, responsible member [%s], created by member [%s]",
+        new_event.id,
+        new_event.name,
+        responsible_member_id,
+        created_by,
+    )
 
     # 2. create associated form
     new_form = form_queries.create_form(

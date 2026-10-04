@@ -38,6 +38,7 @@ from alembic.config import Config
 from alembic import command
 from sqlalchemy.orm import Session, sessionmaker
 
+from fastapi import Depends
 from fastapi.testclient import TestClient
 from fastapi_clerk_auth import HTTPAuthorizationCredentials as ClerkHTTPAuthorizationCredentials
 
@@ -319,17 +320,57 @@ def clerk_client(client) -> Generator:
     app.dependency_overrides.pop(optional_clerk_guard, None)
 
 
+STAFF_ACTOR_CLERK_ID = "clerk_test_staff_actor"
+
+
+def _staff_member(session, credentials):
+    """The caller's member row, or a standing "Test Staff" row when the test made none.
+
+    In production a caller only holds a permission through their own member row,
+    so a route that records who acted (``created_by`` on an event) can rely on
+    ``CurrentMember``. ``_as`` fakes the permissions without that row; this
+    supplies one, without hiding the test's own member when it made one.
+    """
+    from sqlalchemy import select
+
+    from app.DB.schema import Members, MembersGender
+    from app.exceptions import MemberNotFound
+    from app.helpers import resolve_member
+
+    try:
+        return resolve_member(session, credentials)
+    except MemberNotFound:
+        pass
+    member = session.scalar(select(Members).where(Members.clerk_user_id == STAFF_ACTOR_CLERK_ID))
+    if member is None:
+        member = Members(
+            name="Test Staff",
+            email="staff-actor@example.com",
+            clerk_user_id=STAFF_ACTOR_CLERK_ID,
+            gender=MembersGender.MALE,
+        )
+        session.add(member)
+        session.flush()
+    return member
+
+
 @contextmanager
 def _as(access, credentials) -> Generator:
     """Answer every permission check with ``access``."""
-    from app.helpers import optional_clerk_guard
+    from app.dependencies import DB
+    from app.helpers import authenticated_guard, get_current_member, optional_clerk_guard
     from app.services.permissions.dependencies import get_access
 
+    def current_member(session: DB, credentials=Depends(authenticated_guard)):
+        return _staff_member(session, credentials)
+
     app.dependency_overrides[get_access] = lambda: access
+    app.dependency_overrides[get_current_member] = current_member
     # Routes that resolve the caller as a member (e.g. to record who acted) see these credentials.
     app.dependency_overrides[optional_clerk_guard] = lambda: credentials
     yield
     app.dependency_overrides.pop(get_access, None)
+    app.dependency_overrides.pop(get_current_member, None)
     app.dependency_overrides.pop(optional_clerk_guard, None)
 
 
