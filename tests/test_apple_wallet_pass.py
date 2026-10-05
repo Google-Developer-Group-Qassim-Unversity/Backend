@@ -2,6 +2,8 @@ import base64
 import hashlib
 import io
 import json
+import os
+import struct
 import zipfile
 from datetime import datetime, timedelta, timezone
 
@@ -11,11 +13,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import BestAvailableEncryption, Encoding, pkcs12
 from cryptography.x509.oid import NameOID
-from PIL import Image
 
-from app import wallet_signer
-from app.wallet_band import render_name_band
-from app.wallet_signer import generate_apple_pkpass
+from app.wallet_signer import ASSETS_DIR, generate_apple_pkpass
 
 P12_PASSWORD = "test-password"
 CARD = {
@@ -24,11 +23,6 @@ CARD = {
     "themeId": "gdg-blue",
     "uniId": "451000000",
 }
-
-# Drawing Arabic needs Pillow's RAQM layout, which loads the system libfribidi.
-# Where that is missing the pass falls back to native fields (covered below).
-can_draw_text = render_name_band("gdg-blue", "عضو", "عضو تجريبي", (17, 24, 39)) is not None
-needs_text_layout = pytest.mark.skipif(not can_draw_text, reason="Pillow RAQM layout (libfribidi) is not available")
 
 
 def _self_signed(common_name: str) -> tuple[rsa.RSAPrivateKey, x509.Certificate]:
@@ -65,30 +59,45 @@ def _unpack(pkpass: bytes) -> dict[str, bytes]:
         return {name: archive.read(name) for name in archive.namelist()}
 
 
-@needs_text_layout
-def test_the_name_is_drawn_into_the_strip_and_kept_off_the_front_fields(signing_certs) -> None:
+def _png_size(data: bytes) -> tuple[int, int]:
+    width, height = struct.unpack(">II", data[16:24])
+    return width, height
+
+
+def test_the_pass_is_an_event_ticket_with_the_name_as_its_headline(signing_certs) -> None:
     files = _unpack(generate_apple_pkpass(CARD))
-    pass_json = json.loads(files["pass.json"])
+    ticket = json.loads(files["pass.json"])["eventTicket"]
 
-    # Any front field would be drawn by Wallet on top of the baked name.
-    assert set(pass_json["storeCard"]) == {"backFields"}
-    assert pass_json["storeCard"]["backFields"][0]["value"] == CARD["fullName"]
-
-    for suffix, size in {"": (375, 144), "@2x": (750, 288), "@3x": (1125, 432)}.items():
-        assert Image.open(io.BytesIO(files[f"strip{suffix}.png"])).size == size
-
-    other = _unpack(generate_apple_pkpass({**CARD, "fullName": "اسم آخر مختلف"}))
-    assert other["strip@3x.png"] != files["strip@3x.png"]
+    assert ticket["primaryFields"][0]["value"] == CARD["fullName"]
+    assert [field["key"] for field in ticket["secondaryFields"]] == ["uni_id", "institution"]
+    assert ticket["secondaryFields"][-1]["textAlignment"] == "PKTextAlignmentRight"
 
 
-def test_the_pass_carries_the_ios_27_poster_layout_alongside_the_store_card(signing_certs) -> None:
-    files = _unpack(generate_apple_pkpass(CARD))
-    pass_json = json.loads(files["pass.json"])
+def test_a_card_without_a_university_id_leaves_the_field_out(signing_certs) -> None:
+    files = _unpack(generate_apple_pkpass({**CARD, "uniId": None}))
+    ticket = json.loads(files["pass.json"])["eventTicket"]
 
-    assert pass_json["posterGeneric"]["primaryFields"][0] == {"key": "member_name", "value": CARD["fullName"]}
-    for name in ("artwork", "primaryLogo", "logo", "icon", "strip"):
-        for suffix in ("", "@2x", "@3x"):
-            assert f"{name}{suffix}.png" in files
+    assert [field["key"] for field in ticket["secondaryFields"]] == ["institution"]
+
+
+@pytest.mark.parametrize("theme_id", ["gdg-blue", "gdg-red", "gdg-gold-admin"])
+def test_each_theme_packs_its_own_background_at_every_scale(signing_certs, theme_id: str) -> None:
+    files = _unpack(generate_apple_pkpass({**CARD, "themeId": theme_id}))
+
+    for suffix, size in {"": (180, 220), "@2x": (360, 440), "@3x": (540, 660)}.items():
+        assert _png_size(files[f"background{suffix}.png"]) == size
+        with open(os.path.join(ASSETS_DIR, f"background-{theme_id}{suffix}.png"), "rb") as f:
+            assert files[f"background{suffix}.png"] == f.read()
+    # A strip would replace the background: PassKit shows one or the other.
+    assert not any(name.startswith("strip") for name in files)
+
+
+def test_values_are_white_on_every_theme(signing_certs) -> None:
+    # Wallet draws values white over a background image regardless; saying so keeps
+    # the back of the pass and any future style consistent with the face.
+    for theme_id in ("gdg-blue", "gdg-red", "gdg-gold-admin"):
+        files = _unpack(generate_apple_pkpass({**CARD, "themeId": theme_id}))
+        assert json.loads(files["pass.json"])["foregroundColor"] == "rgb(255, 255, 255)"
 
 
 def test_the_manifest_hashes_every_packed_file(signing_certs) -> None:
@@ -100,29 +109,8 @@ def test_the_manifest_hashes_every_packed_file(signing_certs) -> None:
         assert hashlib.sha1(files[name]).hexdigest() == digest
 
 
-def test_without_text_layout_the_name_falls_back_to_a_native_field(signing_certs, monkeypatch) -> None:
-    monkeypatch.setattr(wallet_signer, "render_name_band", lambda *args: None)
-
-    files = _unpack(generate_apple_pkpass(CARD))
-    store_card = json.loads(files["pass.json"])["storeCard"]
-
-    assert store_card["secondaryFields"][0]["value"] == CARD["fullName"]
-    assert "primaryFields" not in store_card
-    assert Image.open(io.BytesIO(files["strip@3x.png"])).size == (1125, 432)
-
-
-@needs_text_layout
-def test_a_long_name_is_shrunk_to_fit_the_strip() -> None:
-    long_name = "عبدالرحمن عبدالعزيز عبدالمحسن عبدالكريم العبدالرحمن الطويل جدا"
-    band = render_name_band("gdg-blue", "عضو", long_name, (17, 24, 39))
-    assert band is not None
-
-    image = Image.open(io.BytesIO(band["@3x"])).convert("RGB")
-    surface = image.getpixel((2, 300))
-    # The text is centred, so a margin column at the name's height stays untouched.
-    assert all(image.getpixel((20, y)) == surface for y in range(230, 300))
-
-
 def test_an_unknown_theme_gets_the_default_card(signing_certs) -> None:
+    default = _unpack(generate_apple_pkpass(CARD))
     files = _unpack(generate_apple_pkpass({**CARD, "themeId": "not-a-theme"}))
-    assert json.loads(files["pass.json"])["backgroundColor"] == "rgb(191, 242, 255)"
+
+    assert files["background@3x.png"] == default["background@3x.png"]
