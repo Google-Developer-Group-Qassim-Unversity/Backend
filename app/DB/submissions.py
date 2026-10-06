@@ -4,17 +4,31 @@ from typing import Optional, Sequence
 
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .schema import Submissions, SubmissionsSubmissionType, t_forms_submissions
 
 
 def create_submission(session: Session, form_id: int, submission_type: str, member_id: int):
-    exists = session.execute(
-        select(Submissions).where(Submissions.form_id == form_id, Submissions.member_id == member_id)
-    ).first()
-    if exists:
+    """Register a member, or None when they already are.
+
+    A member who cancelled has their old row brought back rather than a second
+    one added (a member has one row per form): it starts over as a fresh,
+    unreviewed registration.
+    """
+    existing = get_submission_by_form_and_member(session, form_id, member_id, include_cancelled=True)
+    if existing is not None and existing.cancelled_at is None:
         return None
+    if existing is not None:
+        existing.cancelled_at = None
+        existing.submission_type = SubmissionsSubmissionType(submission_type)
+        existing.submitted_at = func.now()  # type: ignore[assignment]
+        existing.is_accepted = 0
+        existing.is_invited = 0
+        existing.google_submission_id = None
+        existing.google_submission_value = None
+        session.flush()
+        return existing
 
     submission = Submissions(form_id=form_id, member_id=member_id, is_accepted=0, submission_type=submission_type)
     session.add(submission)
@@ -22,15 +36,19 @@ def create_submission(session: Session, form_id: int, submission_type: str, memb
     return submission
 
 
-def get_submission_by_form_and_member(session: Session, form_id: int, member_id: int):
-    submission = session.execute(
-        select(Submissions).where(Submissions.form_id == form_id, Submissions.member_id == member_id)
-    ).scalar_one_or_none()
-    return submission
+def get_submission_by_form_and_member(
+    session: Session, form_id: int, member_id: int, *, include_cancelled: bool = False
+) -> Submissions | None:
+    """The member's registration for this form. A cancelled one counts as none unless asked for."""
+    statement = select(Submissions).where(Submissions.form_id == form_id, Submissions.member_id == member_id)
+    if not include_cancelled:
+        statement = statement.where(Submissions.cancelled_at.is_(None))
+    return session.execute(statement).scalar_one_or_none()
 
 
-def delete_submission(session: Session, submission: Submissions) -> None:
-    session.delete(submission)
+def cancel_submission(session: Session, submission: Submissions) -> None:
+    """Soft delete: the row stays as a record of the registration and when it was cancelled."""
+    submission.cancelled_at = func.now()  # type: ignore[assignment]
     session.flush()
 
 
@@ -108,7 +126,9 @@ def get_form_ids(session: Session, submission_ids: list[int]) -> set[int]:
 
 
 def update_is_accepted(session: Session, submission_id: int, is_accepted: bool):
-    submission = session.execute(select(Submissions).where(Submissions.id == submission_id)).scalar_one_or_none()
+    submission = session.execute(
+        select(Submissions).where(Submissions.id == submission_id, Submissions.cancelled_at.is_(None))
+    ).scalar_one_or_none()
     if not submission:
         return None
     submission.is_accepted = is_accepted

@@ -72,13 +72,16 @@ def cancel_submission(form_id: int, member: CurrentMember, session: DB):
     Accepted registrations can be cancelled too - that frees the seat. Once the
     event leaves `open` (it is running or over) the registration is part of the
     record and stays.
+
+    A soft delete: the row is kept with `cancelled_at` set. Registering again
+    brings it back (see `create_submission`).
     """
     submission = submission_queries.get_submission_by_form_and_member(session, form_id, member.id)
     if submission is None:
         raise SubmissionNotFound(form_id)
     if submission.form.event.status != EventsStatus.OPEN:
         raise RegistrationClosed(form_id)
-    submission_queries.delete_submission(session, submission)
+    submission_queries.cancel_submission(session, submission)
     session.commit()
     logger.info(f"member [{member.id}] cancelled submission [{submission.id}] for form [{form_id}]")
     return {"status": "success"}

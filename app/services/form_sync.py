@@ -186,7 +186,10 @@ def sync_manual_form_submissions(
                 skipped_no_member += 1
                 continue
 
-            if submission_queries.get_submission_by_form_and_member(session, form_id, member.id):
+            # A member who cancelled stays cancelled: their old form response is not a new registration.
+            if submission_queries.get_submission_by_form_and_member(
+                session, form_id, member.id, include_cancelled=True
+            ):
                 skipped_existing += 1
                 continue
 
