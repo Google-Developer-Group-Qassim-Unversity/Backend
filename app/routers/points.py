@@ -27,6 +27,9 @@ class Event_model(BaseClassModel):
     points: int
     action_name: str
     ar_action_name: str | None = None
+    location_type: str
+    # true when every action in this history row is a bonus action
+    bonus_row: bool
 
 
 class Member_event_history_model(BaseClassModel):
