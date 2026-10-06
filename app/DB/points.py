@@ -66,6 +66,7 @@ def get_member_points_history_semester(session: Session, semester_id: str, membe
             e.start_datetime AS start_datetime,
             e.end_datetime AS end_datetime,
             e.location_type AS location_type,
+            MAX(a.action_type <> 'bonus') = 0 AS bonus_row,
             SUM((COALESCE(a.points, 0) + COALESCE(lm.mod_value_sum, 0))) AS points,
             GROUP_CONCAT(DISTINCT a.action_name ORDER BY a.action_name ASC SEPARATOR ', ') AS action_name,
             GROUP_CONCAT(DISTINCT a.ar_action_name ORDER BY a.action_name ASC SEPARATOR ', ') AS ar_action_name
@@ -160,6 +161,7 @@ def get_department_points_history_semester(session: Session, semester_id: str, d
             a.action_name AS action_name,
             a.ar_action_name AS ar_action_name,
             e.location_type AS location_type,
+            a.action_type = 'bonus' AS bonus_row,
             SUM((COALESCE(a.points, 0) + COALESCE(mods.mod_value_sum, 0))) AS points
         FROM departments_logs dl
         JOIN departments d ON d.id = dl.department_id
