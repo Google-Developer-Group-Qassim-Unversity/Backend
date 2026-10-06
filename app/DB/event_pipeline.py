@@ -38,7 +38,7 @@ def unban_days(session: Session, days: list[date]) -> int:
 ACTIVE_STAGES_EXCLUDED = (EventRequestStage.CANCELLED,)
 
 
-def get_request(session: Session, request_id: int, lock: bool = False) -> EventRequests | None:
+def get_request(session: Session, request_id: str, lock: bool = False) -> EventRequests | None:
     statement = (
         select(EventRequests)
         .where(EventRequests.id == request_id)
@@ -111,11 +111,6 @@ def list_requests(
 def set_partners(session: Session, request: EventRequests, department_ids: list[int]) -> None:
     request.partners = [EventRequestPartners(department_id=d) for d in dict.fromkeys(department_ids)]
     session.flush()
-
-
-def get_request_by_event_id(session: Session, event_id: int) -> EventRequests | None:
-    """The request that published this event, if it came from the pipeline."""
-    return session.scalar(select(EventRequests).where(EventRequests.event_id == event_id))
 
 
 def lock_pipeline(session: Session, name: str, wait: bool = True) -> bool:

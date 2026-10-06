@@ -5,7 +5,16 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.DB.schema import DepartmentsLogs, Events, Forms, Logs, Modifications, PipelinePenalties
+from app.DB.schema import (
+    DepartmentsLogs,
+    EventRequests,
+    EventRequestTasks,
+    Events,
+    Forms,
+    Logs,
+    Modifications,
+    PipelinePenalties,
+)
 from tests.pipeline_support import book_complete, submit
 
 
@@ -109,6 +118,19 @@ def test_a_late_penalty_is_taken_off_once(pipeline, world):
     assert publish(pipeline, world).status_code == 409  # already published: nothing twice
 
 
+def test_the_requester_is_responsible_and_the_publisher_is_recorded(pipeline, world):
+    finish_all(pipeline, world)
+    pipeline.sign_in(world["admin"], super_admin=True)
+    event_id = publish(pipeline, world).json()["event_id"]
+
+    event = pipeline.session.get(Events, event_id)
+    assert event.responsible_member_id == world["leader"].id
+    assert event.created_by == world["admin"].id
+    details = pipeline.client.get(f"/events/{event_id}/details").json()
+    assert details["responsible"] == {"member_id": world["leader"].id, "name": world["leader"].name}
+    assert details["created_by"] == {"member_id": world["admin"].id, "name": world["admin"].name}
+
+
 def test_another_department_cannot_publish(pipeline, world):
     finish_all(pipeline, world)
     other = pipeline.department("Cyber")
@@ -137,13 +159,55 @@ def test_a_team_finishing_after_an_early_publish_does_not_reopen_it(pipeline, wo
     assert len(events) == 1
 
 
-def test_an_event_published_by_the_pipeline_cannot_be_deleted(pipeline, world):
-    """Bug #6: deleting it left the request published with its days taken, and dropped the penalty."""
+def test_deleting_a_published_event_takes_everything_with_it(pipeline, world):
+    """Bug #6: the request, its tasks and penalty, the event's points and the penalty's discount all go,
+    and the days are free again."""
+    booked_at = pipeline.now
+    pipeline.sign_in(world["admin"], super_admin=True)
+    url = f"/pipeline/requests/{world['request_id']}"
+    pipeline.client.post(f"{url}/return", json={"notes": "fix"})
+    pipeline.freeze(pipeline.now + timedelta(hours=12 + 30))
+    pipeline.client.post(f"{url}/resubmit")
     finish_all(pipeline, world)
     event_id = publish(pipeline, world).json()["event_id"]
-    pipeline.sign_in(world["admin"], super_admin=True)
+    penalty = pipeline.session.scalar(
+        select(PipelinePenalties).where(PipelinePenalties.request_id == world["request_id"])
+    )
+    pipeline.session.refresh(penalty)
+    log_ids = pipeline.session.scalars(select(Logs.id).where(Logs.event_id == event_id)).all()
+    assert penalty.applied_log_id in log_ids
 
+    pipeline.sign_in(world["admin"], super_admin=True)
     response = pipeline.client.delete(f"/events/{event_id}")
-    assert response.status_code == 409, response.text
-    assert response.json()["code"] == "published_by_pipeline"
-    assert pipeline.session.get(Events, event_id) is not None
+    assert response.status_code == 200, response.text
+
+    pipeline.session.expire_all()
+    assert pipeline.session.get(Events, event_id) is None
+    assert pipeline.session.get(EventRequests, world["request_id"]) is None
+    assert (
+        pipeline.session.scalars(
+            select(EventRequestTasks).where(EventRequestTasks.request_id == world["request_id"])
+        ).all()
+        == []
+    )
+    assert (
+        pipeline.session.scalars(
+            select(PipelinePenalties).where(PipelinePenalties.request_id == world["request_id"])
+        ).all()
+        == []
+    )
+    # Points: the event's department and member rows, and the penalty's discount.
+    assert pipeline.session.scalars(select(DepartmentsLogs).where(DepartmentsLogs.log_id.in_(log_ids))).all() == []
+    assert pipeline.session.scalars(select(Modifications).where(Modifications.log_id.in_(log_ids))).all() == []
+    assert pipeline.client.get(url).status_code == 404
+
+    # Back to before the late resubmit, when those days were past the lockout.
+    pipeline.freeze(booked_at)
+    days = pipeline.client.get("/pipeline/calendar", params={"from": "2026-07-20", "to": "2026-07-21"}).json()["days"]
+    assert [d["status"] for d in days] == ["open", "open"]
+    other = pipeline.department("Cyber")
+    pipeline.sign_in(pipeline.officer(other))
+    booked = pipeline.client.post(
+        "/pipeline/requests", json={"department_id": other.id, "start_date": "2026-07-20", "end_date": "2026-07-21"}
+    )
+    assert booked.status_code == 201, booked.text

@@ -11,6 +11,7 @@ counts as free here, even before anything has marked it.
 
 import logging
 from contextlib import contextmanager
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import Enum
@@ -20,6 +21,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.DB import pipeline_teams as team_queries
+from app.DB import departments as department_queries
 from app.DB import event_pipeline as queries
 from app.DB import actions as action_queries
 from app.DB import logs as log_queries
@@ -44,6 +46,7 @@ from app.services.pipeline_notifications import PendingEmail
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.dependencies import Caller
 from app.services.events import create_full_event
+from app.semesters import current_semester
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +270,7 @@ def booking_lock(session: Session):
     yield
 
 
-def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: int | None) -> None:
+def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: str | None) -> None:
     """Super admins have full authority: they skip every rule here but a sane range."""
     if caller.access.is_super_admin:
         check_range(start, end, MAX_CALENDAR_DAYS)
@@ -285,7 +288,7 @@ def _check_bookable(session: Session, caller: Caller, start: date, end: date, ig
             raise PipelineConflict("day_taken", "One of these days is already taken")
 
 
-def _check_one_live_hold(session: Session, department_id: int, ignore_id: int | None = None) -> None:
+def _check_one_live_hold(session: Session, department_id: int, ignore_id: str | None = None) -> None:
     held = [
         r for r in queries.get_department_drafts_with_hold(session, department_id, clock.now()) if r.id != ignore_id
     ]
@@ -369,6 +372,12 @@ def can_edit(caller: Caller, request: EventRequests) -> bool:
     return can_request_for(caller, request.department_id) and request.stage in EDITABLE_STAGES
 
 
+def partner_options(session: Session) -> Sequence[Departments]:
+    """The departments a request can partner with: this semester's, as an event's departments are picked."""
+    semester = current_semester(session)
+    return [] if semester is None else department_queries.get_semester_departments(session, semester.id)
+
+
 def update_details(session: Session, caller: Caller, request: EventRequests, fields: dict) -> None:
     """Save any subset of the event details. Nothing is required until submit."""
     require_request_for(caller, request.department_id)
@@ -392,8 +401,8 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
     if partners is not None:
         if request.department_id in partners:
             raise PipelineConflict("self_partner", "A department cannot partner with itself", 422)
-        if partners and len(team_queries.get_departments(session, set(partners))) != len(set(partners)):
-            raise PipelineConflict("unknown_department", "A partner department does not exist", 422)
+        if not set(partners) <= {d.id for d in partner_options(session)}:
+            raise PipelineConflict("partner_not_this_semester", "A partner must be a department of this semester", 422)
         queries.set_partners(session, request, partners)
     session.flush()
 
@@ -411,7 +420,7 @@ def within_official_hours(request: EventRequests) -> bool | None:
 # --------------------------------------------------------------------------- reading
 
 
-def get_request_for(session: Session, caller: Caller, request_id: int, lock: bool = False) -> EventRequests:
+def get_request_for(session: Session, caller: Caller, request_id: str, lock: bool = False) -> EventRequests:
     request = queries.get_request(session, request_id, lock=lock)
     if request is None or request.stage == EventRequestStage.CANCELLED:
         raise NotFound("Event request", request_id)
@@ -773,7 +782,10 @@ def publish(
     if request.start_date is None:
         raise PipelineConflict("no_dates", "This request has no dates")
     event, _department_log = create_full_event(
-        session, event_for(request, department_action_id, member_action_id, image_url)
+        session,
+        event_for(request, department_action_id, member_action_id, image_url),
+        responsible_member_id=request.created_by,
+        created_by=caller.member.id,
     )
     penalty = get_penalty(session, request)
     if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:
@@ -784,5 +796,5 @@ def publish(
     request.event_id = event.id
     request.stage = EventRequestStage.PUBLISHED
     session.flush()
-    logger.info("Request %s published as event %s", request.id, event.id)
+    logger.info("Request %s published as event %s by member %s", request.id, event.id, caller.member.id)
     return event.id

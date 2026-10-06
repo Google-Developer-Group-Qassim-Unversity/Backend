@@ -31,16 +31,16 @@ TRANSPARENT_PNG = (
 DEFAULT_THEME = "gdg-blue"
 THEMES_CONFIG = {
     "gdg-blue": {
-        "bg_rgb": "rgb(191, 242, 255)",
-        "fg_rgb": "rgb(17, 24, 39)",
-        "label_rgb": "rgb(51, 65, 85)",
+        "bg_rgb": "rgb(47, 123, 246)",
+        "fg_rgb": "rgb(255, 255, 255)",
+        "label_rgb": "rgb(219, 234, 254)",
         "badge_color": "#BFF2FF",
         "role_title": "عضو نادي قوقل للطلبة المطورين",
     },
     "gdg-red": {
-        "bg_rgb": "rgb(255, 217, 220)",
-        "fg_rgb": "rgb(17, 24, 39)",
-        "label_rgb": "rgb(75, 85, 99)",
+        "bg_rgb": "rgb(225, 55, 88)",
+        "fg_rgb": "rgb(255, 255, 255)",
+        "label_rgb": "rgb(255, 228, 230)",
         "badge_color": "#FFD9DC",
         "role_title": "عضو نادي قوقل للطلبة المطورين",
     },
@@ -58,12 +58,17 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     """
     Generates a cryptographically signed Apple Wallet .pkpass binary buffer
     using Python cryptography PKCS#7 detached signature.
-    Uses 'storeCard' pass type with full-bleed background.png to render the complete Figma card
-    design - background.png is only honored by PassKit for storeCard, so the 'eventTicket' style
-    used previously silently dropped it and fell back to Wallet's plain default rendering.
+
+    The pass is an 'eventTicket' because that is the only style PassKit lets carry a
+    full-card image (background.png), which Wallet always blurs. Wallet also draws
+    every field value over that image in white, ignoring foregroundColor, so each
+    theme's background is the card art darkened behind the text rather than the
+    light card surface itself.
     """
     theme_id = card_data.get("themeId", DEFAULT_THEME)
-    theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
+    if theme_id not in THEMES_CONFIG:
+        theme_id = DEFAULT_THEME
+    theme = THEMES_CONFIG[theme_id]
 
     pass_type_id = config.APPLE_PASS_TYPE_ID
     team_id = config.APPLE_TEAM_ID
@@ -81,27 +86,30 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     major = card_data.get("major") or ""
     level = card_data.get("studyYearOrLevel") or ""
 
-    # 1. Build pass.json with full-card storeCard layout
+    role_title = theme["role_title"]
+    uni_id = str(card_data.get("uniId") or "")
+    secondary_fields = [{"key": "institution", "label": "الجهة", "value": uni_college}]
+    if uni_id:
+        secondary_fields.insert(0, {"key": "uni_id", "label": "الرقم الجامعي", "value": uni_id})
+    # The last field sits at the card's right edge, where Arabic reads from.
+    secondary_fields[-1]["textAlignment"] = "PKTextAlignmentRight"
+
+    # 1. Build pass.json
     pass_json = {
         "formatVersion": 1,
         "passTypeIdentifier": pass_type_id,
         "teamIdentifier": team_id,
         "organizationName": "GDG Qassim",
         "serialNumber": serial_number,
-        "description": theme["role_title"],
+        "description": role_title,
         "foregroundColor": theme["fg_rgb"],
         "backgroundColor": theme["bg_rgb"],
         "labelColor": theme["label_rgb"],
-        "storeCard": {
-            # secondaryFields/auxiliaryFields are deliberately omitted: Apple renders
-            # them as an extra text row on the card face below primaryFields, which
-            # isn't part of the card artwork's design - that detail lives on the back
-            # (backFields) instead, reachable via the info button.
-            "primaryFields": [{"key": "member_name", "label": theme["role_title"], "value": full_name}],
+        "eventTicket": {
+            "primaryFields": [{"key": "member_name", "label": role_title, "value": full_name}],
+            "secondaryFields": secondary_fields,
             "backFields": [
-                {"key": "uni_id", "label": "الرقم الجامعي", "value": str(card_data.get("uniId") or "")},
                 {"key": "email", "label": "البريد الإلكتروني", "value": card_data.get("email", "")},
-                {"key": "institution", "label": "الكلية / الجهة", "value": uni_college},
                 {"key": "major", "label": "التخصص", "value": major},
                 {"key": "level", "label": "المستوى / المرحلة", "value": level},
                 {"key": "club_name", "label": "النادي", "value": "Google Developer Group - Qassim"},
@@ -126,22 +134,16 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     files_to_pack: Dict[str, bytes] = {}
     files_to_pack["pass.json"] = json.dumps(pass_json, ensure_ascii=False, indent=2).encode("utf-8")
 
-    # Pack logos and icons
-    for img_name in ["icon.png", "icon@2x.png", "icon@3x.png", "logo.png", "logo@2x.png", "logo@3x.png"]:
-        img_path = os.path.join(ASSETS_DIR, img_name)
-        if os.path.exists(img_path):
-            with open(img_path, "rb") as f:
-                files_to_pack[img_name] = f.read()
-
-    # Pack full-bleed background images for the complete Figma card design
-    for suffix in ["", "@2x", "@3x"]:
-        bg_dest = f"background{suffix}.png"
-        themed_bg = os.path.join(ASSETS_DIR, f"background-{theme_id}{suffix}.png")
-        default_bg = os.path.join(ASSETS_DIR, f"background{suffix}.png")
-        bg_path = themed_bg if os.path.exists(themed_bg) else default_bg
-        if os.path.exists(bg_path):
-            with open(bg_path, "rb") as f:
-                files_to_pack[bg_dest] = f.read()
+    # Pack the images, preferring a theme's own variant: every theme has its own
+    # background, and the admin card its own logo.
+    for name in ["icon", "logo", "background"]:
+        for suffix in ["", "@2x", "@3x"]:
+            themed_path = os.path.join(ASSETS_DIR, f"{name}-{theme_id}{suffix}.png")
+            default_path = os.path.join(ASSETS_DIR, f"{name}{suffix}.png")
+            img_path = themed_path if os.path.exists(themed_path) else default_path
+            if os.path.exists(img_path):
+                with open(img_path, "rb") as f:
+                    files_to_pack[f"{name}{suffix}.png"] = f.read()
 
     # Generate fallback transparent images if any missing
     for required in ["icon.png", "icon@2x.png", "logo.png", "logo@2x.png"]:

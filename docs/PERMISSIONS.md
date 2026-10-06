@@ -53,6 +53,11 @@ the department it is held for - an AI leader edits AI's events, not Robotics'.
   (grants, assignments, super admins); used by `app/routers/permissions.py`.
 - `GET /access/me` and `GET /access/events/{id}` - what the caller can do, for
   the frontends.
+- `GET /permissions/members/{id}` (super admins) - what any member can do and
+  why, per department: `explain_access` in `access.py`, the same code
+  `resolve_access` runs, with the source of each permission (`shared`,
+  `department`, `team`, `grant`). It backs the Member lookup tab on
+  `/permissions`, which the member card links to (`?tab=member&member=<id>`).
 
 Frontend: `middleware.ts` lets in staff only (signed 5-minute `gdg_access`
 cookie over `/access/me`); `lib/access.ts` mirrors the keys and each page's

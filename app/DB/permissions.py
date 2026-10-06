@@ -148,6 +148,20 @@ def list_grants(
     return session.scalars(statement).all()
 
 
+def list_member_grants(session: Session, semester_id: str, member_id: int) -> Sequence[PermissionGrants]:
+    """The member's grants this semester that still stand, in every department."""
+    return session.scalars(
+        select(PermissionGrants)
+        .where(
+            PermissionGrants.semester_id == semester_id,
+            PermissionGrants.member_id == member_id,
+            PermissionGrants.revoked_at.is_(None),
+        )
+        .options(selectinload(PermissionGrants.granter))
+        .order_by(PermissionGrants.granted_at.desc(), PermissionGrants.id.desc())
+    ).all()
+
+
 def get_active_grant(
     session: Session, semester_id: str, department_id: int, member_id: int, permission: str
 ) -> PermissionGrants | None:

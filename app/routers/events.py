@@ -1,7 +1,6 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
-from app.DB import event_pipeline as pipeline_queries
 from app.DB import (
     events as events_queries,
     forms as form_queries,
@@ -34,10 +33,10 @@ from app.services.google_client import set_form_publish_state
 from app.semesters import resolve_semester
 from time import perf_counter
 from typing import Annotated, Literal
-from app.exceptions import DataIntegrityError, PipelineConflict
+from app.exceptions import DataIntegrityError
 from app.dependencies import DB
 from sqlalchemy.orm import Session
-from app.DB.schema import EventsLocationType, EventsStatus, FormType
+from app.DB.schema import EventsLocationType, EventsStatus, FormType, Members
 
 from app.routers.responses import DetailResponse
 from app.services.permissions.catalogue import Perm
@@ -149,7 +148,16 @@ def get_event_details(event_id: int, session: DB):
     actions = events_queries.get_actions_by_event_id(session, event_id)
     if not event or not actions:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-    return {"event": event, "actions": actions}
+    return {
+        "event": event,
+        "actions": actions,
+        "responsible": _person(event.responsible_member),
+        "created_by": _person(event.creator),
+    }
+
+
+def _person(member: Members | None) -> dict | None:
+    return {"member_id": member.id, "name": member.name} if member else None
 
 
 @router.post(
@@ -159,11 +167,11 @@ def get_event_details(event_id: int, session: DB):
     responses={409: {"model": ConflictResponse, "description": "Event already exists"}},
     dependencies=[Depends(Require(Perm.EVENTS_CREATE))],
 )
-def create_event(event_data: createEvent_model, session: DB, access: CurrentAccess):
+def create_event(event_data: createEvent_model, session: DB, member: CurrentMember, access: CurrentAccess):
     access.require(Perm.EVENTS_CREATE, event_data.department_id)
     try:
-        logger.info("Creating New Event and Associated Form")
-        new_event, _ = create_full_event(session, event_data)
+        logger.info("Member [%s] creating New Event and Associated Form", member.id)
+        new_event, _ = create_full_event(session, event_data, responsible_member_id=member.id, created_by=member.id)
         session.commit()
         session.refresh(new_event)
 
@@ -328,15 +336,8 @@ def delete_event(event_id: int, session: DB):
         logger.error(f"HTTP 400: Cannot delete event [{event_id}] with status [{event.status}]")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only draft events can be deleted")
 
-    # Deleting it would leave the request published with its days taken, and drop
-    # any late penalty with the event's logs (pipeline bug #6).
-    request = pipeline_queries.get_request_by_event_id(session, event_id)
-    if request is not None:
-        raise PipelineConflict(
-            "published_by_pipeline",
-            f"This event was published from events pipeline request #{request.id}, so it can't be deleted",
-        )
-
+    # A pipeline request that published it goes too, through the foreign key:
+    # its tasks, penalty and points, and its days are free again.
     event_name = event.name
     events_queries.delete_event(session, event_id)
     session.commit()

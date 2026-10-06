@@ -53,6 +53,7 @@ uv run alembic revision -m "desc"              # new empty migration (write manu
 - **`app/services/permissions/`** – who can do what: the `Perm` catalogue, `resolve_access`, and the route guards (`Staff`, `Require`, `SuperAdmin`)
 - **`alembic/env.py`** – migration env; excludes DB views listed in `VIEWS` set via `include_object`
 - **Source of truth for DB**: `app/DB/schema.py` + existing migration files
+- **Ids are UUIDs.** A new table's id is `UUID_CHAR` with `default=new_id` (`app/DB/ids.py`, time-ordered UUIDv7), never an auto-increment integer; columns that reference it are `UUID_CHAR` as well. Only the legacy tables listed in `tests/test_uuid_ids.py` keep integer ids. See the root `CLAUDE.md`
 - **Do not use `--autogenerate`** for new migrations. Create empty revisions with `alembic revision -m "desc"` and write them manually
 - For FK relationships with `ON DELETE CASCADE`, always add `passive_deletes=True` to the SQLAlchemy relationship (see schema docstring)
 - Alembic ignores the views in `alembic/env.py` `VIEWS` set — do not remove `include_object`

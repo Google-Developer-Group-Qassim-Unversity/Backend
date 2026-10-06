@@ -183,8 +183,8 @@ def list_pipeline_notifications(
     )
 
 
-@router.post("/notifications/{notification_id:int}/read", status_code=status.HTTP_200_OK, response_model=BanResult)
-def read_pipeline_notification(notification_id: int, session: DB, caller: CurrentCaller):
+@router.post("/notifications/{notification_id}/read", status_code=status.HTTP_200_OK, response_model=BanResult)
+def read_pipeline_notification(notification_id: str, session: DB, caller: CurrentCaller):
     _require_access(caller)
     _, _, rows, _ = notifications.list_for(
         session, _visible_departments(session, caller), caller.member.id, True, 1000, 0
