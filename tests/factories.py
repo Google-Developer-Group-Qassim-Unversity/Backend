@@ -21,6 +21,7 @@ def make_event(**overrides):
         "start_datetime": "2026-06-29T00:00:00",
         "end_datetime": "2026-06-29T00:00:00",
         "status": "draft",
+        "level": "beginner",
         "image_url": None,
         "is_official": 0,
         "created_at": None,
