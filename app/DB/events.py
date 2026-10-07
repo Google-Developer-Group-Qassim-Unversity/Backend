@@ -5,6 +5,7 @@ from sqlalchemy import select, func
 
 from app.exceptions import EventNotFound
 from .schema import (
+    EventsLevel,
     Events,
     EventsLocationType,
     EventsStatus,
@@ -171,6 +172,7 @@ def create_event(session: Session, event_data: Events_model, responsible_member_
         end_datetime=event_data.end_datetime,
         description=event_data.description,
         status=event_data.status,
+        level=EventsLevel(event_data.level or EventsLevel.BEGINNER),
         is_official=event_data.is_official,
         image_url=event_data.image_url,
         meeting_url=event_data.meeting_url,
@@ -209,6 +211,8 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         existing_event.end_datetime = event_data.end_datetime
         existing_event.description = event_data.description
         existing_event.status = EventsStatus(event_data.status)
+        if event_data.level is not None:
+            existing_event.level = EventsLevel(event_data.level)
         existing_event.image_url = event_data.image_url
         # meeting_url is owned by update_event_meeting_url, and the edit form does not
         # carry it, so it otherwise survives untouched here. Except: once the event stops

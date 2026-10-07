@@ -24,6 +24,9 @@ class PaginationMeta_model(BaseClassModel):
     total_pages: int
 
 
+EventLevel = Literal["beginner", "intermediate", "advanced"]
+
+
 class Events_model(BaseClassModel):
     id: int | None = None
     name: str
@@ -33,6 +36,10 @@ class Events_model(BaseClassModel):
     start_datetime: datetime
     end_datetime: datetime
     status: Literal["draft", "open", "active", "closed"]
+    # Always set on output. On input it is optional so callers that only touch
+    # other fields keep the event's level: an update without it leaves it alone,
+    # and internal events (custom points) default to beginner.
+    level: EventLevel | None = None
     image_url: str | None = None
     meeting_url: str | None = None
     is_official: int | None = None
@@ -76,8 +83,14 @@ class AttachFormRequest(BaseModel):
         return value
 
 
+class NewEvent_model(Events_model):
+    """An event an admin is creating: they must say what level it is."""
+
+    level: EventLevel  # pyright: ignore[reportGeneralTypeIssues, reportIncompatibleVariableOverride]
+
+
 class createEvent_model(BaseClassModel):
-    event: Events_model
+    event: NewEvent_model
     form_type: Literal["google", "none", "registration"]
     department_action_id: int
     member_action_id: int
