@@ -6,9 +6,11 @@ shared bearer secret. This module centralizes the call so it can be reused by
 the cache router (user-triggered) and by event mutations (auto-trigger).
 """
 
+import logging
+
 import httpx
 
-from app.config import config
+from app.config import MissingSettingError, config
 
 
 def reset_leaderboard_cache() -> dict:
@@ -32,3 +34,11 @@ def reset_leaderboard_cache() -> dict:
         )
         response.raise_for_status()
         return response.json()
+
+
+def refresh_member_names_cache() -> None:
+    """A name is already committed; cache outages must not report a failed save."""
+    try:
+        reset_leaderboard_cache()
+    except (httpx.HTTPError, ValueError, MissingSettingError):
+        logging.getLogger(__name__).warning("Could not refresh public member names cache", exc_info=True)

@@ -25,6 +25,7 @@ from app.DB.schema import (
     SemesterTerm,
 )
 from app.DB.semesters import get_semester_by_hijri_code
+from app.member_names import initial_public_name
 from app.main import app
 from app.routers import club_structure as router
 from app.services.permissions.access import Access
@@ -489,6 +490,28 @@ def test_deleting_an_empty_semester_takes_its_department_list(sign_in, club, db_
 # ---------- public ----------
 
 
+def test_public_structure_uses_chosen_aliases_without_shortening(sign_in, club, db_session):
+    client = sign_in()
+    club.ahmed.public_name = "Public President Alias"
+    club.sara.public_name = "Public Officer Alias"
+    db_session.flush()
+    add(client, club, club.ahmed, department=club.business)
+    assert grant(client, club, club.sara).status_code == 200
+    assert grant(client, club, club.sara, role="vp", department=club.business).status_code == 200
+    assert grant(client, club, club.ahmed, department=club.leadership).status_code == 200
+    app.dependency_overrides.pop(config.CLERK_GUARD, None)
+    response = client.get(PREFIX + "/public")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["presidents"] == ["Public President Alias"]
+    cards = {item["id"]: item for item in body["departments"]}
+    assert cards[club.design.id]["leader"] == "Public Officer Alias"
+    assert cards[club.business.id]["deputy"] == "Public Officer Alias"
+    assert cards[club.business.id]["members"] == ["Public President Alias"]
+    assert club.ahmed.name not in response.text
+    assert club.sara.name not in response.text
+
+
 def test_public_structure_is_anonymous_and_display_only(sign_in, club, db_session):
     client = sign_in()
     club.design.name, club.design.ar_name, club.design.color = "Operations", "قسم التشغيل", "#22c55e"
@@ -564,4 +587,4 @@ def test_public_structure_of_a_past_semester(sign_in, club, db_session):
     ],
 )
 def test_public_name_keeps_only_first_and_family_name(full_name, public_name):
-    assert router._public_name(full_name) == public_name
+    assert initial_public_name(full_name) == public_name

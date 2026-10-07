@@ -5,7 +5,7 @@ from sqlalchemy import text
 _MEMBERS_POINTS_BASE_QUERY = """
         SELECT
             m.id AS member_id,
-            m.name AS member_name,
+            COALESCE(NULLIF(m.public_name, ''), 'Member') AS member_name,
             COALESCE(SUM(CASE WHEN e.id IS NOT NULL THEN (COALESCE(a.points, 0) + COALESCE(mods.mod_value_sum, 0)) ELSE 0 END), 0) AS total_points
         FROM members m
         LEFT JOIN members_logs ml ON ml.member_id = m.id
@@ -27,7 +27,7 @@ def get_members_points_semester(session: Session, semester_id: str) -> list[dict
     """Every member's total points for the semester, ordered highest first."""
     query = (
         _MEMBERS_POINTS_BASE_QUERY
-        + """GROUP BY m.id, m.name
+        + """GROUP BY m.id, m.public_name
         ORDER BY total_points DESC
     """
     )
@@ -40,7 +40,7 @@ def get_member_points_by_id_semester(session: Session, semester_id: str, member_
     query = (
         _MEMBERS_POINTS_BASE_QUERY
         + """WHERE m.id = :member_id
-    GROUP BY m.id, m.name
+    GROUP BY m.id, m.public_name
         ORDER BY total_points DESC
     """
     )
@@ -60,7 +60,7 @@ def get_member_points_history_semester(session: Session, semester_id: str, membe
         )
         SELECT
             m.id AS member_id,
-            m.name AS member_name,
+            COALESCE(NULLIF(m.public_name, ''), 'Member') AS member_name,
             e.id AS event_id,
             e.name AS event_name,
             e.start_datetime AS start_datetime,
@@ -80,7 +80,7 @@ def get_member_points_history_semester(session: Session, semester_id: str, membe
             AND e.semester_id = :semester_id
             AND e.status <> 'draft'
             AND e.location_type <> 'hidden'
-        GROUP BY m.id, m.name, e.id, e.name, e.start_datetime, e.end_datetime
+        GROUP BY m.id, m.public_name, e.id, e.name, e.start_datetime, e.end_datetime
         ORDER BY e.start_datetime DESC
     """)
     result = session.execute(statement, {"member_id": member_id, "semester_id": semester_id})
