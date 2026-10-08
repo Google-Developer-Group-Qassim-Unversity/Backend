@@ -720,6 +720,9 @@ class Submissions(Base):
     )
     google_submission_id: Mapped[Optional[str]] = mapped_column(String(100))
     google_submission_value: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Set when the member cancels. The row is kept as a record; every reader of
+    # "who is registered" skips it (the forms_submissions view does too).
+    cancelled_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
     form: Mapped["Forms"] = relationship("Forms", back_populates="submissions")
     member: Mapped["Members"] = relationship("Members", back_populates="submissions")

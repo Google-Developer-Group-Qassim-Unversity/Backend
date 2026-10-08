@@ -180,3 +180,5 @@ class SubmissionResponse(BaseClassModel):
     submission_type: Literal["none", "partial", "google", "registration"]
     google_submission_id: str | None = None
     google_submission_value: JsonValue | None = None
+    # Always null here: a registration that was just created (or re-created) is not cancelled.
+    cancelled_at: datetime | None = None

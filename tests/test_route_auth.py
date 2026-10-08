@@ -90,6 +90,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "DELETE /emails/blast/templates/{template_id:int}": "emails.blast",
     "DELETE /events/{event_id:int}": "events.delete for event",
     "DELETE /semesters/{semester_id}": "semesters.manage",
+    "DELETE /submissions/{form_id:int}": "authenticated_guard",
     "GET /": None,
     "GET /actions": None,
     "GET /actions/all": None,
