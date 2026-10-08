@@ -17,6 +17,7 @@ from app.DB.schema import (
     PipelineTeam,
 )
 from app.routers.club_structure_models import UtcDateTime
+from app.routers.models import EventLevel
 
 MemberId = int
 
@@ -259,3 +260,4 @@ class PublishRequest(BaseModel):
     department_action_id: int = Field(gt=0)
     member_action_id: int = Field(gt=0)
     image_url: str | None = Field(default=None, max_length=500)
+    level: EventLevel

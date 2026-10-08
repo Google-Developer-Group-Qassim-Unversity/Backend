@@ -263,7 +263,9 @@ def complete_event_request_task(
 def publish_event_request(request_id: str, body: PublishRequest, session: DB, caller: CurrentCaller):
     """Turn a ready request into a real event in /events, created as a draft for admins to review."""
     request = service.get_request_for(session, caller, request_id, lock=True)
-    service.publish(session, caller, request, body.department_action_id, body.member_action_id, body.image_url)
+    service.publish(
+        session, caller, request, body.department_action_id, body.member_action_id, body.image_url, body.level
+    )
     session.commit()
     # Best-effort, as after POST /events/: the leaderboard app caches events.
     try:

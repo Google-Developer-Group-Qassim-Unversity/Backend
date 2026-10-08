@@ -84,6 +84,12 @@ class EventsStatus(str, enum.Enum):
     CLOSED = "closed"
 
 
+class EventsLevel(str, enum.Enum):
+    BEGINNER = "beginner"
+    INTERMEDIATE = "intermediate"
+    ADVANCED = "advanced"
+
+
 class FormType(str, enum.Enum):
     NONE = "none"
     REGISTRATION = "registration"
@@ -430,6 +436,12 @@ class Events(Base):
     )
     status: Mapped[EventsStatus] = mapped_column(
         Enum(EventsStatus, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    )
+    # How much prior knowledge the event assumes. Shown on the member app's event cards.
+    level: Mapped[EventsLevel] = mapped_column(
+        Enum(EventsLevel, values_callable=lambda cls: [member.value for member in cls]),
+        nullable=False,
+        server_default=text("'beginner'"),
     )
     description: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
@@ -1401,6 +1413,7 @@ t_open_events = Table(
     Column("start_datetime", DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column("end_datetime", DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column("status", Enum(OpenEventsStatus, values_callable=lambda cls: [member.value for member in cls])),
+    Column("level", Enum(EventsLevel, values_callable=lambda cls: [member.value for member in cls])),
     Column("image_url", String(500)),
     Column("meeting_url", String(500)),
     Column("is_official", TINYINT(1), server_default=text("'0'")),

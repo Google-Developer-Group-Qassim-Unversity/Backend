@@ -45,8 +45,16 @@ def finish_all(pipeline, world):
     pipeline.sign_in(world["leader"])
 
 
-def publish(pipeline, world):
-    return pipeline.client.post(f"/pipeline/requests/{world['request_id']}/publish", json=world["actions"])
+def publish(pipeline, world, level="intermediate"):
+    return pipeline.client.post(
+        f"/pipeline/requests/{world['request_id']}/publish", json={**world["actions"], "level": level}
+    )
+
+
+def test_publish_requires_a_level(pipeline, world):
+    finish_all(pipeline, world)
+    response = pipeline.client.post(f"/pipeline/requests/{world['request_id']}/publish", json=world["actions"])
+    assert response.status_code == 422
 
 
 def test_publish_is_refused_until_every_team_is_done(pipeline, world):
@@ -71,6 +79,7 @@ def test_publish_creates_the_event_like_post_events(pipeline, world):
     assert event.start_datetime == datetime(2026, 7, 20, 10, 0)
     assert event.end_datetime == datetime(2026, 7, 21, 12, 0)
     assert event.is_official == 1
+    assert event.level.value == "intermediate"
     form = pipeline.session.scalar(select(Forms).where(Forms.event_id == event.id))
     assert form.form_type.value == "registration"
     logs = pipeline.session.scalars(select(Logs).where(Logs.event_id == event.id)).all()

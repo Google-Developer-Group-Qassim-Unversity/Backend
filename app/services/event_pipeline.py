@@ -38,7 +38,7 @@ from app.DB.schema import (
     PipelineTeam,
 )
 from app.exceptions import DepartmentForbidden, IncompleteRequest, NotFound, PipelineConflict
-from app.routers.models import Events_model, createEvent_model
+from app.routers.models import EventLevel, NewEvent_model, createEvent_model
 from app.services import event_briefs
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
@@ -729,7 +729,9 @@ def can_publish(caller: Caller, request: EventRequests) -> bool:
     return can_request_for(caller, request.department_id) and request.stage == EventRequestStage.READY
 
 
-def event_for(request: EventRequests, department_action_id: int, member_action_id: int, image_url: str | None):
+def event_for(
+    request: EventRequests, department_action_id: int, member_action_id: int, image_url: str | None, level: EventLevel
+):
     """The ``POST /events/`` payload a ready request becomes.
 
     Times are wall-clock Riyadh times, the way the event form stores them. A
@@ -742,7 +744,7 @@ def event_for(request: EventRequests, department_action_id: int, member_action_i
     venue = (logistics.brief or {}).get("venue") if logistics else None
     registration = request.registration.value if request.registration else "none"
     return createEvent_model(
-        event=Events_model(
+        event=NewEvent_model(
             name=request.title or f"Event request {request.id}",
             description=request.description,
             location_type=EventsLocationType.ON_SITE if on_site else EventsLocationType.ONLINE,
@@ -753,6 +755,7 @@ def event_for(request: EventRequests, department_action_id: int, member_action_i
             status="draft",
             image_url=image_url,
             is_official=int(bool(request.is_official)),
+            level=level,
         ),
         form_type="none" if registration == "none" else "registration",
         department_action_id=department_action_id,
@@ -768,6 +771,7 @@ def publish(
     department_action_id: int,
     member_action_id: int,
     image_url: str | None,
+    level: EventLevel,
 ) -> int:
     """Create the real event, in the same transaction, the same way ``POST /events/`` does.
 
@@ -783,7 +787,7 @@ def publish(
         raise PipelineConflict("no_dates", "This request has no dates")
     event, _department_log = create_full_event(
         session,
-        event_for(request, department_action_id, member_action_id, image_url),
+        event_for(request, department_action_id, member_action_id, image_url, level),
         responsible_member_id=request.created_by,
         created_by=caller.member.id,
     )
