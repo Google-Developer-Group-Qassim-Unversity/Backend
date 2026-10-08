@@ -336,3 +336,60 @@ def test_create_member_does_not_fold_already_claimed_email(clerk_client: TestCli
     response = clerk_client.post("/members/")
     assert response.status_code == 409
     assert "email" in response.json()["detail"].lower()
+
+
+# === A uni_id that is not a university id ===
+# Until 21 Aug 2026 the auth app stored the part of the sign-up email before the
+# "@" as uni_id, so Gmail sign-ups carry values like "shahralhrby12". That used to
+# fail Member_model's 9-digit check and abort the whole registration.
+
+
+def _post_members_with_uni_id(client: TestClient, uni_id: str):
+    from app.main import app
+    from app.helpers import authenticated_guard
+    from fastapi_clerk_auth import HTTPAuthorizationCredentials as ClerkHTTPAuthorizationCredentials
+    from tests.conftest import FAKE_CLERK_CREDENTIALS
+
+    decoded = dict(FAKE_CLERK_CREDENTIALS.decoded or {})
+    decoded["metadata"] = {**decoded["metadata"], "uni_id": uni_id}
+    credentials = ClerkHTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-token", decoded=decoded)
+    app.dependency_overrides[authenticated_guard] = lambda: credentials
+    try:
+        return client.post("/members/")
+    finally:
+        app.dependency_overrides.pop(authenticated_guard, None)
+
+
+def test_create_member_ignores_a_bad_uni_id_and_folds_by_email(client: TestClient, db_session):
+    """The imported row is still found by email, and keeps its real uni_id."""
+    imported = Members(
+        name="Imported Staff",
+        email="test@example.com",
+        phone_number="0500000000",
+        uni_id="441109174",
+        gender=MembersGender.MALE,
+        uni_level=0,
+        uni_college="UNKNOWN",
+        is_authenticated=False,
+    )
+    db_session.add(imported)
+    db_session.commit()
+
+    response = _post_members_with_uni_id(client, "shahralhrby12")
+
+    assert_2xx(response)
+    body = response.json()
+    assert body["already_exists"] is True
+    assert body["member"]["id"] == imported.id
+    assert body["member"]["uni_id"] == "441109174"
+    db_session.refresh(imported)
+    assert imported.clerk_user_id == "clerk_test_member_sub"
+
+
+def test_create_member_with_a_bad_uni_id_and_no_row_creates_one_without_it(client: TestClient):
+    response = _post_members_with_uni_id(client, "shahralhrby12")
+
+    assert_2xx(response)
+    body = response.json()
+    assert body["already_exists"] is False
+    assert body["member"]["uni_id"] is None

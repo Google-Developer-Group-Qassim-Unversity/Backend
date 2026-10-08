@@ -1,4 +1,5 @@
 import logging
+import re
 import sentry_sdk
 from fastapi import Depends
 from sqlalchemy.orm import Session
@@ -25,6 +26,8 @@ import jwt
 from datetime import datetime, date, timedelta
 
 logger = logging.getLogger(__name__)
+
+UNI_ID = re.compile(r"\d{9}")
 
 
 def get_effective_date(dt: datetime, threshold: int) -> date:
@@ -84,6 +87,24 @@ def get_email_from_credentials(credentials) -> str | None:
     return decoded.get("email") or decoded.get("primary_email_address") or decoded.get("metadata", {}).get("email")
 
 
+def get_metadata_uni_id(credentials) -> str | None:
+    """``metadata.uni_id`` when it is a university id, otherwise ``None``.
+
+    publicMetadata is written by the auth app, not checked by Clerk. Until
+    21 Aug 2026 the auth app filled ``uni_id`` in with whatever came before the
+    ``@`` of the sign-up email, so a Gmail sign-up carries ``shahralhrby12``.
+    Passed on, that fails ``Member_model``'s 9-digit check and aborts
+    registration before the email fold that would have found the member's
+    row; at sign-in it can never match a row anyway. Every ``members.uni_id``
+    is 9 digits, so dropping anything else loses nothing.
+    """
+    decoded = credentials.model_dump().get("decoded", {})
+    uni_id = (decoded.get("metadata") or {}).get("uni_id")
+    if uni_id is None or not UNI_ID.fullmatch(str(uni_id)):
+        return None
+    return str(uni_id)
+
+
 def resolve_member(session: Session, credentials) -> Members:
     """Resolve the ``Members`` row for the currently authenticated caller.
 
@@ -94,7 +115,9 @@ def resolve_member(session: Session, credentials) -> Members:
     2. ``uni_id`` from publicMetadata, for members who have not authenticated
        since this identity model was introduced.
     3. the email claim, for a member whose row was created by an admin before
-       they ever signed in, so it carries neither of the first two.
+       they ever signed in, so it carries neither of the first two. Only an
+       unclaimed row matches: one that already belongs to a Clerk account is
+       never handed to another, whatever the email says.
 
     A hit on 2 or 3 writes ``clerk_user_id`` back, so the next request takes the
     first branch and the fallbacks decay into dead weight rather than a
@@ -109,16 +132,15 @@ def resolve_member(session: Session, credentials) -> Members:
     if member:
         return member
 
-    decoded = credentials.model_dump()["decoded"]
-    uni_id = decoded.get("metadata", {}).get("uni_id")
+    uni_id = get_metadata_uni_id(credentials)
     if uni_id:
-        member = member_queries.get_member_by_uni_id_or_none(session, str(uni_id))
+        member = member_queries.get_member_by_uni_id_or_none(session, uni_id)
         if member:
             return member_queries.set_member_clerk_user_id(session, member, clerk_user_id)
 
     email = get_email_from_credentials(credentials)
     if email:
-        member = member_queries.get_member_by_email_or_none(session, str(email))
+        member = member_queries.get_unclaimed_member_by_email_or_none(session, str(email))
         if member:
             return member_queries.set_member_clerk_user_id(session, member, clerk_user_id)
 
@@ -172,6 +194,13 @@ def get_member_or_none(session: DB, credentials=Depends(optional_clerk_guard)) -
     try:
         return resolve_member(session, credentials)
     except MemberNotFound:
+        # Expected for someone mid-sign-up, but it is also what a staff member
+        # whose account never got linked looks like, and that used to leave no
+        # trace at all: a 200 from /access/me with `actor:-`.
+        logger.warning(
+            "Clerk user %s is signed in but matches no member row; treating them as a guest",
+            get_clerk_user_id_from_credentials(credentials),
+        )
         return None
 
 
@@ -220,11 +249,17 @@ def credentials_to_member_model(credentials) -> Member_model:
 
     # 2. create Member_model from metadata
     metadata = credentials_dict["decoded"]["metadata"]
+    uni_id = get_metadata_uni_id(credentials)
+    if uni_id is None and metadata.get("uni_id"):
+        logger.warning(
+            "Ignoring metadata uni_id for Clerk user %s: not a 9-digit university id",
+            credentials_dict["decoded"]["sub"],
+        )
     member = Member_model(
         name=metadata.get("fullArabicName"),
         email=metadata.get("personalEmail"),
         phone_number=metadata.get("saudiPhone"),
-        uni_id=metadata.get("uni_id"),
+        uni_id=uni_id,
         clerk_user_id=str(credentials_dict["decoded"]["sub"]),
         gender=metadata.get("gender").title(),
         uni_level=metadata.get("uniLevel"),

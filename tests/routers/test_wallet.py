@@ -135,6 +135,35 @@ def test_the_email_fallback_ignores_app_written_metadata(db_session):
         resolve_member(db_session, FAKE_CLERK_CREDENTIALS)
 
 
+def test_the_email_fallback_never_takes_a_claimed_row(db_session):
+    """An email claim only finds a row no Clerk account owns yet. A row that
+    already belongs to someone else stays theirs, rather than being re-pointed
+    at whoever's token carries the same address."""
+    member = make_member(db_session, email=CLERK_EMAIL, uni_id=None, clerk_user_id="someone_else")
+
+    with pytest.raises(MemberNotFound):
+        resolve_member(db_session, credentials_with_email(CLERK_EMAIL))
+    assert member.clerk_user_id == "someone_else"
+
+
+def credentials_with_uni_id(uni_id: str):
+    decoded = dict(FAKE_CLERK_CREDENTIALS.decoded or {})
+    decoded["metadata"] = {**decoded["metadata"], "uni_id": uni_id}
+    return ClerkHTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-token", decoded=decoded)
+
+
+def test_a_uni_id_that_is_not_a_university_id_is_skipped(db_session):
+    """The old auth app stored the local part of a Gmail address as `uni_id`.
+    It is skipped, and the chain carries on to the email claim."""
+    member = make_member(db_session, email=CLERK_EMAIL, uni_id="441109174")
+
+    decoded = dict(credentials_with_uni_id("shahralhrby12").decoded or {})
+    decoded["email"] = CLERK_EMAIL
+    credentials = ClerkHTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-token", decoded=decoded)
+
+    assert resolve_member(db_session, credentials).id == member.id
+
+
 def test_raises_when_nothing_matches(db_session):
     make_member(db_session, uni_id="999999999", email="somebody-else@example.com")
     with pytest.raises(MemberNotFound):
@@ -167,6 +196,17 @@ def test_signed_in_but_unregistered_resolves_to_a_guest(db_session):
     from app.helpers import get_member_or_none
 
     assert get_member_or_none(db_session, FAKE_CLERK_CREDENTIALS) is None
+
+
+def test_a_signed_in_guest_is_logged_with_their_clerk_id(db_session, caplog):
+    """A staff member whose account was never linked looks exactly like this.
+    It used to leave no trace; now the Clerk id is in the log."""
+    from app.helpers import get_member_or_none
+
+    with caplog.at_level("WARNING", logger="app.helpers"):
+        get_member_or_none(db_session, FAKE_CLERK_CREDENTIALS)
+
+    assert CLERK_SUB in caplog.text
 
 
 # ====================== GET /wallet/me ======================
