@@ -32,3 +32,12 @@ class AccessForEvent(BaseModel):
     event_id: int
     # The permissions the caller has for this event: department-scoped ones checked against its department(s).
     permissions: list[str]
+
+
+class StagingSignInCheck(BaseModel):
+    email: str
+
+
+class StagingSignInAnswer(BaseModel):
+    # Whether this email belongs to a current staff member (or a super admin).
+    is_staff: bool
