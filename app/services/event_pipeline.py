@@ -691,6 +691,36 @@ def save_deliverable(
     session.flush()
 
 
+# Design can replace the poster until the request is published.
+POSTER_STAGES = WORKING_STAGES | {EventRequestStage.READY}
+
+
+def can_upload_poster(caller: Caller, request: EventRequests) -> bool:
+    if request.stage not in POSTER_STAGES:
+        return False
+    task = get_task(request, PipelineTeam.DESIGN)
+    if task is None or task.status == EventRequestTaskStatus.BRIEF:
+        return False
+    return caller.access.is_super_admin or caller.access.can(Perm.PIPELINE_DESIGN)
+
+
+def check_poster_upload(session: Session, caller: Caller, request: EventRequests) -> None:
+    """Refuse before anything is uploaded: Design, while the request is on its way to publish."""
+    if not can_upload_poster(caller, request):
+        require_team(session, caller, PipelineTeam.DESIGN)
+        raise PipelineConflict("cannot_upload_poster", f"The request is {request.stage.value}; its poster is final")
+
+
+def set_poster(session: Session, caller: Caller, request: EventRequests, url: str) -> None:
+    """Design's deliverable: the poster, already stored. It becomes the event's image at publish."""
+    check_poster_upload(session, caller, request)
+    task = get_task(request, PipelineTeam.DESIGN)
+    task.deliverable = {"poster_url": url}  # type: ignore[union-attr]
+    task.deliverable_version = event_deliverables.DELIVERABLE_VERSION  # type: ignore[union-attr]
+    session.flush()
+    logger.info("Request %s: Design uploaded the poster %s", request.id, url)
+
+
 def _apply_confirmation(
     session: Session, caller: Caller, request: EventRequests, task: EventRequestTasks
 ) -> PendingEmail | None:
@@ -728,8 +758,9 @@ def _apply_confirmation(
 def complete(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> list[PendingEmail | None]:
     """A team finishes its part. Design done sends the request to Media; all three done makes it ready.
 
-    Logistics finishes by confirming the event (``event_deliverables``); if it
-    confirmed other dates, call this inside ``booking_lock``.
+    Design finishes once it has uploaded the poster. Logistics finishes by
+    confirming the event (``event_deliverables``); if it confirmed other dates,
+    call this inside ``booking_lock``.
     """
     _require_open_task(session, caller, request, team)
     now = clock.now()
@@ -737,6 +768,10 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
     emails: list[PendingEmail | None] = []
     if team == PipelineTeam.LOGISTICS:
         emails.append(_apply_confirmation(session, caller, request, task))  # type: ignore[arg-type]
+    elif team == PipelineTeam.DESIGN:
+        missing = event_deliverables.missing(team, task.deliverable)  # type: ignore[union-attr]
+        if missing:
+            raise IncompleteRequest(missing)
     task.status = EventRequestTaskStatus.DONE  # type: ignore[union-attr]
     task.completed_at = now  # type: ignore[union-attr]
     task.completed_by = caller.member.id  # type: ignore[union-attr]

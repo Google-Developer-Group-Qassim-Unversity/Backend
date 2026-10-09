@@ -4,7 +4,8 @@ import pytest
 from sqlalchemy import select
 
 from app.DB.schema import EventRequests, PipelineNotifications
-from tests.pipeline_support import MEET_LINK, book_complete, finish, submit
+from tests.pipeline_support import MEET_LINK, book_complete, finish, submit, upload_poster
+from tests.r2_support import PNG
 
 
 @pytest.fixture
@@ -177,3 +178,52 @@ def test_people_lists_this_semesters_club_members(pipeline, world):
     ids = [p["member_id"] for p in people]
     assert {m.id for m in world["people"].values()} <= set(ids)
     assert len(ids) == len(set(ids))
+
+
+# --------------------------------------------------------------------------- Design's poster
+
+
+def design_task(body):
+    return next(t for t in body["tasks"] if t["team"] == "design")
+
+
+def test_design_cannot_finish_without_a_poster(pipeline, world):
+    pipeline.sign_in(world["people"]["design"])
+    body = pipeline.client.get(url(world)).json()
+    assert design_task(body)["deliverable_missing"] == ["poster.poster_url"]
+    assert body["actions"]["can_upload_poster"] is True
+    response = pipeline.client.post(url(world, "/tasks/design/complete"))
+    assert response.status_code == 422
+    assert [e["loc"] for e in response.json()["detail"]] == [["poster", "poster_url"]]
+
+
+def test_the_poster_lands_in_r2_and_on_the_request(pipeline, world, fake_r2):
+    pipeline.sign_in(world["people"]["design"])
+    response = upload_poster(pipeline, world["request_id"])
+    assert response.status_code == 200, response.text
+    poster_url = design_task(response.json())["deliverable"]["poster_url"]
+    assert poster_url.startswith("https://cdn.example.com/event-images/") and poster_url.endswith(".png")
+    key = poster_url.removeprefix("https://cdn.example.com/")
+    assert fake_r2.get_object(Bucket="test-bucket", Key=key)["Body"].read() == PNG
+    assert pipeline.client.post(url(world, "/tasks/design/complete")).status_code == 200
+
+
+def test_design_can_replace_the_poster_until_publish(pipeline, world):
+    pipeline.sign_in(world["people"]["design"])
+    first = design_task(upload_poster(pipeline, world["request_id"]).json())["deliverable"]["poster_url"]
+    assert pipeline.client.post(url(world, "/tasks/design/complete")).status_code == 200
+    second = design_task(upload_poster(pipeline, world["request_id"]).json())["deliverable"]["poster_url"]
+    assert second != first
+
+
+def test_only_design_uploads_the_poster(pipeline, world):
+    assert upload_poster(pipeline, world["request_id"]).status_code == 403  # signed in as Logistics
+    pipeline.sign_in(world["people"]["ai"])
+    assert upload_poster(pipeline, world["request_id"]).status_code == 403
+
+
+def test_the_poster_must_be_an_image(pipeline, world):
+    pipeline.sign_in(world["people"]["design"])
+    response = upload_poster(pipeline, world["request_id"], b"%PDF-1.4", "application/pdf")
+    assert response.status_code == 422
+    assert response.json()["code"] == "not_an_image"

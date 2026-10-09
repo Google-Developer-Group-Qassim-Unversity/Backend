@@ -4,6 +4,7 @@ A department whose name contains "Design", "Logistics" or "Media" is that team.
 """
 
 from datetime import datetime
+from io import BytesIO
 
 import pytest
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
@@ -22,6 +23,7 @@ from app.DB.schema import (
 )
 from app.DB.semesters import get_semester_by_hijri_code
 from app.main import app
+from tests.r2_support import PNG
 
 # A Wednesday in Riyadh, inside the seeded Summer 2026 (475) the suite pins as current.
 FROZEN_NOW = datetime(2026, 7, 15, 9, 0, 0)  # 12:00 in Riyadh
@@ -103,8 +105,10 @@ class Pipeline:
 
 
 @pytest.fixture
-def pipeline(db_session, client, monkeypatch, outbound, seed_refs):
+def pipeline(db_session, client, monkeypatch, outbound, seed_refs, r2_env, fake_r2):
     """Pipeline steps send emails in the background; ``outbound`` records them instead of sending.
+
+    Design's poster goes to R2, which is moto's in-memory S3 here (``tests/r2_support.py``).
 
     The points tiers are production action ids, so the suite's one tier is the
     seeded department and member action; ``helper.tier`` is it as request details.
@@ -160,8 +164,14 @@ MEET_LINK = "https://meet.google.com/abc-defg-hij"
 
 
 def finish(pipeline, request_id: str, team: str):
-    """Finish ``team``'s part as the signed-in person. Logistics confirms its prefilled form, plus the Meet link."""
+    """Finish ``team``'s part as the signed-in person.
+
+    Design uploads a poster first; Logistics confirms its prefilled form, plus the Meet link.
+    """
     url = f"/pipeline/requests/{request_id}"
+    if team == "design":
+        uploaded = upload_poster(pipeline, request_id)
+        assert uploaded.status_code == 200, uploaded.text
     if team == "logistics":
         tasks = pipeline.client.get(url).json()["tasks"]
         confirmation = next(t for t in tasks if t["team"] == "logistics")["deliverable"]
@@ -170,3 +180,9 @@ def finish(pipeline, request_id: str, team: str):
         )
         assert saved.status_code == 200, saved.text
     return pipeline.client.post(f"{url}/tasks/{team}/complete")
+
+
+def upload_poster(pipeline, request_id: str, content: bytes = PNG, content_type: str = "image/png"):
+    return pipeline.client.post(
+        f"/pipeline/requests/{request_id}/poster", files={"file": ("poster.png", BytesIO(content), content_type)}
+    )

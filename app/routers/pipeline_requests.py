@@ -3,11 +3,17 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
+import uuid
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile, status
 
 from app.DB import event_pipeline as queries
 from app.DB.schema import EventRequests, EventRequestStage, EventRequestTasks, EventRequestTaskStatus, PipelineTeam
+from app.clients import R2Client
+from app.config import config
 from app.dependencies import DB
+from app.exceptions import PipelineConflict
+from app.routers.upload import get_extension
 
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.pipeline_models import (
@@ -76,6 +82,7 @@ def _actions(session, caller: Caller, request: EventRequests) -> RequestActions:
         can_resubmit=requester and request.stage == EventRequestStage.RETURNED,
         complete=[t for t in service.ALL_TEAMS if service.can_complete(session, caller, request, t)],
         can_publish=service.can_publish(caller, request),
+        can_upload_poster=service.can_upload_poster(caller, request),
     )
 
 
@@ -226,6 +233,29 @@ def save_event_request_deliverable(
     """Save Logistics' confirmation as a draft while its part is open; confirming checks it."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.save_deliverable(session, caller, request, team, body.deliverable)
+    session.commit()
+    return detail(session, caller, request)
+
+
+POSTER_TYPES = {"image/png", "image/jpeg", "image/webp"}
+MAX_POSTER_BYTES = 10 * 1024 * 1024
+
+
+@router.post("/{request_id}/poster", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def upload_event_request_poster(
+    request_id: str, file: Annotated[UploadFile, File()], session: DB, caller: CurrentCaller, client: R2Client
+):
+    """Design hands over the poster: stored in R2 like any event image, and the event's image once published."""
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    service.check_poster_upload(session, caller, request)
+    if file.content_type not in POSTER_TYPES:
+        raise PipelineConflict("not_an_image", "The poster must be a PNG, JPEG or WebP image", 422)
+    content = file.file.read(MAX_POSTER_BYTES + 1)
+    if len(content) > MAX_POSTER_BYTES:
+        raise PipelineConflict("too_large", "The poster must be 10 MB or smaller", 422)
+    key = f"event-images/{uuid.uuid4()}{get_extension(file.filename, file.content_type)}"
+    client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
+    service.set_poster(session, caller, request, f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}")
     session.commit()
     return detail(session, caller, request)
 

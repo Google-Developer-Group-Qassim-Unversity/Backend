@@ -119,7 +119,7 @@ def test_design_done_sends_to_media_and_all_three_make_it_ready(pipeline, world)
     assert finish(pipeline, world["request_id"], "logistics").json()["stage"] == "in_review"
 
     as_(pipeline, world, "design")
-    body = pipeline.client.post(url(world, "/tasks/design/complete")).json()
+    body = finish(pipeline, world["request_id"], "design").json()
     assert body["stage"] == "media"
     assert {t["team"]: t["status"] for t in body["tasks"]} == {"design": "done", "logistics": "done", "media": "open"}
 
