@@ -836,29 +836,37 @@ def can_publish(caller: Caller, request: EventRequests) -> bool:
     return can_request_for(caller, request.department_id) and request.stage == EventRequestStage.READY
 
 
-def event_for(request: EventRequests, image_url: str | None):
-    """The ``POST /events/`` payload a ready request becomes.
+def event_for(request: EventRequests) -> tuple[createEvent_model, int]:
+    """The ``POST /events/`` payload a ready request becomes, and who is responsible for it.
 
-    Times are wall-clock Riyadh times, the way the event form stores them. A
-    day mix of on-site and online is published as on-site; the Meet link is
-    added from the event page like any other.
+    Nothing is typed again at publish. The when, where and what come from Logistics' confirmation (or, for a
+    request a super admin publishes before Logistics confirmed, from the request
+    as asked), and the image is Design's poster. Times are wall-clock Riyadh
+    times, the way the event form stores them. A mix of on-site and online days
+    is published as on-site at the venue, with the Meet link for the online days.
+    The event opens straight away: publishing is the team's decision, with no
+    admin review after it.
     """
-    modes = set((request.day_modes or {}).values())
+    confirmed = event_deliverables.logistics_confirmation(request, get_task(request, PipelineTeam.LOGISTICS))
+    if confirmed is None:
+        confirmed = event_deliverables.logistics_prefill(request, None)
+    modes = set((confirmed.day_modes or {}).values())
     on_site = "on_site" in modes or not modes
-    logistics = get_task(request, PipelineTeam.LOGISTICS)
-    venue = (logistics.brief or {}).get("venue") if logistics else None
+    place = " · ".join(p.strip() for p in (confirmed.venue, confirmed.room) if p and p.strip())
+    design = get_task(request, PipelineTeam.DESIGN)
+    poster = (design.deliverable or {}).get("poster_url") if design else None
     registration = request.registration.value if request.registration else "none"
     return createEvent_model(
         event=Events_model(
             name=request.title or f"Event request {request.id}",
-            description=request.description,
+            description=confirmed.description,
             location_type=EventsLocationType.ON_SITE if on_site else EventsLocationType.ONLINE,
-            location=(venue or "-")[:100] if on_site else "Online",
-            start_datetime=datetime.combine(request.start_date, request.daily_start_time or time(0, 0)),  # type: ignore[arg-type]
-            end_datetime=datetime.combine(request.end_date, request.daily_end_time or time(23, 59)),  # type: ignore[arg-type]
-            # A draft: admins review a published request before members can see it.
-            status="draft",
-            image_url=image_url,
+            location=(place or "-")[:100] if on_site else "Online",
+            start_datetime=datetime.combine(confirmed.start_date, confirmed.daily_start_time or time(0, 0)),  # type: ignore[arg-type]
+            end_datetime=datetime.combine(confirmed.end_date, confirmed.daily_end_time or time(23, 59)),  # type: ignore[arg-type]
+            status="open",
+            image_url=poster,
+            meeting_url=confirmed.meet_link if "online" in modes else None,
             is_official=int(bool(request.is_official)),
         ),
         form_type="none" if registration == "none" else "registration",
@@ -866,11 +874,14 @@ def event_for(request: EventRequests, image_url: str | None):
         department_action_id=request.department_action_id,  # type: ignore[arg-type]
         member_action_id=request.member_action_id,  # type: ignore[arg-type]
         department_id=request.department_id,
-    )
+    ), confirmed.responsible_member_id or request.created_by
 
 
-def publish(session: Session, caller: Caller, request: EventRequests, image_url: str | None) -> int:
-    """Create the real event, in the same transaction, the same way ``POST /events/`` does.
+def publish(session: Session, caller: Caller, request: EventRequests) -> int:
+    """Create the real event, open, in the same transaction, the same way ``POST /events/`` does.
+
+    Everything comes from the request and what the teams handed over
+    (``event_for``); the responsible person is the one Logistics confirmed.
 
     Any late penalty is taken off the department once, on a log of its own for
     the new event, the way custom points are: the event's department log has a
@@ -885,8 +896,9 @@ def publish(session: Session, caller: Caller, request: EventRequests, image_url:
     if request.department_action_id is None or request.member_action_id is None:
         raise PipelineConflict("no_points_tier", "Pick the points tier in the request's details first")
     check_points_tier(session, request.department_action_id, request.member_action_id)
+    payload, responsible_member_id = event_for(request)
     event, _department_log = create_full_event(
-        session, event_for(request, image_url), responsible_member_id=request.created_by, created_by=caller.member.id
+        session, payload, responsible_member_id=responsible_member_id, created_by=caller.member.id
     )
     penalty = get_penalty(session, request)
     if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:

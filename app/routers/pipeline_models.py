@@ -264,10 +264,6 @@ class InboxItem(BaseModel):
     opened_at: UtcDateTime | None
 
 
-class PublishRequest(BaseModel):
-    image_url: str | None = Field(default=None, max_length=500)
-
-
 class SaveDeliverableRequest(BaseModel):
     """A draft of what the team hands over, saved as it is. Its fields are the team's form (app/services/event_deliverables.py)."""
 
