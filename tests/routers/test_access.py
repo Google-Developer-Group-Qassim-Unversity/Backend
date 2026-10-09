@@ -236,32 +236,3 @@ def test_access_for_an_event_follows_its_department(club, seed_refs):
     assert Perm.EVENTS_EDIT.value in mine
     assert Perm.EVENTS_EDIT.value not in theirs
     assert Perm.EVENTS_VIEW.value in theirs
-
-
-@pytest.mark.parametrize("env", ["staging", "development"])
-def test_staging_sign_in_lets_in_current_staff_only(club, monkeypatch, env):
-    monkeypatch.setenv("ENV", env)
-    ai = club.department("AI")
-    staff = club.join(club.person(), ai)
-    former = club.join(club.person(), ai, "leader", semester=club.previous)
-    admin = club.super_admin(club.person())
-
-    def check(email: str) -> bool:
-        response = club.client.post("/access/staging-sign-in", json={"email": email})
-        assert response.status_code == 200
-        return response.json()["is_staff"]
-
-    assert check(f"  {staff.email.upper()} ") is True
-    assert check(admin.email) is True
-    assert check(former.email) is False
-    assert check(club.person().email) is False
-    assert check("nobody@example.com") is False
-
-
-@pytest.mark.parametrize("env", ["production", "testing"])
-def test_staging_sign_in_does_not_exist_outside_staging(club, monkeypatch, env):
-    monkeypatch.setenv("ENV", env)
-    staff = club.join(club.person(), club.department("AI"))
-
-    response = club.client.post("/access/staging-sign-in", json={"email": staff.email})
-    assert response.status_code == 404

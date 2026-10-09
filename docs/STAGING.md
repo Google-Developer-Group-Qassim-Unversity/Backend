@@ -15,7 +15,7 @@ through a change on real data before it reaches `main`.
 | Frontend (docker)  | `gdg-admin-web`, port 3012 | `gdg-admin-web-staging`, port 3013 |
 | Sentry environment | `production`               | `staging`                      |
 | Clerk instance     | production (`clerk.gdg-q.com`) | development (`quality-ram-46`), shared with local dev |
-| Sign-in            | Clerk's email code         | staff email + `8888`           |
+| Sign-in            | Clerk's email code         | any email + `8888`             |
 
 Local `poe dev` uses the Infisical `dev` env, whose `DATABASE_URL` is a MySQL
 on your own machine (`127.0.0.1/scores-local`), so a migration you are still
@@ -58,19 +58,11 @@ Staging's sign-in looks and flows like production's Clerk page: email, then
 Clerk cannot be told to accept a fixed code. "Continue with Google" is real
 Clerk Google sign-in.
 
-Current staff get past the email step: anyone on the current semester's
-roster, and super admins, the same people who can open the admin app. The
-frontend asks the backend's `POST /access/staging-sign-in`, which is public
-because nobody is signed in yet, and so exists only with `ENV=staging` or
-`development` (a 404 in prod). Everyone else sees Clerk's "Couldn't find your
-account." Staging holds a copy of every member's real data, so regular members
-stay out.
-
-`STAGING_LOGIN_EMAILS` (comma-separated, Infisical `staging` /
-`/admin-frontend`) lets in extra emails that are not staff, such as a developer
-who is not on the roster. The frontend reads it when its container starts, so
-a change needs a staging redeploy (run the Deploy workflow by hand on `dev`).
-With `STAGING_OTP` unset, the page is Clerk's own.
+Any email gets past the email step; there is no list to keep. What happens
+next is the permissions system's call, exactly as on production: the
+middleware asks `GET /access/me` and lets in only current staff (anyone on the
+current semester's roster, and super admins). Everyone else lands on
+"access denied". With `STAGING_OTP` unset, the page is Clerk's own.
 
 It works by minting a Clerk sign-in ticket for the email, which is only safe
 because staging uses Clerk's **development** instance. A session on the

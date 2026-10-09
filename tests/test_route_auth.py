@@ -205,9 +205,6 @@ EXPECTED_AUTH: dict[str, str | None] = {
     # Answers "not staff" for anyone signed in who is not; see app/services/permissions.
     "GET /access/me": "authenticated_guard",
     "GET /access/events/{event_id:int}": "admin.access",
-    # Public so staging's sign-in can ask before anyone has a session; a 404
-    # outside staging and local dev (Backend/docs/STAGING.md).
-    "POST /access/staging-sign-in": None,
     # The permissions screens.
     "GET /permissions/catalogue": "admin.access",
     "GET /permissions/assignments": "permissions.manage",
