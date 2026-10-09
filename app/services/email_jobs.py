@@ -80,7 +80,7 @@ def send_certificates_by_event_id(
                     provider=EmailProvider.GOOGLE,
                     from_address=from_address,
                 )
-                call_certificate_api(cert_request)
+                call_certificate_api(cert_request, on_behalf_of=sent_by_id)
                 logger.info("Certificate API responded with 200 OK")
                 email_queries.create_email_log(
                     session,
@@ -117,7 +117,7 @@ def send_manual_certificates_job(request_data: ManualCertificateRequest, sent_by
                     provider=request_data.provider,
                     from_address=from_address,
                 )
-                call_certificate_api(cert_request)
+                call_certificate_api(cert_request, on_behalf_of=sent_by_id)
                 logger.info("Certificate API responded with 200 OK")
                 email_queries.create_email_log(
                     session,
@@ -164,6 +164,7 @@ async def send_custom_email_job(
                     request_data.language,
                     EmailProvider.GOOGLE,
                     from_address,
+                    on_behalf_of=sent_by_id,
                 )
                 logger.info("Custom email API responded with 200 OK")
                 email_queries.create_email_log(
@@ -209,6 +210,7 @@ async def send_direct_email_job(
                     request.attachments,
                     provider,
                     from_address,
+                    on_behalf_of=sent_by_id,
                 )
                 logger.info("Direct email API responded with 200 OK")
 
@@ -274,6 +276,7 @@ async def send_blast_job(
                         from_addr,
                         request.preview_text,
                         request.attachments,
+                        on_behalf_of=sent_by_id,
                     )
                     logger.info(f"Blast API responded successfully for [{from_addr.value}]")
 
@@ -309,6 +312,7 @@ async def send_blast_job(
                 None,
                 request.preview_text,
                 request.attachments,
+                on_behalf_of=sent_by_id,
             )
             logger.info(f"Blast API responded successfully for [{len(emails)}] recipients")
 
@@ -365,7 +369,7 @@ async def send_acceptance_job(
         logger.info(f"Sending acceptance blast to [{len(emails)}] recipients via [{from_address.value}]")
 
         try:
-            await call_acceptance_api(emails, subject, html_content, from_address)
+            await call_acceptance_api(emails, subject, html_content, from_address, on_behalf_of=sent_by_id)
         except Exception:
             submissions_queries.mark_submissions_as_uninvited(session, submission_ids)
             session.commit()

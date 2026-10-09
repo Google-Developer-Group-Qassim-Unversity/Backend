@@ -74,3 +74,13 @@ def test_only_a_super_admin_can_run_the_sweep_by_hand(pipeline, world):
     response = pipeline.client.post("/pipeline/sweep")
     assert response.status_code == 200, response.text
     assert response.json()["ran"] is True
+
+
+def test_its_emails_are_not_attributed_to_a_click(pipeline, world):
+    """The copy goes to whoever booked the event - a real member. On staging
+    that must not count as them clicking (app/services/email_redirect.py)."""
+    book_complete(pipeline, world["ai"])
+    result = sweep(pipeline, pipeline.now + timedelta(hours=25))
+
+    assert result.emails
+    assert all(email.clicked is False for email in result.emails)
