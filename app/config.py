@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     PIPELINE_EMAILS_LIVE: bool = False
     ADMIN_APP_URL: str = "https://admin.gdg-q.com"
 
+    # Staging and development. Comma-separated developer addresses that get the
+    # emails nobody clicked for (app/services/email_redirect.py).
+    EMAIL_REDIRECT_FALLBACK: str = ""
+
     R2_ACCOUNT_ID: Optional[str] = None
     R2_ACCESS_KEY_ID: Optional[str] = None
     R2_SECRET_ACCESS_KEY: Optional[str] = None
@@ -153,6 +157,20 @@ class Config:
     @property
     def is_dev(self) -> bool:
         return get_settings().ENV.lower() == "development"
+
+    @property
+    def ENV(self) -> str:
+        """`production`, `staging`, `development` or `testing`."""
+        return get_settings().ENV.lower()
+
+    @property
+    def redirects_email(self) -> bool:
+        """Staging and local dev run on copies of prod, real addresses included."""
+        return self.ENV in ("staging", "development")
+
+    @property
+    def EMAIL_REDIRECT_FALLBACK(self) -> list[str]:
+        return [email.strip() for email in get_settings().EMAIL_REDIRECT_FALLBACK.split(",") if email.strip()]
 
     @property
     def DATABASE_URL(self) -> str:

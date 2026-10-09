@@ -77,6 +77,7 @@ def expire_holds(session: Session, now: datetime, result: SweepResult) -> None:
             session, request.department_id, request, PipelineNotificationKind.HOLD_EXPIRED, request.creator
         )
         if email:
+            email.clicked = False
             result.emails.append(email)
         result.expired_holds += 1
     session.flush()

@@ -81,6 +81,9 @@ class PendingEmail:
     html: str
     sent_by_id: int
     data: dict = field(default_factory=dict)
+    # False when nobody clicked: the sweep attributes its emails to whoever
+    # booked the event, a real member, not to someone testing the app.
+    clicked: bool = True
 
 
 # (subject, heading) per kind, Arabic then English.
@@ -179,7 +182,14 @@ async def send_pipeline_email_job(pending: PendingEmail, job_id: int | None = No
     with job_boundary(job_id, EMAIL_JOB_QUERIES) as (tracker, session):
         from_address = get_from_address()
         await call_blast_api(
-            pending.emails, pending.subject, pending.html, EmailProvider.GOOGLE, from_address, None, []
+            pending.emails,
+            pending.subject,
+            pending.html,
+            EmailProvider.GOOGLE,
+            from_address,
+            None,
+            [],
+            on_behalf_of=pending.sent_by_id if pending.clicked else None,
         )
         email_queries.create_email_log(
             session,

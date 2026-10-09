@@ -245,7 +245,7 @@ def send_custom_email(
     dependencies=[Depends(Require(Perm.EMAILS_EVENT, event_departments))],
     response_model=EmailTestResponse,
 )
-async def send_custom_email_test(event_id: int, request: CustomEmailTestRequest, session: DB):
+async def send_custom_email_test(event_id: int, request: CustomEmailTestRequest, member: CurrentMember, session: DB):
     logger.info(f"Sending custom email test for event [{event_id}]")
 
     def prepare() -> tuple[SimpleEvent, EmailLogsFromAddress, list[tuple[SimpleMember, str, str]]]:
@@ -280,6 +280,7 @@ async def send_custom_email_test(event_id: int, request: CustomEmailTestRequest,
             request.language,
             EmailProvider.GOOGLE,
             from_address,
+            on_behalf_of=member.id,
         )
         emails.append(simple_member.email)
 
@@ -655,6 +656,7 @@ async def send_acceptance_blasts(
 )
 async def send_acceptance_test(
     request: Request,
+    member: CurrentMember,
     subject: Annotated[str, Query(description="Email subject line")],
     emails: Annotated[list[str], Query(description="Email addresses to send to")],
 ):
@@ -668,7 +670,7 @@ async def send_acceptance_test(
     logger.info(f"Sending request to acceptance API: [{config.CERTIFICATE_API_URL}/blasts]")
 
     from_addr = await run_in_threadpool(get_from_address)
-    await call_acceptance_api(emails, subject, html_content, from_addr)
+    await call_acceptance_api(emails, subject, html_content, from_addr, on_behalf_of=member.id)
     logger.info("Acceptance API responded successfully")
 
     return {"sent_count": len(emails), "emails": emails}
@@ -743,7 +745,7 @@ def send_blast(
     dependencies=[Depends(Require(Perm.EMAILS_BLAST))],
     response_model=EmailTestResponse,
 )
-async def send_blast_test(request: BlastTestRequest):
+async def send_blast_test(request: BlastTestRequest, member: CurrentMember):
     logger.info("Sending blast test email")
     logger.info(f"Sending test blast to [{len(request.test_emails)}] test emails")
 
@@ -756,6 +758,7 @@ async def send_blast_test(request: BlastTestRequest):
         from_addr,
         request.preview_text,
         request.attachments,
+        on_behalf_of=member.id,
     )
     logger.info("Blast API responded successfully")
 

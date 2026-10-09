@@ -48,7 +48,9 @@ from app.routers import (
 # and every real bug in that window was rejected at ingest alongside them.
 sentry_sdk.init(
     dsn=config.SENTRY_DSN,
-    environment="development" if config.is_dev else "production",
+    # Its own environment per deployment, so staging errors are told apart
+    # from prod's and can be filtered out of its alerts.
+    environment=config.ENV,
     traces_sample_rate=0.2,
     integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
 )

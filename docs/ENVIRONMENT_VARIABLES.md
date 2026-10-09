@@ -19,7 +19,7 @@ the boot rather than the first request.
 
 | Variable | Needed | Default | Notes |
 |---|---|---|---|
-| `ENV` | optional | `Production` | `development` uses the local log dir and tags Sentry as dev |
+| `ENV` | optional | `Production` | `Production`, `Staging`, `development` or `testing`; tags Sentry with it. `Staging` and `development` redirect every email - see `EMAIL_REDIRECT_FALLBACK` |
 | `LOG_LEVEL` | optional | `INFO` | `DEBUG` also logs request bodies, which contain member PII |
 | `SENTRY_DSN` | optional | - | leave unset to disable Sentry |
 | `DATABASE_URL` | **at startup** | - | the app refuses to start without it |
@@ -56,6 +56,7 @@ duplicated across both apps for that one convenience link.
 | `SES_FROM_ADDRESS` | when the feature runs | - |  |
 | `PIPELINE_EMAILS_LIVE` | no | `false` | events pipeline: `false` sends each email only to whoever triggered it, as a trial copy; `true` emails the whole department |
 | `ADMIN_APP_URL` | no | `https://admin.gdg-q.com` | links in events pipeline emails |
+| `EMAIL_REDIRECT_FALLBACK` | on staging | - | comma-separated developer addresses. With `ENV` `Staging` or `development`, an email goes to the member who clicked send instead of its recipients; emails nobody clicked for (the pipeline sweep) go here. Unset there, those emails fail rather than reach real members - see `app/services/email_redirect.py` |
 
 ### Cloudflare R2 (uploads)
 
