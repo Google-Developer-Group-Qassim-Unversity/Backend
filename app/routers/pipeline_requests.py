@@ -27,7 +27,6 @@ from app.routers.pipeline_models import (
     PaginatedEventRequests,
     PersonRef,
     PipelineDepartment,
-    PublishRequest,
     RedateRequest,
     SaveBriefRequest,
     SaveDeliverableRequest,
@@ -316,10 +315,10 @@ def complete_event_request_task(
 
 
 @router.post("/{request_id}/publish", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def publish_event_request(request_id: str, body: PublishRequest, session: DB, caller: CurrentCaller):
-    """Turn a ready request into a real event in /events, created as a draft for admins to review."""
+def publish_event_request(request_id: str, session: DB, caller: CurrentCaller):
+    """Turn a ready request into a real, open event in /events, from what the teams handed over."""
     request = service.get_request_for(session, caller, request_id, lock=True)
-    service.publish(session, caller, request, body.image_url)
+    service.publish(session, caller, request)
     session.commit()
     # Best-effort, as after POST /events/: the leaderboard app caches events.
     try:
