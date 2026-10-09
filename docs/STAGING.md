@@ -24,15 +24,16 @@ at; `ALEMBIC_DATABASE_URL` is set in every env but nothing reads it.
 
 ## Deploying
 
-Merge or push to `dev`. `.github/workflows/deploy.yml` deploys whichever half
-changed, exactly as it does for `main`: it migrates `scores_staging` to the
-release's head first, so a broken migration fails the deploy and leaves the
-running staging app alone. Run the workflow by hand on `dev` to redeploy both
-halves.
+Every change goes through `dev`; nothing is pushed or PR'd into `main` directly.
 
-Getting a change to production stays the same: a PR into `main`. `dev` is not
-merged into `main`; it is reset to `main` whenever it drifts too far
-(`git push --force origin main:dev`, after checking nobody is mid-test).
+1. Branch from `dev`, open the PR into `dev`. PR checks run there.
+2. Merging it deploys staging. `.github/workflows/deploy.yml` deploys whichever
+   half changed and migrates `scores_staging` to the release's head first, so a
+   broken migration fails the deploy and leaves the running staging app alone.
+3. Once staging looks right, open a `dev` -> `main` PR and merge it with a merge
+   commit. That push to `main` deploys production the same way.
+
+Run the workflow by hand on either branch to redeploy both halves.
 
 ## Emails never reach real members
 
@@ -54,7 +55,10 @@ Staging's sign-in page asks for an email and the fixed code `8888` instead of
 running Clerk's emailed code (`Frontend/lib/staging-sign-in.ts`). It accepts only
 the emails in `STAGING_LOGIN_EMAILS` (comma-separated, Infisical `staging` /
 `/admin-frontend`): staging holds a copy of every member's real data, so add a
-developer there before they can sign in. `STAGING_OTP` holds the code; with it
+developer there before they can sign in. It holds the Development department's
+members (six on 9 Oct 2026, Fall 2026); update it when the team changes. The
+frontend reads it when its container starts, so a change needs a staging
+redeploy (run the Deploy workflow by hand on `dev`). `STAGING_OTP` holds the code; with it
 unset, the page is Clerk's normal one.
 
 It works by minting a Clerk sign-in ticket for the email, which is only safe
