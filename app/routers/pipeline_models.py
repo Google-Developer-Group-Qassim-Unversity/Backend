@@ -180,6 +180,8 @@ class RequestActions(BaseModel):
     can_resubmit: bool
     complete: list[PipelineTeam]
     can_publish: bool = False
+    # Design uploads or replaces the poster, until the request is published.
+    can_upload_poster: bool = False
 
 
 class EventRequestDetail(EventRequestSummary):
