@@ -27,6 +27,7 @@ from app.DB import actions as action_queries
 from app.DB import logs as log_queries
 from app.DB.schema import (
     Departments,
+    Members,
     EventsLocationType,
     EventRequests,
     EventRequestStage,
@@ -40,6 +41,7 @@ from app.DB.schema import (
 from app.exceptions import DepartmentForbidden, IncompleteRequest, NotFound, PipelineConflict
 from app.routers.models import Events_model, createEvent_model
 from app.services import event_briefs
+from app.services import event_deliverables
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail
@@ -396,6 +398,8 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
     for key in ("is_official",):
         if key in fields and fields[key] is not None:
             fields[key] = int(fields[key])
+    if fields.get("department_action_id") is not None or fields.get("member_action_id") is not None:
+        check_points_tier(session, fields.get("department_action_id"), fields.get("member_action_id"))
     for key, value in fields.items():
         setattr(request, key, value)
     if partners is not None:
@@ -405,6 +409,13 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
             raise PipelineConflict("partner_not_this_semester", "A partner must be a department of this semester", 422)
         queries.set_partners(session, request, partners)
     session.flush()
+
+
+def check_points_tier(session: Session, department_action_id: int | None, member_action_id: int | None) -> None:
+    """A points tier is one of the pairs ``GET /actions`` offers as composite actions, both halves together."""
+    pairs = {(d.id, m.id) for d, m in action_queries.get_composite_pairs(session)}
+    if (department_action_id, member_action_id) not in pairs:
+        raise PipelineConflict("not_a_points_tier", "Pick one of the points tiers", 422)
 
 
 def within_official_hours(request: EventRequests) -> bool | None:
@@ -653,8 +664,7 @@ def can_complete(session: Session, caller: Caller, request: EventRequests, team:
     return caller.access.can(TEAM_PERMS[team])
 
 
-def complete(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> list[PendingEmail | None]:
-    """A team marks its part done. Design done sends the request to Media; all three done makes it ready."""
+def _require_open_task(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> None:
     if not can_complete(session, caller, request, team):
         require_team(session, caller, team)
         if request.stage not in WORKING_STAGES:
@@ -662,15 +672,77 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
                 "cannot_complete", f"The request is {request.stage.value}; there is nothing to mark done"
             )
         raise PipelineConflict("cannot_complete", f"The {team.value} part is not open")
+
+
+def save_deliverable(
+    session: Session, caller: Caller, request: EventRequests, team: PipelineTeam, deliverable: dict
+) -> None:
+    """Save Logistics' confirmation as a draft, while its part is open. Confirming checks it."""
+    if team != PipelineTeam.LOGISTICS:
+        raise PipelineConflict("no_form", f"The {team.value} team hands over no form", 422)
+    _require_open_task(session, caller, request, team)
+    parsed = event_deliverables.parse(team, deliverable)
+    responsible = parsed.get("responsible_member_id")
+    if responsible is not None and session.get(Members, responsible) is None:
+        raise NotFound("Member", responsible)
+    task = get_task(request, team)
+    task.deliverable = parsed  # type: ignore[union-attr]
+    task.deliverable_version = event_deliverables.DELIVERABLE_VERSION  # type: ignore[union-attr]
+    session.flush()
+
+
+def _apply_confirmation(
+    session: Session, caller: Caller, request: EventRequests, task: EventRequestTasks
+) -> PendingEmail | None:
+    """Logistics confirms: keep what it confirmed, and move the request to the confirmed dates.
+
+    Moving the dates follows the calendar's rules, like booking them; the
+    requesting department is told. Call inside ``booking_lock``.
+    """
+    confirmation = event_deliverables.logistics_confirmation(request, task)
+    missing = event_deliverables.missing(PipelineTeam.LOGISTICS, confirmation)
+    if missing:
+        raise IncompleteRequest(missing)
+    assert confirmation is not None and confirmation.start_date and confirmation.end_date
+    if confirmation.responsible_member_id and session.get(Members, confirmation.responsible_member_id) is None:
+        raise NotFound("Member", confirmation.responsible_member_id)
+    task.deliverable = confirmation.model_dump(mode="json")
+    task.deliverable_version = event_deliverables.DELIVERABLE_VERSION
+
+    old = (request.start_date, request.end_date)
+    new = (confirmation.start_date, confirmation.end_date)
+    if old == new:
+        return None
+    _check_bookable(session, caller, new[0], new[1], request.id)
+    request.start_date, request.end_date = new
+    request.day_modes = {d.isoformat(): m for d, m in (confirmation.day_modes or {}).items()}
+    moved = {"from": [d.isoformat() if d else None for d in old], "to": [d.isoformat() for d in new]}
+    notifications.notify(session, request.department_id, request, PipelineNotificationKind.DATES_CHANGED, moved)
+    logger.info("Request %s moved by Logistics from %s..%s to %s..%s", request.id, *old, *new)
+    note = f"{old[0]} → {old[1]}  ⟶  {new[0]} → {new[1]}" if old[0] else None
+    return notifications.department_email(
+        session, request.department_id, request, PipelineNotificationKind.DATES_CHANGED, caller.member, note
+    )
+
+
+def complete(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> list[PendingEmail | None]:
+    """A team finishes its part. Design done sends the request to Media; all three done makes it ready.
+
+    Logistics finishes by confirming the event (``event_deliverables``); if it
+    confirmed other dates, call this inside ``booking_lock``.
+    """
+    _require_open_task(session, caller, request, team)
     now = clock.now()
     task = get_task(request, team)
+    emails: list[PendingEmail | None] = []
+    if team == PipelineTeam.LOGISTICS:
+        emails.append(_apply_confirmation(session, caller, request, task))  # type: ignore[arg-type]
     task.status = EventRequestTaskStatus.DONE  # type: ignore[union-attr]
     task.completed_at = now  # type: ignore[union-attr]
     task.completed_by = caller.member.id  # type: ignore[union-attr]
     notifications.notify(
         session, request.department_id, request, PipelineNotificationKind.TASK_DONE, {"team": team.value}
     )
-    emails: list[PendingEmail | None] = []
 
     if team == PipelineTeam.DESIGN:
         media = ensure_task(session, request, PipelineTeam.MEDIA)
@@ -729,7 +801,7 @@ def can_publish(caller: Caller, request: EventRequests) -> bool:
     return can_request_for(caller, request.department_id) and request.stage == EventRequestStage.READY
 
 
-def event_for(request: EventRequests, department_action_id: int, member_action_id: int, image_url: str | None):
+def event_for(request: EventRequests, image_url: str | None):
     """The ``POST /events/`` payload a ready request becomes.
 
     Times are wall-clock Riyadh times, the way the event form stores them. A
@@ -755,20 +827,14 @@ def event_for(request: EventRequests, department_action_id: int, member_action_i
             is_official=int(bool(request.is_official)),
         ),
         form_type="none" if registration == "none" else "registration",
-        department_action_id=department_action_id,
-        member_action_id=member_action_id,
+        # publish refuses a request without its points tier before getting here.
+        department_action_id=request.department_action_id,  # type: ignore[arg-type]
+        member_action_id=request.member_action_id,  # type: ignore[arg-type]
         department_id=request.department_id,
     )
 
 
-def publish(
-    session: Session,
-    caller: Caller,
-    request: EventRequests,
-    department_action_id: int,
-    member_action_id: int,
-    image_url: str | None,
-) -> int:
+def publish(session: Session, caller: Caller, request: EventRequests, image_url: str | None) -> int:
     """Create the real event, in the same transaction, the same way ``POST /events/`` does.
 
     Any late penalty is taken off the department once, on a log of its own for
@@ -781,11 +847,11 @@ def publish(
         raise PipelineConflict("not_ready", "Only a request every team has finished can be published")
     if request.start_date is None:
         raise PipelineConflict("no_dates", "This request has no dates")
+    if request.department_action_id is None or request.member_action_id is None:
+        raise PipelineConflict("no_points_tier", "Pick the points tier in the request's details first")
+    check_points_tier(session, request.department_action_id, request.member_action_id)
     event, _department_log = create_full_event(
-        session,
-        event_for(request, department_action_id, member_action_id, image_url),
-        responsible_member_id=request.created_by,
-        created_by=caller.member.id,
+        session, event_for(request, image_url), responsible_member_id=request.created_by, created_by=caller.member.id
     )
     penalty = get_penalty(session, request)
     if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:

@@ -127,6 +127,8 @@ def details_missing(request: EventRequests) -> list[str]:
         missing.append("details.presenter_email")
     if request.registration == EventRequestRegistration.ACCEPTANCE and not request.expected_accepted:
         missing.append("details.expected_accepted")
+    if request.department_action_id is None or request.member_action_id is None:
+        missing.append("details.points_tier")
     return missing
 
 

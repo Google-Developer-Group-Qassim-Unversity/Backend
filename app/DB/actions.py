@@ -11,6 +11,31 @@ def get_actions(session: Session):
     return actions
 
 
+# The points tiers: (department action, member action) pairs an event is created
+# with. Production ids, pasted in - see docs/HARDCODED_ACTION_IDS.md. The admin
+# event form (GET /actions) and the events pipeline both read them from here.
+COMPOSITE_ACTION_IDS: list[tuple[int, int]] = [
+    (51, 76),
+    (52, 77),
+    (53, 78),
+    (54, 79),
+    (86, 87),
+    (88, 89),
+    (90, 91),
+    (105, 108),
+]
+
+
+def get_composite_pairs(session: Session) -> list[tuple[Actions, Actions]]:
+    """The points tiers whose two actions both exist, in the order above."""
+    actions = {action.id: action for action in get_actions(session)}
+    return [
+        (actions[department_id], actions[member_id])
+        for department_id, member_id in COMPOSITE_ACTION_IDS
+        if department_id in actions and member_id in actions
+    ]
+
+
 def get_action_by_id(session: Session, action_id: int):
     statement = select(Actions).where(Actions.id == action_id)
     action = session.scalars(statement).first()

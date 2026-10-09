@@ -9,6 +9,7 @@ import pytest
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 
 from app.config import config
+from app.DB import actions as action_queries
 from app.DB.club_structure import get_role_by_key
 from app.DB.schema import (
     ClubMemberships,
@@ -102,10 +103,18 @@ class Pipeline:
 
 
 @pytest.fixture
-def pipeline(db_session, client, monkeypatch, outbound):
-    """Pipeline steps send emails in the background; ``outbound`` records them instead of sending."""
+def pipeline(db_session, client, monkeypatch, outbound, seed_refs):
+    """Pipeline steps send emails in the background; ``outbound`` records them instead of sending.
+
+    The points tiers are production action ids, so the suite's one tier is the
+    seeded department and member action; ``helper.tier`` is it as request details.
+    """
     helper = Pipeline(db_session, client, monkeypatch)
     helper.outbound = outbound
+    monkeypatch.setattr(
+        action_queries, "COMPOSITE_ACTION_IDS", [(seed_refs.dept_action.id, seed_refs.member_action.id)]
+    )
+    helper.tier = {"department_action_id": seed_refs.dept_action.id, "member_action_id": seed_refs.member_action.id}
     yield helper
     app.dependency_overrides.pop(config.CLERK_GUARD, None)
     app.dependency_overrides.pop(config.CLERK_GUARD_optional, None)
@@ -137,7 +146,7 @@ def book_complete(pipeline, department, start="2026-07-20", end="2026-07-21") ->
     assert response.status_code == 201, response.text
     request_id = response.json()["id"]
     url = f"/pipeline/requests/{request_id}"
-    assert pipeline.client.put(f"{url}/details", json=COMPLETE_DETAILS).status_code == 200
+    assert pipeline.client.put(f"{url}/details", json={**COMPLETE_DETAILS, **pipeline.tier}).status_code == 200
     assert pipeline.client.put(f"{url}/briefs/design", json={"brief": COMPLETE_DESIGN}).status_code == 200
     assert pipeline.client.put(f"{url}/briefs/logistics", json={"brief": COMPLETE_LOGISTICS}).status_code == 200
     return request_id
@@ -145,3 +154,19 @@ def book_complete(pipeline, department, start="2026-07-20", end="2026-07-21") ->
 
 def submit(pipeline, request_id: str):
     return pipeline.client.post(f"/pipeline/requests/{request_id}/submit")
+
+
+MEET_LINK = "https://meet.google.com/abc-defg-hij"
+
+
+def finish(pipeline, request_id: str, team: str):
+    """Finish ``team``'s part as the signed-in person. Logistics confirms its prefilled form, plus the Meet link."""
+    url = f"/pipeline/requests/{request_id}"
+    if team == "logistics":
+        tasks = pipeline.client.get(url).json()["tasks"]
+        confirmation = next(t for t in tasks if t["team"] == "logistics")["deliverable"]
+        saved = pipeline.client.put(
+            f"{url}/deliverables/logistics", json={"deliverable": {**confirmation, "meet_link": MEET_LINK}}
+        )
+        assert saved.status_code == 200, saved.text
+    return pipeline.client.post(f"{url}/tasks/{team}/complete")

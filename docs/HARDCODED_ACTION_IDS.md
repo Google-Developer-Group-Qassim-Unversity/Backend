@@ -1,14 +1,15 @@
 # Hardcoded action IDs
 
-Three lists of `actions` primary keys are pasted into the source. They decide
+Two lists of `actions` primary keys are pasted into the source. They decide
 which events an admin can create and whether those events can be attended.
 They disagree with each other, and nothing in the code says whether that is
 deliberate - you have to query production to find out (below).
 
 ```python
-# app/routers/action.py:32-33  - which pairs the admin UI offers
-department_ids = [51, 52, 53, 54, 86, 88, 90, 105]
-member_ids     = [76, 77, 78, 79, 87, 89, 91, 108]
+# app/DB/actions.py  - the points tiers: which pairs the admin event form and
+#                      the events pipeline offer, through get_composite_pairs()
+COMPOSITE_ACTION_IDS = [(51, 76), (52, 77), (53, 78), (54, 79),
+                        (86, 87), (88, 89), (90, 91), (105, 108)]
 
 # app/DB/logs.py:55            - which events can be attended
 ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89]
@@ -104,7 +105,7 @@ metadata (`order`, `is_hidden`), so there is precedent and no new pattern.
 1. **`actions.is_attendable`** (`TINYINT(1) NOT NULL DEFAULT 0`) replaces
    `ATTENDABLE_ACTION_IDS`.
 2. **A `composite_actions` table** (`department_action_id`, `member_action_id`,
-   plus `order`) replaces the positional zip. A join table rather than a
+   plus `order`) replaces `COMPOSITE_ACTION_IDS`. A join table rather than a
    self-referential `pair_id` because the pairing is a thing in its own right -
    it is what the admin event form actually selects - and it can then carry its
    own ordering instead of borrowing the list's.
@@ -130,7 +131,8 @@ rather than failing the deploy.
 - [ ] Look at event 350 (بطولة الشطرنج): 5 submissions, zero member awards
 - [ ] Alembic revision: `is_attendable` column + `composite_actions` table + backfill
 - [ ] `get_attendable_logs` joins `actions` on `is_attendable = 1`
-- [ ] `get_categorized_actions` reads `composite_actions` instead of zipping
+- [ ] `get_composite_pairs` reads `composite_actions` instead of `COMPOSITE_ACTION_IDS`
+      (`GET /actions` and the events pipeline's points tier both go through it)
 - [ ] `create_action` / `update_action` accept and return `is_attendable`
 - [ ] Admin UI: expose the flag, and manage pairs instead of assuming eight
 - [ ] Delete the module-scoped `patch_get_attendable_logs` fixture in

@@ -21,21 +21,8 @@ from app.services.permissions.guards import Require
 router = APIRouter(prefix="/actions", tags=["actions"])
 
 
-def get_action_by_id(actions, action_id: int):
-    for action in actions:
-        if action.id == action_id:
-            return action
-    return None
-
-
 @router.get("", status_code=status.HTTP_200_OK, response_model=Categorized_action)
 def get_categorized_actions(session: DB):
-    # These are to link department and member actions into composite actions.
-    # Paired positionally by the zip below, and hardcoded production IDs - so a
-    # new action can never join a pair. See docs/HARDCODED_ACTION_IDS.md.
-    department_ids = [51, 52, 53, 54, 86, 88, 90, 105]
-    member_ids = [76, 77, 78, 79, 87, 89, 91, 108]
-
     actions_queries.get_bonus_action(session)
     actions_queries.get_discount_action(session)
     session.commit()
@@ -44,15 +31,13 @@ def get_categorized_actions(session: DB):
 
     categorized_action = {"composite_actions": [], "department_actions": [], "member_actions": [], "custom_actions": []}
 
-    # 1. Add composite actions (only include pairs where both actions exist)
-    for deptId, memberId in zip(department_ids, member_ids):
-        dept_action = get_action_by_id(actions, deptId)
-        member_action = get_action_by_id(actions, memberId)
-        if dept_action is not None and member_action is not None:
-            categorized_action["composite_actions"].append((dept_action, member_action))
+    # 1. Add composite actions: the points tiers, hardcoded production ids (see
+    # COMPOSITE_ACTION_IDS and docs/HARDCODED_ACTION_IDS.md).
+    categorized_action["composite_actions"] = actions_queries.get_composite_pairs(session)
 
     # 2. filter out department and member actions used in composites
-    actions = [action for action in actions if action.id not in department_ids + member_ids]
+    paired = {action_id for pair in actions_queries.COMPOSITE_ACTION_IDS for action_id in pair}
+    actions = [action for action in actions if action.id not in paired]
 
     # 3. add department and member actions
     categorized_action["department_actions"] = [action for action in actions if action.action_type == "department"]

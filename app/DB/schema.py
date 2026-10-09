@@ -1152,10 +1152,18 @@ class EventRequests(Base):
         ),
         ForeignKeyConstraint(["created_by"], ["members.id"], name="fk_event_requests_created_by", ondelete="RESTRICT"),
         ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_event_requests_event", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["department_action_id"], ["actions.id"], name="fk_event_requests_department_action", ondelete="SET NULL"
+        ),
+        ForeignKeyConstraint(
+            ["member_action_id"], ["actions.id"], name="fk_event_requests_member_action", ondelete="SET NULL"
+        ),
         CheckConstraint("end_date >= start_date", name="ck_event_requests_dates"),
         Index("ix_event_requests_dates", "start_date", "end_date"),
         Index("ix_event_requests_department_stage", "department_id", "stage"),
         Index("ix_event_requests_stage", "stage"),
+        Index("fk_event_requests_department_action", "department_action_id"),
+        Index("fk_event_requests_member_action", "member_action_id"),
     )
 
     id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
@@ -1186,6 +1194,10 @@ class EventRequests(Base):
     registration: Mapped[Optional[EventRequestRegistration]] = mapped_column(_enum(EventRequestRegistration))
     expected_accepted: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     help_needed: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    # The points tier: one of the (department action, member action) pairs from
+    # ``app/DB/actions.py``, picked by the requesting team. The event is created with it.
+    department_action_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    member_action_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
@@ -1239,7 +1251,12 @@ class EventRequestTaskStatus(str, enum.Enum):
 
 
 class EventRequestTasks(Base):
-    """One team's part of a request: its brief (JSON, versioned by a Pydantic model in code) and its progress."""
+    """One team's part of a request: its brief, what the team hands over, and its progress.
+
+    The brief is what the requesting team asks for, the deliverable what the
+    team hands back (Logistics' confirmation, Design's poster). Both are JSON,
+    versioned by a Pydantic model in code (``event_briefs``, ``event_deliverables``).
+    """
 
     __tablename__ = "event_request_tasks"
     __table_args__ = (
@@ -1261,6 +1278,8 @@ class EventRequestTasks(Base):
     )
     brief: Mapped[Optional[dict]] = mapped_column(JSON)
     brief_version: Mapped[Optional[int]] = mapped_column(SMALLINT(unsigned=True))
+    deliverable: Mapped[Optional[dict]] = mapped_column(JSON)
+    deliverable_version: Mapped[Optional[int]] = mapped_column(SMALLINT(unsigned=True))
     opened_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     completed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     completed_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
@@ -1276,6 +1295,7 @@ class PipelineNotificationKind(str, enum.Enum):
     TASK_DONE = "task_done"
     MEDIA_RECEIVED = "media_received"
     READY_TO_PUBLISH = "ready_to_publish"
+    DATES_CHANGED = "dates_changed"
 
 
 class PipelineNotifications(Base):

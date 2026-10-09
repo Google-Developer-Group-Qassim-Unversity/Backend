@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
 from app.DB import event_pipeline as queries
-from app.DB.schema import EventRequests, EventRequestStage, PipelineTeam
+from app.DB.schema import EventRequests, EventRequestStage, EventRequestTasks, EventRequestTaskStatus, PipelineTeam
 from app.dependencies import DB
 
 from app.leaderboard_cache import reset_leaderboard_cache
@@ -24,11 +24,13 @@ from app.routers.pipeline_models import (
     PublishRequest,
     RedateRequest,
     SaveBriefRequest,
+    SaveDeliverableRequest,
     TaskResponse,
     UpdateDetailsRequest,
 )
 from app.routers.responses import DetailResponse
 from app.services import event_briefs
+from app.services import event_deliverables
 from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
@@ -77,6 +79,24 @@ def _actions(session, caller: Caller, request: EventRequests) -> RequestActions:
     )
 
 
+def task_response(request: EventRequests, task: EventRequestTasks) -> TaskResponse:
+    deliverable = event_deliverables.shown_deliverable(request, task)
+    reached = task.status != EventRequestTaskStatus.BRIEF
+    return TaskResponse(
+        team=task.team,
+        status=task.status,
+        brief=task.brief,
+        brief_version=task.brief_version,
+        deliverable=deliverable,
+        deliverable_missing=event_deliverables.missing(task.team, deliverable)
+        if reached and task.team in event_deliverables.DELIVERABLE_MODELS
+        else [],
+        opened_at=task.opened_at,
+        completed_at=task.completed_at,
+        completed_by=PersonRef(member_id=task.completer.id, name=task.completer.name) if task.completer else None,
+    )
+
+
 def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetail:
     session.refresh(request)
     return EventRequestDetail(
@@ -97,6 +117,8 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
             registration=request.registration,
             expected_accepted=request.expected_accepted,
             help_needed=request.help_needed,
+            department_action_id=request.department_action_id,
+            member_action_id=request.member_action_id,
         ),
         partners=[PipelineDepartment.model_validate(p.department) for p in request.partners],
         within_official_hours=service.within_official_hours(request),
@@ -104,20 +126,7 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
         updated_at=request.updated_at,
         event_id=request.event_id,
         can_edit=service.can_edit(caller, request),
-        tasks=[
-            TaskResponse(
-                team=task.team,
-                status=task.status,
-                brief=task.brief,
-                brief_version=task.brief_version,
-                opened_at=task.opened_at,
-                completed_at=task.completed_at,
-                completed_by=PersonRef(member_id=task.completer.id, name=task.completer.name)
-                if task.completer
-                else None,
-            )
-            for task in request.tasks
-        ],
+        tasks=[task_response(request, task) for task in request.tasks],
         missing=event_briefs.missing_fields(request)
         if request.stage in (EventRequestStage.DRAFT, EventRequestStage.RETURNED)
         else [],
@@ -210,6 +219,17 @@ def save_event_request_brief(
     return detail(session, caller, request)
 
 
+@router.put("/{request_id}/deliverables/{team}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def save_event_request_deliverable(
+    request_id: str, team: PipelineTeam, body: SaveDeliverableRequest, session: DB, caller: CurrentCaller
+):
+    """Save Logistics' confirmation as a draft while its part is open; confirming checks it."""
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    service.save_deliverable(session, caller, request, team, body.deliverable)
+    session.commit()
+    return detail(session, caller, request)
+
+
 @router.post("/{request_id}/submit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
 def submit_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
     """Send a complete request to Design and Logistics. A 422 lists every missing field."""
@@ -251,10 +271,16 @@ def resubmit_event_request(request_id: str, session: DB, caller: CurrentCaller, 
 def complete_event_request_task(
     request_id: str, team: PipelineTeam, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
 ):
-    """A team marks its part done."""
-    request = service.get_request_for(session, caller, request_id, lock=True)
-    emails = service.complete(session, caller, request, team)
-    session.commit()
+    """A team finishes its part. Logistics finishes by confirming the event, which may move its dates."""
+    if team == PipelineTeam.LOGISTICS:
+        with service.booking_lock(session):
+            request = service.get_request_for(session, caller, request_id, lock=True)
+            emails = service.complete(session, caller, request, team)
+            session.commit()
+    else:
+        request = service.get_request_for(session, caller, request_id, lock=True)
+        emails = service.complete(session, caller, request, team)
+        session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
     return detail(session, caller, request)
 
@@ -263,7 +289,7 @@ def complete_event_request_task(
 def publish_event_request(request_id: str, body: PublishRequest, session: DB, caller: CurrentCaller):
     """Turn a ready request into a real event in /events, created as a draft for admins to review."""
     request = service.get_request_for(session, caller, request_id, lock=True)
-    service.publish(session, caller, request, body.department_action_id, body.member_action_id, body.image_url)
+    service.publish(session, caller, request, body.image_url)
     session.commit()
     # Best-effort, as after POST /events/: the leaderboard app caches events.
     try:
