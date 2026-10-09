@@ -23,6 +23,8 @@ from app.routers.models import (
 )
 from app.config import config
 from app.exceptions import AttendanceTokenAbsent, AttendanceTokenError, DataIntegrityError, MemberNotFound
+from app.DB.schema import EventHistoryAction
+from app.services import event_history
 from app.helpers import (
     CurrentMember,
     validate_attendance_token,
@@ -166,7 +168,7 @@ def mark_attendance(
     response_model=BackfillAttendanceResponse,
     dependencies=[Depends(Require(Perm.ATTENDANCE_BACKFILL, event_departments))],
 )
-def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, session: DB):
+def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, session: DB, actor: CurrentMember):
 
     logger.info(f"Backfill attendance for event [{event_id}], {len(request.members)} members, day [{request.day}]")
 
@@ -184,6 +186,7 @@ def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, sessi
     created_count = 0
     existing_count = 0
     already_attended_count = 0
+    marked: list[dict] = []
 
     for member_data in request.members:
         try:
@@ -207,8 +210,17 @@ def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, sessi
             continue
 
         log_queries.create_member_log(session, member.id, event_log.id, target_date)
+        marked.append({"member_id": member.id, "name": member.name})
         logger.info(f"Backfilled attendance for member [{member.name}] on day [{request.day}]")
 
+    if marked:
+        event_history.record(
+            session,
+            event,
+            EventHistoryAction.ATTENDANCE_BACKFILLED,
+            actor,
+            {"day": request.day, "members": marked, "new_members": created_count},
+        )
     session.commit()
     marked_count = (created_count + existing_count) - already_attended_count
     return BackfillAttendanceResponse(
@@ -274,7 +286,7 @@ def get_event_attendance(
     dependencies=[Depends(Require(Perm.ATTENDANCE_TAKE, event_departments))],
     response_model=CountsResponse,
 )
-def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB):
+def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB, actor: CurrentMember):
     logger.info(f"Manual attendance for event [{event_id}], members {request.member_ids}")
 
     event, event_log = get_event_with_attendable_log(session, event_id)
@@ -286,6 +298,7 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
 
     success_count = 0
     failed_count = 0
+    marked: list[dict] = []
 
     for member_id in request.member_ids:
         try:
@@ -312,9 +325,14 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
 
         if member_success:
             success_count += 1
+            marked.append({"member_id": member.id, "name": member.name})
         else:
             failed_count += 1
 
+    if marked:
+        event_history.record(
+            session, event, EventHistoryAction.ATTENDANCE_MARKED, actor, {"days": days_to_mark, "members": marked}
+        )
     session.commit()
     return {"success": success_count, "failed": failed_count}
 
@@ -325,7 +343,7 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
     dependencies=[Depends(Require(Perm.ATTENDANCE_TAKE, event_departments))],
     response_model=ScanAttendanceResponse,
 )
-def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB):
+def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB, actor: CurrentMember):
     """Marks attendance from a member's wallet-card QR (`/p/{uuid}`), scanned by an admin."""
     logger.info(f"Scan attendance for event [{event_id}], uuid [{request.uuid}]")
 
@@ -353,6 +371,13 @@ def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB):
         )
 
     log_queries.create_member_log(session, member.id, event_log.id, target_date)
+    event_history.record(
+        session,
+        event,
+        EventHistoryAction.ATTENDANCE_SCANNED,
+        actor,
+        {"day": request.day, "members": [{"member_id": member.id, "name": member.name}]},
+    )
     session.commit()
     logger.info(f"Scan attendance: marked member [{member.name}] for event [{event.name}]")
     return ScanAttendanceResponse(status="marked", member_id=member.id, member_name=member.name, uni_id=member.uni_id)
@@ -364,7 +389,7 @@ def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB):
     dependencies=[Depends(Require(Perm.ATTENDANCE_TAKE, event_departments))],
     response_model=CountsResponse,
 )
-def remove_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB):
+def remove_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB, actor: CurrentMember):
     logger.info(f"Remove attendance for event [{event_id}], members {request.member_ids}")
 
     event, event_log = get_event_with_attendable_log(session, event_id)
@@ -381,6 +406,7 @@ def remove_attendance_manual(event_id: int, request: ManualAttendanceRequest, se
 
     success_count = 0
     failed_count = 0
+    removed: list[dict] = []
 
     for member_id in request.member_ids:
         try:
@@ -392,9 +418,14 @@ def remove_attendance_manual(event_id: int, request: ManualAttendanceRequest, se
         deleted = log_queries.delete_member_log(session, member.id, event_log.id, target_date)
         if deleted:
             success_count += 1
+            removed.append({"member_id": member.id, "name": member.name})
             logger.info(f"Attendance removed for member [{member.name}] on day [{request.day or 'today'}]")
         else:
             failed_count += 1
 
+    if removed:
+        event_history.record(
+            session, event, EventHistoryAction.ATTENDANCE_REMOVED, actor, {"day": request.day, "members": removed}
+        )
     session.commit()
     return {"success": success_count, "failed": failed_count}

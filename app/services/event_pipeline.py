@@ -529,7 +529,7 @@ def save_brief(session: Session, caller: Caller, request: EventRequests, team: P
     task = ensure_task(session, request, team)
     task.brief = event_briefs.clean_brief(team, brief)
     task.brief_version = event_briefs.BRIEF_VERSION
-    edit = {"team": team.value}
+    edit: dict[str, str | bool] = {"team": team.value}
     if request.stage not in EDITABLE_STAGES:
         edit["after_submit"] = True
     history.record(session, PipelineHistoryAction.BRIEF_EDITED, caller.member, request, edit)
