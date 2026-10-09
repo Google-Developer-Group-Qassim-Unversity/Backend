@@ -8,7 +8,9 @@ from app.services.form_watches import renew_form_watches
 from app.services.google_client import get_google_credentials
 from app.services.form_responses import FormAccess, FormResponsesClient
 from app.DB import forms as form_queries
-from app.DB.schema import FormType
+from app.DB.schema import EventHistoryAction, Forms, FormType
+from app.helpers import CurrentMember
+from app.services import event_history
 
 
 from app.exceptions import FormNotFoundById, FormNotAttached
@@ -43,6 +45,15 @@ def get_form_by_id(form_id: int, session: DB):
     return form
 
 
+def _form_snapshot(form: Forms) -> dict:
+    return {
+        "form_type": form.form_type.value if form.form_type else None,
+        "google_form_id": form.google_form_id,
+        "google_responders_url": form.google_responders_url,
+        "admin_google_email": form.admin_google_email,
+    }
+
+
 @router.put(
     "/{form_id:int}",
     status_code=status.HTTP_200_OK,
@@ -53,10 +64,15 @@ def get_form_by_id(form_id: int, session: DB):
     },
     dependencies=[Depends(Require(Perm.FORMS_MANAGE, form_departments))],
 )
-def update_form(form_id: int, form: Form_model, session: DB):
+def update_form(form_id: int, form: Form_model, session: DB, actor: CurrentMember):
     try:
         logger.info(f"Updating Form {form_id}")
+        existing = form_queries.get_form_by_id(session, form_id)
+        before = _form_snapshot(existing) if existing else {}
         updated_form = form_queries.update_form(session, form_id, form)
+        changed = event_history.changes(before, _form_snapshot(updated_form))
+        if changed:
+            event_history.record(session, updated_form.event_id, EventHistoryAction.FORM_UPDATED, actor, changed)
         session.commit()
         return updated_form
     except Exception as e:
@@ -74,7 +90,7 @@ def update_form(form_id: int, form: Form_model, session: DB):
     responses={404: {"model": NotFoundResponse, "description": "Event or form not found"}},
     dependencies=[Depends(Require(Perm.FORMS_MANAGE, event_departments))],
 )
-def attach_form(event_id: int, body: AttachFormRequest, session: DB):
+def attach_form(event_id: int, body: AttachFormRequest, session: DB, actor: CurrentMember):
     """Attach a Google Form to an event and invite an admin to edit it.
 
     Idempotent: if the event already has a form (this is a "request access
@@ -144,6 +160,13 @@ def attach_form(event_id: int, body: AttachFormRequest, session: DB):
             admin_google_email=body.admin_google_email,
         ),
     )
+    event_history.record(
+        session,
+        event_id,
+        EventHistoryAction.FORM_ATTACHED,
+        actor,
+        {"google_form_id": google_form_id, "admin_google_email": body.admin_google_email},
+    )
     session.commit()
     logger.info(f"Attached Google Form {google_form_id} to event {event_id}, shared with {body.admin_google_email}")
     return updated_form
@@ -156,7 +179,7 @@ def attach_form(event_id: int, body: AttachFormRequest, session: DB):
     responses={404: {"model": NotFoundResponse, "description": "Event or form not found"}},
     dependencies=[Depends(Require(Perm.FORMS_MANAGE, event_departments))],
 )
-def unattach_form(event_id: int, session: DB):
+def unattach_form(event_id: int, session: DB, actor: CurrentMember):
     """Revoke every admin's access, delete the Forms watch, and reset the form row.
 
     The form itself stays in the club's Drive - only access to it changes.
@@ -212,6 +235,13 @@ def unattach_form(event_id: int, session: DB):
             google_responders_url=None,
             admin_google_email=None,
         ),
+    )
+    event_history.record(
+        session,
+        event_id,
+        EventHistoryAction.FORM_DETACHED,
+        actor,
+        {"google_form_id": form.google_form_id, "revoked": list(granted_emails)},
     )
     session.commit()
     logger.info(f"Unattached Google Form from event {event_id}, revoked {len(granted_emails)} admin(s)")

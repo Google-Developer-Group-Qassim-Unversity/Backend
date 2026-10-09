@@ -120,6 +120,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /events/submissions/{event_id:int}": "submissions.review for event",
     "GET /events/{event_id:int}": None,
     "GET /events/{event_id:int}/details": "events.view",
+    "GET /events/{event_id:int}/history": "events.view",
     "GET /events/{event_id:int}/form": None,
     "GET /forms/": None,
     "GET /forms/{form_id:int}": None,

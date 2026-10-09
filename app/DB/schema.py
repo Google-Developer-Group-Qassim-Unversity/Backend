@@ -1440,6 +1440,51 @@ class PipelineHistory(Base):
     actor: Mapped[Optional["Members"]] = relationship("Members")
 
 
+class EventHistoryAction(str, enum.Enum):
+    """What an admin did to an event from /events, as ``event_history`` records it."""
+
+    CREATED = "created"
+    EDITED = "edited"
+    STATUS_CHANGED = "status_changed"
+    MEETING_URL_CHANGED = "meeting_url_changed"
+    DELETED = "deleted"
+    ATTENDANCE_MARKED = "attendance_marked"
+    ATTENDANCE_SCANNED = "attendance_scanned"
+    ATTENDANCE_BACKFILLED = "attendance_backfilled"
+    ATTENDANCE_REMOVED = "attendance_removed"
+    SUBMISSIONS_REVIEWED = "submissions_reviewed"
+    FORM_UPDATED = "form_updated"
+    FORM_ATTACHED = "form_attached"
+    FORM_DETACHED = "form_detached"
+
+
+class EventHistory(Base):
+    """Who did what to an event from /events, and when: one row per change, never updated after.
+
+    Members registering or attending on their own leave their own rows
+    (submissions, logs); this is for what admins do. ``event_id`` has no
+    foreign key on purpose, so the history outlives a deleted event, with its
+    name copied in. A pipeline event's earlier steps are in ``pipeline_history``.
+    """
+
+    __tablename__ = "event_history"
+    __table_args__ = (
+        ForeignKeyConstraint(["actor_id"], ["members.id"], name="fk_event_history_actor", ondelete="SET NULL"),
+        Index("ix_event_history_event", "event_id", "at"),
+        Index("ix_event_history_actor", "actor_id", "at"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    event_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    actor_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    action: Mapped[EventHistoryAction] = mapped_column(_enum(EventHistoryAction), nullable=False)
+    at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSON)
+    event_name: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+
+    actor: Mapped[Optional["Members"]] = relationship("Members")
+
+
 class PipelinePenalties(Base):
     """Points a department loses for fixing a returned request late.
 
