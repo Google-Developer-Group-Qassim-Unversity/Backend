@@ -55,7 +55,10 @@ Staging's sign-in page asks for an email and the fixed code `8888` instead of
 running Clerk's emailed code (`Frontend/lib/staging-sign-in.ts`). It accepts only
 the emails in `STAGING_LOGIN_EMAILS` (comma-separated, Infisical `staging` /
 `/admin-frontend`): staging holds a copy of every member's real data, so add a
-developer there before they can sign in. `STAGING_OTP` holds the code; with it
+developer there before they can sign in. It holds the Development department's
+members (six on 9 Oct 2026, Fall 2026); update it when the team changes. The
+frontend reads it when its container starts, so a change needs a staging
+redeploy (run the Deploy workflow by hand on `dev`). `STAGING_OTP` holds the code; with it
 unset, the page is Clerk's normal one.
 
 It works by minting a Clerk sign-in ticket for the email, which is only safe
