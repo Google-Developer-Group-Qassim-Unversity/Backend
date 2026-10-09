@@ -13,6 +13,7 @@ from app.DB.schema import (
     EventRequestTaskStatus,
     EventRequestType,
     EventRequestUndatedReason,
+    PipelineHistoryAction,
     PipelineNotificationKind,
     PipelineTeam,
 )
@@ -148,7 +149,7 @@ class EventRequestSummary(BaseModel):
     end_date: date | None
     hold_expires_at: UtcDateTime | None
     undated_reason: EventRequestUndatedReason | None
-    created_at: UtcDateTime
+    requested_at: UtcDateTime
 
 
 class TaskResponse(BaseModel):
@@ -162,8 +163,9 @@ class TaskResponse(BaseModel):
     # What the team still has to hand over before it can finish: "confirm.venue", "poster.poster_url".
     deliverable_missing: list[str]
     opened_at: UtcDateTime | None
-    completed_at: UtcDateTime | None
-    completed_by: PersonRef | None
+    # Who marked this team's part done, and when.
+    done_at: UtcDateTime | None
+    done_by: PersonRef | None
 
 
 class PenaltyResponse(BaseModel):
@@ -184,8 +186,23 @@ class RequestActions(BaseModel):
     can_upload_poster: bool = False
 
 
+class HistoryItem(BaseModel):
+    """One step in a request's history (app/services/pipeline_history.py)."""
+
+    action: PipelineHistoryAction
+    at: UtcDateTime
+    # Null for what the sweep did on its own.
+    actor: PersonRef | None
+    details: dict | None
+
+
 class EventRequestDetail(EventRequestSummary):
-    created_by: PersonRef
+    # Who did each step, and when. Each task says who marked its part done.
+    requested_by: PersonRef
+    submitted_by: PersonRef | None
+    returned_by: PersonRef | None
+    published_at: UtcDateTime | None
+    published_by: PersonRef | None
     details: EventDetails
     partners: list[PipelineDepartment]
     # Worked out from the dates and times: Sun-Thu, 08:00-15:00.
@@ -205,6 +222,8 @@ class EventRequestDetail(EventRequestSummary):
     return_deadline: UtcDateTime | None
     penalty: PenaltyResponse | None
     actions: RequestActions
+    # Everything that happened to the request, oldest first.
+    history: list[HistoryItem]
     now: UtcDateTime
 
 

@@ -52,6 +52,24 @@ JSON on the team's `event_request_tasks` row (`deliverable`,
   event is published.
 - Media still finishes with "Mark done".
 
+## Who did what
+
+Every "who" sits next to its "when". On `event_requests`:
+`requested_by`/`requested_at`, `submitted_by`/`submitted_at`,
+`returned_by`/`returned_at`, `published_by`/`published_at`,
+`cancelled_by`/`cancelled_at`. On each team's task: `done_by`/`done_at`.
+
+`pipeline_history` (`app/services/pipeline_history.py`) keeps everything in
+order, written in the same transaction as the change: booking, new dates,
+edits (with a flag when a super admin edits after submit), submit, return
+(with the notes), resubmit (with any lateness), Logistics' confirmation edits
+and date moves (from and to), every poster upload (with the one it replaced),
+each team finishing, publish, cancel, bans (on the calendar and on each
+request they undated), and a published event being deleted. What the sweep
+does on its own has no actor. Typing into a form is one row per person per 30
+minutes. `request_id` has no foreign key, so the history outlives a request
+deleted with its event. The request page shows it as "Who did what".
+
 ## Emails
 
 `PIPELINE_EMAILS_LIVE` (default `false`). Off, a department email goes only to

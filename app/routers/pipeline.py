@@ -235,5 +235,5 @@ def _summary(request: EventRequests) -> EventRequestSummary:
         end_date=request.end_date,
         hold_expires_at=request.hold_expires_at,
         undated_reason=request.undated_reason,
-        created_at=request.created_at,
+        requested_at=request.requested_at,
     )

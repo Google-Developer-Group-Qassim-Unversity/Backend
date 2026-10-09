@@ -8,7 +8,14 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile, status
 
 from app.DB import event_pipeline as queries
-from app.DB.schema import EventRequests, EventRequestStage, EventRequestTasks, EventRequestTaskStatus, PipelineTeam
+from app.DB.schema import (
+    EventRequests,
+    EventRequestStage,
+    EventRequestTasks,
+    EventRequestTaskStatus,
+    Members,
+    PipelineTeam,
+)
 from app.clients import R2Client
 from app.config import config
 from app.dependencies import DB
@@ -21,6 +28,7 @@ from app.routers.pipeline_models import (
     EventDetails,
     EventRequestDetail,
     EventRequestSummary,
+    HistoryItem,
     PenaltyResponse,
     RequestActions,
     ReturnRequest,
@@ -38,6 +46,7 @@ from app.services import event_briefs
 from app.services import event_deliverables
 from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
+from app.services import pipeline_history
 from app.services import pipeline_notifications as notifications
 from app.services.permissions.dependencies import Caller, CurrentCaller
 from app.services.permissions.catalogue import Perm
@@ -60,7 +69,7 @@ def summary(request: EventRequests) -> EventRequestSummary:
         end_date=request.end_date,
         hold_expires_at=request.hold_expires_at,
         undated_reason=request.undated_reason,
-        created_at=request.created_at,
+        requested_at=request.requested_at,
     )
 
 
@@ -85,6 +94,10 @@ def _actions(session, caller: Caller, request: EventRequests) -> RequestActions:
     )
 
 
+def person(member: Members | None) -> PersonRef | None:
+    return PersonRef(member_id=member.id, name=member.name) if member else None
+
+
 def task_response(request: EventRequests, task: EventRequestTasks) -> TaskResponse:
     deliverable = event_deliverables.shown_deliverable(request, task)
     reached = task.status != EventRequestTaskStatus.BRIEF
@@ -98,8 +111,8 @@ def task_response(request: EventRequests, task: EventRequestTasks) -> TaskRespon
         if reached and task.team in event_deliverables.DELIVERABLE_MODELS
         else [],
         opened_at=task.opened_at,
-        completed_at=task.completed_at,
-        completed_by=PersonRef(member_id=task.completer.id, name=task.completer.name) if task.completer else None,
+        done_at=task.done_at,
+        done_by=person(task.done_by_member),
     )
 
 
@@ -107,7 +120,11 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
     session.refresh(request)
     return EventRequestDetail(
         **summary(request).model_dump(),
-        created_by=PersonRef(member_id=request.creator.id, name=request.creator.name),
+        requested_by=PersonRef(member_id=request.requester.id, name=request.requester.name),
+        submitted_by=person(request.submitter),
+        returned_by=person(request.returner),
+        published_at=request.published_at,
+        published_by=person(request.publisher),
         details=EventDetails(
             title=request.title,
             description=request.description,
@@ -143,6 +160,10 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
         return_deadline=service.return_deadline(request),
         penalty=_penalty(session, request),
         actions=_actions(session, caller, request),
+        history=[
+            HistoryItem(action=row.action, at=row.at, actor=person(row.actor), details=row.details)
+            for row in pipeline_history.for_request(session, request.id)
+        ],
         now=clock.now(),
     )
 

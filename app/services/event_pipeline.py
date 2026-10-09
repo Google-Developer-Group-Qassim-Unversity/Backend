@@ -33,6 +33,7 @@ from app.DB.schema import (
     EventRequestTasks,
     EventRequestTaskStatus,
     EventRequestUndatedReason,
+    PipelineHistoryAction,
     PipelineNotificationKind,
     PipelinePenalties,
     PipelineTeam,
@@ -42,6 +43,7 @@ from app.routers.models import Events_model, createEvent_model
 from app.services import event_briefs
 from app.services import event_deliverables
 from app.services import event_pipeline_clock as clock
+from app.services import pipeline_history as history
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail
 from app.services.permissions.catalogue import Perm
@@ -212,6 +214,12 @@ def ban(
     caller.access.require(Perm.PIPELINE_BANS)
     unique = _check_ban_days(days)
     queries.ban_days(session, unique, reason, caller.member.id)
+    history.record(
+        session,
+        PipelineHistoryAction.DAYS_BANNED,
+        caller.member,
+        details={"dates": [d.isoformat() for d in unique], "reason": reason},
+    )
     undated = []
     for request in queries.get_dated_requests(session, unique[0], unique[-1], lock=True):
         if request.stage == EventRequestStage.PUBLISHED:
@@ -219,6 +227,9 @@ def ban(
         if any(request.start_date <= day <= request.end_date for day in unique):  # type: ignore[operator]
             lost = {"start_date": request.start_date.isoformat(), "end_date": request.end_date.isoformat()}  # type: ignore[union-attr]
             _undate(request, EventRequestUndatedReason.DAY_BANNED)
+            history.record(
+                session, PipelineHistoryAction.DATES_BANNED, caller.member, request, {**lost, "reason": reason}
+            )
             notifications.notify(
                 session,
                 request.department_id,
@@ -241,6 +252,9 @@ def unban(session: Session, caller: Caller, days: list[date]) -> int:
     caller.access.require(Perm.PIPELINE_BANS)
     unique = _check_ban_days(days)
     removed = queries.unban_days(session, unique)
+    history.record(
+        session, PipelineHistoryAction.DAYS_UNBANNED, caller.member, details={"dates": [d.isoformat() for d in unique]}
+    )
     logger.info("Unbanned %d day(s)", removed)
     return removed
 
@@ -309,7 +323,7 @@ def book(session: Session, caller: Caller, department_id: int, start: date, end:
     _check_bookable(session, caller, start, end, None)
     request = EventRequests(
         department_id=department_id,
-        created_by=caller.member.id,
+        requested_by=caller.member.id,
         stage=EventRequestStage.DRAFT,
         start_date=start,
         end_date=end,
@@ -317,6 +331,13 @@ def book(session: Session, caller: Caller, department_id: int, start: date, end:
     )
     session.add(request)
     session.flush()
+    history.record(
+        session,
+        PipelineHistoryAction.BOOKED,
+        caller.member,
+        request,
+        {"start_date": start.isoformat(), "end_date": end.isoformat()},
+    )
     logger.info("Request %s booked %s..%s for department %s", request.id, start, end, department_id)
     return request
 
@@ -336,6 +357,16 @@ def redate(session: Session, caller: Caller, request: EventRequests, start: date
     if is_draft and not caller.access.is_super_admin:
         _check_one_live_hold(session, request.department_id, ignore_id=request.id)
     _check_bookable(session, caller, start, end, request.id)
+    history.record(
+        session,
+        PipelineHistoryAction.REDATED,
+        caller.member,
+        request,
+        {
+            "from": [d.isoformat() if d else None for d in (request.start_date, request.end_date)],
+            "to": [start.isoformat(), end.isoformat()],
+        },
+    )
     request.start_date = start
     request.end_date = end
     request.hold_expires_at = clock.now() + HOLD if is_draft else None
@@ -357,6 +388,9 @@ def cancel(session: Session, caller: Caller, request: EventRequests) -> None:
         raise PipelineConflict("not_a_draft", "Only a draft can be cancelled")
     request.stage = EventRequestStage.CANCELLED
     request.hold_expires_at = None
+    request.cancelled_at = clock.now()
+    request.cancelled_by = caller.member.id
+    history.record(session, PipelineHistoryAction.CANCELLED, caller.member, request)
     session.flush()
 
 
@@ -407,6 +441,14 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
         if not set(partners) <= {d.id for d in partner_options(session)}:
             raise PipelineConflict("partner_not_this_semester", "A partner must be a department of this semester", 422)
         queries.set_partners(session, request, partners)
+    # Outside a draft or a returned request only a super admin can edit; that is the edit worth flagging.
+    history.record(
+        session,
+        PipelineHistoryAction.DETAILS_EDITED,
+        caller.member,
+        request,
+        {"after_submit": True} if request.stage not in EDITABLE_STAGES else None,
+    )
     session.flush()
 
 
@@ -487,6 +529,10 @@ def save_brief(session: Session, caller: Caller, request: EventRequests, team: P
     task = ensure_task(session, request, team)
     task.brief = event_briefs.clean_brief(team, brief)
     task.brief_version = event_briefs.BRIEF_VERSION
+    edit = {"team": team.value}
+    if request.stage not in EDITABLE_STAGES:
+        edit["after_submit"] = True
+    history.record(session, PipelineHistoryAction.BRIEF_EDITED, caller.member, request, edit)
     session.flush()
 
 
@@ -511,6 +557,8 @@ def submit(session: Session, caller: Caller, request: EventRequests) -> list[Pen
     now = clock.now()
     request.stage = EventRequestStage.IN_REVIEW
     request.submitted_at = now
+    request.submitted_by = caller.member.id
+    history.record(session, PipelineHistoryAction.SUBMITTED, caller.member, request)
     request.hold_expires_at = None
     request.undated_reason = None
     for team in BRIEF_TEAMS:
@@ -575,6 +623,8 @@ def return_request(session: Session, caller: Caller, request: EventRequests, not
     now = clock.now()
     request.stage = EventRequestStage.RETURNED
     request.returned_at = now
+    request.returned_by = caller.member.id
+    history.record(session, PipelineHistoryAction.RETURNED, caller.member, request, {"notes": notes})
     request.return_due_at = now + FIX_WINDOW
     request.return_notes = notes
     request.return_count += 1
@@ -636,7 +686,14 @@ def resubmit(session: Session, caller: Caller, request: EventRequests) -> Pendin
     if missing:
         raise IncompleteRequest(missing)
     now = clock.now()
-    record_penalty(session, request, now)
+    penalty = record_penalty(session, request, now)
+    history.record(
+        session,
+        PipelineHistoryAction.RESUBMITTED,
+        caller.member,
+        request,
+        {"late_days": penalty.late_days, "points": penalty.points} if penalty else None,
+    )
     request.stage = EventRequestStage.IN_REVIEW
     request.return_due_at = None
     task = ensure_task(session, request, PipelineTeam.DESIGN)
@@ -684,6 +741,7 @@ def save_deliverable(
     task = get_task(request, team)
     task.deliverable = parsed  # type: ignore[union-attr]
     task.deliverable_version = event_deliverables.DELIVERABLE_VERSION  # type: ignore[union-attr]
+    history.record(session, PipelineHistoryAction.CONFIRMATION_EDITED, caller.member, request)
     session.flush()
 
 
@@ -711,6 +769,14 @@ def set_poster(session: Session, caller: Caller, request: EventRequests, url: st
     """Design's deliverable: the poster, already stored. It becomes the event's image at publish."""
     check_poster_upload(session, caller, request)
     task = get_task(request, PipelineTeam.DESIGN)
+    replaced = (task.deliverable or {}).get("poster_url")  # type: ignore[union-attr]
+    history.record(
+        session,
+        PipelineHistoryAction.POSTER_UPLOADED,
+        caller.member,
+        request,
+        {"poster_url": url, "replaced": replaced} if replaced else {"poster_url": url},
+    )
     task.deliverable = {"poster_url": url}  # type: ignore[union-attr]
     task.deliverable_version = event_deliverables.DELIVERABLE_VERSION  # type: ignore[union-attr]
     session.flush()
@@ -742,6 +808,7 @@ def _apply_confirmation(
     request.day_modes = {d.isoformat(): m for d, m in (confirmation.day_modes or {}).items()}
     moved = {"from": [d.isoformat() if d else None for d in old], "to": [d.isoformat() for d in new]}
     notifications.notify(session, request.department_id, request, PipelineNotificationKind.DATES_CHANGED, moved)
+    history.record(session, PipelineHistoryAction.DATES_MOVED, caller.member, request, moved)
     logger.info("Request %s moved by Logistics from %s..%s to %s..%s", request.id, *old, *new)
     note = f"{old[0]} → {old[1]}  ⟶  {new[0]} → {new[1]}" if old[0] else None
     return notifications.department_email(
@@ -767,8 +834,9 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
         if missing:
             raise IncompleteRequest(missing)
     task.status = EventRequestTaskStatus.DONE  # type: ignore[union-attr]
-    task.completed_at = now  # type: ignore[union-attr]
-    task.completed_by = caller.member.id  # type: ignore[union-attr]
+    task.done_at = now  # type: ignore[union-attr]
+    task.done_by = caller.member.id  # type: ignore[union-attr]
+    history.record(session, PipelineHistoryAction.TASK_DONE, caller.member, request, {"team": team.value})
     notifications.notify(
         session, request.department_id, request, PipelineNotificationKind.TASK_DONE, {"team": team.value}
     )
@@ -891,7 +959,7 @@ def publish(session: Session, caller: Caller, request: EventRequests) -> int:
         raise PipelineConflict("no_points_tier", "Pick the points tier in the request's details first")
     check_points_tier(session, request.department_action_id, request.member_action_id)
     event, _department_log = create_full_event(
-        session, event_for(request), responsible_member_id=request.created_by, created_by=caller.member.id
+        session, event_for(request), responsible_member_id=request.requested_by, created_by=caller.member.id
     )
     penalty = get_penalty(session, request)
     if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:
@@ -901,6 +969,9 @@ def publish(session: Session, caller: Caller, request: EventRequests) -> int:
         penalty.applied_log_id = penalty_log.id
     request.event_id = event.id
     request.stage = EventRequestStage.PUBLISHED
+    request.published_at = clock.now()
+    request.published_by = caller.member.id
+    history.record(session, PipelineHistoryAction.PUBLISHED, caller.member, request, {"event_id": event.id})
     session.flush()
     logger.info("Request %s published as event %s by member %s", request.id, event.id, caller.member.id)
     return event.id

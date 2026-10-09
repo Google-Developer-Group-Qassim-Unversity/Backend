@@ -1150,7 +1150,9 @@ class EventRequests(Base):
         ForeignKeyConstraint(
             ["department_id"], ["departments.id"], name="fk_event_requests_department", ondelete="RESTRICT"
         ),
-        ForeignKeyConstraint(["created_by"], ["members.id"], name="fk_event_requests_created_by", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["requested_by"], ["members.id"], name="fk_event_requests_requested_by", ondelete="RESTRICT"
+        ),
         ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_event_requests_event", ondelete="CASCADE"),
         ForeignKeyConstraint(
             ["department_action_id"], ["actions.id"], name="fk_event_requests_department_action", ondelete="SET NULL"
@@ -1158,17 +1160,33 @@ class EventRequests(Base):
         ForeignKeyConstraint(
             ["member_action_id"], ["actions.id"], name="fk_event_requests_member_action", ondelete="SET NULL"
         ),
+        ForeignKeyConstraint(
+            ["submitted_by"], ["members.id"], name="fk_event_requests_submitted_by", ondelete="SET NULL"
+        ),
+        ForeignKeyConstraint(
+            ["returned_by"], ["members.id"], name="fk_event_requests_returned_by", ondelete="SET NULL"
+        ),
+        ForeignKeyConstraint(
+            ["published_by"], ["members.id"], name="fk_event_requests_published_by", ondelete="SET NULL"
+        ),
+        ForeignKeyConstraint(
+            ["cancelled_by"], ["members.id"], name="fk_event_requests_cancelled_by", ondelete="SET NULL"
+        ),
         CheckConstraint("end_date >= start_date", name="ck_event_requests_dates"),
         Index("ix_event_requests_dates", "start_date", "end_date"),
         Index("ix_event_requests_department_stage", "department_id", "stage"),
         Index("ix_event_requests_stage", "stage"),
         Index("fk_event_requests_department_action", "department_action_id"),
         Index("fk_event_requests_member_action", "member_action_id"),
+        Index("fk_event_requests_requested_by", "requested_by"),
+        Index("fk_event_requests_submitted_by", "submitted_by"),
+        Index("fk_event_requests_returned_by", "returned_by"),
+        Index("fk_event_requests_published_by", "published_by"),
+        Index("fk_event_requests_cancelled_by", "cancelled_by"),
     )
 
     id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    created_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     stage: Mapped[EventRequestStage] = mapped_column(
         _enum(EventRequestStage), nullable=False, server_default=text("'draft'")
     )
@@ -1199,23 +1217,37 @@ class EventRequests(Base):
     department_action_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     member_action_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
-    )
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     )
+    # Who did each step, and when. Each team's task records who marked its part
+    # done (``done_by``/``done_at``), and ``pipeline_history`` keeps every step,
+    # edit and automatic change in order.
+    requested_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    requested_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
     submitted_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    submitted_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    published_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    published_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    cancelled_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    cancelled_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
     # Design can return a request once, within two days of receiving it; the team then has 12 hours.
     returned_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    returned_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     return_count: Mapped[int] = mapped_column(TINYINT(unsigned=True), nullable=False, server_default=text("'0'"))
     return_notes: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     return_due_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
     department: Mapped["Departments"] = relationship("Departments")
-    creator: Mapped["Members"] = relationship("Members")
+    requester: Mapped["Members"] = relationship("Members", foreign_keys=[requested_by])
+    submitter: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[submitted_by])
+    returner: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[returned_by])
+    publisher: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[published_by])
+    canceller: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[cancelled_by])
     partners: Mapped[list["EventRequestPartners"]] = relationship(
         "EventRequestPartners", passive_deletes=True, cascade="all, delete-orphan"
     )
@@ -1263,9 +1295,8 @@ class EventRequestTasks(Base):
         ForeignKeyConstraint(
             ["request_id"], ["event_requests.id"], name="fk_event_request_tasks_request", ondelete="CASCADE"
         ),
-        ForeignKeyConstraint(
-            ["completed_by"], ["members.id"], name="fk_event_request_tasks_completed_by", ondelete="RESTRICT"
-        ),
+        ForeignKeyConstraint(["done_by"], ["members.id"], name="fk_event_request_tasks_done_by", ondelete="RESTRICT"),
+        Index("fk_event_request_tasks_done_by", "done_by"),
         Index("uq_event_request_tasks_team", "request_id", "team", unique=True),
         Index("ix_event_request_tasks_team_status", "team", "status"),
     )
@@ -1281,10 +1312,11 @@ class EventRequestTasks(Base):
     deliverable: Mapped[Optional[dict]] = mapped_column(JSON)
     deliverable_version: Mapped[Optional[int]] = mapped_column(SMALLINT(unsigned=True))
     opened_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
-    completed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
-    completed_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    # Who marked this team's part done, and when.
+    done_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    done_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
-    completer: Mapped[Optional["Members"]] = relationship("Members")
+    done_by_member: Mapped[Optional["Members"]] = relationship("Members")
 
 
 class PipelineNotificationKind(str, enum.Enum):
@@ -1346,6 +1378,66 @@ class PipelineNotificationReads(Base):
     read_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+
+
+class PipelineHistoryAction(str, enum.Enum):
+    """Everything that can happen to a request (or to the calendar), as ``pipeline_history`` records it."""
+
+    BOOKED = "booked"
+    REDATED = "redated"
+    DETAILS_EDITED = "details_edited"
+    BRIEF_EDITED = "brief_edited"
+    SUBMITTED = "submitted"
+    RETURNED = "returned"
+    RESUBMITTED = "resubmitted"
+    CANCELLED = "cancelled"
+    CONFIRMATION_EDITED = "confirmation_edited"
+    DATES_MOVED = "dates_moved"
+    POSTER_UPLOADED = "poster_uploaded"
+    TASK_DONE = "task_done"
+    PUBLISHED = "published"
+    HOLD_EXPIRED = "hold_expired"
+    DATES_BANNED = "dates_banned"
+    PENALTY_GROWN = "penalty_grown"
+    DAYS_BANNED = "days_banned"
+    DAYS_UNBANNED = "days_unbanned"
+    EVENT_DELETED = "event_deleted"
+
+
+class PipelineHistory(Base):
+    """Who did what to a request, and when: one row per step, edit or automatic change, never updated after.
+
+    ``actor_id`` is null for what the sweep did on its own. Calendar-wide
+    actions (banning days) have no request. ``request_id`` has no foreign key
+    on purpose: deleting a published event deletes its request, and its history
+    must outlive it, so the id stays, with the title and department copied in. Saving a form as you type would be a
+    row per keystroke pause, so consecutive edits of the same thing by the same
+    person within 30 minutes are one row, its time the last edit's.
+    """
+
+    __tablename__ = "pipeline_history"
+    __table_args__ = (
+        ForeignKeyConstraint(["actor_id"], ["members.id"], name="fk_pipeline_history_actor", ondelete="SET NULL"),
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_pipeline_history_department", ondelete="SET NULL"
+        ),
+        Index("ix_pipeline_history_request", "request_id", "at"),
+        Index("ix_pipeline_history_actor", "actor_id", "at"),
+        Index("fk_pipeline_history_department", "department_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    request_id: Mapped[Optional[str]] = mapped_column(UUID_CHAR)
+    actor_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    action: Mapped[PipelineHistoryAction] = mapped_column(_enum(PipelineHistoryAction), nullable=False)
+    at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSON)
+    request_title: Mapped[Optional[str]] = mapped_column(
+        VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
+    )
+    department_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+
+    actor: Mapped[Optional["Members"]] = relationship("Members")
 
 
 class PipelinePenalties(Base):
