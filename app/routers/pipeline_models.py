@@ -122,6 +122,10 @@ class EventDetails(BaseModel):
     # 0 saves with the draft like any half-filled field; submit needs at least 1.
     expected_accepted: int | None = Field(default=None, ge=0, le=100000)
     help_needed: str | None = Field(default=None, max_length=5000)
+    # The points tier: one of the composite (department, member) action pairs from ``GET /actions``.
+    # Sent together; submit reports either missing as ``details.points_tier``.
+    department_action_id: int | None = Field(default=None, gt=0)
+    member_action_id: int | None = Field(default=None, gt=0)
 
 
 class UpdateDetailsRequest(EventDetails):
@@ -152,6 +156,11 @@ class TaskResponse(BaseModel):
     status: EventRequestTaskStatus
     brief: dict | None
     brief_version: int | None
+    # What the team hands over (app/services/event_deliverables.py). Logistics'
+    # confirmation shows prefilled from the request until Logistics saves it.
+    deliverable: dict | None
+    # What the team still has to hand over before it can finish: "confirm.venue", "poster.poster_url".
+    deliverable_missing: list[str]
     opened_at: UtcDateTime | None
     completed_at: UtcDateTime | None
     completed_by: PersonRef | None
@@ -254,8 +263,10 @@ class InboxItem(BaseModel):
 
 
 class PublishRequest(BaseModel):
-    """The points tier: one of the composite (department, member) action pairs from ``GET /actions``."""
-
-    department_action_id: int = Field(gt=0)
-    member_action_id: int = Field(gt=0)
     image_url: str | None = Field(default=None, max_length=500)
+
+
+class SaveDeliverableRequest(BaseModel):
+    """A draft of what the team hands over, saved as it is. Its fields are the team's form (app/services/event_deliverables.py)."""
+
+    deliverable: dict

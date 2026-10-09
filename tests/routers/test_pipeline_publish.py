@@ -15,7 +15,7 @@ from app.DB.schema import (
     Modifications,
     PipelinePenalties,
 )
-from tests.pipeline_support import book_complete, submit
+from tests.pipeline_support import book_complete, finish, submit
 
 
 @pytest.fixture
@@ -39,9 +39,7 @@ def world(pipeline, seed_refs):
 def finish_all(pipeline, world):
     pipeline.sign_in(world["admin"], super_admin=True)
     for team in ("design", "logistics", "media"):
-        assert (
-            pipeline.client.post(f"/pipeline/requests/{world['request_id']}/tasks/{team}/complete").status_code == 200
-        )
+        assert finish(pipeline, world["request_id"], team).status_code == 200
     pipeline.sign_in(world["leader"])
 
 
@@ -143,7 +141,7 @@ def test_a_team_finishing_after_an_early_publish_does_not_reopen_it(pipeline, wo
     pipeline.sign_in(world["admin"], super_admin=True)
     url = f"/pipeline/requests/{world['request_id']}"
     for team in ("design", "logistics"):
-        assert pipeline.client.post(f"{url}/tasks/{team}/complete").status_code == 200
+        assert finish(pipeline, world["request_id"], team).status_code == 200
     published = publish(pipeline, world)
     assert published.status_code == 200, published.text
     assert published.json()["stage"] == "published"

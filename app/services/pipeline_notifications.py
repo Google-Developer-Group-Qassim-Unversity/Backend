@@ -108,6 +108,11 @@ _COPY = {
         "أنهت كل الأقسام عملها، ويمكنكم نشر الفعالية الآن",
         "Every team is done; you can publish the event now",
     ),
+    PipelineNotificationKind.DATES_CHANGED: (
+        "تغيّرت تواريخ فعاليتكم · Your event's dates changed",
+        "نقل قسم اللوجستيات فعاليتكم إلى تواريخ أخرى حسب الحجز المتاح",
+        "Logistics moved your event to other dates, the ones it could book",
+    ),
     PipelineNotificationKind.HOLD_EXPIRED: (
         "انتهت مهلة حجز تواريخكم · Your date hold ran out",
         "انتهت مهلة الـ٢٤ ساعة فأُلغي حجز التواريخ. البيانات محفوظة؛ احجزوا تواريخ جديدة.",
