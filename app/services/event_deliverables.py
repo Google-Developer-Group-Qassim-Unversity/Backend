@@ -41,8 +41,6 @@ class LogisticsDeliverableV1(BaseModel):
     room: str | None = Field(default=None, max_length=100)
     # Asked when any day is online.
     meet_link: str | None = Field(default=None, max_length=500)
-    # The club member who answers for the event; the event's responsible person.
-    responsible_member_id: int | None = Field(default=None, gt=0)
     event_type: EventRequestType | None = None
     description: str | None = Field(default=None, max_length=5000)
 
@@ -78,7 +76,6 @@ def logistics_prefill(request: EventRequests, brief: dict | None) -> LogisticsDe
         daily_end_time=request.daily_end_time,
         venue=brief.get("venue"),
         room=brief.get("room"),
-        responsible_member_id=request.created_by,
         event_type=request.event_type,
         description=request.description,
     )
@@ -117,14 +114,7 @@ def missing(team: PipelineTeam, deliverable: dict | BaseModel | None) -> list[st
 
     assert isinstance(parsed, LogisticsDeliverableV1)
     result = []
-    for field in (
-        "start_date",
-        "end_date",
-        "daily_start_time",
-        "daily_end_time",
-        "responsible_member_id",
-        "event_type",
-    ):
+    for field in ("start_date", "end_date", "daily_start_time", "daily_end_time", "event_type"):
         if getattr(parsed, field) is None:
             result.append(prefix + field)
     if not (parsed.description and parsed.description.strip()):

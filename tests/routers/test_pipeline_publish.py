@@ -220,11 +220,10 @@ def test_deleting_a_published_event_takes_everything_with_it(pipeline, world):
 
 
 def test_the_event_is_what_logistics_confirmed(pipeline, world):
-    """Logistics booked another day, time, room and responsible person; the event says so, not the request."""
+    """Logistics booked another day, time and room; the event says so, not the request."""
     pipeline.sign_in(world["admin"], super_admin=True)
     url = f"/pipeline/requests/{world['request_id']}"
     finish(pipeline, world["request_id"], "design")
-    other = pipeline.officer(pipeline.department("Logistics"), name="On the ground")
     tasks = pipeline.client.get(url).json()["tasks"]
     confirmation = next(t for t in tasks if t["team"] == "logistics")["deliverable"]
     confirmation.update(
@@ -235,7 +234,6 @@ def test_the_event_is_what_logistics_confirmed(pipeline, world):
         daily_end_time="15:30",
         venue="بيت الثقافة",
         room="Hall 2",
-        responsible_member_id=other.id,
         description="Confirmed description",
     )
     assert pipeline.client.put(f"{url}/deliverables/logistics", json={"deliverable": confirmation}).status_code == 200
@@ -247,7 +245,7 @@ def test_the_event_is_what_logistics_confirmed(pipeline, world):
     assert event.location == "بيت الثقافة · Hall 2"
     assert event.meeting_url is None
     assert event.description == "Confirmed description"
-    assert event.responsible_member_id == other.id
+    assert event.responsible_member_id == world["leader"].id
 
 
 def test_publish_needs_a_points_tier(pipeline, world):
