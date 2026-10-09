@@ -23,6 +23,7 @@ from app.DB.schema import (
 )
 from app.DB.semesters import get_semester_by_hijri_code
 from app.main import app
+from tests.outbound import OutboundRecorder
 from tests.r2_support import PNG
 
 # A Wednesday in Riyadh, inside the seeded Summer 2026 (475) the suite pins as current.
@@ -31,6 +32,10 @@ FROZEN_NOW = datetime(2026, 7, 15, 9, 0, 0)  # 12:00 in Riyadh
 
 class Pipeline:
     """Builds the rows a pipeline test needs and signs in as whoever it created."""
+
+    # Set by the ``pipeline`` fixture.
+    outbound: OutboundRecorder
+    tier: dict[str, int]
 
     def __init__(self, session, client, monkeypatch):
         self.session = session
