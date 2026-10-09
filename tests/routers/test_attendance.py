@@ -583,3 +583,17 @@ def test_mark_attendance_early_hours_past_event(
         token = make_attendance_token(event_id)
         response = clerk_client.post(f"/attendance/{event_id}?token={token}")
         assert_2xx(response)
+
+
+def test_attendance_an_admin_takes_or_removes_is_in_the_event_history(admin_client: TestClient, seed_refs):
+    event_id = create_attendance_ready_event(admin_client)
+    admin_client.post(f"/attendance/{event_id}/manual", json={"member_ids": [seed_refs.ahmed.id], "day": 1})
+    admin_client.request(
+        "DELETE", f"/attendance/{event_id}/manual", json={"member_ids": [seed_refs.ahmed.id], "day": 1}
+    )
+    items = admin_client.get(f"/events/{event_id}/history").json()["items"]
+    ahmed = {"member_id": seed_refs.ahmed.id, "name": seed_refs.ahmed.name}
+    assert [(i["action"], i["details"]) for i in items[-2:]] == [
+        ("attendance_marked", {"days": [1], "members": [ahmed]}),
+        ("attendance_removed", {"day": 1, "members": [ahmed]}),
+    ]

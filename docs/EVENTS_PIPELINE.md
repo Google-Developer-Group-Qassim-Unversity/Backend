@@ -8,7 +8,7 @@ plan and every decision are on Notion (GDG → Features → Events pipeline).
 
 `draft` (24-hour hold) → `in_review` (Design + Logistics) ⇄ `returned` (once,
 12 hours to fix) → `media` (Design done) → `ready` (all three done) →
-`published` (a draft row in `events`). `cancelled` drops a draft.
+`published` (an open row in `events`). `cancelled` drops a draft.
 
 ## Who can do what
 
@@ -32,7 +32,45 @@ expired holds, growing late penalties - every 5 minutes inside the backend.
 All four workers run the loop; `GET_LOCK('pipeline_sweep')` lets one sweep at
 a time. `POST /pipeline/sweep` (super admin) runs it now.
 
-## Emails: trial mode
+## Deliverables
+
+What a team hands back, the way a brief is what the requesting team asks for:
+JSON on the team's `event_request_tasks` row (`deliverable`,
+`deliverable_version`), one Pydantic model per team in
+`app/services/event_deliverables.py`. A team cannot finish without it.
+
+- **Logistics confirms the event as it was booked**: dates, each day's mode,
+  daily times, venue and room, the Google Meet link for online days, the
+  responsible club member (`GET /pipeline/people`), event type and
+  description. It opens prefilled from the request and the Logistics brief
+  (`PUT .../deliverables/logistics` saves a draft). Confirming
+  (`POST .../tasks/logistics/complete`) checks it, and other dates move the
+  request under the booking rules, inside the booking lock; the requesting
+  department gets a `dates_changed` notification and email.
+- **Design uploads the poster** (`POST .../poster`, PNG/JPEG/WebP up to
+  10 MB, stored in R2 under `event-images/`). Design can replace it until the
+  event is published.
+- Media still finishes with "Mark done".
+
+## Who did what
+
+Every "who" sits next to its "when". On `event_requests`:
+`requested_by`/`requested_at`, `submitted_by`/`submitted_at`,
+`returned_by`/`returned_at`, `published_by`/`published_at`,
+`cancelled_by`/`cancelled_at`. On each team's task: `done_by`/`done_at`.
+
+`pipeline_history` (`app/services/pipeline_history.py`) keeps everything in
+order, written in the same transaction as the change: booking, new dates,
+edits (with a flag when a super admin edits after submit), submit, return
+(with the notes), resubmit (with any lateness), Logistics' confirmation edits
+and date moves (from and to), every poster upload (with the one it replaced),
+each team finishing, publish, cancel, bans (on the calendar and on each
+request they undated), and a published event being deleted. What the sweep
+does on its own has no actor. Typing into a form is one row per person per 30
+minutes. `request_id` has no foreign key, so the history outlives a request
+deleted with its event. The request page shows it as "Who did what".
+
+## Emails
 
 `PIPELINE_EMAILS_LIVE` (default `false`). Off, a department email goes only to
 the person whose action sent it (for the sweep: whoever booked), subject
@@ -44,11 +82,15 @@ it goes to every member of the department's current roster. Every send is an
 
 `POST /pipeline/requests/{id}/publish` creates the event through
 `app/services/events.create_full_event` - the same code as `POST /events/` -
-as a **draft**, with the points tier the team picks. A late penalty is taken
-off the department's log for that event as a `discount` modification, once.
+**open**, with nothing typed again: the points tier the team picked in the
+request's details (one of `COMPOSITE_ACTION_IDS`, see
+`docs/HARDCODED_ACTION_IDS.md`), the when/where/description/Meet link and
+responsible person from Logistics' confirmation, and Design's poster as the
+image. A late penalty is taken off the department's log for that event as a
+`discount` modification, once.
 
-## Trial limits
+## Not built yet
 
-- Brief attachments are links, not uploads (`/upload` is admin-only).
-- Deliverables are a "mark done" check.
-- No Google Calendar / Notion sync.
+- Brief attachments are links, not uploads.
+- Design's Notion request (waiting on the shape the design team wants).
+- Media's deliverables; no Google Calendar sync.

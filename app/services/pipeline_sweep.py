@@ -30,10 +30,12 @@ from app.DB.schema import (
     EventRequests,
     EventRequestStage,
     EventRequestUndatedReason,
+    PipelineHistoryAction,
     PipelineNotificationKind,
 )
 from app.services import event_pipeline
 from app.services import event_pipeline_clock as clock
+from app.services import pipeline_history as history
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail, send_pipeline_email_job
 
@@ -62,7 +64,7 @@ def expire_holds(session: Session, now: datetime, result: SweepResult) -> None:
             EventRequests.hold_expires_at.is_not(None),
             EventRequests.hold_expires_at <= now,
         )
-        .options(selectinload(EventRequests.creator), selectinload(EventRequests.department))
+        .options(selectinload(EventRequests.requester), selectinload(EventRequests.department))
         .with_for_update()
     ).all()
     for request in rows:
@@ -72,9 +74,10 @@ def expire_holds(session: Session, now: datetime, result: SweepResult) -> None:
         request.hold_expires_at = None
         request.undated_reason = EventRequestUndatedReason.HOLD_EXPIRED
         notifications.notify(session, request.department_id, request, PipelineNotificationKind.HOLD_EXPIRED, lost)
+        history.record(session, PipelineHistoryAction.HOLD_EXPIRED, None, request, lost, at=now)
         # Nobody clicked anything, so the trial copy goes to whoever booked it.
         email = notifications.department_email(
-            session, request.department_id, request, PipelineNotificationKind.HOLD_EXPIRED, request.creator
+            session, request.department_id, request, PipelineNotificationKind.HOLD_EXPIRED, request.requester
         )
         if email:
             email.clicked = False
@@ -99,6 +102,14 @@ def grow_penalties(session: Session, now: datetime, result: SweepResult) -> None
         days_before = before.late_days if before else 0
         penalty = event_pipeline.record_penalty(session, request, now)
         if penalty is not None and penalty.late_days != days_before:
+            history.record(
+                session,
+                PipelineHistoryAction.PENALTY_GROWN,
+                None,
+                request,
+                {"late_days": penalty.late_days, "points": penalty.points},
+                at=now,
+            )
             result.penalties_grown += 1
 
 

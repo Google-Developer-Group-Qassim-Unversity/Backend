@@ -6,7 +6,8 @@ from datetime import datetime
 from pydantic.types import JsonValue
 from app.member_names import validate_member_name
 from app.config import config
-from app.DB.schema import EventsLocationType, MembersGender, FormType
+from app.DB.schema import EventHistoryAction, EventsLocationType, MembersGender, FormType
+from app.routers.club_structure_models import UtcDateTime
 
 # A bare Google Meet code, e.g. "abc-defg-hij" - no scheme, no domain.
 _MEET_CODE_RE = re.compile(r"^[a-zA-Z]{2,5}-[a-zA-Z]{2,5}-[a-zA-Z]{2,5}$")
@@ -103,6 +104,22 @@ class EventDetailsModel(BaseClassModel):
     # Null on events created before these were recorded, or if the member was deleted.
     responsible: EventPerson_model | None = None
     created_by: EventPerson_model | None = None
+
+
+class EventHistoryItem(BaseClassModel):
+    """One thing an admin did to the event (app/services/event_history.py)."""
+
+    action: EventHistoryAction
+    at: UtcDateTime
+    actor: EventPerson_model | None
+    details: dict | None
+
+
+class EventHistoryResponse(BaseClassModel):
+    # Oldest first.
+    items: list[EventHistoryItem]
+    # The pipeline request that published the event, whose history has the steps before.
+    pipeline_request_id: str | None
 
 
 class UpdateEventModel(BaseClassModel):

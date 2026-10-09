@@ -3,11 +3,24 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
+import uuid
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile, status
 
 from app.DB import event_pipeline as queries
-from app.DB.schema import EventRequests, EventRequestStage, PipelineTeam
+from app.DB.schema import (
+    EventRequests,
+    EventRequestStage,
+    EventRequestTasks,
+    EventRequestTaskStatus,
+    Members,
+    PipelineTeam,
+)
+from app.clients import R2Client
+from app.config import config
 from app.dependencies import DB
+from app.exceptions import PipelineConflict
+from app.routers.upload import get_extension
 
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.pipeline_models import (
@@ -15,22 +28,25 @@ from app.routers.pipeline_models import (
     EventDetails,
     EventRequestDetail,
     EventRequestSummary,
+    HistoryItem,
     PenaltyResponse,
     RequestActions,
     ReturnRequest,
     PaginatedEventRequests,
     PersonRef,
     PipelineDepartment,
-    PublishRequest,
     RedateRequest,
     SaveBriefRequest,
+    SaveDeliverableRequest,
     TaskResponse,
     UpdateDetailsRequest,
 )
 from app.routers.responses import DetailResponse
 from app.services import event_briefs
+from app.services import event_deliverables
 from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
+from app.services import pipeline_history
 from app.services import pipeline_notifications as notifications
 from app.services.permissions.dependencies import Caller, CurrentCaller
 from app.services.permissions.catalogue import Perm
@@ -53,7 +69,7 @@ def summary(request: EventRequests) -> EventRequestSummary:
         end_date=request.end_date,
         hold_expires_at=request.hold_expires_at,
         undated_reason=request.undated_reason,
-        created_at=request.created_at,
+        requested_at=request.requested_at,
     )
 
 
@@ -74,6 +90,29 @@ def _actions(session, caller: Caller, request: EventRequests) -> RequestActions:
         can_resubmit=requester and request.stage == EventRequestStage.RETURNED,
         complete=[t for t in service.ALL_TEAMS if service.can_complete(session, caller, request, t)],
         can_publish=service.can_publish(caller, request),
+        can_upload_poster=service.can_upload_poster(caller, request),
+    )
+
+
+def person(member: Members | None) -> PersonRef | None:
+    return PersonRef(member_id=member.id, name=member.name) if member else None
+
+
+def task_response(request: EventRequests, task: EventRequestTasks) -> TaskResponse:
+    deliverable = event_deliverables.shown_deliverable(request, task)
+    reached = task.status != EventRequestTaskStatus.BRIEF
+    return TaskResponse(
+        team=task.team,
+        status=task.status,
+        brief=task.brief,
+        brief_version=task.brief_version,
+        deliverable=deliverable,
+        deliverable_missing=event_deliverables.missing(task.team, deliverable)
+        if reached and task.team in event_deliverables.DELIVERABLE_MODELS
+        else [],
+        opened_at=task.opened_at,
+        done_at=task.done_at,
+        done_by=person(task.done_by_member),
     )
 
 
@@ -81,7 +120,11 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
     session.refresh(request)
     return EventRequestDetail(
         **summary(request).model_dump(),
-        created_by=PersonRef(member_id=request.creator.id, name=request.creator.name),
+        requested_by=PersonRef(member_id=request.requester.id, name=request.requester.name),
+        submitted_by=person(request.submitter),
+        returned_by=person(request.returner),
+        published_at=request.published_at,
+        published_by=person(request.publisher),
         details=EventDetails(
             title=request.title,
             description=request.description,
@@ -97,6 +140,8 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
             registration=request.registration,
             expected_accepted=request.expected_accepted,
             help_needed=request.help_needed,
+            department_action_id=request.department_action_id,
+            member_action_id=request.member_action_id,
         ),
         partners=[PipelineDepartment.model_validate(p.department) for p in request.partners],
         within_official_hours=service.within_official_hours(request),
@@ -104,20 +149,7 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
         updated_at=request.updated_at,
         event_id=request.event_id,
         can_edit=service.can_edit(caller, request),
-        tasks=[
-            TaskResponse(
-                team=task.team,
-                status=task.status,
-                brief=task.brief,
-                brief_version=task.brief_version,
-                opened_at=task.opened_at,
-                completed_at=task.completed_at,
-                completed_by=PersonRef(member_id=task.completer.id, name=task.completer.name)
-                if task.completer
-                else None,
-            )
-            for task in request.tasks
-        ],
+        tasks=[task_response(request, task) for task in request.tasks],
         missing=event_briefs.missing_fields(request)
         if request.stage in (EventRequestStage.DRAFT, EventRequestStage.RETURNED)
         else [],
@@ -128,6 +160,10 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
         return_deadline=service.return_deadline(request),
         penalty=_penalty(session, request),
         actions=_actions(session, caller, request),
+        history=[
+            HistoryItem(action=row.action, at=row.at, actor=person(row.actor), details=row.details)
+            for row in pipeline_history.for_request(session, request.id)
+        ],
         now=clock.now(),
     )
 
@@ -210,6 +246,40 @@ def save_event_request_brief(
     return detail(session, caller, request)
 
 
+@router.put("/{request_id}/deliverables/{team}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def save_event_request_deliverable(
+    request_id: str, team: PipelineTeam, body: SaveDeliverableRequest, session: DB, caller: CurrentCaller
+):
+    """Save Logistics' confirmation as a draft while its part is open; confirming checks it."""
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    service.save_deliverable(session, caller, request, team, body.deliverable)
+    session.commit()
+    return detail(session, caller, request)
+
+
+POSTER_TYPES = {"image/png", "image/jpeg", "image/webp"}
+MAX_POSTER_BYTES = 10 * 1024 * 1024
+
+
+@router.post("/{request_id}/poster", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def upload_event_request_poster(
+    request_id: str, file: Annotated[UploadFile, File()], session: DB, caller: CurrentCaller, client: R2Client
+):
+    """Design hands over the poster: stored in R2 like any event image, and the event's image once published."""
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    service.check_poster_upload(session, caller, request)
+    if file.content_type not in POSTER_TYPES:
+        raise PipelineConflict("not_an_image", "The poster must be a PNG, JPEG or WebP image", 422)
+    content = file.file.read(MAX_POSTER_BYTES + 1)
+    if len(content) > MAX_POSTER_BYTES:
+        raise PipelineConflict("too_large", "The poster must be 10 MB or smaller", 422)
+    key = f"event-images/{uuid.uuid4()}{get_extension(file.filename, file.content_type)}"
+    client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
+    service.set_poster(session, caller, request, f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}")
+    session.commit()
+    return detail(session, caller, request)
+
+
 @router.post("/{request_id}/submit", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
 def submit_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
     """Send a complete request to Design and Logistics. A 422 lists every missing field."""
@@ -251,19 +321,25 @@ def resubmit_event_request(request_id: str, session: DB, caller: CurrentCaller, 
 def complete_event_request_task(
     request_id: str, team: PipelineTeam, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
 ):
-    """A team marks its part done."""
-    request = service.get_request_for(session, caller, request_id, lock=True)
-    emails = service.complete(session, caller, request, team)
-    session.commit()
+    """A team finishes its part. Logistics finishes by confirming the event, which may move its dates."""
+    if team == PipelineTeam.LOGISTICS:
+        with service.booking_lock(session):
+            request = service.get_request_for(session, caller, request_id, lock=True)
+            emails = service.complete(session, caller, request, team)
+            session.commit()
+    else:
+        request = service.get_request_for(session, caller, request_id, lock=True)
+        emails = service.complete(session, caller, request, team)
+        session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
     return detail(session, caller, request)
 
 
 @router.post("/{request_id}/publish", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def publish_event_request(request_id: str, body: PublishRequest, session: DB, caller: CurrentCaller):
-    """Turn a ready request into a real event in /events, created as a draft for admins to review."""
+def publish_event_request(request_id: str, session: DB, caller: CurrentCaller):
+    """Turn a ready request into a real, open event in /events, from what the teams handed over."""
     request = service.get_request_for(session, caller, request_id, lock=True)
-    service.publish(session, caller, request, body.department_action_id, body.member_action_id, body.image_url)
+    service.publish(session, caller, request)
     session.commit()
     # Best-effort, as after POST /events/: the leaderboard app caches events.
     try:
