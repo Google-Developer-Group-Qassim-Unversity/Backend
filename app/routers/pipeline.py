@@ -6,7 +6,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
-from app.DB import club_structure as club_queries
 from app.DB import pipeline_teams as team_queries
 from app.DB.schema import EventRequests, PipelineTeam
 from app.dependencies import DB
@@ -24,7 +23,6 @@ from app.routers.pipeline_models import (
     NotificationItem,
     NotificationRequest,
     PaginatedNotifications,
-    PersonRef,
     UnbanDaysRequest,
     PipelineDepartment,
     PipelineMeResponse,
@@ -39,7 +37,6 @@ from app.services.permissions.catalogue import OFFICER_ROLES
 from app.services.permissions.dependencies import Caller, CurrentCaller
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.guards import Require, Staff, SuperAdmin
-from app.semesters import current_semester
 
 logger = logging.getLogger(__name__)
 
@@ -59,19 +56,6 @@ def _team_entries(session) -> list[PipelineTeamEntry]:
         for team in PipelineTeam
         if team in teams
     ]
-
-
-@router.get("/people", status_code=status.HTTP_200_OK, response_model=list[PersonRef])
-def list_pipeline_people(session: DB, caller: CurrentCaller):
-    """This semester's club members, once each: who Logistics can name responsible for an event."""
-    _require_access(caller)
-    semester = current_semester(session)
-    if semester is None:
-        return []
-    people: dict[int, PersonRef] = {}
-    for row in club_queries.get_memberships(session, semester.id):
-        people.setdefault(row.member_id, PersonRef(member_id=row.member_id, name=row.member.name))
-    return sorted(people.values(), key=lambda p: p.name)
 
 
 @router.get("/me", status_code=status.HTTP_200_OK, response_model=PipelineMeResponse)

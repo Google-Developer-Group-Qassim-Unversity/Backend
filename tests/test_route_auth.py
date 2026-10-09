@@ -222,7 +222,6 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /pipeline/calendar": "admin.access",
     "PUT /pipeline/calendar/bans": "pipeline.bans",
     "DELETE /pipeline/calendar/bans": "pipeline.bans",
-    "GET /pipeline/people": "admin.access",
     "POST /pipeline/requests": "admin.access",
     "GET /pipeline/requests": "admin.access",
     "GET /pipeline/requests/{request_id}": "admin.access",

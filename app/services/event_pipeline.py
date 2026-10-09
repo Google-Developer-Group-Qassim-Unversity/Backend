@@ -27,7 +27,6 @@ from app.DB import actions as action_queries
 from app.DB import logs as log_queries
 from app.DB.schema import (
     Departments,
-    Members,
     EventsLocationType,
     EventRequests,
     EventRequestStage,
@@ -682,9 +681,6 @@ def save_deliverable(
         raise PipelineConflict("no_form", f"The {team.value} team hands over no form", 422)
     _require_open_task(session, caller, request, team)
     parsed = event_deliverables.parse(team, deliverable)
-    responsible = parsed.get("responsible_member_id")
-    if responsible is not None and session.get(Members, responsible) is None:
-        raise NotFound("Member", responsible)
     task = get_task(request, team)
     task.deliverable = parsed  # type: ignore[union-attr]
     task.deliverable_version = event_deliverables.DELIVERABLE_VERSION  # type: ignore[union-attr]
@@ -734,8 +730,6 @@ def _apply_confirmation(
     if missing:
         raise IncompleteRequest(missing)
     assert confirmation is not None and confirmation.start_date and confirmation.end_date
-    if confirmation.responsible_member_id and session.get(Members, confirmation.responsible_member_id) is None:
-        raise NotFound("Member", confirmation.responsible_member_id)
     task.deliverable = confirmation.model_dump(mode="json")
     task.deliverable_version = event_deliverables.DELIVERABLE_VERSION
 
@@ -836,8 +830,8 @@ def can_publish(caller: Caller, request: EventRequests) -> bool:
     return can_request_for(caller, request.department_id) and request.stage == EventRequestStage.READY
 
 
-def event_for(request: EventRequests) -> tuple[createEvent_model, int]:
-    """The ``POST /events/`` payload a ready request becomes, and who is responsible for it.
+def event_for(request: EventRequests) -> createEvent_model:
+    """The ``POST /events/`` payload a ready request becomes.
 
     Nothing is typed again at publish. The when, where and what come from Logistics' confirmation (or, for a
     request a super admin publishes before Logistics confirmed, from the request
@@ -874,14 +868,14 @@ def event_for(request: EventRequests) -> tuple[createEvent_model, int]:
         department_action_id=request.department_action_id,  # type: ignore[arg-type]
         member_action_id=request.member_action_id,  # type: ignore[arg-type]
         department_id=request.department_id,
-    ), confirmed.responsible_member_id or request.created_by
+    )
 
 
 def publish(session: Session, caller: Caller, request: EventRequests) -> int:
     """Create the real event, open, in the same transaction, the same way ``POST /events/`` does.
 
     Everything comes from the request and what the teams handed over
-    (``event_for``); the responsible person is the one Logistics confirmed.
+    (``event_for``). The member who requested it is responsible for it.
 
     Any late penalty is taken off the department once, on a log of its own for
     the new event, the way custom points are: the event's department log has a
@@ -896,9 +890,8 @@ def publish(session: Session, caller: Caller, request: EventRequests) -> int:
     if request.department_action_id is None or request.member_action_id is None:
         raise PipelineConflict("no_points_tier", "Pick the points tier in the request's details first")
     check_points_tier(session, request.department_action_id, request.member_action_id)
-    payload, responsible_member_id = event_for(request)
     event, _department_log = create_full_event(
-        session, payload, responsible_member_id=responsible_member_id, created_by=caller.member.id
+        session, event_for(request), responsible_member_id=request.created_by, created_by=caller.member.id
     )
     penalty = get_penalty(session, request)
     if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:

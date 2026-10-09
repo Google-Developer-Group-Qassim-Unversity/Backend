@@ -51,7 +51,6 @@ def test_the_confirmation_opens_prefilled_from_the_request(pipeline, world):
         "venue": "التيك فالي (60)",
         "room": None,
         "meet_link": None,
-        "responsible_member_id": world["people"]["ai"].id,
         "event_type": "workshop",
         "description": "Hands-on machine learning",
     }
@@ -83,10 +82,6 @@ def test_a_value_of_the_wrong_type_is_refused(pipeline, world):
     response = save(pipeline, world, daily_start_time="soon")
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["body", "deliverable", "daily_start_time"]
-
-
-def test_the_responsible_person_must_be_a_member(pipeline, world):
-    assert save(pipeline, world, responsible_member_id=999999).status_code == 404
 
 
 def test_only_logistics_fills_in_the_confirmation(pipeline, world):
@@ -171,13 +166,6 @@ def test_the_points_tier_must_be_one_of_the_pairs(pipeline, seed_refs):
 def test_finished_teams_hand_over_nothing_more(pipeline, world):
     assert finish(pipeline, world["request_id"], "logistics").status_code == 200
     assert save(pipeline, world, room="B12").status_code == 409
-
-
-def test_people_lists_this_semesters_club_members(pipeline, world):
-    people = pipeline.client.get("/pipeline/people").json()
-    ids = [p["member_id"] for p in people]
-    assert {m.id for m in world["people"].values()} <= set(ids)
-    assert len(ids) == len(set(ids))
 
 
 # --------------------------------------------------------------------------- Design's poster
