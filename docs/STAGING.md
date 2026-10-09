@@ -70,9 +70,10 @@ production instance would also be a session on `admin.gdg-q.com`, so the code
 refuses to run with a live (`sk_live_`) key even if `STAGING_OTP` is set.
 
 The development instance's session token has no email claim, so the route
-writes the email into the user's `publicMetadata`; the backend's
-`resolve_member` finds the member by `metadata.email` and stores the new Clerk
-id on the `scores_staging` row.
+writes the email into the user's `publicMetadata`, and for a university address
+(`<uni id>@qu.edu.sa`) the uni id too, since many rows hold a personal email.
+The backend's `resolve_member` finds the member by `metadata.uni_id`, then
+`metadata.email`, and stores the new Clerk id on the `scores_staging` row.
 
 ## What staging still shares with production
 
