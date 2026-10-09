@@ -24,15 +24,16 @@ at; `ALEMBIC_DATABASE_URL` is set in every env but nothing reads it.
 
 ## Deploying
 
-Merge or push to `dev`. `.github/workflows/deploy.yml` deploys whichever half
-changed, exactly as it does for `main`: it migrates `scores_staging` to the
-release's head first, so a broken migration fails the deploy and leaves the
-running staging app alone. Run the workflow by hand on `dev` to redeploy both
-halves.
+Every change goes through `dev`; nothing is pushed or PR'd into `main` directly.
 
-Getting a change to production stays the same: a PR into `main`. `dev` is not
-merged into `main`; it is reset to `main` whenever it drifts too far
-(`git push --force origin main:dev`, after checking nobody is mid-test).
+1. Branch from `dev`, open the PR into `dev`. PR checks run there.
+2. Merging it deploys staging. `.github/workflows/deploy.yml` deploys whichever
+   half changed and migrates `scores_staging` to the release's head first, so a
+   broken migration fails the deploy and leaves the running staging app alone.
+3. Once staging looks right, open a `dev` -> `main` PR and merge it with a merge
+   commit. That push to `main` deploys production the same way.
+
+Run the workflow by hand on either branch to redeploy both halves.
 
 ## Emails never reach real members
 
