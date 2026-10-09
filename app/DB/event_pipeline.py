@@ -44,7 +44,7 @@ def get_request(session: Session, request_id: str, lock: bool = False) -> EventR
         .where(EventRequests.id == request_id)
         .options(
             selectinload(EventRequests.department),
-            selectinload(EventRequests.creator),
+            selectinload(EventRequests.requester),
             selectinload(EventRequests.partners).selectinload(EventRequestPartners.department),
         )
     )
@@ -101,7 +101,7 @@ def list_requests(
     total = session.scalar(select(func.count()).select_from(statement.subquery())) or 0
     rows = session.scalars(
         statement.options(selectinload(EventRequests.department))
-        .order_by(EventRequests.created_at.desc(), EventRequests.id.desc())
+        .order_by(EventRequests.requested_at.desc(), EventRequests.id.desc())
         .limit(limit)
         .offset(offset)
     ).all()
@@ -125,3 +125,8 @@ def lock_pipeline(session: Session, name: str, wait: bool = True) -> bool:
     statement = select(PipelineLocks.name).where(PipelineLocks.name == name)
     statement = statement.with_for_update() if wait else statement.with_for_update(skip_locked=True)
     return session.scalar(statement) is not None
+
+
+def get_request_for_event(session: Session, event_id: int) -> EventRequests | None:
+    """The pipeline request that published ``event_id``, if one did."""
+    return session.scalar(select(EventRequests).where(EventRequests.event_id == event_id))

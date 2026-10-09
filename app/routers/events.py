@@ -36,7 +36,9 @@ from typing import Annotated, Literal
 from app.exceptions import DataIntegrityError
 from app.dependencies import DB
 from sqlalchemy.orm import Session
-from app.DB.schema import EventsLocationType, EventsStatus, FormType, Members
+from app.DB import event_pipeline as pipeline_queries
+from app.DB.schema import EventsLocationType, EventsStatus, FormType, Members, PipelineHistoryAction
+from app.services import pipeline_history
 
 from app.routers.responses import DetailResponse
 from app.services.permissions.catalogue import Perm
@@ -324,7 +326,7 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB):
     dependencies=[Depends(Require(Perm.EVENTS_DELETE, event_departments))],
     response_model=DetailResponse,
 )
-def delete_event(event_id: int, session: DB):
+def delete_event(event_id: int, session: DB, member: CurrentMember):
     logger.info(f"Deleting Event [{event_id}]")
 
     event = events_queries.get_event_by_id(session, event_id)
@@ -337,7 +339,17 @@ def delete_event(event_id: int, session: DB):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only draft events can be deleted")
 
     # A pipeline request that published it goes too, through the foreign key:
-    # its tasks, penalty and points, and its days are free again.
+    # its tasks, penalty and points, and its days are free again. Its history
+    # stays, with this as the last entry.
+    request = pipeline_queries.get_request_for_event(session, event_id)
+    if request is not None:
+        pipeline_history.record(
+            session,
+            PipelineHistoryAction.EVENT_DELETED,
+            member,
+            request,
+            {"event_id": event_id, "event_name": event.name},
+        )
     event_name = event.name
     events_queries.delete_event(session, event_id)
     session.commit()
