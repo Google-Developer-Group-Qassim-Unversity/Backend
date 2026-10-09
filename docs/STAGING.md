@@ -14,6 +14,8 @@ through a change on real data before it reaches `main`.
 | Backend (pm2)      | `GDG-backend`, port 7501   | `GDG-backend-staging`, port 7502, 1 worker |
 | Frontend (docker)  | `gdg-admin-web`, port 3012 | `gdg-admin-web-staging`, port 3013 |
 | Sentry environment | `production`               | `staging`                      |
+| Clerk instance     | production (`clerk.gdg-q.com`) | development (`quality-ram-46`), shared with local dev |
+| Sign-in            | Clerk's email code         | developer email + `8888`       |
 
 Local `poe dev` uses the Infisical `dev` env, whose `DATABASE_URL` is a MySQL
 on your own machine (`127.0.0.1/scores-local`), so a migration you are still
@@ -46,10 +48,28 @@ redirected (`app/services/email_redirect.py`):
 
 Local dev (`ENV=development`) redirects the same way.
 
+## Signing in
+
+Staging's sign-in page asks for an email and the fixed code `8888` instead of
+running Clerk's emailed code (`Frontend/lib/staging-sign-in.ts`). It accepts only
+the emails in `STAGING_LOGIN_EMAILS` (comma-separated, Infisical `staging` /
+`/admin-frontend`): staging holds a copy of every member's real data, so add a
+developer there before they can sign in. `STAGING_OTP` holds the code; with it
+unset, the page is Clerk's normal one.
+
+It works by minting a Clerk sign-in ticket for the email, which is only safe
+because staging uses Clerk's **development** instance. A session on the
+production instance would also be a session on `admin.gdg-q.com`, so the code
+refuses to run with a live (`sk_live_`) key even if `STAGING_OTP` is set.
+
+The development instance's session token has no email claim, so the route
+writes the email into the user's `publicMetadata`; the backend's
+`resolve_member` finds the member by `metadata.email` and stores the new Clerk
+id on the `scores_staging` row.
+
 ## What staging still shares with production
 
-Same Clerk instance (the copied members' Clerk ids only make sense there), same
-Google account for Forms, same Cloudflare R2 bucket, same wallet signing
+Same Google account for Forms, same Cloudflare R2 bucket, same wallet signing
 identity, same `send-certificates` service. An upload from staging lands in the
 production bucket, and a Google Form created from staging is a real form on the
 club's account.
