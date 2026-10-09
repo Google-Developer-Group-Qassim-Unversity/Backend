@@ -51,15 +51,21 @@ Local dev (`ENV=development`) redirects the same way.
 
 ## Signing in
 
-Staging's sign-in page asks for an email and the fixed code `8888` instead of
-running Clerk's emailed code (`Frontend/lib/staging-sign-in.ts`). It accepts only
-the emails in `STAGING_LOGIN_EMAILS` (comma-separated, Infisical `staging` /
-`/admin-frontend`): staging holds a copy of every member's real data, so add a
+Staging's sign-in looks and flows like production's Clerk page: email, then
+"Check your email" with code boxes. No email is sent, and the code is always
+`8888` (`STAGING_OTP`). The page is a redrawn copy of Clerk's screens
+(`Frontend/components/staging-sign-in.tsx`, using Clerk's own wording), because
+Clerk cannot be told to accept a fixed code. "Continue with Google" is real
+Clerk Google sign-in.
+
+Only the emails in `STAGING_LOGIN_EMAILS` (comma-separated, Infisical `staging`
+/ `/admin-frontend`) get past the email step; others see Clerk's "Couldn't find
+your account." Staging holds a copy of every member's real data, so add a
 developer there before they can sign in. It holds the Development department's
 members (six on 9 Oct 2026, Fall 2026); update it when the team changes. The
 frontend reads it when its container starts, so a change needs a staging
-redeploy (run the Deploy workflow by hand on `dev`). `STAGING_OTP` holds the code; with it
-unset, the page is Clerk's normal one.
+redeploy (run the Deploy workflow by hand on `dev`). With `STAGING_OTP` unset,
+the page is Clerk's own.
 
 It works by minting a Clerk sign-in ticket for the email, which is only safe
 because staging uses Clerk's **development** instance. A session on the
