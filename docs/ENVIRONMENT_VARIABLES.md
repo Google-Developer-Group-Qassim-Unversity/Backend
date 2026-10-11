@@ -39,9 +39,9 @@ the boot rather than the first request.
 
 Everything about this integration - the one-time club OAuth, the Drive
 template copy, the Pub/Sub watch registration, and the Forms publish calls -
-runs here in the Backend now. There is no Frontend-side OAuth flow anymore
-(see `docs/GOOGLE_FORMS.md`). The Frontend keeps its own copy of
-`TEMPLATE_FORM_FILE_ID` (declared in `Frontend/lib/config-server.ts`, set
+runs here in the Backend now. There is no frontend-side OAuth flow anymore
+(see `docs/GOOGLE_FORMS.md`). The admin frontend keeps its own copy of
+`TEMPLATE_FORM_FILE_ID` (declared in `Admin/lib/config-server.ts`, set
 under its own Infisical path `/admin-frontend`) purely so a super admin can
 open the template from the Settings page - that file id isn't a secret, just
 duplicated across both apps for that one convenience link.

@@ -53,7 +53,7 @@ uv run alembic revision -m "desc"              # new empty migration (write manu
 - **`app/services/permissions/`** – who can do what: the `Perm` catalogue, `resolve_access`, and the route guards (`Staff`, `Require`, `SuperAdmin`)
 - **`alembic/env.py`** – migration env; excludes DB views listed in `VIEWS` set via `include_object`
 - **Source of truth for DB**: `app/DB/schema.py` + existing migration files
-- **Ids are UUIDs.** A new table's id is `UUID_CHAR` with `default=new_id` (`app/DB/ids.py`, time-ordered UUIDv7), never an auto-increment integer; columns that reference it are `UUID_CHAR` as well. Only the legacy tables listed in `tests/test_uuid_ids.py` keep integer ids. See the root `CLAUDE.md`
+- **Ids are UUIDs.** A new table's id is `UUID_CHAR` with `default=new_id` (`app/DB/ids.py`, time-ordered UUIDv7), never an auto-increment integer; columns that reference it are `UUID_CHAR` as well. Only the legacy tables listed in `tests/test_uuid_ids.py` keep integer ids. See `CLAUDE.md`
 - **Do not use `--autogenerate`** for new migrations. Create empty revisions with `alembic revision -m "desc"` and write them manually
 - For FK relationships with `ON DELETE CASCADE`, always add `passive_deletes=True` to the SQLAlchemy relationship (see schema docstring)
 - Alembic ignores the views in `alembic/env.py` `VIEWS` set — do not remove `include_object`
@@ -77,11 +77,11 @@ uv run alembic revision -m "desc"              # new empty migration (write manu
 
 ## CI (`.github/workflows/`)
 
-Two workflows, one per event:
+This repo is the backend only. The admin frontend lives in the `Admin` repo and
+the public site in `Website`; see `CLAUDE.md`.
 
-- **pr.yml** – on PRs to `main`; jobs skip when their half of the repo is untouched
-  - `backend-lint` – `uv run ruff check .` and `uv run ruff format --check .`
-  - `frontend-lint` – `pnpm run lint` and `pnpm run typecheck`
-  - `test` – `RUN_CLUB_BROWSER=1 uv run pytest` (the fixtures also run `alembic upgrade head` on a fresh MySQL, and `tests/test_migrations.py` fails on multiple heads or models that no migration matches)
-- **deploy.yml** – on push to `main`; SSH-deploys whichever of backend (PM2, infisical prod env, port 7501) and frontend changed. Run it manually to redeploy both.
-  The backend deploy builds the release in `~/GDG-backend.new`, runs `alembic upgrade head` against production, replaces the live release, restarts, and fails unless `/health/db` and `/events/` answer. Migrations are never run by hand.
+- **pr.yml** – on PRs into `dev`
+  - `lint` – `uv run ruff check .` and `uv run ruff format --check .`
+  - `test` – `RUN_CLUB_BROWSER=1 uv run pytest` (the fixtures also run `alembic upgrade head` on a fresh MySQL, and `tests/test_migrations.py` fails on multiple heads or models that no migration matches). The Club Structure browser check needs the admin frontend, so the job also checks out `Admin` - the branch with the PR's name if there is one, else `dev`.
+- **deploy.yml** – on push to `dev` (staging, port 7502) or `main` (production, port 7501); SSH-deploys the backend under PM2 with the matching Infisical env. Run it manually to redeploy.
+  The deploy builds the release in `~/GDG-backend.new` (or `-staging.new`), runs `alembic upgrade head` against that environment's database, replaces the live release, restarts, and fails unless `/health/db` and `/events/` answer. Migrations are never run by hand.

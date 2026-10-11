@@ -26,14 +26,20 @@ at; `ALEMBIC_DATABASE_URL` is set in every env but nothing reads it.
 
 Every change goes through `dev`; nothing is pushed or PR'd into `main` directly.
 
+The backend (this repo) and the admin frontend (the `Admin` repo) deploy
+separately, each from its own `.github/workflows/deploy.yml`, and both follow
+the same flow:
+
 1. Branch from `dev`, open the PR into `dev`. PR checks run there.
-2. Merging it deploys staging. `.github/workflows/deploy.yml` deploys whichever
-   half changed and migrates `scores_staging` to the release's head first, so a
-   broken migration fails the deploy and leaves the running staging app alone.
+2. Merging it deploys staging. The backend deploy migrates `scores_staging` to
+   the release's head first, so a broken migration fails the deploy and leaves
+   the running staging app alone.
 3. Once staging looks right, open a `dev` -> `main` PR and merge it with a merge
    commit. That push to `main` deploys production the same way.
 
-Run the workflow by hand on either branch to redeploy both halves.
+Run a repo's deploy workflow by hand on either branch to redeploy it. A change
+that spans both repos merges the backend first: the frontend expects the API
+it calls to exist.
 
 ## Emails never reach real members
 
@@ -54,7 +60,7 @@ Local dev (`ENV=development`) redirects the same way.
 Staging's sign-in looks and flows like production's Clerk page: email, then
 "Check your email" with code boxes. No email is sent, and the code is always
 `8888` (`STAGING_OTP`). The page is a redrawn copy of Clerk's screens
-(`Frontend/components/staging-sign-in.tsx`, using Clerk's own wording), because
+(`Admin/components/staging-sign-in.tsx`, using Clerk's own wording), because
 Clerk cannot be told to accept a fixed code. "Continue with Google" is real
 Clerk Google sign-in.
 

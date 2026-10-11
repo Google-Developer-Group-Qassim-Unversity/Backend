@@ -108,5 +108,5 @@ in 471) and no longer list departments that did not exist yet.
 - `tests/routers/test_club_structure.py` - every route through the real guards
 - `tests/test_club_structure_concurrency.py` - independent MySQL transactions
 - `tests/routers/test_points.py` - the department ranking rules
-- `tests/test_club_structure_browser.py` + `Frontend/tests/club-structure/` -
+- `tests/test_club_structure_browser.py` + `Admin/tests/club-structure/` -
   Chromium against the real API (`RUN_CLUB_BROWSER=1`, runs in CI)
