@@ -1,0 +1,82 @@
+name: PR Checks
+
+# Every change reaches main through dev (CLAUDE.md), so the checks run on PRs
+# into dev. A dev -> main PR carries only what already passed here.
+
+on:
+  pull_request:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  # One pytest run covers the whole suite, the fresh-DB `alembic upgrade head`
+  # (conftest migrates the testcontainers MySQL), and the Club Structure browser
+  # check, which drives the real admin page from the Admin repo. A change that
+  # spans both repos uses the same branch name in each; this picks up Admin's
+  # matching branch, else its dev.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: Backend
+      - name: Pick the Admin branch
+        id: admin
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/${{ github.repository_owner }}/Admin.git "$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=dev" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/Admin
+          ref: ${{ steps.admin.outputs.ref }}
+          path: Admin
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: Admin/pnpm-lock.yaml
+      - name: Install dependencies
+        run: |
+          (cd Backend && uv sync --locked)
+          (cd Admin && pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps chromium)
+      - name: Run pytest (with Club Structure browser check, Admin@${{ steps.admin.outputs.ref }})
+        working-directory: Backend
+        env:
+          RUN_CLUB_BROWSER: "1"
+          ADMIN_DIR: ${{ github.workspace }}/Admin
+        run: uv run pytest --basetemp=/tmp/pytest
+      - name: Save browser screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: club-structure-browser
+          path: /tmp/pytest/**/*.png
