@@ -9,7 +9,7 @@ drive_file_id is reserved for the Phase 2 drag-drop Drive upload and stays
 NULL until then.
 
 Revision ID: a5b6c7d8e9f0
-Revises: 750018c84549
+Revises: 267cb3fe563f
 Create Date: 2026-10-08 00:00:00.000000
 
 """
@@ -21,7 +21,7 @@ from alembic import op
 from sqlalchemy.dialects.mysql import CHAR, INTEGER, TINYINT, VARCHAR
 
 revision: str = "a5b6c7d8e9f0"
-down_revision: Union[str, Sequence[str], None] = "750018c84549"
+down_revision: Union[str, Sequence[str], None] = "267cb3fe563f"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
