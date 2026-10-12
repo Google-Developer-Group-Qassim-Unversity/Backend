@@ -1,4 +1,5 @@
 import logging
+from typing import TYPE_CHECKING
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, func
@@ -14,6 +15,7 @@ from .schema import (
     DepartmentsLogs,
     Actions,
     Departments,
+    EventContentLinks,
 )
 from app.routers.models import Events_model
 from app.config import config
@@ -21,13 +23,17 @@ from app.helpers import get_effective_date
 from app.semesters import semester_for_event
 from datetime import datetime, timedelta
 
+if TYPE_CHECKING:
+    from app.routers.models import CreateEventContentLink_model, UpdateEventContentLink_model
+
 logger = logging.getLogger(__name__)
 
 
 def get_events(session: Session):
     statement = select(Events)
     statement = statement.order_by(Events.start_datetime.desc())
-    events = session.scalars(statement).all()
+    events = list(session.scalars(statement).all())
+    attach_published_content_links(session, events)
     return events
 
 
@@ -39,7 +45,8 @@ def get_open_events(session: Session):
 
 def get_events_by_semester(session: Session, semester_id: str):
     statement = select(Events).where(Events.semester_id == semester_id).order_by(Events.start_datetime.desc())
-    events = session.scalars(statement).all()
+    events = list(session.scalars(statement).all())
+    attach_published_content_links(session, events)
     return events
 
 
@@ -155,11 +162,127 @@ def get_event_department_ids(session: Session, event_id: int) -> set[int]:
 
 
 def get_event_by_id(session: Session, event_id: int):
+    """The plain event row, for the ~15 internal callers that only read its
+    fields - no content-link query. Serializing payloads attach them at the
+    route layer (see attach_published_content_links)."""
     statement = select(Events).where(Events.id == event_id)
     event = session.scalars(statement).first()
     if not event:
         raise EventNotFound(event_id)
     return event
+
+
+# ---------- event content links ----------
+
+
+def attach_content_links(session: Session, events: list[Events]):
+    """Set each event's ``content_links`` - its published rows only - in one
+    grouped query for the whole batch (one extra SELECT per response, never
+    one per event). The full set (drafts included) is an admin concern and is
+    read via get_event_content_links, never attached onto an event that a
+    serializer could pick up.
+
+    Only call this right before serializing: the public server-side filter is
+    what keeps drafts away from the leaderboard app, and every call site is
+    payload-building code.
+    """
+    event_ids = [event.id for event in events if event.id is not None]
+    if not event_ids:
+        return
+    links_by_event: dict[int, list[EventContentLinks]] = {}
+    stmt = (
+        select(EventContentLinks)
+        .where(EventContentLinks.event_id.in_(event_ids), EventContentLinks.published == True)  # noqa: E712
+        .order_by(EventContentLinks.created_at, EventContentLinks.id)
+    )
+    for link in session.scalars(stmt).all():
+        links_by_event.setdefault(link.event_id, []).append(link)
+    for event in events:
+        if event.id is not None:
+            event.content_links = links_by_event.get(event.id, [])
+
+
+# Name it by purpose: the payload any consumer (including unauthenticated
+# ones) may read carried its published rows only.
+attach_published_content_links = attach_content_links
+
+
+def get_event_content_links(session: Session, event_id: int, published_only: bool) -> list[EventContentLinks]:
+    stmt = (
+        select(EventContentLinks)
+        .where(EventContentLinks.event_id == event_id)
+        .order_by(EventContentLinks.created_at, EventContentLinks.id)
+    )
+    if published_only:
+        stmt = stmt.where(EventContentLinks.published == True)  # noqa: E712
+    return list(session.scalars(stmt).all())
+
+
+def create_event_content_link(
+    session: Session, event_id: int, link_data: "CreateEventContentLink_model", created_by: int | None = None
+) -> EventContentLinks:
+    link = EventContentLinks(
+        event_id=event_id,
+        label=link_data.label,
+        url=link_data.url,
+        kind=link_data.kind,
+        published=link_data.published,
+        created_by=created_by,
+    )
+    session.add(link)
+    session.flush()
+    return link
+
+
+def get_content_link(session: Session, event_id: int, link_id: str) -> EventContentLinks | None:
+    """Scoping by event_id keeps a link id from another event out."""
+    return session.scalar(
+        select(EventContentLinks).where(EventContentLinks.id == link_id, EventContentLinks.event_id == event_id)
+    )
+
+
+def is_content_link_label_taken(session: Session, event_id: int, label: str, exclude_id: str | None = None) -> bool:
+    """A label names the link everywhere it is shown, so an event cannot hold
+    two rows with the same name. Compared the way the database compares it -
+    a plain ``=`` against the utf8mb4_0900_ai_ci column, case- and
+    accent-insensitive - so the friendly pre-check and the unique index can
+    never disagree. Values are trimmed by the validators before they get here.
+    ``exclude_id`` keeps a row's own label from blocking its own edit."""
+    stmt = (
+        select(func.count())
+        .select_from(EventContentLinks)
+        .where(EventContentLinks.event_id == event_id, EventContentLinks.label == label.strip())
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(EventContentLinks.id != exclude_id)
+    return bool(session.scalar(stmt))
+
+
+def update_event_content_link(
+    session: Session, event_id: int, link_id: str, link_data: "UpdateEventContentLink_model"
+) -> EventContentLinks | None:
+    link = get_content_link(session, event_id, link_id)
+    if not link:
+        return None
+    if link_data.label is not None:
+        link.label = link_data.label
+    if link_data.url is not None:
+        link.url = link_data.url
+    if link_data.kind is not None:
+        link.kind = link_data.kind
+    if link_data.published is not None:
+        link.published = link_data.published
+    session.flush()
+    return link
+
+
+def delete_event_content_link(session: Session, event_id: int, link_id: str) -> EventContentLinks | None:
+    link = get_content_link(session, event_id, link_id)
+    if not link:
+        return None
+    session.delete(link)
+    session.flush()
+    return link
 
 
 def create_event(session: Session, event_data: Events_model, responsible_member_id: int, created_by: int):

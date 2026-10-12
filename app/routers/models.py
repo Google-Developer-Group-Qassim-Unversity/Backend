@@ -6,7 +6,7 @@ from datetime import datetime
 from pydantic.types import JsonValue
 from app.member_names import validate_member_name
 from app.config import config
-from app.DB.schema import EventHistoryAction, EventsLocationType, MembersGender, FormType
+from app.DB.schema import EventsContentLinkKind, EventHistoryAction, EventsLocationType, MembersGender, FormType
 from app.routers.club_structure_models import UtcDateTime
 
 # A bare Google Meet code, e.g. "abc-defg-hij" - no scheme, no domain.
@@ -42,6 +42,118 @@ class Events_model(BaseClassModel):
     # the end date. On output: the semester it is filed under.
     semester_id: str | None = None
     created_at: datetime | None = None
+    # Published content links (slides/recordings), attached by the read queries
+    # in app/DB/events.py - never serialized from an event write, and drafts are
+    # excluded server-side so they never reach the leaderboard app.
+    content_links: list["EventContentLink_model"] = []
+
+
+def _require_present(value) -> str:
+    """An edit sends a value or omits the field; ``null`` means "clear" here no
+    column supports. Field validators only run for present fields, so absent
+    (defaults ``None``) never reaches this."""
+    if value is None:
+        raise ValueError("send the value to set, or omit the field - null is not accepted")
+    return value
+
+
+def _normalize_content_url(value: str) -> str:
+    """Validate a pasted content-link URL: http(s) only, at most 500 chars.
+
+    Same style as the meeting_url validator: an admin may paste a bare domain
+    and it is normalized into something clickable, but any other scheme
+    (e.g. "javascript:", "ftp:") is rejected - the URL is rendered directly as
+    a link's href on the leaderboard app.
+    """
+    value = value.strip()
+    # "host:8080" and "javascript:" are indistinguishable this cheaply, and a
+    # content link on an odd port is never a real case here - reject both.
+    if re.search(r"[\x00-\x1f]", value):
+        raise ValueError("url must not contain control characters")
+    if value.startswith("//"):
+        raise ValueError("url must be an absolute http(s) URL")
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:", value) and "://" not in value:
+        raise ValueError("url must use http:// or https://")
+    if "://" not in value:
+        value = f"https://{value}"
+    if not value.lower().startswith(("http://", "https://")):
+        raise ValueError("url must use http:// or https://")
+    # Length applies to what will actually be stored, e.g. a 495-char bare
+    # domain grows past 500 when the scheme is prepended.
+    if len(value) > 500:
+        raise ValueError("url must be at most 500 characters")
+    return value
+
+
+def _validate_content_label(value: str) -> str:
+    """The display name shown on the website; the Drive filename is not."""
+    value = value.strip()
+    if not value:
+        raise ValueError("label must not be empty")
+    if len(value) > 200:
+        raise ValueError("label must be at most 200 characters")
+    return value
+
+
+class EventContentLink_model(BaseClassModel):
+    id: str | None = None
+    label: str
+    url: str
+    kind: EventsContentLinkKind
+    published: bool
+    created_at: datetime | None = None
+
+
+class CreateEventContentLink_model(BaseClassModel):
+    label: str
+
+    @field_validator("label")
+    def _label(cls, v: str):
+        return _validate_content_label(v)
+
+    url: str
+
+    @field_validator("url")
+    def _url(cls, v: str):
+        return _normalize_content_url(v)
+
+    kind: EventsContentLinkKind
+    # Phase 1 has no approval gating: a manually pasted link goes live at once.
+    published: bool = True
+
+
+class UpdateEventContentLink_model(BaseClassModel):
+    """Everything optional - a row is edited field by field, or deleted
+    outright; it is never "cleared". An explicit ``null`` is a validation
+    error, not an "unset this field": every column is required.
+
+    The validators only run for fields present in the payload, so an absent
+    field stays unchanged while an explicit ``null`` is rejected here - the
+    two shapes can never collapse into one.
+    """
+
+    @field_validator("label", "url")
+    def _present_or_absent(cls, v: str | None):
+        return _require_present(v)
+
+    label: str | None = None
+
+    @field_validator("label")
+    def _label(cls, v: str | None):
+        return _validate_content_label(_require_present(v))
+
+    url: str | None = None
+
+    @field_validator("url")
+    def _url(cls, v: str | None):
+        return _normalize_content_url(_require_present(v))
+
+    @field_validator("kind", "published")
+    def _enum_present_or_absent(cls, v):
+        return _require_present(v)
+
+    kind: EventsContentLinkKind | None = None
+    published: bool | None = None
 
 
 class EventListItem_model(Events_model):
@@ -104,6 +216,9 @@ class EventDetailsModel(BaseClassModel):
     # Null on events created before these were recorded, or if the member was deleted.
     responsible: EventPerson_model | None = None
     created_by: EventPerson_model | None = None
+    # Admin view: every content link, published or not. The leaderboard-serving
+    # payloads carry published rows only.
+    content_links: list[EventContentLink_model] = []
 
 
 class EventHistoryItem(BaseClassModel):
