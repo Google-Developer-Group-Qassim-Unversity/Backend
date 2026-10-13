@@ -56,6 +56,7 @@ duplicated across both apps for that one convenience link.
 | `SES_FROM_ADDRESS` | when the feature runs | - |  |
 | `PIPELINE_EMAILS_LIVE` | no | `false` | events pipeline: `false` sends each email only to whoever triggered it, as a trial copy; `true` emails the whole department |
 | `ADMIN_APP_URL` | no | `https://admin.gdg-q.com` | links in events pipeline emails |
+| `EMAIL_REDIRECT_FALLBACK` | on staging | - | comma-separated developer addresses. With `ENV` `Staging` or `development`, an email goes to the member who clicked send instead of its recipients; emails nobody clicked for (the pipeline sweep) go here. Unset there, those emails fail rather than reach real members - see `app/services/email_redirect.py` |
 
 **Dev note on `MEMBER_APP_URL`:** Infisical's dev env points it at
 `https://gdg-q.com`, so a cache reset from a local backend purges the real
@@ -64,8 +65,6 @@ therefore overrides it with the local Website app (`http://localhost:3001`) -
 that file is gitignored and specific to one machine. Remove or change the
 override if you run the Website elsewhere; set it before the first
 content/event edit or the local Website's cache never refreshes.
-
-| `EMAIL_REDIRECT_FALLBACK` | on staging | - | comma-separated developer addresses. With `ENV` `Staging` or `development`, an email goes to the member who clicked send instead of its recipients; emails nobody clicked for (the pipeline sweep) go here. Unset there, those emails fail rather than reach real members - see `app/services/email_redirect.py` |
 
 ### Cloudflare R2 (uploads)
 

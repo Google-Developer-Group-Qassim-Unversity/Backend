@@ -102,6 +102,13 @@ def _pinned_today(monkeypatch):
     monkeypatch.setattr(app.semesters, "today", lambda: TEST_TODAY)
 
 
+# The testcontainer MySQL server's root credentials, for the migration
+# downgrade drill's scratch schema (the seeded database stays untouched by
+# it). Empty when DATABASE_URL was provided instead of a container - in that
+# mode the drill skips, a real server's credentials are not ours to assume.
+_drill_server_root: dict[str, str] = {}
+
+
 @pytest.fixture(scope="session")
 def database_url():
     """
@@ -129,10 +136,49 @@ def database_url():
 
     os.environ["DATABASE_URL"] = url
 
+    from sqlalchemy.engine import make_url
+
+    _drill_server_root["server_url"] = (
+        make_url(url)
+        .set(username="root", password=container.root_password, database=None)
+        .render_as_string(hide_password=False)
+    )
+
     yield url
 
     print("[conftest] Stopping MySQL testcontainer...")
     container.stop()
+
+
+@pytest.fixture(scope="session")
+def downgrade_drill_database_url(database_url):
+    """A scratch schema in the same MySQL server, created and dropped around
+    the migration downgrade drill: a lossy future downgrade there must never
+    strip the seeded database the other tests read from."""
+    if "server_url" not in _drill_server_root:
+        pytest.skip("the downgrade drill needs a testcontainer MySQL server of its own")
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.engine import make_url
+
+    from app.DB.main import _build_connect_args
+
+    base = make_url(database_url)
+    scratch_db = f"{base.database or 'gdg'}_downgrade_drill"
+    scratch_url = str(base.set(database=scratch_db))
+    # Only the server's root account may create a database (the suite's `test`
+    # user is scoped to its own); the drill's schema stays outside the app URL.
+    server = create_engine(
+        _drill_server_root["server_url"], connect_args=_build_connect_args(_drill_server_root["server_url"])
+    )
+    try:
+        with server.connect() as conn:
+            conn.exec_driver_sql(f"CREATE DATABASE `{scratch_db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci")
+        yield scratch_url
+    finally:
+        with server.connect() as conn:
+            conn.exec_driver_sql(f"DROP DATABASE IF EXISTS `{scratch_db}`")
+        server.dispose()
 
 
 @pytest.fixture(scope="session")

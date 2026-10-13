@@ -42,9 +42,17 @@ class Events_model(BaseClassModel):
     # the end date. On output: the semester it is filed under.
     semester_id: str | None = None
     created_at: datetime | None = None
+
+
+class EventsWithContentLinks_model(Events_model):
+    """The read payloads that carry an event's published content links -
+    ``GET /events`` and ``GET /events/{id}``. Every other payload stays lean:
+    a write response without the key cannot be mistaken for a link-less
+    event, and nothing accepts ``content_links`` back in a request body."""
+
     # Published content links (slides/recordings), attached by the read queries
-    # in app/DB/events.py - never serialized from an event write, and drafts are
-    # excluded server-side so they never reach the leaderboard app.
+    # in app/DB/events.py right before serialization; drafts never leave the
+    # guarded admin payloads.
     content_links: list["EventContentLink_model"] = []
 
 
@@ -72,12 +80,21 @@ def _normalize_content_url(value: str) -> str:
         raise ValueError("url must not contain control characters")
     if value.startswith("//"):
         raise ValueError("url must be an absolute http(s) URL")
-    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:", value) and "://" not in value:
-        raise ValueError("url must use http:// or https://")
-    if "://" not in value:
+    # The scheme is read from the start of the value, not searched for: a
+    # redirect target such as "example.com/redirect?to=https://x.com" is a
+    # bare domain that gets the prefix, while a leading "something:" that is
+    # not http(s) stays rejected.
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:", value):
+        if not value.lower().startswith(("http://", "https://")):
+            raise ValueError("url must use http:// or https://")
+    else:
         value = f"https://{value}"
-    if not value.lower().startswith(("http://", "https://")):
-        raise ValueError("url must use http:// or https://")
+    # A link that is nothing but a scheme, or whose address holds whitespace
+    # ("https://", "https://exa mple .com"), points nowhere and never leaves
+    # this validator.
+    address = value.split("://", 1)[1]
+    if not address or re.search(r"\s", address):
+        raise ValueError("url must contain an address after the scheme")
     # Length applies to what will actually be stored, e.g. a 495-char bare
     # domain grows past 500 when the scheme is prepended.
     if len(value) > 500:

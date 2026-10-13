@@ -79,7 +79,7 @@ def test_the_my_events_route_never_gains_content_links(admin_client: TestClient)
     mine = admin_client.get("/events/me").json()
     for entry in mine["attended"] + mine["participated"]:
         if entry["id"] == event["id"]:
-            assert entry["content_links"] == []
+            assert "content_links" not in entry
 
 
 def test_invalid_scheme_urls_are_rejected(admin_client: TestClient, db_session):
@@ -244,6 +244,48 @@ def test_a_full_url_with_a_port_is_still_accepted(admin_client: TestClient):
     assert response.json()["url"] == "https://example.com:8080/x"
 
 
+def test_a_redirect_target_in_the_query_is_a_bare_domain(admin_client: TestClient):
+    """The scheme is read from the start of the value: a pasted redirect
+    target is a bare domain under ``example.com`` and gets the prefix."""
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+
+    response = admin_client.post(
+        f"/events/{event['id']}/content-links", json=make_link_payload(url="example.com/redirect?to=https://x.com")
+    )
+    assert_2xx(response)
+    assert response.json()["url"] == "https://example.com/redirect?to=https://x.com"
+
+
+def test_an_url_without_a_usable_host_is_rejected(admin_client: TestClient):
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+
+    for url in ["https://", "https://exa mple .com"]:
+        response = admin_client.post(f"/events/{event['id']}/content-links", json=make_link_payload(url=url))
+        assert_unprocessable(response)
+
+
+def test_an_uppercase_scheme_is_still_a_link(admin_client: TestClient):
+    """Pasted "HTTPS://..." is an http(s) URL the same way; the public render
+    guard reads schemes case-insensitively too."""
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+
+    response = admin_client.post(
+        f"/events/{event['id']}/content-links", json=make_link_payload(url="HTTPS://drive.google.com/file/d/x")
+    )
+    assert_2xx(response)
+    assert response.json()["url"] == "HTTPS://drive.google.com/file/d/x"
+
+
+def test_a_malformed_link_id_in_the_path_is_a_422(admin_client: TestClient):
+    """link_id is typed UUID in the routes: garbage and non-ASCII bytes stop at
+    the path converter instead of reaching MySQL as an illegal collation mix."""
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+
+    for path in [f"/events/{event['id']}/content-links/not-a-uuid", f"/events/{event['id']}/content-links/%C3%A9"]:
+        assert_unprocessable(admin_client.put(path, json={"label": "x"}))
+        assert_unprocessable(admin_client.delete(path))
+
+
 def test_the_url_length_limit_applies_after_normalization(admin_client: TestClient):
     event = admin_client.post("/events", json=make_create_event_payload()).json()
 
@@ -384,7 +426,7 @@ def test_the_details_shape_puts_drafts_at_the_top_if_the_admin_asks(admin_client
     details = admin_client.get(f"/events/{event['id']}/details").json()
     assert [l["id"] for l in details["content_links"]] == [link["id"]]
     assert details["content_links"][0]["published"] is False
-    assert details["event"]["content_links"] == []
+    assert "content_links" not in details["event"]
 
 
 def test_the_same_label_is_fine_on_another_event(admin_client: TestClient):
@@ -463,20 +505,51 @@ def test_creating_a_link_records_who_created_it(admin_client: TestClient, db_ses
     assert link is not None and link.created_by == me["id"]
 
 
+def test_the_content_link_mutations_record_event_history(admin_client: TestClient):
+    """Publish, repoint or delete a public link and the event's history shows
+    it - who did it and what the row looked like before and after."""
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+    me = admin_client.get("/members/me").json()
+    link = admin_client.post(f"/events/{event['id']}/content-links", json=make_link_payload()).json()
+    url = f"/events/{event['id']}/content-links/{link['id']}"
+
+    history = admin_client.get(f"/events/{event['id']}/history").json()["items"]
+    created = history[-1]
+    assert created["action"] == "content_link_changed"
+    assert created["actor"] and created["actor"]["member_id"] == me["id"]
+    assert created["details"]["content_link"][0] is None
+    assert created["details"]["content_link"][1]["label"] == "Day 1 Slides"
+    assert created["details"]["content_link"][1]["published"] is True
+
+    admin_client.put(url, json={"label": "Bootcamp Slides", "published": False})
+    history = admin_client.get(f"/events/{event['id']}/history").json()["items"]
+    updated = history[-1]
+    assert updated["details"]["content_link"][0]["label"] == "Day 1 Slides"
+    assert updated["details"]["content_link"][0]["published"] is True
+    assert updated["details"]["content_link"][1]["label"] == "Bootcamp Slides"
+    assert updated["details"]["content_link"][1]["published"] is False
+
+    admin_client.delete(url)
+    history = admin_client.get(f"/events/{event['id']}/history").json()["items"]
+    deleted = history[-1]
+    assert deleted["details"]["content_link"][0]["label"] == "Bootcamp Slides"
+    assert deleted["details"]["content_link"][1] is None
+
+
 def test_a_failed_cache_reset_is_logged_and_never_fails_the_write(admin_client: TestClient, monkeypatch, caplog):
     """Outages on the leaderboard app must not 500 the user - and they must
     leave a trail, or a publish toggle would silently not reach members."""
     import logging
 
-    from app.routers import events as events_router
+    from app import leaderboard_cache
 
     def offline_reset():
         raise RuntimeError("leaderboard offline")
 
-    monkeypatch.setattr(events_router, "reset_leaderboard_cache", offline_reset)
+    monkeypatch.setattr(leaderboard_cache, "reset_leaderboard_cache", offline_reset)
     event = admin_client.post("/events", json=make_create_event_payload()).json()
 
-    with caplog.at_level(logging.ERROR, logger="app.routers.events"):
+    with caplog.at_level(logging.ERROR, logger="app.leaderboard_cache"):
         response = admin_client.post(f"/events/{event['id']}/content-links", json=make_link_payload())
     assert_2xx(response)
     assert "leaderboard offline" in caplog.text

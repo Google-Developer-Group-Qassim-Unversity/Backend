@@ -466,8 +466,8 @@ class Events(Base):
 
     if TYPE_CHECKING:
         # Transient: set in app/DB/events.py (one grouped query per response) right
-        # before the row is serialized. Published rows only for the
-        # leaderboard-serving payloads; the full set for the admin's /details.
+        # before the row is serialized - the published rows of the
+        # leaderboard-serving payloads, never the full admin set on an event row.
         content_links: list["EventContentLinks"]
 
 
@@ -1459,6 +1459,7 @@ class EventHistoryAction(str, enum.Enum):
     EDITED = "edited"
     STATUS_CHANGED = "status_changed"
     MEETING_URL_CHANGED = "meeting_url_changed"
+    CONTENT_LINK_CHANGED = "content_link_changed"
     DELETED = "deleted"
     ATTENDANCE_MARKED = "attendance_marked"
     ATTENDANCE_SCANNED = "attendance_scanned"
