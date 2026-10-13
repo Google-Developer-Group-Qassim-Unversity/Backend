@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from app.DB.schema import EventHistory, EventHistoryAction, Events, Members
 
 # What an edit compares. The edit form also sends the status, so a status
-# changed through it shows here; ``meeting_url`` has its own route and action.
+# changed through it shows here; ``meeting_url`` and the event's content
+# links have routes and actions of their own.
 EDITED_FIELDS = (
     "name",
     "status",

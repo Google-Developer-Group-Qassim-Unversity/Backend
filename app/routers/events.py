@@ -1,5 +1,7 @@
 import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from uuid import UUID
 
 from app.DB import (
     events as events_queries,
@@ -14,6 +16,7 @@ from app.routers.models import (
     EventHistoryResponse,
     PaginatedEvents_model,
     Events_model,
+    EventsWithContentLinks_model,
     ConflictResponse,
     NotFoundResponse,
     Form_model,
@@ -24,18 +27,22 @@ from app.routers.models import (
     MemberEvents_model,
     EventWithAttendance_model,
     EventDetailsModel,
+    EventContentLink_model,
     InternalServerErrorResponse,
     UpdateEventModel,
     UpdateEventStatus_model,
     UpdateEventMeetingUrl_model,
+    CreateEventContentLink_model,
+    UpdateEventContentLink_model,
 )
 from app.helpers import CurrentMember
-from app.leaderboard_cache import reset_leaderboard_cache
+from app.leaderboard_cache import reset_leaderboard_cache_best_effort
 from app.services.events import create_full_event
 from app.services.google_client import set_form_publish_state
 from app.semesters import resolve_semester
 from time import perf_counter
 from typing import Annotated, Literal
+from sqlalchemy.exc import IntegrityError
 from app.exceptions import DataIntegrityError
 from app.dependencies import DB
 from sqlalchemy.orm import Session
@@ -65,7 +72,7 @@ def _semester_id(session: Session, semester: int | str) -> str:
     return resolve_semester(session, hijri_code).id
 
 
-@router.get("/", status_code=status.HTTP_200_OK, response_model=list[Events_model])
+@router.get("/", status_code=status.HTTP_200_OK, response_model=list[EventsWithContentLinks_model])
 def get_all_events(session: DB, semester: Annotated[int | str, Query()] = "all"):
     logger.info("Fetching all events")
     start = perf_counter()
@@ -108,9 +115,12 @@ def list_events_paginated(
     return {"items": items, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
 
 
-@router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=Events_model)
+@router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=EventsWithContentLinks_model)
 def get_event_by_id(event_id: int, session: DB):
+    """The event row the leaderboard app and the admin pages read. Published
+    content links ride along; drafts are filtered server-side."""
     event = events_queries.get_event_by_id(session, event_id)
+    events_queries.attach_published_content_links_of_event(session, event)
     session.flush()
     return event
 
@@ -176,11 +186,16 @@ def get_event_details(event_id: int, session: DB):
     actions = events_queries.get_actions_by_event_id(session, event_id)
     if not event or not actions:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    # Admin view: every content link (published or not), as its own list -
+    # never attached onto the event object, so only a code path that asks for
+    # the whole set can ever return it (a serializer reading the event row
+    # sees published rows only, or none).
     return {
         "event": event,
         "actions": actions,
         "responsible": _person(event.responsible_member),
         "created_by": _person(event.creator),
+        "content_links": events_queries.get_event_content_links(session, event_id, published_only=False),
     }
 
 
@@ -215,11 +230,8 @@ def create_event(event_data: createEvent_model, session: DB, member: CurrentMemb
         session.refresh(new_event)
 
         # Best-effort: reset the leaderboard app's data cache so the new event is visible immediately.
-        try:
-            reset_leaderboard_cache()
-            logger.info("Leaderboard cache reset triggered after event creation")
-        except Exception as cache_err:
-            logger.error(cache_err)
+        reset_leaderboard_cache_best_effort()
+        logger.info("Leaderboard cache reset triggered after event creation")
 
         return new_event
     finally:
@@ -463,10 +475,7 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, ses
     # Best-effort: reset the leaderboard cache when entering or leaving the "open" status,
     # since the leaderboard's open-events view is gated on status = 'open'.
     if status_data.status == "open" or old_status == "open":
-        try:
-            reset_leaderboard_cache()
-        except Exception:
-            pass
+        reset_leaderboard_cache_best_effort()
 
     return event
 
@@ -506,12 +515,147 @@ def update_event_meeting_url(
 
     # Best-effort: the leaderboard app caches event data, so the link would otherwise
     # not appear until the next revalidation.
-    try:
-        reset_leaderboard_cache()
-    except Exception as cache_err:
-        logger.error(cache_err)
+    reset_leaderboard_cache_best_effort()
 
     return event
+
+
+def _content_link_snapshot(link) -> dict:
+    """The row as the event history records it: what an admin published,
+    repointed or deleted, in the ``{"field": [before, after]}`` style."""
+    return {"label": link.label, "url": link.url, "kind": link.kind.value, "published": bool(link.published)}
+
+
+def _label_taken_response(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+def _duplicate_label_error(exc: IntegrityError) -> bool:
+    """True only when the question was "is that label taken?" - MySQL error
+    1062 naming our unique index. A 1062 without it is some other duplicate
+    (the PK, say) and a 1452/1451 is an FK problem; those mean something else
+    and must not be reported as a label clash."""
+    args = getattr(exc.orig, "args", None) or ()
+    if not args or args[0] != 1062:
+        return False
+    return "uq_event_content_links_event_label" in str(args[1])
+
+
+@router.post(
+    "/{event_id:int}/content-links",
+    status_code=status.HTTP_201_CREATED,
+    response_model=EventContentLink_model,
+    responses={
+        404: {"model": NotFoundResponse, "description": "Event not found"},
+        409: {"model": ConflictResponse, "description": "A link with this label already exists"},
+    },
+    dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
+)
+def create_event_content_link(
+    event_id: int, link_data: CreateEventContentLink_model, session: DB, member: CurrentMember
+):
+    """Manually paste a link to event content (Drive/YouTube) with the display
+    label shown to members; published immediately."""
+    if events_queries.is_content_link_label_taken(session, event_id, link_data.label):
+        raise _label_taken_response("A content link with this label already exists for this event")
+    # The unique index backstops the check above: two racing creates cannot
+    # both pass the pre-check, and the loser is a 409 too. Any other
+    # IntegrityError is not a label clash and stays an error.
+    try:
+        link = events_queries.create_event_content_link(session, event_id, link_data, created_by=member.id)
+        event_history.record(
+            session,
+            event_id,
+            EventHistoryAction.CONTENT_LINK_CHANGED,
+            member,
+            {"content_link": [None, _content_link_snapshot(link)]},
+        )
+        session.commit()
+        session.refresh(link)
+        # The response carries the derived download_url too, same as the read
+        # payloads - derive it once the row is settled.
+        events_queries.set_download_url(link)
+    except IntegrityError as exc:
+        session.rollback()
+        if not _duplicate_label_error(exc):
+            raise
+        raise _label_taken_response("A content link with this label already exists for this event")
+    logger.info(f"Event [{event_id}] content link [{link.id}] created, kind [{link.kind}]")
+    reset_leaderboard_cache_best_effort()
+    return link
+
+
+@router.put(
+    "/{event_id:int}/content-links/{link_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=EventContentLink_model,
+    responses={
+        404: {"model": NotFoundResponse, "description": "Link not found"},
+        409: {"model": ConflictResponse, "description": "A link with this label already exists"},
+    },
+    dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
+)
+def update_event_content_link(
+    event_id: int, link_id: UUID, link_data: UpdateEventContentLink_model, session: DB, member: CurrentMember
+):
+    """Edit a content link's label/url/kind/published state. Links stay
+    editable and deletable forever - nothing here clears or locks them."""
+    existing = events_queries.get_content_link(session, event_id, str(link_id))
+    if not existing:
+        logger.error(f"HTTP 404: Content link [{link_id}] not found for event [{event_id}]")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content link not found")
+    before = _content_link_snapshot(existing)
+    if link_data.label is not None and events_queries.is_content_link_label_taken(
+        session, event_id, link_data.label, exclude_id=str(link_id)
+    ):
+        raise _label_taken_response("A content link with this label already exists for this event")
+    try:
+        link = events_queries.update_event_content_link(session, existing, link_data)
+        # The response carries the derived download_url too, same as the read
+        # payloads - derive it once the row is edited.
+        events_queries.set_download_url(link)
+        event_history.record(
+            session,
+            event_id,
+            EventHistoryAction.CONTENT_LINK_CHANGED,
+            member,
+            {"content_link": [before, _content_link_snapshot(link)]},
+        )
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        if not _duplicate_label_error(exc):
+            raise
+        raise _label_taken_response("A content link with this label already exists for this event")
+    logger.info(f"Event [{event_id}] content link [{link_id}] updated")
+    reset_leaderboard_cache_best_effort()
+    return link
+
+
+@router.delete(
+    "/{event_id:int}/content-links/{link_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=DetailResponse,
+    responses={404: {"model": NotFoundResponse, "description": "Link not found"}},
+    dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
+)
+def delete_event_content_link(event_id: int, link_id: UUID, session: DB, member: CurrentMember):
+    """Hard delete; a deleted link is gone from the event detail response."""
+    link = events_queries.delete_event_content_link(session, event_id, str(link_id))
+    if not link:
+        logger.error(f"HTTP 404: Content link [{link_id}] not found for event [{event_id}]")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content link not found")
+    event_history.record(
+        session,
+        event_id,
+        EventHistoryAction.CONTENT_LINK_CHANGED,
+        member,
+        {"content_link": [_content_link_snapshot(link), None]},
+    )
+    session.commit()
+    logger.info(f"Event [{event_id}] content link [{link_id}] deleted")
+    reset_leaderboard_cache_best_effort()
+    return {"detail": "Content link deleted successfully"}
 
 
 # TODO: move to submissions router.
