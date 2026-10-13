@@ -572,6 +572,9 @@ def create_event_content_link(
         )
         session.commit()
         session.refresh(link)
+        # The response carries the derived download_url too, same as the read
+        # payloads - derive it once the row is settled.
+        events_queries.set_download_url(link)
     except IntegrityError as exc:
         session.rollback()
         if not _duplicate_label_error(exc):
@@ -608,6 +611,9 @@ def update_event_content_link(
         raise _label_taken_response("A content link with this label already exists for this event")
     try:
         link = events_queries.update_event_content_link(session, existing, link_data)
+        # The response carries the derived download_url too, same as the read
+        # payloads - derive it once the row is edited.
+        events_queries.set_download_url(link)
         event_history.record(
             session,
             event_id,

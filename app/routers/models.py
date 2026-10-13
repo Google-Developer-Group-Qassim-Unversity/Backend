@@ -119,6 +119,10 @@ class EventContentLink_model(BaseClassModel):
     kind: EventsContentLinkKind
     published: bool
     created_at: datetime | None = None
+    # Canonical public direct-download URL for Drive-hosted files, derived at
+    # read time (app/DB/events.py drive_download_url) - never a column, never
+    # settable; a link that is not a recognizable Drive file leaves it null.
+    download_url: str | None = None
 
 
 class CreateEventContentLink_model(BaseClassModel):

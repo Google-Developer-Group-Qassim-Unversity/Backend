@@ -100,6 +100,92 @@ def test_a_bare_domain_is_normalized_into_an_https_url(admin_client: TestClient)
     assert response.json()["url"] == "https://youtu.be/dQw4w9WgXcQ"
 
 
+def test_a_drive_file_link_derives_a_direct_download_url(admin_client: TestClient):
+    """The public modal's Download action rides a derived URL, never a pasted
+    one: the Drive file id is parsed out of the share link."""
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+
+    link = admin_client.post(
+        f"/events/{event['id']}/content-links",
+        json=make_link_payload(url="https://drive.google.com/file/d/1RQKabc123_X9/view?usp=drive_link"),
+    ).json()
+    assert link["download_url"] == "https://drive.usercontent.google.com/download?id=1RQKabc123_X9&export=download"
+
+    listed = next(
+        l for l in admin_client.get(f"/events/{event['id']}").json()["content_links"] if l["id"] == link["id"]
+    )
+    assert listed["download_url"] == link["download_url"]
+
+
+def test_a_uc_style_drive_link_derives_the_same_download_url(admin_client: TestClient):
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+
+    link = admin_client.post(
+        f"/events/{event['id']}/content-links",
+        json=make_link_payload(url="https://drive.google.com/uc?export=download&id=1UCabc789"),
+    ).json()
+    assert link["download_url"] == "https://drive.usercontent.google.com/download?id=1UCabc789&export=download"
+
+
+def test_links_that_are_not_drive_files_stay_open_only(admin_client: TestClient, db_session):
+    """YouTube, other hosts, editor-less forms and malformed URLs yield null -
+    an Open-only row, never a broken Download action."""
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+
+    for i, url in enumerate(
+        [
+            "https://youtube.com/watch?v=abc",
+            "https://notdrive.example.com/file/d/abc123",
+            "https://docs.google.com/presentation/d/1pZrbBczE7l71HNW/edit",  # an editor, not a file blob
+            "https://drive.google.com/file/d/",  # malformed: the id is missing
+            "https://drive.google.com/uc?export=download&id=not%20an%20id",  # malformed: the param is unusable
+        ]
+    ):
+        link = admin_client.post(
+            f"/events/{event['id']}/content-links", json=make_link_payload(label=f"Not a file {i}", url=url)
+        ).json()
+        assert link["download_url"] is None, url
+        listed = next(
+            l for l in admin_client.get(f"/events/{event['id']}").json()["content_links"] if l["id"] == link["id"]
+        )
+        assert listed["download_url"] is None, url
+
+
+def test_a_row_with_a_drive_file_id_downloads_by_it(admin_client: TestClient, db_session):
+    """Phase 2's upload flow stores the id itself; it then wins over URL
+    parsing. Direct write - nothing can set it through the API yet."""
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+    link = admin_client.post(f"/events/{event['id']}/content-links", json=make_link_payload()).json()
+
+    row = db_session.scalars(select(EventContentLinks).where(EventContentLinks.id == link["id"])).one()
+    row.drive_file_id = "Phase2FileId01"
+    db_session.commit()
+
+    listed = next(
+        l for l in admin_client.get(f"/events/{event['id']}").json()["content_links"] if l["id"] == link["id"]
+    )
+    assert listed["download_url"] == "https://drive.usercontent.google.com/download?id=Phase2FileId01&export=download"
+
+
+def test_a_recording_never_carries_a_download_url(admin_client: TestClient, db_session):
+    """Nobody downloads an unseen video: recordings stay Open-only, even when
+    their URL is a Drive file or Phase 2 filled the file id."""
+    event = admin_client.post("/events", json=make_create_event_payload()).json()
+    link = admin_client.post(
+        f"/events/{event['id']}/content-links",
+        json=make_link_payload(kind="recording", url="https://drive.google.com/file/d/1VidDo2/download"),
+    ).json()
+
+    row = db_session.scalars(select(EventContentLinks).where(EventContentLinks.id == link["id"])).one()
+    row.drive_file_id = "Phase2VidId01"
+    db_session.commit()
+
+    listed = next(
+        l for l in admin_client.get(f"/events/{event['id']}").json()["content_links"] if l["id"] == link["id"]
+    )
+    assert listed["download_url"] is None
+
+
 def test_an_url_over_500_characters_is_rejected(admin_client: TestClient):
     event = admin_client.post("/events", json=make_create_event_payload()).json()
 

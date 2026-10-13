@@ -1573,6 +1573,12 @@ class EventContentLinks(Base):
     )
     created_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
+    if TYPE_CHECKING:
+        # Transient, never a column: the canonical public direct-download URL,
+        # derived at read time (app/DB/events.py drive_download_url) and not
+        # settable through the API.
+        download_url: Optional[str]
+
 
 # =============================================================================
 # Views (read-only, defined in DB migrations)

@@ -1,5 +1,7 @@
 import logging
+import re
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs, urlsplit
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import Select, select, func
@@ -7,6 +9,7 @@ from sqlalchemy import Select, select, func
 from app.exceptions import EventNotFound
 from .schema import (
     Events,
+    EventsContentLinkKind,
     EventsLocationType,
     EventsStatus,
     MembersLogs,
@@ -227,11 +230,73 @@ def _attach_published_content_links(session: Session, events: list[Events], stmt
         return
     links_by_event: dict[int, list[EventContentLinks]] = {}
     stmt = stmt.order_by(EventContentLinks.created_at, EventContentLinks.id)
-    for link in session.scalars(stmt).all():
+    links = session.scalars(stmt).all()
+    for link in links:
+        set_download_url(link)
         links_by_event.setdefault(link.event_id, []).append(link)
     for event in events:
         if event.id is not None:
             event.content_links = links_by_event.get(event.id, [])
+
+
+# Google's public direct-download endpoint: the URL the Drive web app itself
+# produces for "download anyway", live-verified against public files (200,
+# application/octet-stream). The Drive API's documented equivalent
+# (files.get?alt=media) needs an access token, so it is not usable by a public
+# web page - this one is, for links that are public by design.
+_DRIVE_DOWNLOAD_URL = "https://drive.usercontent.google.com/download?id={file_id}&export=download"
+
+_DRIVE_FILE_ID_RE = r"[A-Za-z0-9_-]+"
+
+
+def _drive_file_id_from_url(url: str) -> str | None:
+    """The Drive file id a public share link points at, or None.
+
+    Recognizes only the shapes that carry a plain file: ``drive.google.com
+    .com/file/d/<ID>`` and the ``uc?id=<ID>`` export form. Google-hosted
+    editors (docs/document/presentation/...) open a viewer, not a file blob,
+    so they stay Open-only. Never raises: a malformed URL is simply not a
+    download - the modal keeps an Open action and nothing breaks."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        path = parts.path or ""
+        if host == "drive.google.com":
+            if match := re.match(rf"^/file/d/({_DRIVE_FILE_ID_RE})", path):
+                return match.group(1)
+        if host in ("drive.google.com", "docs.google.com") and path.rstrip("/") == "/uc":
+            file_id = parse_qs(parts.query).get("id", [""])[0]
+            if re.fullmatch(_DRIVE_FILE_ID_RE, file_id):
+                return file_id
+        return None
+    except Exception:
+        return None
+
+
+def drive_download_url(link: EventContentLinks) -> str | None:
+    """The public direct-download URL sent to the website as ``download_url``,
+    or None when there is not one. ``drive_file_id`` (Phase 2's upload flow)
+    wins over URL parsing when both exist; a link that is not a Drive file
+    (YouTube, other hosts, a malformed URL) yields None.
+
+    Recordings never carry one, even when their URL is a Drive file: nobody
+    watches (or wants) an unseen video downloaded to their device - recordings
+    stay Open-only."""
+    try:
+        if link.kind == EventsContentLinkKind.RECORDING:
+            return None
+        file_id = link.drive_file_id or _drive_file_id_from_url(link.url)
+        if not file_id:
+            return None
+        return _DRIVE_DOWNLOAD_URL.format(file_id=file_id)
+    except Exception:
+        return None
+
+
+def set_download_url(link: EventContentLinks) -> None:
+    """Read-time derivation: the transient ``download_url`` rides the row into
+    its serialization, never into the database."""
+    link.download_url = drive_download_url(link)
 
 
 def get_event_content_links(session: Session, event_id: int, published_only: bool) -> list[EventContentLinks]:
@@ -242,7 +307,10 @@ def get_event_content_links(session: Session, event_id: int, published_only: boo
     )
     if published_only:
         stmt = stmt.where(EventContentLinks.published == True)  # noqa: E712
-    return list(session.scalars(stmt).all())
+    links = list(session.scalars(stmt).all())
+    for link in links:
+        set_download_url(link)
+    return links
 
 
 def create_event_content_link(
