@@ -6,7 +6,7 @@ be pushed, when it last was, and the last error if the push failed
 (``app/services/pipeline_notion.py``).
 
 Revision ID: a7c2e9d4b1f3
-Revises: 267cb3fe563f
+Revises: c0a1f2e3d4b5
 Create Date: 2026-10-14 09:10:00.000000
 
 """
@@ -20,7 +20,7 @@ from sqlalchemy.dialects import mysql
 
 # revision identifiers, used by Alembic.
 revision: str = "a7c2e9d4b1f3"
-down_revision: Union[str, Sequence[str], None] = "267cb3fe563f"
+down_revision: Union[str, Sequence[str], None] = "c0a1f2e3d4b5"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
