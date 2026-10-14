@@ -1,11 +1,15 @@
 import logging
+import re
+from typing import TYPE_CHECKING
+from urllib.parse import parse_qs, urlsplit
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select, func
+from sqlalchemy import Select, select, func
 
 from app.exceptions import EventNotFound
 from .schema import (
     Events,
+    EventsContentLinkKind,
     EventsLocationType,
     EventsStatus,
     MembersLogs,
@@ -14,6 +18,7 @@ from .schema import (
     DepartmentsLogs,
     Actions,
     Departments,
+    EventContentLinks,
 )
 from app.routers.models import Events_model
 from app.config import config
@@ -21,13 +26,18 @@ from app.helpers import get_effective_date
 from app.semesters import semester_for_event
 from datetime import datetime, timedelta
 
+if TYPE_CHECKING:
+    from app.routers.models import CreateEventContentLink_model, UpdateEventContentLink_model
+
 logger = logging.getLogger(__name__)
 
 
 def get_events(session: Session):
+    """The whole events table, newest first - the leaderboard app's full array."""
     statement = select(Events)
     statement = statement.order_by(Events.start_datetime.desc())
-    events = session.scalars(statement).all()
+    events = list(session.scalars(statement).all())
+    attach_published_content_links_of_all_events(session, events)
     return events
 
 
@@ -39,7 +49,8 @@ def get_open_events(session: Session):
 
 def get_events_by_semester(session: Session, semester_id: str):
     statement = select(Events).where(Events.semester_id == semester_id).order_by(Events.start_datetime.desc())
-    events = session.scalars(statement).all()
+    events = list(session.scalars(statement).all())
+    attach_published_content_links_of_semester(session, events, semester_id)
     return events
 
 
@@ -155,11 +166,215 @@ def get_event_department_ids(session: Session, event_id: int) -> set[int]:
 
 
 def get_event_by_id(session: Session, event_id: int):
+    """The plain event row, for the ~15 internal callers that only read its
+    fields - no content-link query. Serializing payloads attach them at the
+    route layer (see attach_published_content_links_of_event)."""
     statement = select(Events).where(Events.id == event_id)
     event = session.scalars(statement).first()
     if not event:
         raise EventNotFound(event_id)
     return event
+
+
+# ---------- event content links ----------
+
+
+def attach_published_content_links_of_all_events(session: Session, events: list[Events]):
+    """``GET /events`` without a filter returns every event row, so every
+    published link belongs to one of them - the links are selected straight
+    off the table, no event-id list shipped with the query."""
+    return _attach_published_content_links(
+        session,
+        events,
+        select(EventContentLinks).where(EventContentLinks.published == True),  # noqa: E712
+    )
+
+
+def attach_published_content_links_of_semester(session: Session, events: list[Events], semester_id: str):
+    """``GET /events?semester=…`` returns one semester's events; joining the
+    links through their event keeps the query to a WHERE instead of an id
+    list that grows with the table."""
+    stmt = (
+        select(EventContentLinks)
+        .join(Events, Events.id == EventContentLinks.event_id)
+        .where(Events.semester_id == semester_id, EventContentLinks.published == True)  # noqa: E712
+        .order_by(EventContentLinks.created_at, EventContentLinks.id)
+    )
+    return _attach_published_content_links(session, events, stmt)
+
+
+def attach_published_content_links_of_event(session: Session, event: Events):
+    """One event, e.g. ``GET /events/{id}``: a plain WHERE on its own id."""
+    stmt = (
+        select(EventContentLinks)
+        .where(EventContentLinks.event_id == event.id, EventContentLinks.published == True)  # noqa: E712
+        .order_by(EventContentLinks.created_at, EventContentLinks.id)
+    )
+    return _attach_published_content_links(session, [event], stmt)
+
+
+def _attach_published_content_links(session: Session, events: list[Events], stmt: Select):
+    """Set each event's ``content_links`` - its published rows only - in one
+    grouped query for the whole batch (one extra SELECT per response, never
+    one per event). The full set (drafts included) is an admin concern and is
+    read via get_event_content_links, never attached onto an event that a
+    serializer could pick up.
+
+    Only call this right before serializing: the public server-side filter is
+    what keeps drafts away from the leaderboard app, and every call site is
+    payload-building code. The statement passed in must select exactly the
+    published rows of the batch's events - that is what the three wrappers
+    above build.
+    """
+    if not events:
+        return
+    links_by_event: dict[int, list[EventContentLinks]] = {}
+    stmt = stmt.order_by(EventContentLinks.created_at, EventContentLinks.id)
+    links = session.scalars(stmt).all()
+    for link in links:
+        set_download_url(link)
+        links_by_event.setdefault(link.event_id, []).append(link)
+    for event in events:
+        if event.id is not None:
+            event.content_links = links_by_event.get(event.id, [])
+
+
+# Google's public direct-download endpoint: the URL the Drive web app itself
+# produces for "download anyway", live-verified against public files (200,
+# application/octet-stream). The Drive API's documented equivalent
+# (files.get?alt=media) needs an access token, so it is not usable by a public
+# web page - this one is, for links that are public by design.
+_DRIVE_DOWNLOAD_URL = "https://drive.usercontent.google.com/download?id={file_id}&export=download"
+
+_DRIVE_FILE_ID_RE = r"[A-Za-z0-9_-]+"
+
+
+def _drive_file_id_from_url(url: str) -> str | None:
+    """The Drive file id a public share link points at, or None.
+
+    Recognizes only the shapes that carry a plain file: ``drive.google.com
+    .com/file/d/<ID>`` and the ``uc?id=<ID>`` export form. Google-hosted
+    editors (docs/document/presentation/...) open a viewer, not a file blob,
+    so they stay Open-only. Never raises: a malformed URL is simply not a
+    download - the modal keeps an Open action and nothing breaks."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        path = parts.path or ""
+        if host == "drive.google.com":
+            if match := re.match(rf"^/file/d/({_DRIVE_FILE_ID_RE})", path):
+                return match.group(1)
+        if host in ("drive.google.com", "docs.google.com") and path.rstrip("/") == "/uc":
+            file_id = parse_qs(parts.query).get("id", [""])[0]
+            if re.fullmatch(_DRIVE_FILE_ID_RE, file_id):
+                return file_id
+        return None
+    except Exception:
+        return None
+
+
+def drive_download_url(link: EventContentLinks) -> str | None:
+    """The public direct-download URL sent to the website as ``download_url``,
+    or None when there is not one. ``drive_file_id`` (Phase 2's upload flow)
+    wins over URL parsing when both exist; a link that is not a Drive file
+    (YouTube, other hosts, a malformed URL) yields None.
+
+    Recordings never carry one, even when their URL is a Drive file: nobody
+    watches (or wants) an unseen video downloaded to their device - recordings
+    stay Open-only."""
+    try:
+        if link.kind == EventsContentLinkKind.RECORDING:
+            return None
+        file_id = link.drive_file_id or _drive_file_id_from_url(link.url)
+        if not file_id:
+            return None
+        return _DRIVE_DOWNLOAD_URL.format(file_id=file_id)
+    except Exception:
+        return None
+
+
+def set_download_url(link: EventContentLinks) -> None:
+    """Read-time derivation: the transient ``download_url`` rides the row into
+    its serialization, never into the database."""
+    link.download_url = drive_download_url(link)
+
+
+def get_event_content_links(session: Session, event_id: int, published_only: bool) -> list[EventContentLinks]:
+    stmt = (
+        select(EventContentLinks)
+        .where(EventContentLinks.event_id == event_id)
+        .order_by(EventContentLinks.created_at, EventContentLinks.id)
+    )
+    if published_only:
+        stmt = stmt.where(EventContentLinks.published == True)  # noqa: E712
+    links = list(session.scalars(stmt).all())
+    for link in links:
+        set_download_url(link)
+    return links
+
+
+def create_event_content_link(
+    session: Session, event_id: int, link_data: "CreateEventContentLink_model", created_by: int | None = None
+) -> EventContentLinks:
+    link = EventContentLinks(
+        event_id=event_id,
+        label=link_data.label,
+        url=link_data.url,
+        kind=link_data.kind,
+        published=link_data.published,
+        created_by=created_by,
+    )
+    session.add(link)
+    session.flush()
+    return link
+
+
+def get_content_link(session: Session, event_id: int, link_id: str) -> EventContentLinks | None:
+    """Scoping by event_id keeps a link id from another event out."""
+    return session.scalar(
+        select(EventContentLinks).where(EventContentLinks.id == link_id, EventContentLinks.event_id == event_id)
+    )
+
+
+def is_content_link_label_taken(session: Session, event_id: int, label: str, exclude_id: str | None = None) -> bool:
+    """A label names the link everywhere it is shown, so an event cannot hold
+    two rows with the same name. Compared the way the database compares it -
+    a plain ``=`` against the utf8mb4_0900_ai_ci column, case- and
+    accent-insensitive - so the friendly pre-check and the unique index can
+    never disagree. Values are trimmed by the validators before they get here.
+    ``exclude_id`` keeps a row's own label from blocking its own edit."""
+    stmt = (
+        select(func.count())
+        .select_from(EventContentLinks)
+        .where(EventContentLinks.event_id == event_id, EventContentLinks.label == label.strip())
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(EventContentLinks.id != exclude_id)
+    return bool(session.scalar(stmt))
+
+
+def update_event_content_link(session: Session, existing: EventContentLinks, link_data: "UpdateEventContentLink_model"):
+    """Apply the edit to the row the handler already fetched (404 handled
+    there), applying only the present fields - a row is never cleared."""
+    if link_data.label is not None:
+        existing.label = link_data.label
+    if link_data.url is not None:
+        existing.url = link_data.url
+    if link_data.kind is not None:
+        existing.kind = link_data.kind
+    if link_data.published is not None:
+        existing.published = link_data.published
+    session.flush()
+    return existing
+
+
+def delete_event_content_link(session: Session, event_id: int, link_id: str) -> EventContentLinks | None:
+    link = get_content_link(session, event_id, link_id)
+    if not link:
+        return None
+    session.delete(link)
+    session.flush()
+    return link
 
 
 def create_event(session: Session, event_data: Events_model, responsible_member_id: int, created_by: int):

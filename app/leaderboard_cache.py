@@ -12,6 +12,8 @@ import httpx
 
 from app.config import MissingSettingError, config
 
+logger = logging.getLogger(__name__)
+
 
 def reset_leaderboard_cache() -> dict:
     """Trigger a full data-cache reset on the leaderboard app.
@@ -42,3 +44,15 @@ def refresh_member_names_cache() -> None:
         reset_leaderboard_cache()
     except (httpx.HTTPError, ValueError, MissingSettingError):
         logging.getLogger(__name__).warning("Could not refresh public member names cache", exc_info=True)
+
+
+def reset_leaderboard_cache_best_effort() -> None:
+    """A committed change (event created/edited, content link changed, ...)
+    must reach the leaderboard app only after its data cache is revalidated -
+    but a cache outage must never fail the admin's own write. Every mutation
+    site calls this: it logs the full failure with the context that matters."""
+
+    try:
+        reset_leaderboard_cache()
+    except Exception:
+        logger.error("Leaderboard cache reset failed", exc_info=True)

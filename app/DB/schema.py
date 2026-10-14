@@ -1,5 +1,5 @@
 from app.member_names import default_public_name
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import datetime
 import enum
 import uuid
@@ -76,6 +76,12 @@ class EventsLocationType(str, enum.Enum):
     ON_SITE = "on-site"
     NONE = "none"
     HIDDEN = "hidden"
+
+
+class EventsContentLinkKind(str, enum.Enum):
+    SLIDES = "slides"
+    RECORDING = "recording"
+    OTHER = "other"
 
 
 class EventsStatus(str, enum.Enum):
@@ -457,6 +463,12 @@ class Events(Base):
     forms: Mapped[list["Forms"]] = relationship("Forms", back_populates="event", passive_deletes=True)
     logs: Mapped[list["Logs"]] = relationship("Logs", back_populates="event", passive_deletes=True)
     email_logs: Mapped[list["EmailLogs"]] = relationship("EmailLogs", back_populates="event", passive_deletes=True)
+
+    if TYPE_CHECKING:
+        # Transient: set in app/DB/events.py (one grouped query per response) right
+        # before the row is serialized - the published rows of the
+        # leaderboard-serving payloads, never the full admin set on an event row.
+        content_links: list["EventContentLinks"]
 
 
 class Members(Base):
@@ -1455,6 +1467,7 @@ class EventHistoryAction(str, enum.Enum):
     EDITED = "edited"
     STATUS_CHANGED = "status_changed"
     MEETING_URL_CHANGED = "meeting_url_changed"
+    CONTENT_LINK_CHANGED = "content_link_changed"
     DELETED = "deleted"
     ATTENDANCE_MARKED = "attendance_marked"
     ATTENDANCE_SCANNED = "attendance_scanned"
@@ -1526,6 +1539,53 @@ class PipelinePenalties(Base):
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     )
     applied_log_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+
+
+class EventContentLinks(Base):
+    """Links an event's content (slides, recordings) on the public event page.
+
+    Members upload to Google Drive / YouTube themselves; the admin pastes the
+    URL here with a display `label`, so the Drive filename behind the link is
+    never rendered to members. `drive_file_id` is reserved for the Phase 2
+    drag-drop Drive upload - this table is its landing spot.
+    """
+
+    __tablename__ = "event_content_links"
+    __table_args__ = (
+        # Two links of one event never share a name - members pick by label, so
+        # the names must differ. The columns' utf8mb4_0900_ai_ci collation makes
+        # this case- AND accent-insensitive. The API pre-checks for a friendlier
+        # 409; this index is the race-proof backstop. Its leading event_id is
+        # also the backing index the event FK rides on, so no separate one.
+        Index("uq_event_content_links_event_label", "event_id", "label", unique=True),
+        ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_event_content_links_event", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["created_by"], ["members.id"], name="fk_event_content_links_created_by", ondelete="SET NULL"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    event_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    label: Mapped[str] = mapped_column(VARCHAR(200, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
+    url: Mapped[str] = mapped_column(VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
+    kind: Mapped[EventsContentLinkKind] = mapped_column(
+        Enum(EventsContentLinkKind, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    )
+    # Reserved for Phase 2; stays NULL until the Drive upload flow exists.
+    drive_file_id: Mapped[Optional[str]] = mapped_column(
+        VARCHAR(255, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
+    )
+    published: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    created_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+
+    if TYPE_CHECKING:
+        # Transient, never a column: the canonical public direct-download URL,
+        # derived at read time (app/DB/events.py drive_download_url) and not
+        # settable through the API.
+        download_url: Optional[str]
 
 
 # =============================================================================
