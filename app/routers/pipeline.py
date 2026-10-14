@@ -33,6 +33,7 @@ from app.services import event_pipeline as pipeline_service
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
 from app.services import pipeline_sweep
+from app.services import pipeline_notion as notion
 from app.services.permissions.catalogue import OFFICER_ROLES
 from app.services.permissions.dependencies import Caller, CurrentCaller
 from app.services.permissions.catalogue import Perm
@@ -124,11 +125,13 @@ def get_pipeline_calendar(
     response_model=BanResult,
     dependencies=[Depends(Require(Perm.PIPELINE_BANS))],
 )
-def ban_pipeline_days(body: BanDaysRequest, session: DB, caller: CurrentCaller):
+def ban_pipeline_days(body: BanDaysRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
     """Logistics closes days to bookings. A day already banned takes the new reason."""
     with pipeline_service.booking_lock(session):
-        days, _undated = pipeline_service.ban(session, caller, body.dates, body.reason)
+        days, undated = pipeline_service.ban(session, caller, body.dates, body.reason)
         session.commit()
+    for request in undated:
+        notion.sync_after_commit(background_tasks, request)
     return BanResult(count=len(days))
 
 

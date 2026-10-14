@@ -48,6 +48,7 @@ from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_history
 from app.services import pipeline_notifications as notifications
+from app.services import pipeline_notion as notion
 from app.services.permissions.dependencies import Caller, CurrentCaller
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.guards import Require, Staff
@@ -98,9 +99,11 @@ def person(member: Members | None) -> PersonRef | None:
     return PersonRef(member_id=member.id, name=member.name) if member else None
 
 
-def task_response(request: EventRequests, task: EventRequestTasks) -> TaskResponse:
+def task_response(request: EventRequests, task: EventRequestTasks, caller: Caller | None = None) -> TaskResponse:
     deliverable = event_deliverables.shown_deliverable(request, task)
     reached = task.status != EventRequestTaskStatus.BRIEF
+    # Why the card is missing is for whoever can fix it (the token, the board).
+    show_error = caller is not None and caller.access.is_super_admin
     return TaskResponse(
         team=task.team,
         status=task.status,
@@ -113,6 +116,9 @@ def task_response(request: EventRequests, task: EventRequestTasks) -> TaskRespon
         opened_at=task.opened_at,
         done_at=task.done_at,
         done_by=person(task.done_by_member),
+        notion_url=task.notion_page_url,
+        notion_pending=bool(task.notion_sync_pending) and config.notion_enabled,
+        notion_error=task.notion_error if show_error else None,
     )
 
 
@@ -149,7 +155,7 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
         updated_at=request.updated_at,
         event_id=request.event_id,
         can_edit=service.can_edit(caller, request),
-        tasks=[task_response(request, task) for task in request.tasks],
+        tasks=[task_response(request, task, caller) for task in request.tasks],
         missing=event_briefs.missing_fields(request)
         if request.stage in (EventRequestStage.DRAFT, EventRequestStage.RETURNED)
         else [],
@@ -217,32 +223,42 @@ def redate_event_request(request_id: str, body: RedateRequest, session: DB, call
 
 
 @router.put("/{request_id}/details", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def update_event_request_details(request_id: str, body: UpdateDetailsRequest, session: DB, caller: CurrentCaller):
+def update_event_request_details(
+    request_id: str, body: UpdateDetailsRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
+):
     """Save any of the event details; only the fields sent change."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.update_details(session, caller, request, body.model_dump(exclude_unset=True))
     session.commit()
+    notion.sync_after_commit(background_tasks, request)
     return detail(session, caller, request)
 
 
 @router.delete("/{request_id}", status_code=status.HTTP_200_OK, response_model=DetailResponse)
-def cancel_event_request(request_id: str, session: DB, caller: CurrentCaller):
+def cancel_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
     """Drop a draft. Its dates, if it still held any, are free again."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.cancel(session, caller, request)
     session.commit()
+    notion.sync_after_commit(background_tasks, request)
     logger.info("Request %s cancelled", request_id)
     return DetailResponse(detail="Request cancelled")
 
 
 @router.put("/{request_id}/briefs/{team}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
 def save_event_request_brief(
-    request_id: str, team: PipelineTeam, body: SaveBriefRequest, session: DB, caller: CurrentCaller
+    request_id: str,
+    team: PipelineTeam,
+    body: SaveBriefRequest,
+    session: DB,
+    caller: CurrentCaller,
+    background_tasks: BackgroundTasks,
 ):
     """Save the Design or Logistics brief as a draft; submit checks it."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.save_brief(session, caller, request, team, body.brief)
     session.commit()
+    notion.sync_after_commit(background_tasks, request)
     return detail(session, caller, request)
 
 
@@ -263,7 +279,12 @@ MAX_POSTER_BYTES = 10 * 1024 * 1024
 
 @router.post("/{request_id}/poster", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
 def upload_event_request_poster(
-    request_id: str, file: Annotated[UploadFile, File()], session: DB, caller: CurrentCaller, client: R2Client
+    request_id: str,
+    file: Annotated[UploadFile, File()],
+    session: DB,
+    caller: CurrentCaller,
+    client: R2Client,
+    background_tasks: BackgroundTasks,
 ):
     """Design hands over the poster: stored in R2 like any event image, and the event's image once published."""
     request = service.get_request_for(session, caller, request_id, lock=True)
@@ -277,6 +298,7 @@ def upload_event_request_poster(
     client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
     service.set_poster(session, caller, request, f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}")
     session.commit()
+    notion.sync_after_commit(background_tasks, request)
     return detail(session, caller, request)
 
 
@@ -287,6 +309,7 @@ def submit_event_request(request_id: str, session: DB, caller: CurrentCaller, ba
     emails = service.submit(session, caller, request)
     session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
+    notion.sync_after_commit(background_tasks, request)
     return detail(session, caller, request)
 
 
@@ -304,6 +327,7 @@ def return_event_request(
     email = service.return_request(session, caller, request, body.notes)
     session.commit()
     notifications.send_after_commit(session, background_tasks, [email])
+    notion.sync_after_commit(background_tasks, request)
     return detail(session, caller, request)
 
 
@@ -314,6 +338,7 @@ def resubmit_event_request(request_id: str, session: DB, caller: CurrentCaller, 
     email = service.resubmit(session, caller, request)
     session.commit()
     notifications.send_after_commit(session, background_tasks, [email])
+    notion.sync_after_commit(background_tasks, request)
     return detail(session, caller, request)
 
 
@@ -332,15 +357,17 @@ def complete_event_request_task(
         emails = service.complete(session, caller, request, team)
         session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
+    notion.sync_after_commit(background_tasks, request)
     return detail(session, caller, request)
 
 
 @router.post("/{request_id}/publish", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def publish_event_request(request_id: str, session: DB, caller: CurrentCaller):
+def publish_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
     """Turn a ready request into a real, open event in /events, from what the teams handed over."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.publish(session, caller, request)
     session.commit()
+    notion.sync_after_commit(background_tasks, request)
     # Best-effort, as after POST /events/: the leaderboard app caches events.
     try:
         reset_leaderboard_cache()

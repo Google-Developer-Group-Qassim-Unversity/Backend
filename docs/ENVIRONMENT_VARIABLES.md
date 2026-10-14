@@ -56,6 +56,8 @@ duplicated across both apps for that one convenience link.
 | `SES_FROM_ADDRESS` | when the feature runs | - |  |
 | `PIPELINE_EMAILS_LIVE` | no | `false` | events pipeline: `false` sends each email only to whoever triggered it, as a trial copy; `true` emails the whole department |
 | `ADMIN_APP_URL` | no | `https://admin.gdg-q.com` | links in events pipeline emails |
+| `NOTION_TOKEN` | for Design's Notion board | - | internal integration secret (`ntn_...`) of the design team's Notion; with `NOTION_DESIGN_DATABASE_ID`, every request that reaches Design gets a card there. Unset: nothing is sent. Setup steps are on Notion (Events pipeline → Design's Notion board) |
+| `NOTION_DESIGN_DATABASE_ID` | for Design's Notion board | - | the database (board) the cards go in; shared with the integration. One board for prod and staging; staging titles carry a `(staging)` prefix |
 | `EMAIL_REDIRECT_FALLBACK` | on staging | - | comma-separated developer addresses. With `ENV` `Staging` or `development`, an email goes to the member who clicked send instead of its recipients; emails nobody clicked for (the pipeline sweep) go here. Unset there, those emails fail rather than reach real members - see `app/services/email_redirect.py` |
 
 ### Cloudflare R2 (uploads)
