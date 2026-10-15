@@ -26,6 +26,7 @@ from app.DB import event_pipeline as queries
 from app.DB import actions as action_queries
 from app.DB import logs as log_queries
 from app.DB.schema import (
+    BumpOutcome,
     Departments,
     EventsLocationType,
     EventRequests,
@@ -287,22 +288,111 @@ def booking_lock(session: Session):
     yield
 
 
-def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: str | None) -> None:
-    """Super admins have full authority: they skip every rule here but a sane range."""
-    if caller.access.is_super_admin:
-        check_range(start, end, MAX_CALENDAR_DAYS)
-        return
+def overlapping(
+    session: Session, start: date, end: date, ignore_id: str | None = None, lock: bool = False
+) -> list[EventRequests]:
+    """The requests holding any of ``start``..``end`` right now."""
+    now = clock.now()
+    return [
+        r
+        for r in queries.get_dated_requests(session, start, end, lock=lock)
+        if r.id != ignore_id and takes_its_days(r, now)
+    ]
+
+
+def _check_bookable(
+    session: Session,
+    caller: Caller,
+    start: date,
+    end: date,
+    ignore_id: str | None,
+    bumps: dict[str, BumpOutcome] | None = None,
+) -> list[EventRequests]:
+    """Whether ``start``..``end`` can be booked; returns the requests to bump off them.
+
+    The length and the lockout bind everyone. A super admin may book a banned
+    day, and may book over other requests when ``bumps`` says what happens to
+    each one of them (``None``: this change cannot bump, so a taken day is
+    refused). A published event is never bumped.
+    """
     check_range(start, end, MAX_BOOKING_DAYS)
     if start < first_bookable_day():
         raise PipelineConflict(
             "day_locked", f"The first day you can book is {first_bookable_day().isoformat()}", status_code=409
         )
-    if queries.get_bans(session, start, end, lock=True):
+    super_admin = caller.access.is_super_admin
+    if not super_admin and queries.get_bans(session, start, end, lock=True):
         raise PipelineConflict("day_banned", "Logistics closed one of these days")
-    now = clock.now()
-    for request in queries.get_dated_requests(session, start, end, lock=True):
-        if request.id != ignore_id and takes_its_days(request, now):
-            raise PipelineConflict("day_taken", "One of these days is already taken")
+    taking = overlapping(session, start, end, ignore_id, lock=True)
+    if not taking:
+        return []
+    if not super_admin or bumps is None:
+        raise PipelineConflict("day_taken", "One of these days is already taken")
+    if any(r.stage == EventRequestStage.PUBLISHED for r in taking):
+        raise PipelineConflict("day_published", "A published event is on one of these days")
+    if set(bumps) != {r.id for r in taking}:
+        raise PipelineConflict(
+            "overlap_undecided", "Other requests hold these days; choose what happens to each of them"
+        )
+    return taking
+
+
+def bump(
+    session: Session, caller: Caller, request: EventRequests, outcome: BumpOutcome, by: EventRequests
+) -> PendingEmail | None:
+    """A super admin booked ``by`` over ``request``'s days: reschedule or cancel it, and tell its department.
+
+    Rescheduling sends it back to a draft holding no dates, whatever stage it
+    reached. Its details and briefs stay; the teams' parts go back to briefs
+    and Logistics' confirmation, made for the old dates, is dropped. The
+    department books new dates and submits again.
+    """
+    lost = {"start_date": request.start_date.isoformat(), "end_date": request.end_date.isoformat()}  # type: ignore[union-attr]
+    details = {**lost, "outcome": outcome.value, "by_request_id": by.id, "by_department_id": by.department_id}
+    history.record(session, PipelineHistoryAction.OVERRIDDEN, caller.member, request, details)
+    notion.mark(session, request)
+    if outcome == BumpOutcome.CANCEL:
+        request.stage = EventRequestStage.CANCELLED
+        request.hold_expires_at = None
+        request.cancelled_at = clock.now()
+        request.cancelled_by = caller.member.id
+    else:
+        request.stage = EventRequestStage.DRAFT
+        request.return_due_at = None
+        _undate(request, EventRequestUndatedReason.OVERRIDDEN)
+        for task in request.tasks:
+            task.status = EventRequestTaskStatus.BRIEF
+            task.opened_at = None
+            task.done_at = None
+            task.done_by = None
+            if task.team == PipelineTeam.LOGISTICS:
+                task.deliverable = None
+                task.deliverable_version = None
+    notifications.notify(session, request.department_id, request, PipelineNotificationKind.OVERRIDDEN, details)
+    session.flush()
+    logger.info("Request %s bumped (%s) by request %s", request.id, outcome.value, by.id)
+    return notifications.department_email(
+        session,
+        request.department_id,
+        request,
+        PipelineNotificationKind.OVERRIDDEN,
+        caller.member,
+        _BUMP_NOTES[outcome].format(start=lost["start_date"], end=lost["end_date"]),
+    )
+
+
+_BUMP_NOTES = {
+    BumpOutcome.RESCHEDULE: (
+        "حجز مشرف عام تواريخكم ({start} → {end}) لفعالية أخرى. عاد طلبكم مسودة بلا تواريخ، وكل بياناته محفوظة؛ "
+        "احجزوا تواريخ جديدة ثم أرسلوه من جديد.\n"
+        "A super admin booked your dates ({start} → {end}) for another event. Your request is a draft again with "
+        "no dates, everything in it kept; book new dates and submit it again."
+    ),
+    BumpOutcome.CANCEL: (
+        "حجز مشرف عام تواريخكم ({start} → {end}) لفعالية أخرى، وأُلغي طلبكم.\n"
+        "A super admin booked your dates ({start} → {end}) for another event, and your request was cancelled."
+    ),
+}
 
 
 def _check_one_live_hold(session: Session, department_id: int, ignore_id: str | None = None) -> None:
@@ -315,14 +405,23 @@ def _check_one_live_hold(session: Session, department_id: int, ignore_id: str | 
         )
 
 
-def book(session: Session, caller: Caller, department_id: int, start: date, end: date) -> EventRequests:
-    """Create a draft holding ``start``..``end`` for 24 hours. Call inside ``booking_lock``."""
+def book(
+    session: Session,
+    caller: Caller,
+    department_id: int,
+    start: date,
+    end: date,
+    bumps: dict[str, BumpOutcome] | None = None,
+) -> tuple[EventRequests, list[EventRequests], list[PendingEmail | None]]:
+    """Create a draft holding ``start``..``end`` for 24 hours. Call inside ``booking_lock``.
+
+    Returns the request, the requests it bumped (see ``bump``) and their emails.
+    """
     require_request_for(caller, department_id)
     if session.get(Departments, department_id) is None:
         raise NotFound("Department", department_id)
-    if not caller.access.is_super_admin:
-        _check_one_live_hold(session, department_id)
-    _check_bookable(session, caller, start, end, None)
+    _check_one_live_hold(session, department_id)
+    bumped = _check_bookable(session, caller, start, end, None, bumps or {})
     request = EventRequests(
         department_id=department_id,
         requested_by=caller.member.id,
@@ -341,14 +440,23 @@ def book(session: Session, caller: Caller, department_id: int, start: date, end:
         {"start_date": start.isoformat(), "end_date": end.isoformat()},
     )
     logger.info("Request %s booked %s..%s for department %s", request.id, start, end, department_id)
-    return request
+    emails = [bump(session, caller, r, (bumps or {})[r.id], request) for r in bumped]
+    return request, bumped, emails
 
 
-def redate(session: Session, caller: Caller, request: EventRequests, start: date, end: date) -> None:
+def redate(
+    session: Session,
+    caller: Caller,
+    request: EventRequests,
+    start: date,
+    end: date,
+    bumps: dict[str, BumpOutcome] | None = None,
+) -> tuple[list[EventRequests], list[PendingEmail | None]]:
     """Give a request that lost its dates new ones. Call inside ``booking_lock``.
 
     A draft gets a fresh 24-hour hold. A submitted request that lost its days
-    to a ban takes the new ones outright, as its old ones were.
+    to a ban takes the new ones outright, as its old ones were. Returns the
+    requests it bumped (see ``bump``) and their emails.
     """
     require_request_for(caller, request.department_id)
     if request.stage in (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED):
@@ -356,9 +464,9 @@ def redate(session: Session, caller: Caller, request: EventRequests, start: date
     if takes_its_days(request, clock.now()) and not caller.access.is_super_admin:
         raise PipelineConflict("still_held", "This request still holds its dates")
     is_draft = request.stage == EventRequestStage.DRAFT
-    if is_draft and not caller.access.is_super_admin:
+    if is_draft:
         _check_one_live_hold(session, request.department_id, ignore_id=request.id)
-    _check_bookable(session, caller, start, end, request.id)
+    bumped = _check_bookable(session, caller, start, end, request.id, bumps or {})
     history.record(
         session,
         PipelineHistoryAction.REDATED,
@@ -379,6 +487,7 @@ def redate(session: Session, caller: Caller, request: EventRequests, start: date
         request.day_modes = {k: v for k, v in request.day_modes.items() if k in kept} or None
     session.flush()
     logger.info("Request %s re-dated to %s..%s", request.id, start, end)
+    return bumped, [bump(session, caller, r, (bumps or {})[r.id], request) for r in bumped]
 
 
 def cancel(session: Session, caller: Caller, request: EventRequests) -> None:
@@ -404,9 +513,7 @@ EDITABLE_STAGES = {EventRequestStage.DRAFT, EventRequestStage.RETURNED}
 
 
 def can_edit(caller: Caller, request: EventRequests) -> bool:
-    """The team edits its draft; a super admin edits anything not yet published."""
-    if caller.access.is_super_admin:
-        return request.stage not in (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED)
+    """The team edits its draft, or its request Design returned. Once submitted, the teams work from it as it is."""
     return can_request_for(caller, request.department_id) and request.stage in EDITABLE_STAGES
 
 
@@ -444,16 +551,7 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
         if not set(partners) <= {d.id for d in partner_options(session)}:
             raise PipelineConflict("partner_not_this_semester", "A partner must be a department of this semester", 422)
         queries.set_partners(session, request, partners)
-    # Outside a draft or a returned request only a super admin can edit; that is the edit worth flagging.
-    history.record(
-        session,
-        PipelineHistoryAction.DETAILS_EDITED,
-        caller.member,
-        request,
-        {"after_submit": True} if request.stage not in EDITABLE_STAGES else None,
-    )
-    if request.stage not in EDITABLE_STAGES:
-        notion.mark(session, request)
+    history.record(session, PipelineHistoryAction.DETAILS_EDITED, caller.member, request)
     session.flush()
 
 
@@ -559,12 +657,7 @@ def save_brief(session: Session, caller: Caller, request: EventRequests, team: P
     task = ensure_task(session, request, team)
     task.brief = event_briefs.clean_brief(team, brief)
     task.brief_version = event_briefs.BRIEF_VERSION
-    edit: dict[str, str | bool] = {"team": team.value}
-    if request.stage not in EDITABLE_STAGES:
-        edit["after_submit"] = True
-    history.record(session, PipelineHistoryAction.BRIEF_EDITED, caller.member, request, edit)
-    if request.stage not in EDITABLE_STAGES:
-        notion.mark(session, request)
+    history.record(session, PipelineHistoryAction.BRIEF_EDITED, caller.member, request, {"team": team.value})
     session.flush()
 
 
@@ -577,9 +670,7 @@ def submit(session: Session, caller: Caller, request: EventRequests) -> list[Pen
     require_request_for(caller, request.department_id)
     if request.stage != EventRequestStage.DRAFT:
         raise PipelineConflict("not_a_draft", "Only a draft can be submitted")
-    if not takes_its_days(request, clock.now()) and not (
-        caller.access.is_super_admin and request.start_date is not None
-    ):
+    if not takes_its_days(request, clock.now()):
         raise PipelineConflict("hold_expired", "The hold on your dates ran out; book dates again, then submit")
     for team in BRIEF_TEAMS:
         ensure_task(session, request, team)
@@ -632,14 +723,12 @@ def return_deadline(request: EventRequests) -> datetime | None:
 
 
 def can_return(session: Session, caller: Caller, request: EventRequests) -> bool:
-    """Design can return a request once, within two days of receiving it. Super admins any time."""
+    """Design can return a request once, within two days of receiving it."""
     if request.stage != EventRequestStage.IN_REVIEW:
         return False
     design = get_task(request, PipelineTeam.DESIGN)
     if design is None or design.status != EventRequestTaskStatus.OPEN:
         return False
-    if caller.access.is_super_admin:
-        return True
     deadline = return_deadline(request)
     return (
         caller.access.can(Perm.PIPELINE_DESIGN)
@@ -739,8 +828,7 @@ def resubmit(session: Session, caller: Caller, request: EventRequests) -> Pendin
     return reach_team(session, caller, request, PipelineTeam.DESIGN, PipelineNotificationKind.REQUEST_RECEIVED)
 
 
-# While the teams are working on it. A request published early by a super admin
-# can have a task left open; it stays open, and completing it changes nothing.
+# While the teams are working on it.
 WORKING_STAGES = {EventRequestStage.IN_REVIEW, EventRequestStage.RETURNED, EventRequestStage.MEDIA}
 
 
@@ -922,34 +1010,25 @@ def inbox(session: Session, caller: Caller, team: PipelineTeam | None) -> list[t
 
 # --------------------------------------------------------------------------- publish
 
-PUBLISHABLE_BY_SUPER_ADMIN = {
-    EventRequestStage.IN_REVIEW,
-    EventRequestStage.RETURNED,
-    EventRequestStage.MEDIA,
-    EventRequestStage.READY,
-}
-
 
 def can_publish(caller: Caller, request: EventRequests) -> bool:
-    if caller.access.is_super_admin:
-        return request.stage in PUBLISHABLE_BY_SUPER_ADMIN
+    """Only once every team has finished, for a super admin too: the event is what the teams handed over."""
     return can_request_for(caller, request.department_id) and request.stage == EventRequestStage.READY
 
 
 def event_for(request: EventRequests) -> createEvent_model:
     """The ``POST /events/`` payload a ready request becomes.
 
-    Nothing is typed again at publish. The when, where and what come from Logistics' confirmation (or, for a
-    request a super admin publishes before Logistics confirmed, from the request
-    as asked), and the image is Design's poster. Times are wall-clock Riyadh
+    Nothing is typed again at publish. The when, where and what come from Logistics' confirmation,
+    and the image is Design's poster. Times are wall-clock Riyadh
     times, the way the event form stores them. A mix of on-site and online days
     is published as on-site at the venue, with the Meet link for the online days.
     The event opens straight away: publishing is the team's decision, with no
     admin review after it.
     """
     confirmed = event_deliverables.logistics_confirmation(request, get_task(request, PipelineTeam.LOGISTICS))
-    if confirmed is None:
-        confirmed = event_deliverables.logistics_prefill(request, None)
+    # A ready request has every task done, Logistics' confirmation included.
+    assert confirmed is not None
     modes = set((confirmed.day_modes or {}).values())
     on_site = "on_site" in modes or not modes
     place = " · ".join(p.strip() for p in (confirmed.venue, confirmed.room) if p and p.strip())

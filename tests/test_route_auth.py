@@ -242,6 +242,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "POST /pipeline/notifications/{notification_id}/read": "admin.access",
     "POST /pipeline/notifications/read-all": "admin.access",
     "POST /pipeline/sweep": "super_admin",
+    "GET /pipeline/overlaps": "super_admin",
     "GET /pipeline/inbox": "admin.access",
     "POST /pipeline/requests/{request_id}/publish": "admin.access",
     "POST /pipeline/requests/{request_id}/return": "pipeline.design",

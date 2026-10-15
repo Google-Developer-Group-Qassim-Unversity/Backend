@@ -142,25 +142,26 @@ def test_another_department_cannot_publish(pipeline, world):
     assert publish(pipeline, world).status_code == 403
 
 
-def test_a_team_finishing_after_an_early_publish_does_not_reopen_it(pipeline, world):
-    """Bug #5: a super admin publishes before Media is done; Media's "Mark done" must not make a second event."""
+def test_a_super_admin_cannot_publish_before_every_team_is_done(pipeline, world):
     pipeline.sign_in(world["admin"], super_admin=True)
     url = f"/pipeline/requests/{world['request_id']}"
     for team in ("design", "logistics"):
+        assert publish_is_refused(pipeline, world)
         assert finish(pipeline, world["request_id"], team).status_code == 200
-    published = publish(pipeline, world)
-    assert published.status_code == 200, published.text
-    assert published.json()["stage"] == "published"
+    assert publish_is_refused(pipeline, world)
+    assert pipeline.client.get(url).json()["actions"]["can_publish"] is False
 
-    late = pipeline.client.post(f"{url}/tasks/media/complete")
-    assert late.status_code == 409
-    assert late.json()["code"] == "cannot_complete"
-    body = pipeline.client.get(url).json()
-    assert body["stage"] == "published"
-    assert body["actions"]["complete"] == []
+    assert finish(pipeline, world["request_id"], "media").status_code == 200
+    assert pipeline.client.get(url).json()["actions"]["can_publish"] is True
+    assert publish(pipeline, world).status_code == 200
     assert publish(pipeline, world).status_code == 409
     events = pipeline.session.scalars(select(Events).where(Events.name == "Intro to ML")).all()
     assert len(events) == 1
+
+
+def publish_is_refused(pipeline, world) -> bool:
+    response = publish(pipeline, world)
+    return response.status_code == 409 and response.json()["code"] == "not_ready"
 
 
 def test_deleting_a_published_event_takes_everything_with_it(pipeline, world):

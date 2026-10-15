@@ -171,14 +171,11 @@ def test_the_history_outlives_a_deleted_event(pipeline, world):
     assert rows[-1].details == {"event_id": event_id, "event_name": "Intro to ML"}
 
 
-def test_an_edit_while_the_teams_work_on_it_is_flagged(pipeline, world):
+def test_a_super_admin_cannot_edit_while_the_teams_work_on_it(pipeline, world):
     submit(pipeline, world["request_id"])
-    admin = pipeline.person("Admin")
-    pipeline.sign_in(admin, super_admin=True)
-    pipeline.client.put(url(world, "/details"), json={"title": "Renamed by an admin"})
-    pipeline.client.put(url(world, "/briefs/design"), json={"brief": {"idea": "Changed"}})
-    history = pipeline.client.get(url(world)).json()["history"]
-    assert [(h["action"], h["details"]) for h in history[-2:]] == [
-        ("details_edited", {"after_submit": True}),
-        ("brief_edited", {"team": "design", "after_submit": True}),
-    ]
+    pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
+    details = pipeline.client.put(url(world, "/details"), json={"title": "Renamed by an admin"})
+    brief = pipeline.client.put(url(world, "/briefs/design"), json={"brief": {"idea": "Changed"}})
+    assert [details.status_code, brief.status_code] == [409, 409]
+    assert {details.json()["code"], brief.json()["code"]} == {"not_editable"}
+    assert pipeline.client.get(url(world)).json()["can_edit"] is False

@@ -14,8 +14,19 @@ plan and every decision are on Notion (GDG → Features → Events pipeline).
 
 `app/services/department_permissions.py`. A department's current-semester
 leader and VPs act for it and can grant that to its members; super admins act
-for every department and skip the time rules (lockout, bans, taken days, the
-4-day limit, the return window). Design, Logistics and Media are the
+for every department and may book a banned day, change a request's dates while
+it still holds them, and cancel a request at any stage before publish.
+
+A super admin may also book over other requests (booking or re-dating), never
+over a published event. `GET /pipeline/overlaps?from=&to=` says which requests
+would be bumped and who each email goes to; the booking then says, in `bumps`,
+what happens to each one: `reschedule` sends it back to a draft holding no
+dates (`undated_reason` `overridden`; its details and briefs stay, the teams'
+parts go back to briefs and Logistics' confirmation is dropped), `cancel`
+cancels it. Its department gets a notification and an email either way. Every other rule binds them too: the lockout, the 4-day limit, one
+live hold per department, the 24-hour hold at submit, details frozen after
+submit, Design's one return within two days, and publish only once every team
+is done. Design, Logistics and Media are the
 departments on the current semester's roster whose names contain those words,
 ignoring case (`app/DB/pipeline_teams.py`); none or two matches leaves the team
 unset, and submit says so. Their leaders and VPs get the team's permissions
@@ -61,7 +72,7 @@ Every "who" sits next to its "when". On `event_requests`:
 
 `pipeline_history` (`app/services/pipeline_history.py`) keeps everything in
 order, written in the same transaction as the change: booking, new dates,
-edits (with a flag when a super admin edits after submit), submit, return
+edits, submit, return
 (with the notes), resubmit (with any lateness), Logistics' confirmation edits
 and date moves (from and to), every poster upload (with the one it replaced),
 each team finishing, publish, cancel, bans (on the calendar and on each

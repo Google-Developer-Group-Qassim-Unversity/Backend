@@ -50,6 +50,7 @@ from app.services import event_pipeline_clock as clock
 from app.services import pipeline_history
 from app.services import pipeline_notifications as notifications
 from app.services import pipeline_notion as notion
+from app.services.pipeline_notifications import PendingEmail
 from app.services.permissions.dependencies import Caller, CurrentCaller
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.guards import Require, Staff
@@ -180,12 +181,26 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=EventRequestDetail)
-def book_event_request(body: BookRequest, session: DB, caller: CurrentCaller):
-    """Book a date range: a new draft that holds those days for 24 hours."""
+def book_event_request(body: BookRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
+    """Book a date range: a new draft that holds those days for 24 hours.
+
+    A super admin may book over other requests, saying in ``bumps`` what happens to each.
+    """
     with service.booking_lock(session):
-        request = service.book(session, caller, body.department_id, body.start_date, body.end_date)
+        request, bumped, emails = service.book(
+            session, caller, body.department_id, body.start_date, body.end_date, body.bumps
+        )
         session.commit()
+    _after_bumps(session, background_tasks, bumped, emails)
     return detail(session, caller, request)
+
+
+def _after_bumps(
+    session, background_tasks: BackgroundTasks, bumped: list[EventRequests], emails: list[PendingEmail | None]
+) -> None:
+    notifications.send_after_commit(session, background_tasks, emails)
+    for request in bumped:
+        notion.sync_after_commit(background_tasks, request)
 
 
 @router.get("", status_code=status.HTTP_200_OK, response_model=PaginatedEventRequests)
@@ -241,12 +256,15 @@ def get_event_request(request_id: str, session: DB, caller: CurrentCaller):
 
 
 @router.put("/{request_id}/dates", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def redate_event_request(request_id: str, body: RedateRequest, session: DB, caller: CurrentCaller):
+def redate_event_request(
+    request_id: str, body: RedateRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
+):
     """New dates for a request that lost its own; a draft gets a fresh 24-hour hold."""
     with service.booking_lock(session):
         request = service.get_request_for(session, caller, request_id, lock=True)
-        service.redate(session, caller, request, body.start_date, body.end_date)
+        bumped, emails = service.redate(session, caller, request, body.start_date, body.end_date, body.bumps)
         session.commit()
+    _after_bumps(session, background_tasks, bumped, emails)
     return detail(session, caller, request)
 
 

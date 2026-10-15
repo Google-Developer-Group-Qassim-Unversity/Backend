@@ -236,7 +236,8 @@ def sync_request(request_id: str) -> bool:
             .where(EventRequestTasks.request_id == request_id, EventRequestTasks.team == PipelineTeam.DESIGN)
             .with_for_update()
         )
-        if request is None or task is None or task.status == EventRequestTaskStatus.BRIEF:
+        # A request bumped back to a draft has its card already; it says so.
+        if request is None or task is None or (task.status == EventRequestTaskStatus.BRIEF and not task.notion_page_id):
             return False
         if not task.notion_sync_pending:
             return True
@@ -309,7 +310,8 @@ def card_status(request: EventRequests, task: EventRequestTasks) -> str:
         return STATUS_PUBLISHED
     if task.status == EventRequestTaskStatus.DONE:
         return STATUS_DONE
-    if task.status == EventRequestTaskStatus.RETURNED:
+    # BRIEF with a card: a super admin bumped the request back to a draft.
+    if task.status in (EventRequestTaskStatus.RETURNED, EventRequestTaskStatus.BRIEF):
         return STATUS_RETURNED
     return STATUS_NEW
 

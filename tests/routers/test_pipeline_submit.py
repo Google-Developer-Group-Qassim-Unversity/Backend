@@ -66,8 +66,11 @@ def test_design_other_needs_its_text(pipeline, world):
     assert "design.design_type_other" in pipeline.client.get(f"/pipeline/requests/{request_id}").json()["missing"]
 
 
-def test_submit_is_refused_after_the_hold_expired(pipeline, world):
+@pytest.mark.parametrize("super_admin", [False, True])
+def test_submit_is_refused_after_the_hold_expired(pipeline, world, super_admin):
     request_id = book_complete(pipeline, world["ai"])
+    if super_admin:
+        pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
     pipeline.freeze(pipeline.now + timedelta(hours=25))
     response = submit(pipeline, request_id)
     assert response.status_code == 409
