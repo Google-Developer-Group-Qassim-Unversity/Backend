@@ -118,11 +118,16 @@ def test_dates_logistics_moved_say_from_what_to_what(pipeline, world):
     confirmation = next(t for t in tasks if t["team"] == "logistics")["deliverable"]
     confirmation.update(start_date="2026-07-22", end_date="2026-07-22", day_modes={"2026-07-22": "online"})
     confirmation["meet_link"] = MEET_LINK
+    confirmation["change_reason"] = "The hall was taken"
     pipeline.client.put(url(world, "/deliverables/logistics"), json={"deliverable": confirmation})
     body = pipeline.client.post(url(world, "/tasks/logistics/complete")).json()
     moved = next(h for h in body["history"] if h["action"] == "dates_moved")
     assert moved["actor"] == ref(world["people"]["logistics"])
-    assert moved["details"] == {"from": ["2026-07-20", "2026-07-21"], "to": ["2026-07-22", "2026-07-22"]}
+    assert moved["details"] == {
+        "from": ["2026-07-20", "2026-07-21"],
+        "to": ["2026-07-22", "2026-07-22"],
+        "reason": "The hall was taken",
+    }
 
 
 def test_what_the_sweep_did_has_no_person(pipeline, world):

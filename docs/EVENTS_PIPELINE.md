@@ -78,6 +78,27 @@ JSON on the team's `event_request_tasks` row (`deliverable`,
   (`POST .../tasks/logistics/complete`) checks it, and other dates move the
   request under the booking rules, inside the booking lock; the requesting
   department gets a `dates_changed` notification and email.
+- **What Logistics changes, it explains.** `event_deliverables.changes`
+  compares the confirmation with the prefill (`CONFIRMED_FIELDS`: dates, day
+  modes, times, venue, room, type, description; a blank on either side is
+  not a change). Any change makes `change_reason` required
+  (`confirm.change_reason` in `deliverable_missing`; the task's
+  `confirmation_changes` lists the fields). The reason and the list of
+  changes go to the requesting department: with the `dates_changed` email
+  when the dates moved, otherwise with a `confirmation_changed` one; both
+  land in the notification payload and in the history (`dates_moved`, and
+  Logistics' `task_done`).
+- **A Meet link can be generated** (`POST .../deliverables/logistics/meet`)
+  when the confirmation has an online day, dates and times: a calendar event
+  with a Meet room on the club's events calendar, through the organizer
+  account in `GOOGLE_MEET_*` (`app/services/google_meet.py`; the room is set
+  open to anyone with the link, hosts present, attendance report, nothing
+  recorded). The link and the calendar event id are kept on the confirmation;
+  generating again replaces both and deletes the old event. Confirming moves
+  the calendar event to the confirmed times after the commit, best effort.
+  `actions.can_generate_meet` is false, and the button hidden, until the four
+  settings are set. The team's calendar entry (below) shows the link in its
+  description like any other Meet link, through its own sync.
 - **Design uploads the poster** (`POST .../poster`, PNG/JPEG/WebP up to
   10 MB, stored in R2 under `event-images/`). Design can replace it until the
   event is published.

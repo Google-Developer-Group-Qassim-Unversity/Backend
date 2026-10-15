@@ -1391,6 +1391,8 @@ class PipelineNotificationKind(str, enum.Enum):
     DATES_CHANGED = "dates_changed"
     OVERRIDDEN = "overridden"
     CANCELLED = "cancelled"
+    # Logistics confirmed the event with another time, place or detail than the one requested, but the same dates.
+    CONFIRMATION_CHANGED = "confirmation_changed"
 
 
 class PipelineNotifications(Base):

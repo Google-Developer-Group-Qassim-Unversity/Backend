@@ -51,9 +51,12 @@ def test_the_confirmation_opens_prefilled_from_the_request(pipeline, world):
         "venue": "التيك فالي (60)",
         "room": None,
         "meet_link": None,
+        "meet_event_id": None,
         "event_type": "workshop",
         "description": "Hands-on machine learning",
+        "change_reason": None,
     }
+    assert task["confirmation_changes"] == []
     # One day is online, and only Logistics knows the Meet link.
     assert task["deliverable_missing"] == ["confirm.meet_link"]
 
@@ -111,7 +114,15 @@ def test_confirming_other_dates_moves_the_request_and_tells_the_department(pipel
         )
     )
     assert moved.department_id == world["ai"].id
-    assert moved.payload == {"from": ["2026-07-20", "2026-07-21"], "to": ["2026-07-22", "2026-07-22"]}
+    assert moved.payload == {
+        "from": ["2026-07-20", "2026-07-21"],
+        "to": ["2026-07-22", "2026-07-22"],
+        "changes": [
+            {"field": "start_date", "from": "2026-07-20", "to": "2026-07-22"},
+            {"field": "end_date", "from": "2026-07-21", "to": "2026-07-22"},
+        ],
+        "reason": REASON,
+    }
     subjects = [b.params["subject"] for b in pipeline.outbound.to("/blasts")]
     assert any("dates changed" in s.lower() for s in subjects)
 
@@ -134,9 +145,93 @@ def test_logistics_cannot_move_a_request_onto_a_taken_day(pipeline, world):
     assert task["status"] == "open"
 
 
+REASON = "The hall was taken that day; the university offered Wednesday instead."
+
+
 def finish_with(pipeline, world, **changes):
-    assert save(pipeline, world, meet_link=MEET_LINK, **changes).status_code == 200
+    """Confirm with ``changes`` to the prefilled form, giving the reason any change needs."""
+    assert save(pipeline, world, meet_link=MEET_LINK, change_reason=REASON, **changes).status_code == 200
     return pipeline.client.post(url(world, "/tasks/logistics/complete"))
+
+
+# --------------------------------------------------------------------------- changes need a reason
+
+
+def test_a_change_from_the_request_needs_a_reason(pipeline, world):
+    body = save(pipeline, world, meet_link=MEET_LINK, daily_start_time="11:00").json()
+    task = logistics_task(body)
+    assert task["confirmation_changes"] == ["daily_start_time"]
+    assert task["deliverable_missing"] == ["confirm.change_reason"]
+
+    response = pipeline.client.post(url(world, "/tasks/logistics/complete"))
+    assert response.status_code == 422
+    assert [e["loc"] for e in response.json()["detail"]] == [["confirm", "change_reason"]]
+
+    assert save(pipeline, world, change_reason="  ").status_code == 200  # blank is still missing
+    assert pipeline.client.post(url(world, "/tasks/logistics/complete")).status_code == 422
+    assert save(pipeline, world, change_reason=REASON).status_code == 200
+    body = pipeline.client.post(url(world, "/tasks/logistics/complete")).json()
+    assert logistics_task(body)["status"] == "done"
+    assert logistics_task(body)["deliverable"]["change_reason"] == REASON
+
+
+def test_the_department_hears_what_changed_and_why(pipeline, world):
+    response = finish_with(pipeline, world, daily_start_time="11:00", venue="بيت الثقافة")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["start_date"], body["end_date"]) == ("2026-07-20", "2026-07-21")  # the dates did not move
+
+    changed = pipeline.session.scalar(
+        select(PipelineNotifications).where(
+            PipelineNotifications.request_id == world["request_id"],
+            PipelineNotifications.kind == "confirmation_changed",
+        )
+    )
+    assert changed.department_id == world["ai"].id
+    assert changed.payload == {
+        "changes": [
+            {"field": "daily_start_time", "from": "10:00:00", "to": "11:00:00"},
+            {"field": "venue", "from": "التيك فالي (60)", "to": "بيت الثقافة"},
+        ],
+        "reason": REASON,
+    }
+    assert not pipeline.session.scalar(
+        select(PipelineNotifications).where(
+            PipelineNotifications.request_id == world["request_id"], PipelineNotifications.kind == "dates_changed"
+        )
+    )
+    blast = next(b for b in pipeline.outbound.to("/blasts") if "details changed" in b.params["subject"].lower())
+    html = blast.text
+    assert REASON in html
+    assert "Start time" in html and "10:00" in html and "11:00" in html
+    assert "بيت الثقافة" in html
+
+    done = next(h for h in body["history"] if h["action"] == "task_done" and h["details"]["team"] == "logistics")
+    assert done["details"]["reason"] == REASON
+    assert [c["field"] for c in done["details"]["changes"]] == ["daily_start_time", "venue"]
+
+
+def test_confirming_as_requested_needs_no_reason_and_sends_nothing(pipeline, world):
+    assert save(pipeline, world, meet_link=MEET_LINK, room="B12").status_code == 200  # filling a blank
+    task = logistics_task(pipeline.client.get(url(world)).json())
+    assert task["confirmation_changes"] == []
+    assert task["deliverable_missing"] == []
+    body = pipeline.client.post(url(world, "/tasks/logistics/complete")).json()
+    assert logistics_task(body)["status"] == "done"
+    kinds = set(
+        pipeline.session.scalars(
+            select(PipelineNotifications.kind).where(PipelineNotifications.request_id == world["request_id"])
+        ).all()
+    )
+    assert not kinds & {"confirmation_changed", "dates_changed"}
+
+
+def test_a_change_undone_drops_its_reason(pipeline, world):
+    assert save(pipeline, world, meet_link=MEET_LINK, daily_start_time="11:00", change_reason=REASON).status_code == 200
+    body = save(pipeline, world, daily_start_time="10:00").json()
+    assert logistics_task(body)["confirmation_changes"] == []
+    body = pipeline.client.post(url(world, "/tasks/logistics/complete")).json()
+    assert logistics_task(body)["deliverable"]["change_reason"] is None
 
 
 # --------------------------------------------------------------------------- points tier

@@ -236,6 +236,7 @@ def test_the_event_is_what_logistics_confirmed(pipeline, world):
         venue="بيت الثقافة",
         room="Hall 2",
         description="Confirmed description",
+        change_reason="The hall was taken; the university offered the 27th",
     )
     assert pipeline.client.put(f"{url}/deliverables/logistics", json={"deliverable": confirmation}).status_code == 200
     assert pipeline.client.post(f"{url}/tasks/logistics/complete").status_code == 200
