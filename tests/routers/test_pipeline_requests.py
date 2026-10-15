@@ -70,7 +70,7 @@ def test_booking_a_banned_day_is_refused(pipeline, world):
     assert response.json()["code"] == "day_banned"
 
 
-def test_a_taken_day_cannot_be_booked_but_a_super_admin_can_stack(pipeline, world):
+def test_a_taken_day_cannot_be_booked(pipeline, world):
     pipeline.sign_in(world["ai_leader"])
     assert book(pipeline, world["ai"]).status_code == 201
 
@@ -78,9 +78,6 @@ def test_a_taken_day_cannot_be_booked_but_a_super_admin_can_stack(pipeline, worl
     response = book(pipeline, world["cyber"], "2026-07-21", "2026-07-22")
     assert response.status_code == 409
     assert response.json()["code"] == "day_taken"
-
-    pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
-    assert book(pipeline, world["cyber"], "2026-07-21", "2026-07-22").status_code == 201
 
 
 def test_an_expired_hold_is_free_without_any_sweep(pipeline, world):

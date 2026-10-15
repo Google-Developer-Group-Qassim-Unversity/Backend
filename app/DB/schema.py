@@ -1114,6 +1114,16 @@ class EventRequestStage(str, enum.Enum):
 class EventRequestUndatedReason(str, enum.Enum):
     HOLD_EXPIRED = "hold_expired"
     DAY_BANNED = "day_banned"
+    # A super admin booked these days for another request.
+    OVERRIDDEN = "overridden"
+
+
+class BumpOutcome(str, enum.Enum):
+    """What happens to a request a super admin books over. Never stored: the history records it as text."""
+
+    # Back to a draft holding no dates; the department picks new ones and submits again.
+    RESCHEDULE = "reschedule"
+    CANCEL = "cancel"
 
 
 class EventRequestType(str, enum.Enum):
@@ -1348,6 +1358,7 @@ class PipelineNotificationKind(str, enum.Enum):
     MEDIA_RECEIVED = "media_received"
     READY_TO_PUBLISH = "ready_to_publish"
     DATES_CHANGED = "dates_changed"
+    OVERRIDDEN = "overridden"
 
 
 class PipelineNotifications(Base):
@@ -1422,6 +1433,7 @@ class PipelineHistoryAction(str, enum.Enum):
     DAYS_BANNED = "days_banned"
     DAYS_UNBANNED = "days_unbanned"
     EVENT_DELETED = "event_deleted"
+    OVERRIDDEN = "overridden"
 
 
 class PipelineHistory(Base):

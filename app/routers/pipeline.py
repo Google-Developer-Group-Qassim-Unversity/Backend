@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
 from app.DB import pipeline_teams as team_queries
+from app.config import config
 from app.DB.schema import PipelineTeam
 from app.dependencies import DB
 from app.exceptions import DepartmentForbidden
@@ -22,7 +23,10 @@ from app.routers.pipeline_models import (
     InboxItem,
     NotificationItem,
     NotificationRequest,
+    OverlapEntry,
+    OverlapResponse,
     PaginatedNotifications,
+    PersonRef,
     UnbanDaysRequest,
     PipelineDepartment,
     PipelineMeResponse,
@@ -118,6 +122,33 @@ def get_pipeline_calendar(
             )
             for d in days
         ],
+    )
+
+
+@router.get(
+    "/overlaps", status_code=status.HTTP_200_OK, response_model=OverlapResponse, dependencies=[Depends(SuperAdmin)]
+)
+def get_pipeline_overlaps(
+    session: DB,
+    start: Annotated[date, Query(alias="from")],
+    end: Annotated[date, Query(alias="to")],
+    ignore: Annotated[str | None, Query(description="The request being re-dated, which never bumps itself")] = None,
+):
+    """The requests a super admin would bump by booking ``from``..``to``, and who each email goes to."""
+    pipeline_service.check_range(start, end)
+    return OverlapResponse(
+        requests=[
+            OverlapEntry(
+                request=summary(request),
+                recipients=[
+                    PersonRef(member_id=m.id, name=m.name)
+                    for m in notifications.department_members(session, request.department_id)
+                    if m.email
+                ],
+            )
+            for request in pipeline_service.overlapping(session, start, end, ignore)
+        ],
+        emails_live=config.PIPELINE_EMAILS_LIVE,
     )
 
 

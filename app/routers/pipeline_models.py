@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.DB.schema import (
+    BumpOutcome,
     EventRequestAudience,
     EventRequestLocationScope,
     EventRequestRegistration,
@@ -101,11 +102,14 @@ class BookRequest(BaseModel):
     department_id: int = Field(gt=0)
     start_date: date
     end_date: date
+    # A super admin booking over other requests: what happens to each, by request id (``GET /pipeline/overlaps``).
+    bumps: dict[str, BumpOutcome] = Field(default_factory=dict)
 
 
 class RedateRequest(BaseModel):
     start_date: date
     end_date: date
+    bumps: dict[str, BumpOutcome] = Field(default_factory=dict)
 
 
 class EventDetails(BaseModel):
@@ -310,3 +314,17 @@ class SaveDeliverableRequest(BaseModel):
     """A draft of what the team hands over, saved as it is. Its fields are the team's form (app/services/event_deliverables.py)."""
 
     deliverable: dict
+
+
+class OverlapEntry(BaseModel):
+    request: EventRequestSummary
+    # Who its department's email goes to: every current member with an email.
+    recipients: list[PersonRef]
+
+
+class OverlapResponse(BaseModel):
+    """What booking ``from``..``to`` would bump. A published event cannot be bumped: the booking is refused."""
+
+    requests: list[OverlapEntry]
+    # Off: the emails go only to the super admin, as trial copies.
+    emails_live: bool

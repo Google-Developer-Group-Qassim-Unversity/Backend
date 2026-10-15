@@ -26,6 +26,7 @@ from app.DB import event_pipeline as queries
 from app.DB import actions as action_queries
 from app.DB import logs as log_queries
 from app.DB.schema import (
+    BumpOutcome,
     Departments,
     EventsLocationType,
     EventRequests,
@@ -287,21 +288,111 @@ def booking_lock(session: Session):
     yield
 
 
-def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: str | None) -> None:
-    """The length and the lockout bind everyone. A super admin may book a banned or taken day."""
+def overlapping(
+    session: Session, start: date, end: date, ignore_id: str | None = None, lock: bool = False
+) -> list[EventRequests]:
+    """The requests holding any of ``start``..``end`` right now."""
+    now = clock.now()
+    return [
+        r
+        for r in queries.get_dated_requests(session, start, end, lock=lock)
+        if r.id != ignore_id and takes_its_days(r, now)
+    ]
+
+
+def _check_bookable(
+    session: Session,
+    caller: Caller,
+    start: date,
+    end: date,
+    ignore_id: str | None,
+    bumps: dict[str, BumpOutcome] | None = None,
+) -> list[EventRequests]:
+    """Whether ``start``..``end`` can be booked; returns the requests to bump off them.
+
+    The length and the lockout bind everyone. A super admin may book a banned
+    day, and may book over other requests when ``bumps`` says what happens to
+    each one of them (``None``: this change cannot bump, so a taken day is
+    refused). A published event is never bumped.
+    """
     check_range(start, end, MAX_BOOKING_DAYS)
     if start < first_bookable_day():
         raise PipelineConflict(
             "day_locked", f"The first day you can book is {first_bookable_day().isoformat()}", status_code=409
         )
-    if caller.access.is_super_admin:
-        return
-    if queries.get_bans(session, start, end, lock=True):
+    super_admin = caller.access.is_super_admin
+    if not super_admin and queries.get_bans(session, start, end, lock=True):
         raise PipelineConflict("day_banned", "Logistics closed one of these days")
-    now = clock.now()
-    for request in queries.get_dated_requests(session, start, end, lock=True):
-        if request.id != ignore_id and takes_its_days(request, now):
-            raise PipelineConflict("day_taken", "One of these days is already taken")
+    taking = overlapping(session, start, end, ignore_id, lock=True)
+    if not taking:
+        return []
+    if not super_admin or bumps is None:
+        raise PipelineConflict("day_taken", "One of these days is already taken")
+    if any(r.stage == EventRequestStage.PUBLISHED for r in taking):
+        raise PipelineConflict("day_published", "A published event is on one of these days")
+    if set(bumps) != {r.id for r in taking}:
+        raise PipelineConflict(
+            "overlap_undecided", "Other requests hold these days; choose what happens to each of them"
+        )
+    return taking
+
+
+def bump(
+    session: Session, caller: Caller, request: EventRequests, outcome: BumpOutcome, by: EventRequests
+) -> PendingEmail | None:
+    """A super admin booked ``by`` over ``request``'s days: reschedule or cancel it, and tell its department.
+
+    Rescheduling sends it back to a draft holding no dates, whatever stage it
+    reached. Its details and briefs stay; the teams' parts go back to briefs
+    and Logistics' confirmation, made for the old dates, is dropped. The
+    department books new dates and submits again.
+    """
+    lost = {"start_date": request.start_date.isoformat(), "end_date": request.end_date.isoformat()}  # type: ignore[union-attr]
+    details = {**lost, "outcome": outcome.value, "by_request_id": by.id, "by_department_id": by.department_id}
+    history.record(session, PipelineHistoryAction.OVERRIDDEN, caller.member, request, details)
+    notion.mark(session, request)
+    if outcome == BumpOutcome.CANCEL:
+        request.stage = EventRequestStage.CANCELLED
+        request.hold_expires_at = None
+        request.cancelled_at = clock.now()
+        request.cancelled_by = caller.member.id
+    else:
+        request.stage = EventRequestStage.DRAFT
+        request.return_due_at = None
+        _undate(request, EventRequestUndatedReason.OVERRIDDEN)
+        for task in request.tasks:
+            task.status = EventRequestTaskStatus.BRIEF
+            task.opened_at = None
+            task.done_at = None
+            task.done_by = None
+            if task.team == PipelineTeam.LOGISTICS:
+                task.deliverable = None
+                task.deliverable_version = None
+    notifications.notify(session, request.department_id, request, PipelineNotificationKind.OVERRIDDEN, details)
+    session.flush()
+    logger.info("Request %s bumped (%s) by request %s", request.id, outcome.value, by.id)
+    return notifications.department_email(
+        session,
+        request.department_id,
+        request,
+        PipelineNotificationKind.OVERRIDDEN,
+        caller.member,
+        _BUMP_NOTES[outcome].format(start=lost["start_date"], end=lost["end_date"]),
+    )
+
+
+_BUMP_NOTES = {
+    BumpOutcome.RESCHEDULE: (
+        "حجز مشرف عام تواريخكم ({start} → {end}) لفعالية أخرى. عاد طلبكم مسودة بلا تواريخ، وكل بياناته محفوظة؛ "
+        "احجزوا تواريخ جديدة ثم أرسلوه من جديد.\n"
+        "A super admin booked your dates ({start} → {end}) for another event. Your request is a draft again with "
+        "no dates, everything in it kept; book new dates and submit it again."
+    ),
+    BumpOutcome.CANCEL: (
+        "حجز مشرف عام تواريخكم ({start} → {end}) لفعالية أخرى، وأُلغي طلبكم.\n"
+        "A super admin booked your dates ({start} → {end}) for another event, and your request was cancelled."
+    ),
+}
 
 
 def _check_one_live_hold(session: Session, department_id: int, ignore_id: str | None = None) -> None:
@@ -314,13 +405,23 @@ def _check_one_live_hold(session: Session, department_id: int, ignore_id: str | 
         )
 
 
-def book(session: Session, caller: Caller, department_id: int, start: date, end: date) -> EventRequests:
-    """Create a draft holding ``start``..``end`` for 24 hours. Call inside ``booking_lock``."""
+def book(
+    session: Session,
+    caller: Caller,
+    department_id: int,
+    start: date,
+    end: date,
+    bumps: dict[str, BumpOutcome] | None = None,
+) -> tuple[EventRequests, list[EventRequests], list[PendingEmail | None]]:
+    """Create a draft holding ``start``..``end`` for 24 hours. Call inside ``booking_lock``.
+
+    Returns the request, the requests it bumped (see ``bump``) and their emails.
+    """
     require_request_for(caller, department_id)
     if session.get(Departments, department_id) is None:
         raise NotFound("Department", department_id)
     _check_one_live_hold(session, department_id)
-    _check_bookable(session, caller, start, end, None)
+    bumped = _check_bookable(session, caller, start, end, None, bumps or {})
     request = EventRequests(
         department_id=department_id,
         requested_by=caller.member.id,
@@ -339,14 +440,23 @@ def book(session: Session, caller: Caller, department_id: int, start: date, end:
         {"start_date": start.isoformat(), "end_date": end.isoformat()},
     )
     logger.info("Request %s booked %s..%s for department %s", request.id, start, end, department_id)
-    return request
+    emails = [bump(session, caller, r, (bumps or {})[r.id], request) for r in bumped]
+    return request, bumped, emails
 
 
-def redate(session: Session, caller: Caller, request: EventRequests, start: date, end: date) -> None:
+def redate(
+    session: Session,
+    caller: Caller,
+    request: EventRequests,
+    start: date,
+    end: date,
+    bumps: dict[str, BumpOutcome] | None = None,
+) -> tuple[list[EventRequests], list[PendingEmail | None]]:
     """Give a request that lost its dates new ones. Call inside ``booking_lock``.
 
     A draft gets a fresh 24-hour hold. A submitted request that lost its days
-    to a ban takes the new ones outright, as its old ones were.
+    to a ban takes the new ones outright, as its old ones were. Returns the
+    requests it bumped (see ``bump``) and their emails.
     """
     require_request_for(caller, request.department_id)
     if request.stage in (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED):
@@ -356,7 +466,7 @@ def redate(session: Session, caller: Caller, request: EventRequests, start: date
     is_draft = request.stage == EventRequestStage.DRAFT
     if is_draft:
         _check_one_live_hold(session, request.department_id, ignore_id=request.id)
-    _check_bookable(session, caller, start, end, request.id)
+    bumped = _check_bookable(session, caller, start, end, request.id, bumps or {})
     history.record(
         session,
         PipelineHistoryAction.REDATED,
@@ -377,6 +487,7 @@ def redate(session: Session, caller: Caller, request: EventRequests, start: date
         request.day_modes = {k: v for k, v in request.day_modes.items() if k in kept} or None
     session.flush()
     logger.info("Request %s re-dated to %s..%s", request.id, start, end)
+    return bumped, [bump(session, caller, r, (bumps or {})[r.id], request) for r in bumped]
 
 
 def cancel(session: Session, caller: Caller, request: EventRequests) -> None:

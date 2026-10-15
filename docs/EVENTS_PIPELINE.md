@@ -14,9 +14,16 @@ plan and every decision are on Notion (GDG → Features → Events pipeline).
 
 `app/services/department_permissions.py`. A department's current-semester
 leader and VPs act for it and can grant that to its members; super admins act
-for every department and may book a banned or taken day, change a request's
-dates while it still holds them, and cancel a request at any stage before
-publish. Every other rule binds them too: the lockout, the 4-day limit, one
+for every department and may book a banned day, change a request's dates while
+it still holds them, and cancel a request at any stage before publish.
+
+A super admin may also book over other requests (booking or re-dating), never
+over a published event. `GET /pipeline/overlaps?from=&to=` says which requests
+would be bumped and who each email goes to; the booking then says, in `bumps`,
+what happens to each one: `reschedule` sends it back to a draft holding no
+dates (`undated_reason` `overridden`; its details and briefs stay, the teams'
+parts go back to briefs and Logistics' confirmation is dropped), `cancel`
+cancels it. Its department gets a notification and an email either way. Every other rule binds them too: the lockout, the 4-day limit, one
 live hold per department, the 24-hour hold at submit, details frozen after
 submit, Design's one return within two days, and publish only once every team
 is done. Design, Logistics and Media are the
