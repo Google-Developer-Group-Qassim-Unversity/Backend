@@ -83,6 +83,16 @@ class Settings(BaseSettings):
     # Design's Notion board (app/services/pipeline_notion.py). Both unset: no card is written, nothing retries.
     NOTION_TOKEN: Optional[str] = None
     NOTION_DESIGN_DATABASE_ID: Optional[str] = None
+    # The team's Google Calendar (app/services/pipeline_calendar.py), written as
+    # the account that can edit it, through an OAuth client of its own that is
+    # published (in production), so its refresh token does not expire after 7
+    # days like the club's testing client's. Token minted with
+    # `scripts/setup_google_oauth.py --calendar`. The client falls back to
+    # GOOGLE_CLIENT_ID/SECRET. Id or token unset: no entry is written, nothing retries.
+    GOOGLE_CALENDAR_ID: Optional[str] = None
+    GOOGLE_CALENDAR_REFRESH_TOKEN: Optional[str] = None
+    GOOGLE_CALENDAR_CLIENT_ID: Optional[str] = None
+    GOOGLE_CALENDAR_CLIENT_SECRET: Optional[str] = None
 
     # Staging and development. Comma-separated developer addresses that get the
     # emails nobody clicked for (app/services/email_redirect.py).
@@ -252,6 +262,27 @@ class Config:
     def notion_enabled(self) -> bool:
         """Design's Notion board is written only when both its settings are set."""
         return bool(get_settings().NOTION_TOKEN and get_settings().NOTION_DESIGN_DATABASE_ID)
+
+    @property
+    def GOOGLE_CALENDAR_ID(self) -> Optional[str]:
+        return get_settings().GOOGLE_CALENDAR_ID
+
+    @property
+    def GOOGLE_CALENDAR_REFRESH_TOKEN(self) -> Optional[str]:
+        return get_settings().GOOGLE_CALENDAR_REFRESH_TOKEN
+
+    @property
+    def GOOGLE_CALENDAR_CLIENT_ID(self) -> str:
+        return get_settings().GOOGLE_CALENDAR_CLIENT_ID or self.GOOGLE_CLIENT_ID
+
+    @property
+    def GOOGLE_CALENDAR_CLIENT_SECRET(self) -> str:
+        return get_settings().GOOGLE_CALENDAR_CLIENT_SECRET or self.GOOGLE_CLIENT_SECRET
+
+    @property
+    def calendar_enabled(self) -> bool:
+        """The team's Google Calendar is written only when its id and its account's token are set."""
+        return bool(get_settings().GOOGLE_CALENDAR_ID and get_settings().GOOGLE_CALENDAR_REFRESH_TOKEN)
 
     @property
     def GOOGLE_ALLOWED_EMAIL_DOMAINS(self) -> list[str]:

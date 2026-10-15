@@ -1587,6 +1587,28 @@ class PipelinePenalties(Base):
     applied_log_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
 
+class PipelineCalendarEntries(Base):
+    """A request's entry on the team's Google Calendar (``app/services/pipeline_calendar.py``).
+
+    ``sync_pending`` is set in the same transaction as every change the entry
+    should show; the sync after commit (or the sweep) clears it. ``request_id``
+    has no foreign key: deleting a published event deletes its request, and
+    this row has to outlive it so the entry still comes off the calendar.
+    """
+
+    __tablename__ = "pipeline_calendar_entries"
+    __table_args__ = (
+        Index("uq_pipeline_calendar_entries_request", "request_id", unique=True),
+        Index("ix_pipeline_calendar_entries_pending", "sync_pending"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    request_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    sync_pending: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    error: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+
+
 class EventContentLinks(Base):
     """Links an event's content (slides, recordings) on the public event page.
 

@@ -322,6 +322,7 @@ class SweepResponse(BaseModel):
     expired_holds: int = 0
     penalties_grown: int = 0
     notion_synced: int = 0
+    calendar_synced: int = 0
 
 
 class ReturnRequest(BaseModel):
