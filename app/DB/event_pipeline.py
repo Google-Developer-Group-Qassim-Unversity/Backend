@@ -4,9 +4,20 @@ from collections.abc import Sequence
 from datetime import date, datetime
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session, selectinload
+from typing import Literal
 
-from app.DB.schema import BookingBans, EventRequestPartners, EventRequests, EventRequestStage, PipelineLocks
+from sqlalchemy.orm import Session, aliased, selectinload
+
+from app.DB.schema import (
+    BookingBans,
+    EventRequestPartners,
+    EventRequests,
+    EventRequestStage,
+    EventRequestTasks,
+    EventRequestTaskStatus,
+    PipelineLocks,
+    PipelineTeam,
+)
 
 
 def get_bans(session: Session, start: date, end: date, lock: bool = False) -> Sequence[BookingBans]:
@@ -87,21 +98,56 @@ def get_department_drafts_with_hold(session: Session, department_id: int, now: d
     ).all()
 
 
+# The stages a request ends in. Everything else is still moving.
+PAST_STAGES = (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED)
+
+
 def list_requests(
-    session: Session, department_ids: set[int] | None, stage: EventRequestStage | None, limit: int, offset: int
+    session: Session,
+    department_ids: set[int] | None,
+    stage: EventRequestStage | None,
+    limit: int,
+    offset: int,
+    *,
+    state: Literal["active", "past"] | None = None,
+    team: PipelineTeam | None = None,
+    team_statuses: Sequence[EventRequestTaskStatus] | None = None,
 ) -> tuple[int, Sequence[EventRequests]]:
-    """Newest first. ``department_ids=None`` means every department."""
+    """``department_ids=None`` means every department.
+
+    Cancelled requests show only when asked for, by ``stage`` or ``state="past"``.
+    ``team`` keeps the requests whose ``team`` part is in ``team_statuses``.
+
+    Newest first; past requests by when they ended, a team's finished parts by
+    when the team finished them.
+    """
     statement = select(EventRequests)
     if department_ids is not None:
         statement = statement.where(EventRequests.department_id.in_(department_ids))
     if stage is not None:
         statement = statement.where(EventRequests.stage == stage)
+    elif state == "past":
+        statement = statement.where(EventRequests.stage.in_(PAST_STAGES))
+    elif state == "active":
+        statement = statement.where(EventRequests.stage.not_in(PAST_STAGES))
     else:
         statement = statement.where(EventRequests.stage != EventRequestStage.CANCELLED)
+    task = None
+    if team is not None:
+        task = aliased(EventRequestTasks)
+        statement = statement.join(task, (task.request_id == EventRequests.id) & (task.team == team))
+        if team_statuses:
+            statement = statement.where(task.status.in_(team_statuses))
     total = session.scalar(select(func.count()).select_from(statement.subquery())) or 0
+    if task is not None and team_statuses and set(team_statuses) == {EventRequestTaskStatus.DONE}:
+        order = (task.done_at.desc(), EventRequests.id.desc())
+    elif state == "past":
+        order = (func.coalesce(EventRequests.published_at, EventRequests.updated_at).desc(), EventRequests.id.desc())
+    else:
+        order = (EventRequests.requested_at.desc(), EventRequests.id.desc())
     rows = session.scalars(
-        statement.options(selectinload(EventRequests.department))
-        .order_by(EventRequests.requested_at.desc(), EventRequests.id.desc())
+        statement.options(selectinload(EventRequests.department), selectinload(EventRequests.tasks))
+        .order_by(*order)
         .limit(limit)
         .offset(offset)
     ).all()

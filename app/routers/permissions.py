@@ -171,12 +171,22 @@ def get_member_access(member_id: int, session: DB):
     member = session.get(Members, member_id)
     if member is None:
         raise MemberNotFound(member_id)
+    return member_access(session, member)
+
+
+@router.get("/me", status_code=status.HTTP_200_OK, response_model=MemberAccessResponse, dependencies=[Depends(Staff)])
+def get_my_access_explained(session: DB, caller: CurrentCaller):
+    """The same answer as ``/members/{id}``, for the signed-in person: every staff member may see their own."""
+    return member_access(session, caller.member)
+
+
+def member_access(session, member: Members) -> MemberAccessResponse:
     explanation = explain_access(session, member)
     access = explanation.access()
     semester = session.get(Semesters, explanation.semester_id) if explanation.semester_id else None
     grants = {
         (row.department_id, row.permission): row
-        for row in (queries.list_member_grants(session, semester.id, member_id) if semester else ())
+        for row in (queries.list_member_grants(session, semester.id, member.id) if semester else ())
     }
 
     def held(department_id: int) -> list[HeldPermission]:

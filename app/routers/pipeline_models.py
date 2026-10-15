@@ -51,6 +51,11 @@ class PipelineMeResponse(BaseModel):
     has_access: bool
     departments: list[ActingDepartment]
     teams: list[PipelineTeamEntry]
+    # What the caller does as themselves, through their own roster, as if they
+    # were not a super admin. For anyone else these are simply what they can do.
+    # A super admin acts for everyone else on their behalf.
+    own_department_ids: list[int]
+    own_teams: list[PipelineTeam]
 
 
 class CalendarDayRequest(BaseModel):
@@ -140,6 +145,15 @@ class PersonRef(BaseModel):
     name: str
 
 
+class TaskState(BaseModel):
+    """Where one team's part of a request stands, for a list row."""
+
+    team: PipelineTeam
+    status: EventRequestTaskStatus
+    opened_at: UtcDateTime | None
+    done_at: UtcDateTime | None
+
+
 class EventRequestSummary(BaseModel):
     id: str
     department: PipelineDepartment
@@ -150,6 +164,10 @@ class EventRequestSummary(BaseModel):
     hold_expires_at: UtcDateTime | None
     undated_reason: EventRequestUndatedReason | None
     requested_at: UtcDateTime
+    published_at: UtcDateTime | None
+    # Where each team's part stands (briefs not yet sent included), so a list can
+    # say whose turn it is without loading every request.
+    task_states: list[TaskState]
 
 
 class TaskResponse(BaseModel):
@@ -206,7 +224,6 @@ class EventRequestDetail(EventRequestSummary):
     requested_by: PersonRef
     submitted_by: PersonRef | None
     returned_by: PersonRef | None
-    published_at: UtcDateTime | None
     published_by: PersonRef | None
     details: EventDetails
     partners: list[PipelineDepartment]

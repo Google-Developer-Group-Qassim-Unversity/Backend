@@ -217,6 +217,8 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "POST /permissions/super-admins": "super_admin",
     "DELETE /permissions/super-admins/{member_id:int}": "super_admin",
     "GET /permissions/members/{member_id:int}": "super_admin",
+    # Your own access, explained: every staff member can see theirs.
+    "GET /permissions/me": "admin.access",
     "GET /permissions/departments/{department_id:int}/grants": "permissions.grant for department",
     "POST /permissions/departments/{department_id:int}/grants": "permissions.grant for department",
     "DELETE /permissions/departments/{department_id:int}/grants/{grant_id}": "permissions.grant for department",
