@@ -44,6 +44,7 @@ from app.services import event_briefs
 from app.services import event_deliverables
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_history as history
+from app.services import pipeline_notion as notion
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail
 from app.services.permissions.catalogue import Perm
@@ -237,6 +238,7 @@ def ban(
                 PipelineNotificationKind.DATES_BANNED,
                 {**lost, "reason": reason},
             )
+            notion.mark(session, request)
             undated.append(request)
     logger.info(
         "Banned %d day(s) from %s to %s; %d request(s) lost their dates",
@@ -391,6 +393,7 @@ def cancel(session: Session, caller: Caller, request: EventRequests) -> None:
     request.cancelled_at = clock.now()
     request.cancelled_by = caller.member.id
     history.record(session, PipelineHistoryAction.CANCELLED, caller.member, request)
+    notion.mark(session, request)
     session.flush()
 
 
@@ -449,6 +452,8 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
         request,
         {"after_submit": True} if request.stage not in EDITABLE_STAGES else None,
     )
+    if request.stage not in EDITABLE_STAGES:
+        notion.mark(session, request)
     session.flush()
 
 
@@ -533,6 +538,8 @@ def save_brief(session: Session, caller: Caller, request: EventRequests, team: P
     if request.stage not in EDITABLE_STAGES:
         edit["after_submit"] = True
     history.record(session, PipelineHistoryAction.BRIEF_EDITED, caller.member, request, edit)
+    if request.stage not in EDITABLE_STAGES:
+        notion.mark(session, request)
     session.flush()
 
 
@@ -565,6 +572,7 @@ def submit(session: Session, caller: Caller, request: EventRequests) -> list[Pen
         task = ensure_task(session, request, team)
         task.status = EventRequestTaskStatus.OPEN
         task.opened_at = now
+    notion.mark(session, request, reopened=True)
     session.flush()
     logger.info("Request %s submitted to Design and Logistics", request.id)
     return [
@@ -631,6 +639,7 @@ def return_request(session: Session, caller: Caller, request: EventRequests, not
     task = get_task(request, PipelineTeam.DESIGN)
     task.status = EventRequestTaskStatus.RETURNED  # type: ignore[union-attr]
     notifications.notify(session, request.department_id, request, PipelineNotificationKind.RETURNED, {"notes": notes})
+    notion.mark(session, request)
     session.flush()
     logger.info("Request %s returned by Design", request.id)
     return notifications.department_email(
@@ -699,6 +708,7 @@ def resubmit(session: Session, caller: Caller, request: EventRequests) -> Pendin
     task = ensure_task(session, request, PipelineTeam.DESIGN)
     task.status = EventRequestTaskStatus.OPEN
     task.opened_at = now
+    notion.mark(session, request, reopened=True)
     session.flush()
     logger.info("Request %s resubmitted to Design", request.id)
     return reach_team(session, caller, request, PipelineTeam.DESIGN, PipelineNotificationKind.REQUEST_RECEIVED)
@@ -779,6 +789,7 @@ def set_poster(session: Session, caller: Caller, request: EventRequests, url: st
     )
     task.deliverable = {"poster_url": url}  # type: ignore[union-attr]
     task.deliverable_version = event_deliverables.DELIVERABLE_VERSION  # type: ignore[union-attr]
+    notion.mark(session, request)
     session.flush()
     logger.info("Request %s: Design uploaded the poster %s", request.id, url)
 
@@ -859,6 +870,7 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
                 session, request.department_id, request, PipelineNotificationKind.READY_TO_PUBLISH, caller.member
             )
         )
+    notion.mark(session, request)
     session.flush()
     logger.info("Request %s: %s done", request.id, team.value)
     return emails
@@ -972,6 +984,7 @@ def publish(session: Session, caller: Caller, request: EventRequests) -> int:
     request.published_at = clock.now()
     request.published_by = caller.member.id
     history.record(session, PipelineHistoryAction.PUBLISHED, caller.member, request, {"event_id": event.id})
+    notion.mark(session, request)
     session.flush()
     logger.info("Request %s published as event %s by member %s", request.id, event.id, caller.member.id)
     return event.id

@@ -78,6 +78,16 @@ prefixed `[تجربة · Trial]`, with the list of who would have received it. O
 it goes to every member of the department's current roster. Every send is an
 `email_jobs` row (type `blast`) and shows in the email jobs page.
 
+## Design's Notion board
+
+When a request reaches Design, the backend writes its card on the design
+team's Notion board and keeps it in sync - returned, resubmitted, poster
+uploaded, dates moved, done, published, cancelled - without blocking any step:
+the transition commits, the card is written after, and the sweep retries what
+failed. `app/services/pipeline_notion.py` says what a card holds; the setup steps
+are on Notion (Events pipeline → Design's Notion board). Off until
+`NOTION_TOKEN` and `NOTION_DESIGN_DATABASE_ID` are set.
+
 ## Publish
 
 `POST /pipeline/requests/{id}/publish` creates the event through
@@ -92,5 +102,4 @@ image. A late penalty is taken off the department's log for that event as a
 ## Not built yet
 
 - Brief attachments are links, not uploads.
-- Design's Notion request (waiting on the shape the design team wants).
 - Media's deliverables; no Google Calendar sync.

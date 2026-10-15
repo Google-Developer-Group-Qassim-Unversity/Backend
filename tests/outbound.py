@@ -214,8 +214,45 @@ def _default_response(request: httpx.Request) -> httpx.Response:
     if path == "/api/revalidate":
         return httpx.Response(200, json={"revalidated": True})
 
+    # Notion (app/services/notion_client.py): the design team's board.
+    if request.url.host == "api.notion.com":
+        return _notion_response(request)
+
     raise AssertionError(
         f"Unstubbed outbound request: {request.method} {request.url}\n"
         "Add it to tests/outbound.py:_default_response with the response the real "
         "service returns, or stub it in the test with outbound.stub(...)."
     )
+
+
+NOTION_PAGE_ID = "11111111-2222-3333-4444-555555555555"
+NOTION_PAGE_URL = "https://www.notion.so/Intro-to-ML-11111111222233334444555555555555"
+
+
+def _notion_response(request: httpx.Request) -> httpx.Response:
+    """The shapes Notion's public API (version 2022-06-28) answers with, as far as the sync reads them."""
+    path = request.url.path
+    if request.method == "GET" and path.startswith("/v1/databases/"):
+        return httpx.Response(200, json={"object": "database", "properties": {"Name": {"type": "title"}}})
+    if request.method == "PATCH" and path.startswith("/v1/databases/"):
+        return httpx.Response(200, json={"object": "database"})
+    if request.method == "POST" and path == "/v1/pages":
+        return httpx.Response(200, json={"object": "page", "id": NOTION_PAGE_ID, "url": NOTION_PAGE_URL})
+    if request.method == "PATCH" and path.startswith("/v1/pages/"):
+        return httpx.Response(200, json={"object": "page", "id": path.rsplit("/", 1)[1]})
+    if request.method == "GET" and path.endswith("/children"):
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"id": "block-ours", "type": "synced_block", "synced_block": {"synced_from": None}},
+                    {"id": "block-theirs", "type": "paragraph", "paragraph": {"rich_text": []}},
+                ],
+                "has_more": False,
+            },
+        )
+    if request.method == "PATCH" and path.endswith("/children"):
+        return httpx.Response(200, json={"results": []})
+    if request.method == "DELETE" and path.startswith("/v1/blocks/"):
+        return httpx.Response(200, json={"object": "block", "archived": True})
+    raise AssertionError(f"Unexpected Notion call: {request.method} {request.url}")

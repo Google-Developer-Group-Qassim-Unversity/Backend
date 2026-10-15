@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     # action sent it, marked as a trial copy; on, it goes to the department.
     PIPELINE_EMAILS_LIVE: bool = False
     ADMIN_APP_URL: str = "https://admin.gdg-q.com"
+    # Design's Notion board (app/services/pipeline_notion.py). Both unset: no card is written, nothing retries.
+    NOTION_TOKEN: Optional[str] = None
+    NOTION_DESIGN_DATABASE_ID: Optional[str] = None
 
     # Staging and development. Comma-separated developer addresses that get the
     # emails nobody clicked for (app/services/email_redirect.py).
@@ -236,6 +239,19 @@ class Config:
     @property
     def ADMIN_APP_URL(self) -> str:
         return get_settings().ADMIN_APP_URL.rstrip("/")
+
+    @property
+    def NOTION_TOKEN(self) -> Optional[str]:
+        return get_settings().NOTION_TOKEN
+
+    @property
+    def NOTION_DESIGN_DATABASE_ID(self) -> Optional[str]:
+        return get_settings().NOTION_DESIGN_DATABASE_ID
+
+    @property
+    def notion_enabled(self) -> bool:
+        """Design's Notion board is written only when both its settings are set."""
+        return bool(get_settings().NOTION_TOKEN and get_settings().NOTION_DESIGN_DATABASE_ID)
 
     @property
     def GOOGLE_ALLOWED_EMAIL_DOMAINS(self) -> list[str]:

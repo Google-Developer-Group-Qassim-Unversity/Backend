@@ -1327,6 +1327,14 @@ class EventRequestTasks(Base):
     # Who marked this team's part done, and when.
     done_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     done_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    # Design's card on the team's Notion board (app/services/pipeline_notion.py).
+    # ``notion_sync_pending`` is set in the same transaction as every change the
+    # card should show; the sync after commit (or the sweep) clears it.
+    notion_page_id: Mapped[Optional[str]] = mapped_column(String(36))
+    notion_page_url: Mapped[Optional[str]] = mapped_column(String(255))
+    notion_sync_pending: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    notion_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    notion_error: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
 
     done_by_member: Mapped[Optional["Members"]] = relationship("Members")
 

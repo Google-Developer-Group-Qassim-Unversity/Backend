@@ -166,6 +166,11 @@ class TaskResponse(BaseModel):
     # Who marked this team's part done, and when.
     done_at: UtcDateTime | None
     done_by: PersonRef | None
+    # Design only: its card on the team's Notion board (app/services/pipeline_notion.py).
+    # ``notion_pending`` while a change is still to be written there; the error is shown to super admins.
+    notion_url: str | None = None
+    notion_pending: bool = False
+    notion_error: str | None = None
 
 
 class PenaltyResponse(BaseModel):
@@ -270,6 +275,7 @@ class SweepResponse(BaseModel):
     ran: bool
     expired_holds: int = 0
     penalties_grown: int = 0
+    notion_synced: int = 0
 
 
 class ReturnRequest(BaseModel):
