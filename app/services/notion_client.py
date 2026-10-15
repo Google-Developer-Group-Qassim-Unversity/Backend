@@ -89,6 +89,10 @@ def update_page(page_id: str, properties: dict, icon: str | None = None) -> dict
     return call("PATCH", f"/pages/{page_id}", body)
 
 
+def trash_page(page_id: str) -> dict:
+    return call("PATCH", f"/pages/{page_id}", {"in_trash": True})
+
+
 def update_database(database_id: str, title: str, description: str, properties: dict) -> dict:
     """Set the board's columns. Properties not listed are left alone, so the team's own columns survive."""
     return call(

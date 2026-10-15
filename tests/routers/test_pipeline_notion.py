@@ -144,8 +144,11 @@ def test_a_cancelled_request_closes_its_card(pipeline, board, world):
     submit(pipeline, request_id)
     persist(request_id)
     pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
-    assert pipeline.client.delete(f"/pipeline/requests/{request_id}").status_code == 200
+    assert pipeline.client.post(f"/pipeline/requests/{request_id}/cancel").status_code == 200
     assert page_edits(pipeline)[-1].json["properties"]["Status"]["select"]["name"] == "Cancelled"
+
+    assert pipeline.client.delete(f"/pipeline/requests/{request_id}").status_code == 200
+    assert page_edits(pipeline)[-1].json == {"in_trash": True}
 
 
 def test_notion_down_never_blocks_the_step_and_the_sweep_retries(pipeline, board, world):

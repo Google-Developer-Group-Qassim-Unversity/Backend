@@ -145,7 +145,7 @@ def test_deleting_the_published_event_takes_the_entry_off(pipeline, team_calenda
 
 def test_a_cancelled_draft_comes_off(pipeline, team_calendar, world):
     request_id = book_complete(pipeline, world["ai"])
-    assert pipeline.client.delete(f"/pipeline/requests/{request_id}").status_code == 200
+    assert pipeline.client.post(f"/pipeline/requests/{request_id}/cancel").status_code == 200
     assert len(deletes(pipeline, request_id)) == 1
 
 

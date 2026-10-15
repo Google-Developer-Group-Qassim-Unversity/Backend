@@ -113,10 +113,20 @@ _COPY = {
         "نقل قسم اللوجستيات فعاليتكم إلى تواريخ أخرى حسب الحجز المتاح",
         "Logistics moved your event to other dates, the ones it could book",
     ),
+    PipelineNotificationKind.CANCELLED: (
+        "أُلغي طلب فعالية · An event request was cancelled",
+        "ألغى القسم الطالب هذا الطلب، فلا حاجة لإكمال العمل عليه",
+        "The requesting department cancelled this request; there is nothing left to do on it",
+    ),
     PipelineNotificationKind.HOLD_EXPIRED: (
         "انتهت مهلة حجز تواريخكم · Your date hold ran out",
         "انتهت مهلة الـ٢٤ ساعة فأُلغي حجز التواريخ. البيانات محفوظة؛ احجزوا تواريخ جديدة.",
         "The 24-hour hold ran out and the dates were released. Everything is kept; book new dates.",
+    ),
+    PipelineNotificationKind.OVERRIDDEN: (
+        "حُجزت تواريخ فعاليتكم لفعالية أخرى · Your event's dates were taken",
+        "حجز مشرف عام تواريخ فعاليتكم لفعالية أخرى",
+        "A super admin booked your event's dates for another event",
     ),
 }
 
@@ -127,7 +137,7 @@ def _render(request: EventRequests, kind: PipelineNotificationKind, department_n
     title = html.escape(request.title or f"#{request.id}")
     dates = f"{request.start_date} → {request.end_date}" if request.start_date else "-"
     requester = html.escape(request.department.ar_name if request.department else "")
-    note_html = f"<p><b>ملاحظات · Notes:</b><br>{html.escape(note)}</p>" if note else ""
+    note_html = f"<p><b>ملاحظات · Notes:</b><br>{html.escape(note).replace(chr(10), '<br>')}</p>" if note else ""
     return (
         f'<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif">'
         f"<h2>{ar_heading}</h2>"

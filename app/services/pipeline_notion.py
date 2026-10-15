@@ -3,7 +3,8 @@
 The design team works from a Notion board. When a request reaches Design the
 backend writes its card there, and from then on the card follows the request:
 returned, resubmitted, poster uploaded, dates moved by Logistics, Design done,
-published, cancelled. Nothing is ever typed twice.
+published, cancelled. Nothing is ever typed twice. A cancelled request deleted
+for good takes its card to the Notion trash.
 
 **What goes where.** The board's columns are what a designer sorts and filters
 by: Status (the board's columns), the department, the design type, size and
@@ -236,7 +237,8 @@ def sync_request(request_id: str) -> bool:
             .where(EventRequestTasks.request_id == request_id, EventRequestTasks.team == PipelineTeam.DESIGN)
             .with_for_update()
         )
-        if request is None or task is None or task.status == EventRequestTaskStatus.BRIEF:
+        # A request bumped back to a draft has its card already; it says so.
+        if request is None or task is None or (task.status == EventRequestTaskStatus.BRIEF and not task.notion_page_id):
             return False
         if not task.notion_sync_pending:
             return True
@@ -285,6 +287,18 @@ def _push(session: Session, request: EventRequests, task: EventRequestTasks) -> 
     logger.info("Request %s: Notion card updated", request.id)
 
 
+def trash_card(page_id: str) -> None:
+    """Move a deleted request's card to the Notion trash. Best effort: the request is gone, nothing retries it."""
+    if not config.notion_enabled:
+        return
+    try:
+        notion.trash_page(page_id)
+    except Exception:
+        logger.exception("Notion card %s of a deleted request not moved to the trash", page_id)
+        return
+    logger.info("Notion card %s of a deleted request moved to the trash", page_id)
+
+
 def ensure_schema(database_id: str) -> str:
     """Push the board's columns once per process, and learn the name of its title column."""
     if database_id in _title_property:
@@ -309,7 +323,8 @@ def card_status(request: EventRequests, task: EventRequestTasks) -> str:
         return STATUS_PUBLISHED
     if task.status == EventRequestTaskStatus.DONE:
         return STATUS_DONE
-    if task.status == EventRequestTaskStatus.RETURNED:
+    # BRIEF with a card: a super admin bumped the request back to a draft.
+    if task.status in (EventRequestTaskStatus.RETURNED, EventRequestTaskStatus.BRIEF):
         return STATUS_RETURNED
     return STATUS_NEW
 

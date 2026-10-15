@@ -8,7 +8,7 @@ the row outlives a request deleted with its event, and the entry still comes
 off the calendar.
 
 Revision ID: b8d3f0e5c2a4
-Revises: a7c2e9d4b1f3
+Revises: b4d8e1f6a2c9
 Create Date: 2026-10-15 10:00:00.000000
 
 """
@@ -22,7 +22,7 @@ from sqlalchemy.dialects import mysql
 
 # revision identifiers, used by Alembic.
 revision: str = "b8d3f0e5c2a4"
-down_revision: Union[str, Sequence[str], None] = "a7c2e9d4b1f3"
+down_revision: Union[str, Sequence[str], None] = "b4d8e1f6a2c9"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

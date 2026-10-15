@@ -143,11 +143,26 @@ def test_a_ban_is_recorded_on_the_calendar_and_on_each_request_it_undated(pipeli
         select(PipelineHistory).where(PipelineHistory.request_id.is_(None), PipelineHistory.action == "days_banned")
     ).all()
     assert [(r.actor_id, r.details) for r in calendar_rows] == [
-        (logistics.id, {"dates": ["2026-07-21"], "reason": "Exams"})
+        (logistics.id, {"dates": ["2026-07-21"], "reason": "Exams", "block_id": response.json()["block_id"]})
     ]
     pipeline.sign_in(world["people"]["ai"])
     banned = pipeline.client.get(url(world)).json()["history"][-1]
     assert (banned["action"], banned["actor"]) == ("dates_banned", ref(logistics))
+
+
+def test_the_history_outlives_a_deleted_request(pipeline, world):
+    pipeline.sign_in(world["people"]["ai"])
+    submit(pipeline, world["request_id"])
+    assert pipeline.client.post(url(world, "/cancel")).status_code == 200
+    assert pipeline.client.delete(url(world)).status_code == 200
+
+    rows = pipeline.session.scalars(
+        select(PipelineHistory)
+        .where(PipelineHistory.request_id == world["request_id"])
+        .order_by(PipelineHistory.at, PipelineHistory.id)
+    ).all()
+    assert [r.action for r in rows][-2:] == ["cancelled", "request_deleted"]
+    assert rows[-1].request_title is not None
 
 
 def test_the_history_outlives_a_deleted_event(pipeline, world):
@@ -171,14 +186,11 @@ def test_the_history_outlives_a_deleted_event(pipeline, world):
     assert rows[-1].details == {"event_id": event_id, "event_name": "Intro to ML"}
 
 
-def test_an_edit_while_the_teams_work_on_it_is_flagged(pipeline, world):
+def test_a_super_admin_cannot_edit_while_the_teams_work_on_it(pipeline, world):
     submit(pipeline, world["request_id"])
-    admin = pipeline.person("Admin")
-    pipeline.sign_in(admin, super_admin=True)
-    pipeline.client.put(url(world, "/details"), json={"title": "Renamed by an admin"})
-    pipeline.client.put(url(world, "/briefs/design"), json={"brief": {"idea": "Changed"}})
-    history = pipeline.client.get(url(world)).json()["history"]
-    assert [(h["action"], h["details"]) for h in history[-2:]] == [
-        ("details_edited", {"after_submit": True}),
-        ("brief_edited", {"team": "design", "after_submit": True}),
-    ]
+    pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
+    details = pipeline.client.put(url(world, "/details"), json={"title": "Renamed by an admin"})
+    brief = pipeline.client.put(url(world, "/briefs/design"), json={"brief": {"idea": "Changed"}})
+    assert [details.status_code, brief.status_code] == [409, 409]
+    assert {details.json()["code"], brief.json()["code"]} == {"not_editable"}
+    assert pipeline.client.get(url(world)).json()["can_edit"] is False
