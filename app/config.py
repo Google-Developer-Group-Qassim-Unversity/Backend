@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     # Design's Notion board (app/services/pipeline_notion.py). Both unset: no card is written, nothing retries.
     NOTION_TOKEN: Optional[str] = None
     NOTION_DESIGN_DATABASE_ID: Optional[str] = None
+    # Google Meet links for online events (app/services/google_meet.py): the
+    # organizer account that owns the club's events calendar, not the Forms
+    # account above. All four unset: the "generate a link" button is hidden.
+    GOOGLE_MEET_CLIENT_ID: Optional[str] = None
+    GOOGLE_MEET_CLIENT_SECRET: Optional[str] = None
+    GOOGLE_MEET_REFRESH_TOKEN: Optional[str] = None
+    GOOGLE_MEET_CALENDAR_ID: Optional[str] = None
 
     # Staging and development. Comma-separated developer addresses that get the
     # emails nobody clicked for (app/services/email_redirect.py).
@@ -252,6 +259,33 @@ class Config:
     def notion_enabled(self) -> bool:
         """Design's Notion board is written only when both its settings are set."""
         return bool(get_settings().NOTION_TOKEN and get_settings().NOTION_DESIGN_DATABASE_ID)
+
+    @property
+    def GOOGLE_MEET_CLIENT_ID(self) -> str:
+        return env_or_except("GOOGLE_MEET_CLIENT_ID")
+
+    @property
+    def GOOGLE_MEET_CLIENT_SECRET(self) -> str:
+        return env_or_except("GOOGLE_MEET_CLIENT_SECRET")
+
+    @property
+    def GOOGLE_MEET_REFRESH_TOKEN(self) -> str:
+        return env_or_except("GOOGLE_MEET_REFRESH_TOKEN")
+
+    @property
+    def GOOGLE_MEET_CALENDAR_ID(self) -> str:
+        return env_or_except("GOOGLE_MEET_CALENDAR_ID")
+
+    @property
+    def meet_enabled(self) -> bool:
+        """Meet links are generated only when the organizer account and its calendar are all set."""
+        settings = get_settings()
+        return bool(
+            settings.GOOGLE_MEET_CLIENT_ID
+            and settings.GOOGLE_MEET_CLIENT_SECRET
+            and settings.GOOGLE_MEET_REFRESH_TOKEN
+            and settings.GOOGLE_MEET_CALENDAR_ID
+        )
 
     @property
     def GOOGLE_ALLOWED_EMAIL_DOMAINS(self) -> list[str]:

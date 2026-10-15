@@ -58,6 +58,10 @@ duplicated across both apps for that one convenience link.
 | `ADMIN_APP_URL` | no | `https://admin.gdg-q.com` | links in events pipeline emails |
 | `NOTION_TOKEN` | for Design's Notion board | - | internal integration secret (`ntn_...`) of the design team's Notion; with `NOTION_DESIGN_DATABASE_ID`, every request that reaches Design gets a card there. Unset: nothing is sent. Setup steps are on Notion (Events pipeline → Design's Notion board) |
 | `NOTION_DESIGN_DATABASE_ID` | for Design's Notion board | - | the database (board) the cards go in; shared with the integration. One board for prod and staging; staging titles carry a `(staging)` prefix |
+| `GOOGLE_MEET_CLIENT_ID` | for Meet links | - | OAuth client of the organizer account that owns the club's events calendar (`app/services/google_meet.py`). Not the Forms account above. With the other three, Logistics gets a "generate a link" button on its confirmation; any unset hides it |
+| `GOOGLE_MEET_CLIENT_SECRET` | for Meet links | - |  |
+| `GOOGLE_MEET_REFRESH_TOKEN` | for Meet links | - | granted `calendar.events`, `meetings.space.created` and `meetings.space.settings`. Shared with the club's Telegram meetings bot: never revoke it or re-run consent for it; ask for a second token instead |
+| `GOOGLE_MEET_CALENDAR_ID` | for Meet links | - | the `...@group.calendar.google.com` id of the events calendar every generated link's event goes on; never taken from a request |
 | `EMAIL_REDIRECT_FALLBACK` | on staging | - | comma-separated developer addresses. With `ENV` `Staging` or `development`, an email goes to the member who clicked send instead of its recipients; emails nobody clicked for (the pipeline sweep) go here. Unset there, those emails fail rather than reach real members - see `app/services/email_redirect.py` |
 
 **Dev note on `MEMBER_APP_URL`:** Infisical's dev env points it at

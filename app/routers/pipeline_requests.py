@@ -47,6 +47,7 @@ from app.services import event_briefs
 from app.services import event_deliverables
 from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
+from app.services import google_meet
 from app.services import pipeline_history
 from app.services import pipeline_notifications as notifications
 from app.services import pipeline_notion as notion
@@ -99,6 +100,7 @@ def _actions(session, caller: Caller, request: EventRequests) -> RequestActions:
         complete=[t for t in service.ALL_TEAMS if service.can_complete(session, caller, request, t)],
         can_publish=service.can_publish(caller, request),
         can_upload_poster=service.can_upload_poster(caller, request),
+        can_generate_meet=service.can_generate_meet(session, caller, request),
         can_cancel=service.can_cancel(caller, request),
         can_delete=service.can_delete(caller, request),
     )
@@ -111,6 +113,7 @@ def person(member: Members | None) -> PersonRef | None:
 def task_response(request: EventRequests, task: EventRequestTasks, caller: Caller | None = None) -> TaskResponse:
     deliverable = event_deliverables.shown_deliverable(request, task)
     reached = task.status != EventRequestTaskStatus.BRIEF
+    changes = event_deliverables.logistics_changes(request, task) if task.team == PipelineTeam.LOGISTICS else []
     # Why the card is missing is for whoever can fix it (the token, the board).
     show_error = caller is not None and caller.access.is_super_admin
     return TaskResponse(
@@ -119,9 +122,10 @@ def task_response(request: EventRequests, task: EventRequestTasks, caller: Calle
         brief=task.brief,
         brief_version=task.brief_version,
         deliverable=deliverable,
-        deliverable_missing=event_deliverables.missing(task.team, deliverable)
+        deliverable_missing=event_deliverables.missing(task.team, deliverable, changes)
         if reached and task.team in event_deliverables.DELIVERABLE_MODELS
         else [],
+        confirmation_changes=[c["field"] for c in changes],
         opened_at=task.opened_at,
         done_at=task.done_at,
         done_by=person(task.done_by_member),
@@ -334,6 +338,46 @@ def save_event_request_deliverable(
     return detail(session, caller, request)
 
 
+@router.post(
+    "/{request_id}/deliverables/logistics/meet", status_code=status.HTTP_200_OK, response_model=EventRequestDetail
+)
+def generate_event_request_meet(request_id: str, session: DB, caller: CurrentCaller):
+    """Logistics has a Google Meet link made on the club's calendar, from the confirmation's dates and times.
+
+    The calendar call happens before the row is locked, so nothing waits on
+    Google; generating again replaces the earlier link and drops its calendar event.
+    """
+    request = service.get_request_for(session, caller, request_id)
+    schedule = service.check_meet_generation(session, caller, request)
+    title, description = service.meet_title(request, service.get_task(request, PipelineTeam.LOGISTICS))
+    try:
+        meeting = google_meet.create_meeting(title, description, schedule)
+    except google_meet.MeetError as error:
+        logger.error("Request %s: Google refused the Meet link (%s)", request_id, error)
+        raise PipelineConflict("meet_failed", f"Google could not create the link: {error}", 502) from error
+    try:
+        request = service.get_request_for(session, caller, request_id, lock=True)
+        replaced = service.set_meet_link(session, caller, request, meeting)
+        session.commit()
+    except Exception:
+        session.rollback()
+        # Nothing refers to the event any more; a stray one on the calendar would only confuse.
+        _drop_meeting(meeting.event_id)
+        raise
+    _drop_meeting(replaced)
+    return detail(session, caller, request)
+
+
+def _drop_meeting(event_id: str) -> None:
+    """Delete a calendar event the confirmation no longer points at. Best effort: it is only tidiness."""
+    if not event_id:
+        return
+    try:
+        google_meet.delete_meeting(event_id)
+    except Exception:
+        logger.exception("Could not delete the Meet calendar event %s", event_id)
+
+
 POSTER_TYPES = {"image/png", "image/jpeg", "image/webp"}
 MAX_POSTER_BYTES = 10 * 1024 * 1024
 
@@ -413,6 +457,11 @@ def complete_event_request_task(
             request = service.get_request_for(session, caller, request_id, lock=True)
             emails = service.complete(session, caller, request, team)
             session.commit()
+        # A generated Meet link's calendar event follows the confirmed times, after the commit.
+        task = service.get_task(request, team)
+        if task is not None and task.deliverable and task.deliverable.get("meet_event_id"):
+            title, description = service.meet_title(request, task)
+            background_tasks.add_task(service.sync_meeting, request.id, dict(task.deliverable), title, description)
     else:
         request = service.get_request_for(session, caller, request_id, lock=True)
         emails = service.complete(session, caller, request, team)

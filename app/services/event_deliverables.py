@@ -8,7 +8,9 @@ team's task row with ``deliverable_version``, the way briefs are.
   holds what the department wanted; the university may give another day,
   time or room. The confirmation opens prefilled from the request and the
   Logistics brief, and Logistics changes what differs. Publish reads it, so
-  the confirmed version is the one that goes on the event.
+  the confirmed version is the one that goes on the event. Whatever Logistics
+  changed from what was asked (``changes``) needs a reason, which goes to
+  the requesting department with the change.
 - **Design uploads the poster.** It becomes the event's image.
 
 Drafts are saved as they are, however incomplete; ``missing`` says what
@@ -39,10 +41,31 @@ class LogisticsDeliverableV1(BaseModel):
     # Asked when any day is on-site.
     venue: str | None = Field(default=None, max_length=200)
     room: str | None = Field(default=None, max_length=100)
-    # Asked when any day is online.
+    # Asked when any day is online. Typed in, or generated on the club's
+    # calendar (app/services/google_meet.py), in which case ``meet_event_id``
+    # is the calendar event behind it.
     meet_link: str | None = Field(default=None, max_length=500)
+    meet_event_id: str | None = Field(default=None, max_length=200)
     event_type: EventRequestType | None = None
     description: str | None = Field(default=None, max_length=5000)
+    # Why the confirmed event differs from the one requested. Required once anything in
+    # ``CONFIRMED_FIELDS`` differs from the prefill; sent to the requesting department.
+    change_reason: str | None = Field(default=None, max_length=1000)
+
+
+# What the requesting department asked for and Logistics can confirm differently.
+# The Meet link is Logistics' own to provide, so it is never a change.
+CONFIRMED_FIELDS = (
+    "start_date",
+    "end_date",
+    "day_modes",
+    "daily_start_time",
+    "daily_end_time",
+    "venue",
+    "room",
+    "event_type",
+    "description",
+)
 
 
 class DesignDeliverableV1(BaseModel):
@@ -90,6 +113,45 @@ def logistics_confirmation(request: EventRequests, task: EventRequestTasks | Non
     return logistics_prefill(request, task.brief)
 
 
+def _comparable(value):
+    """A field's value as it is compared: blanks are nothing, text is trimmed, the rest is JSON."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, dict):
+        return {str(k): v for k, v in value.items()} or None
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def changes(baseline: LogisticsDeliverableV1, confirmation: LogisticsDeliverableV1) -> list[dict]:
+    """What Logistics confirmed differently from what was asked, as ``{"field", "from", "to"}``.
+
+    A blank on either side is not a change: filling in what the request left
+    open, or leaving open what it asked for (a blank that matters is reported
+    as missing instead). Neither is the mode of each day once the dates
+    themselves moved, since the days are then different ones.
+    """
+    before = baseline.model_dump(mode="json")
+    after = confirmation.model_dump(mode="json")
+    dates_moved = (before["start_date"], before["end_date"]) != (after["start_date"], after["end_date"])
+    result = []
+    for field in CONFIRMED_FIELDS:
+        if field == "day_modes" and dates_moved:
+            continue
+        old, new = _comparable(before[field]), _comparable(after[field])
+        if old is not None and new is not None and old != new:
+            result.append({"field": field, "from": old, "to": new})
+    return result
+
+
+def logistics_changes(request: EventRequests, task: EventRequestTasks | None) -> list[dict]:
+    """What the saved confirmation changes from the request, or nothing while nothing is saved."""
+    if task is None or task.deliverable is None:
+        return []
+    return changes(logistics_prefill(request, task.brief), LogisticsDeliverableV1.model_validate(task.deliverable))
+
+
 def shown_deliverable(request: EventRequests, task: EventRequestTasks) -> dict | None:
     """The deliverable as the request page shows it: Logistics' starts prefilled."""
     if task.team == PipelineTeam.LOGISTICS and task.status != EventRequestTaskStatus.BRIEF:
@@ -98,8 +160,12 @@ def shown_deliverable(request: EventRequests, task: EventRequestTasks) -> dict |
     return task.deliverable
 
 
-def missing(team: PipelineTeam, deliverable: dict | BaseModel | None) -> list[str]:
-    """Everything the team still has to hand over before it can finish."""
+def missing(team: PipelineTeam, deliverable: dict | BaseModel | None, changed: list[dict] | None = None) -> list[str]:
+    """Everything the team still has to hand over before it can finish.
+
+    ``changed`` is what Logistics' confirmation changes from the request
+    (``changes``); any change makes the reason required.
+    """
     prefix = PREFIX[team] + "."
     model = DELIVERABLE_MODELS[team]
     try:
@@ -131,6 +197,8 @@ def missing(team: PipelineTeam, deliverable: dict | BaseModel | None) -> list[st
         result.append(prefix + "venue")
     if "online" in modes.values() and not (parsed.meet_link and is_web_link(parsed.meet_link)):
         result.append(prefix + "meet_link")
+    if changed and not (parsed.change_reason and parsed.change_reason.strip()):
+        result.append(prefix + "change_reason")
     return sorted(set(result), key=result.index)
 
 

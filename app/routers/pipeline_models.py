@@ -204,6 +204,9 @@ class TaskResponse(BaseModel):
     deliverable: dict | None
     # What the team still has to hand over before it can finish: "confirm.venue", "poster.poster_url".
     deliverable_missing: list[str]
+    # Logistics only: the fields its saved confirmation changes from what was requested
+    # ("daily_start_time", "venue", ...). Any makes ``confirm.change_reason`` required.
+    confirmation_changes: list[str] = []
     opened_at: UtcDateTime | None
     # Who marked this team's part done, and when.
     done_at: UtcDateTime | None
@@ -231,6 +234,8 @@ class RequestActions(BaseModel):
     can_publish: bool = False
     # Design uploads or replaces the poster, until the request is published.
     can_upload_poster: bool = False
+    # Logistics can have a Meet link made on the club's calendar while it confirms (needs the organizer account set up).
+    can_generate_meet: bool = False
     # The requesting department drops it at any stage before publish, then deletes it for good.
     can_cancel: bool = False
     can_delete: bool = False

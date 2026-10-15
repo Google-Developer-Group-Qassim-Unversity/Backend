@@ -113,6 +113,11 @@ _COPY = {
         "نقل قسم اللوجستيات فعاليتكم إلى تواريخ أخرى حسب الحجز المتاح",
         "Logistics moved your event to other dates, the ones it could book",
     ),
+    PipelineNotificationKind.CONFIRMATION_CHANGED: (
+        "تغيّرت تفاصيل فعاليتكم · Your event's details changed",
+        "أكّد قسم اللوجستيات فعاليتكم بتفاصيل تختلف عمّا طلبتم، حسب الحجز المتاح",
+        "Logistics confirmed your event with details that differ from what you asked for",
+    ),
     PipelineNotificationKind.CANCELLED: (
         "أُلغي طلب فعالية · An event request was cancelled",
         "ألغى القسم الطالب هذا الطلب، فلا حاجة لإكمال العمل عليه",
@@ -131,7 +136,60 @@ _COPY = {
 }
 
 
-def _render(request: EventRequests, kind: PipelineNotificationKind, department_name: str, note: str | None) -> str:
+# What Logistics can confirm differently (app/services/event_deliverables.CONFIRMED_FIELDS), Arabic then English.
+_FIELD_LABELS = {
+    "start_date": ("اليوم الأول", "First day"),
+    "end_date": ("اليوم الأخير", "Last day"),
+    "day_modes": ("نوع كل يوم", "Each day's mode"),
+    "daily_start_time": ("وقت البداية", "Start time"),
+    "daily_end_time": ("وقت النهاية", "End time"),
+    "venue": ("المكان", "Venue"),
+    "room": ("القاعة", "Room"),
+    "event_type": ("نوع الفعالية", "Event type"),
+    "description": ("الوصف", "Description"),
+}
+_MODE_LABELS = {"on_site": ("حضوري", "On site"), "online": ("عن بُعد", "Online")}
+
+
+def _shown(field: str, value, language: int) -> str:
+    """A changed field's value as the email shows it: blanks as a dash, times without seconds, modes per day."""
+    if value is None or value == "":
+        return "—"
+    if field in ("daily_start_time", "daily_end_time") and isinstance(value, str):
+        return value[:5]
+    if field == "day_modes" and isinstance(value, dict):
+        return ", ".join(
+            f"{day}: {_MODE_LABELS.get(str(mode), (str(mode), str(mode)))[language]}" for day, mode in value.items()
+        )
+    return str(value)
+
+
+def _changes_html(changes: list[dict], reason: str | None, language: int) -> str:
+    """What changed, each as "label: from → to", then the reason. ``language`` is 0 for Arabic, 1 for English."""
+    if not changes and not reason:
+        return ""
+    heading = ("ما تغيّر عمّا طلبتم", "What changed from your request")[language]
+    reason_label = ("سبب التغيير", "Why")[language]
+    items = "".join(
+        f"<li><b>{html.escape(_FIELD_LABELS.get(c['field'], (c['field'], c['field']))[language])}:</b> "
+        f"<bdi>{html.escape(_shown(c['field'], c.get('from'), language))}</bdi> → "
+        f"<bdi>{html.escape(_shown(c['field'], c.get('to'), language))}</bdi></li>"
+        for c in changes
+    )
+    parts = [f"<p><b>{heading}:</b></p><ul>{items}</ul>" if items else ""]
+    if reason:
+        parts.append(f"<p><b>{reason_label}:</b><br>{html.escape(reason).replace(chr(10), '<br>')}</p>")
+    return "".join(parts)
+
+
+def _render(
+    request: EventRequests,
+    kind: PipelineNotificationKind,
+    department_name: str,
+    note: str | None,
+    changes: list[dict] | None = None,
+    reason: str | None = None,
+) -> str:
     _, ar_heading, en_heading = _COPY[kind]
     link = f"{config.ADMIN_APP_URL}/pipeline/requests/{request.id}"
     title = html.escape(request.title or f"#{request.id}")
@@ -142,11 +200,12 @@ def _render(request: EventRequests, kind: PipelineNotificationKind, department_n
         f'<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif">'
         f"<h2>{ar_heading}</h2>"
         f"<p><b>الفعالية:</b> {title}<br><b>القسم الطالب:</b> {requester}<br><b>التواريخ:</b> {dates}</p>"
-        f"{note_html}"
+        f"{note_html}{_changes_html(changes or [], reason, 0)}"
         f'<p><a href="{link}">فتح الطلب</a></p></div><hr>'
         f'<div dir="ltr" style="font-family:Arial,sans-serif">'
         f"<h2>{en_heading}</h2>"
         f"<p><b>Event:</b> {title}<br><b>To:</b> {html.escape(department_name)}<br><b>Dates:</b> {dates}</p>"
+        f"{_changes_html(changes or [], reason, 1)}"
         f'<p><a href="{link}">Open the request</a></p></div>'
     )
 
@@ -158,13 +217,19 @@ def department_email(
     kind: PipelineNotificationKind,
     triggered_by: Members,
     note: str | None = None,
+    changes: list[dict] | None = None,
+    reason: str | None = None,
 ) -> PendingEmail | None:
-    """The email for ``department_id`` - or, in trial mode, its copy for ``triggered_by``."""
+    """The email for ``department_id`` - or, in trial mode, its copy for ``triggered_by``.
+
+    ``changes`` and ``reason`` are what Logistics confirmed differently and why
+    (``event_deliverables.changes``), listed in both languages.
+    """
     departments = team_queries.get_departments(session, {department_id})
     department_name = departments[0].name if departments else str(department_id)
     members = [m for m in department_members(session, department_id) if m.email]
     subject, _, _ = _COPY[kind]
-    body = _render(request, kind, department_name, note)
+    body = _render(request, kind, department_name, note, changes, reason)
     data = {"pipeline": {"request_id": request.id, "kind": kind.value, "department_id": department_id}}
 
     if config.PIPELINE_EMAILS_LIVE:
