@@ -288,15 +288,14 @@ def booking_lock(session: Session):
 
 
 def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: str | None) -> None:
-    """Super admins have full authority: they skip every rule here but a sane range."""
-    if caller.access.is_super_admin:
-        check_range(start, end, MAX_CALENDAR_DAYS)
-        return
+    """The length and the lockout bind everyone. A super admin may book a banned or taken day."""
     check_range(start, end, MAX_BOOKING_DAYS)
     if start < first_bookable_day():
         raise PipelineConflict(
             "day_locked", f"The first day you can book is {first_bookable_day().isoformat()}", status_code=409
         )
+    if caller.access.is_super_admin:
+        return
     if queries.get_bans(session, start, end, lock=True):
         raise PipelineConflict("day_banned", "Logistics closed one of these days")
     now = clock.now()
@@ -320,8 +319,7 @@ def book(session: Session, caller: Caller, department_id: int, start: date, end:
     require_request_for(caller, department_id)
     if session.get(Departments, department_id) is None:
         raise NotFound("Department", department_id)
-    if not caller.access.is_super_admin:
-        _check_one_live_hold(session, department_id)
+    _check_one_live_hold(session, department_id)
     _check_bookable(session, caller, start, end, None)
     request = EventRequests(
         department_id=department_id,
@@ -356,7 +354,7 @@ def redate(session: Session, caller: Caller, request: EventRequests, start: date
     if takes_its_days(request, clock.now()) and not caller.access.is_super_admin:
         raise PipelineConflict("still_held", "This request still holds its dates")
     is_draft = request.stage == EventRequestStage.DRAFT
-    if is_draft and not caller.access.is_super_admin:
+    if is_draft:
         _check_one_live_hold(session, request.department_id, ignore_id=request.id)
     _check_bookable(session, caller, start, end, request.id)
     history.record(
@@ -404,9 +402,7 @@ EDITABLE_STAGES = {EventRequestStage.DRAFT, EventRequestStage.RETURNED}
 
 
 def can_edit(caller: Caller, request: EventRequests) -> bool:
-    """The team edits its draft; a super admin edits anything not yet published."""
-    if caller.access.is_super_admin:
-        return request.stage not in (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED)
+    """The team edits its draft, or its request Design returned. Once submitted, the teams work from it as it is."""
     return can_request_for(caller, request.department_id) and request.stage in EDITABLE_STAGES
 
 
@@ -444,16 +440,7 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
         if not set(partners) <= {d.id for d in partner_options(session)}:
             raise PipelineConflict("partner_not_this_semester", "A partner must be a department of this semester", 422)
         queries.set_partners(session, request, partners)
-    # Outside a draft or a returned request only a super admin can edit; that is the edit worth flagging.
-    history.record(
-        session,
-        PipelineHistoryAction.DETAILS_EDITED,
-        caller.member,
-        request,
-        {"after_submit": True} if request.stage not in EDITABLE_STAGES else None,
-    )
-    if request.stage not in EDITABLE_STAGES:
-        notion.mark(session, request)
+    history.record(session, PipelineHistoryAction.DETAILS_EDITED, caller.member, request)
     session.flush()
 
 
@@ -559,12 +546,7 @@ def save_brief(session: Session, caller: Caller, request: EventRequests, team: P
     task = ensure_task(session, request, team)
     task.brief = event_briefs.clean_brief(team, brief)
     task.brief_version = event_briefs.BRIEF_VERSION
-    edit: dict[str, str | bool] = {"team": team.value}
-    if request.stage not in EDITABLE_STAGES:
-        edit["after_submit"] = True
-    history.record(session, PipelineHistoryAction.BRIEF_EDITED, caller.member, request, edit)
-    if request.stage not in EDITABLE_STAGES:
-        notion.mark(session, request)
+    history.record(session, PipelineHistoryAction.BRIEF_EDITED, caller.member, request, {"team": team.value})
     session.flush()
 
 
@@ -577,9 +559,7 @@ def submit(session: Session, caller: Caller, request: EventRequests) -> list[Pen
     require_request_for(caller, request.department_id)
     if request.stage != EventRequestStage.DRAFT:
         raise PipelineConflict("not_a_draft", "Only a draft can be submitted")
-    if not takes_its_days(request, clock.now()) and not (
-        caller.access.is_super_admin and request.start_date is not None
-    ):
+    if not takes_its_days(request, clock.now()):
         raise PipelineConflict("hold_expired", "The hold on your dates ran out; book dates again, then submit")
     for team in BRIEF_TEAMS:
         ensure_task(session, request, team)
@@ -632,14 +612,12 @@ def return_deadline(request: EventRequests) -> datetime | None:
 
 
 def can_return(session: Session, caller: Caller, request: EventRequests) -> bool:
-    """Design can return a request once, within two days of receiving it. Super admins any time."""
+    """Design can return a request once, within two days of receiving it."""
     if request.stage != EventRequestStage.IN_REVIEW:
         return False
     design = get_task(request, PipelineTeam.DESIGN)
     if design is None or design.status != EventRequestTaskStatus.OPEN:
         return False
-    if caller.access.is_super_admin:
-        return True
     deadline = return_deadline(request)
     return (
         caller.access.can(Perm.PIPELINE_DESIGN)
@@ -739,8 +717,7 @@ def resubmit(session: Session, caller: Caller, request: EventRequests) -> Pendin
     return reach_team(session, caller, request, PipelineTeam.DESIGN, PipelineNotificationKind.REQUEST_RECEIVED)
 
 
-# While the teams are working on it. A request published early by a super admin
-# can have a task left open; it stays open, and completing it changes nothing.
+# While the teams are working on it.
 WORKING_STAGES = {EventRequestStage.IN_REVIEW, EventRequestStage.RETURNED, EventRequestStage.MEDIA}
 
 
@@ -922,34 +899,25 @@ def inbox(session: Session, caller: Caller, team: PipelineTeam | None) -> list[t
 
 # --------------------------------------------------------------------------- publish
 
-PUBLISHABLE_BY_SUPER_ADMIN = {
-    EventRequestStage.IN_REVIEW,
-    EventRequestStage.RETURNED,
-    EventRequestStage.MEDIA,
-    EventRequestStage.READY,
-}
-
 
 def can_publish(caller: Caller, request: EventRequests) -> bool:
-    if caller.access.is_super_admin:
-        return request.stage in PUBLISHABLE_BY_SUPER_ADMIN
+    """Only once every team has finished, for a super admin too: the event is what the teams handed over."""
     return can_request_for(caller, request.department_id) and request.stage == EventRequestStage.READY
 
 
 def event_for(request: EventRequests) -> createEvent_model:
     """The ``POST /events/`` payload a ready request becomes.
 
-    Nothing is typed again at publish. The when, where and what come from Logistics' confirmation (or, for a
-    request a super admin publishes before Logistics confirmed, from the request
-    as asked), and the image is Design's poster. Times are wall-clock Riyadh
+    Nothing is typed again at publish. The when, where and what come from Logistics' confirmation,
+    and the image is Design's poster. Times are wall-clock Riyadh
     times, the way the event form stores them. A mix of on-site and online days
     is published as on-site at the venue, with the Meet link for the online days.
     The event opens straight away: publishing is the team's decision, with no
     admin review after it.
     """
     confirmed = event_deliverables.logistics_confirmation(request, get_task(request, PipelineTeam.LOGISTICS))
-    if confirmed is None:
-        confirmed = event_deliverables.logistics_prefill(request, None)
+    # A ready request has every task done, Logistics' confirmation included.
+    assert confirmed is not None
     modes = set((confirmed.day_modes or {}).values())
     on_site = "on_site" in modes or not modes
     place = " · ".join(p.strip() for p in (confirmed.venue, confirmed.room) if p and p.strip())

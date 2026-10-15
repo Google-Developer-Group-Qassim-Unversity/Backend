@@ -240,9 +240,27 @@ def test_cancelling_a_draft_frees_its_dates(pipeline, world):
     assert book(pipeline, world["cyber"]).status_code == 201
 
 
-def test_a_super_admin_skips_the_lockout_bans_and_the_one_hold_rule(pipeline, world):
+def test_a_super_admin_can_book_a_banned_day(pipeline, world):
     pipeline.sign_in(world["logistics_leader"])
-    pipeline.client.put("/pipeline/calendar/bans", json={"dates": ["2026-07-17"]})
+    pipeline.client.put("/pipeline/calendar/bans", json={"dates": ["2026-07-21"]})
     pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
-    assert book(pipeline, world["ai"], "2026-07-16", "2026-07-17").status_code == 201
-    assert book(pipeline, world["ai"], "2026-07-20", "2026-07-26").status_code == 201
+    assert book(pipeline, world["ai"]).status_code == 201
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "code"),
+    [("2026-07-16", "2026-07-17", "day_locked"), ("2026-07-20", "2026-07-26", "range_too_long")],
+)
+def test_the_lockout_and_the_length_bind_a_super_admin_too(pipeline, world, start, end, code):
+    pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
+    response = book(pipeline, world["ai"], start, end)
+    assert response.status_code in (409, 422)
+    assert response.json()["code"] == code
+
+
+def test_a_super_admin_keeps_one_live_hold_per_department(pipeline, world):
+    pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
+    assert book(pipeline, world["ai"]).status_code == 201
+    response = book(pipeline, world["ai"], "2026-07-25", "2026-07-25")
+    assert response.status_code == 409
+    assert response.json()["code"] == "hold_exists"

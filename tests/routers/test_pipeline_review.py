@@ -141,8 +141,7 @@ def test_a_team_cannot_complete_another_teams_part(pipeline, world):
 
 def test_a_super_admin_can_do_every_step(pipeline, world):
     pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
-    pipeline.freeze(pipeline.now + timedelta(days=5))
-    assert pipeline.client.post(url(world, "/return"), json={"notes": "late but allowed"}).status_code == 200
+    assert pipeline.client.post(url(world, "/return"), json={"notes": "fix"}).status_code == 200
     assert pipeline.client.post(url(world, "/resubmit")).status_code == 200
     for team in ("design", "logistics", "media"):
         assert finish(pipeline, world["request_id"], team).status_code == 200
