@@ -2,15 +2,16 @@
 
 import logging
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
 from app.DB import pipeline_teams as team_queries
-from app.DB.schema import EventRequests, PipelineTeam
+from app.DB.schema import PipelineTeam
 from app.dependencies import DB
 from app.exceptions import DepartmentForbidden
 
+from app.routers.pipeline_requests import summary
 from app.routers.pipeline_models import (
     ActingDepartment,
     BanDaysRequest,
@@ -18,7 +19,6 @@ from app.routers.pipeline_models import (
     CalendarDayRequest,
     CalendarDayResponse,
     CalendarResponse,
-    EventRequestSummary,
     InboxItem,
     NotificationItem,
     NotificationRequest,
@@ -83,6 +83,8 @@ def get_pipeline_me(session: DB, caller: CurrentCaller):
             for department in departments
         ],
         teams=teams,
+        own_department_ids=sorted(pipeline_service.own_department_ids(caller)),
+        own_teams=pipeline_service.own_teams(caller),
     )
 
 
@@ -148,8 +150,13 @@ def unban_pipeline_days(body: UnbanDaysRequest, session: DB, caller: CurrentCall
     return BanResult(count=removed)
 
 
-def _visible_departments(session, caller: Caller) -> set[int] | None:
-    return pipeline_service.visible_department_ids(session, caller)
+NotificationScope = Literal["mine", "club"]
+
+
+def _notified_departments(session, caller: Caller, scope: NotificationScope) -> set[int] | None:
+    if scope == "club":
+        return pipeline_service.visible_department_ids(session, caller)
+    return pipeline_service.notified_department_ids(session, caller)
 
 
 @router.get("/notifications", status_code=status.HTTP_200_OK, response_model=PaginatedNotifications)
@@ -157,13 +164,24 @@ def list_pipeline_notifications(
     session: DB,
     caller: CurrentCaller,
     unread: Annotated[bool, Query()] = False,
+    scope: Annotated[NotificationScope, Query()] = "mine",
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    """The caller's departments' notifications, newest first. Read state is per person."""
+    """The caller's notifications, newest first. Read state is per person.
+
+    ``mine`` is what concerns the caller's own departments and teams. For a super
+    admin that is far less than everything they can see; ``club`` is every
+    department they can see, for when they want the whole picture.
+    """
     _require_access(caller)
     total, unread_count, rows, read = notifications.list_for(
-        session, _visible_departments(session, caller), caller.member.id, unread, page_size, (page - 1) * page_size
+        session,
+        _notified_departments(session, caller, scope),
+        caller.member.id,
+        unread,
+        page_size,
+        (page - 1) * page_size,
     )
     return PaginatedNotifications(
         items=[
@@ -190,7 +208,7 @@ def list_pipeline_notifications(
 def read_pipeline_notification(notification_id: str, session: DB, caller: CurrentCaller):
     _require_access(caller)
     _, _, rows, _ = notifications.list_for(
-        session, _visible_departments(session, caller), caller.member.id, True, 1000, 0
+        session, _notified_departments(session, caller, "club"), caller.member.id, True, 1000, 0
     )
     count = notifications.mark_read(session, caller.member.id, [n.id for n in rows if n.id == notification_id])
     session.commit()
@@ -198,10 +216,12 @@ def read_pipeline_notification(notification_id: str, session: DB, caller: Curren
 
 
 @router.post("/notifications/read-all", status_code=status.HTTP_200_OK, response_model=BanResult)
-def read_all_pipeline_notifications(session: DB, caller: CurrentCaller):
+def read_all_pipeline_notifications(
+    session: DB, caller: CurrentCaller, scope: Annotated[NotificationScope, Query()] = "mine"
+):
     _require_access(caller)
     _, _, rows, _ = notifications.list_for(
-        session, _visible_departments(session, caller), caller.member.id, True, 1000, 0
+        session, _notified_departments(session, caller, scope), caller.member.id, True, 1000, 0
     )
     count = notifications.mark_read(session, caller.member.id, [n.id for n in rows])
     session.commit()
@@ -223,20 +243,6 @@ def get_pipeline_inbox(session: DB, caller: CurrentCaller, team: Annotated[Pipel
     """Requests waiting on the caller's team(s), oldest first."""
     _require_access(caller)
     return [
-        InboxItem(request=_summary(request), team=task.team, status=task.status, opened_at=task.opened_at)
+        InboxItem(request=summary(request), team=task.team, status=task.status, opened_at=task.opened_at)
         for request, task in pipeline_service.inbox(session, caller, team)
     ]
-
-
-def _summary(request: EventRequests) -> EventRequestSummary:
-    return EventRequestSummary(
-        id=request.id,
-        department=PipelineDepartment.model_validate(request.department),
-        stage=request.stage,
-        title=request.title,
-        start_date=request.start_date,
-        end_date=request.end_date,
-        hold_expires_at=request.hold_expires_at,
-        undated_reason=request.undated_reason,
-        requested_at=request.requested_at,
-    )

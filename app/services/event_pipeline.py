@@ -18,7 +18,7 @@ from enum import Enum
 
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.DB import pipeline_teams as team_queries
 from app.DB import departments as department_queries
@@ -506,6 +506,31 @@ def visible_department_ids(session: Session, caller: Caller) -> set[int] | None:
     return set(requesting) | teams
 
 
+def own_department_ids(caller: Caller) -> set[int]:
+    """The departments the caller requests for as themselves, through their own roster.
+
+    Everyone but a super admin: the same as ``visible_department_ids`` without
+    the team departments. A super admin can request for every department, but
+    only these are theirs.
+    """
+    return {d for d in caller.access.roles if caller.access.holds(Perm.PIPELINE_REQUEST, d)}
+
+
+def own_teams(caller: Caller) -> list[PipelineTeam]:
+    """The teams the caller works as themselves. A super admin steps in for the rest."""
+    return [team for team in ALL_TEAMS if caller.access.holds(TEAM_PERMS[team])]
+
+
+def notified_department_ids(session: Session, caller: Caller) -> set[int] | None:
+    """Whose notifications are the caller's: what they see, except that a super admin
+    gets only their own departments' and teams'. Every department's notifications
+    reach a super admin only when they ask for the whole club."""
+    if not caller.access.is_super_admin:
+        return visible_department_ids(session, caller)
+    teams = team_queries.get_teams(session)
+    return own_department_ids(caller) | {teams[team].id for team in own_teams(caller) if team in teams}
+
+
 # --------------------------------------------------------------------------- briefs and submit
 
 BRIEF_TEAMS = (PipelineTeam.DESIGN, PipelineTeam.LOGISTICS)
@@ -889,6 +914,7 @@ def inbox(session: Session, caller: Caller, team: PipelineTeam | None) -> list[t
             EventRequestTasks.status.in_([EventRequestTaskStatus.OPEN, EventRequestTaskStatus.RETURNED]),
             EventRequests.stage.not_in([EventRequestStage.CANCELLED, EventRequestStage.PUBLISHED]),
         )
+        .options(selectinload(EventRequests.department), selectinload(EventRequests.tasks))
         .order_by(EventRequestTasks.opened_at)
     ).all()
     return [(r, t) for r, t in rows]
