@@ -11,8 +11,8 @@ deliberate - you have to query production to find out (below).
 COMPOSITE_ACTION_IDS = [(51, 76), (52, 77), (53, 78), (54, 79),
                         (86, 87), (88, 89), (90, 91), (105, 108)]
 
-# app/DB/logs.py:55            - which events can be attended
-ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89]
+# app/DB/logs.py:60            - which events can be attended
+ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89, 108]
 ```
 
 **The repository does not record what any of these rows are.** No migration
@@ -29,7 +29,7 @@ they are:
 | 86 | Organized an Online Bootcamp | 87 | Online Bootcamp attendance | 6 | yes |
 | 88 | Organized a massive event (300+) | 89 | massive event attendance | 15 | yes |
 | 90 | Organized a twitter space | 91 | attend a twitter space | **0** | no |
-| 105 | Host a Tournament | 108 | مشاركة في بطولة | 5 | no |
+| 105 | Host a Tournament | 108 | مشاركة في بطولة | 5 | yes (since GDG-47) |
 
 Re-run this if you suspect it has drifted again:
 
@@ -47,9 +47,9 @@ own flag.
 
 ## What is broken because of it
 
-**Two of the eight pairs cannot be attended - probably on purpose.**
-`ATTENDABLE_ACTION_IDS` is `member_ids` minus its last two entries, so an event
-built on the `(90, 91)` or `(105, 108)` pair 500s on every attendance route:
+**One of the eight pairs cannot be attended - on purpose.**
+`ATTENDABLE_ACTION_IDS` leaves out 91, so an event built on the `(90, 91)` pair
+500s on every attendance route:
 
 ```
 500 {"detail": "Event has no attendable logs"}
@@ -68,7 +68,15 @@ placings through separate bonus actions, neither of which touches the
 attendance path.
 
 So the exclusion looks deliberate rather than dropped, even though nothing in
-the code says so. The one loose end is event 350 (بطولة الشطرنج), which has 5
+the code says so.
+
+**That held for tournaments until it didn't.** On 2026-10-13 event 464
+(بطولة الألعاب الإلكترونية | Quick Series) was built on `(105, 108)` and handed
+out a check-in QR code. Every check-in and every manual mark 500'd, and because
+`DataIntegrityError` is not logged by the error handlers, nothing reached the
+logs or Sentry except the bare 500 on the request line (GDG-47). 108 was added
+to `ATTENDABLE_ACTION_IDS` as the stopgap; the `is_attendable` flag below is
+still the fix. The one loose end is event 350 (بطولة الشطرنج), which has 5
 form submissions and no member awards at all - worth a look, but it is one
 event and there are other explanations.
 
@@ -113,8 +121,8 @@ metadata (`order`, `is_hidden`), so there is precedent and no new pattern.
 The literals above *are* the backfill, so the migration is mechanical:
 
 ```sql
--- 91 and 108 stay 0: spaces and tournaments do not mark attendance (see above)
-UPDATE actions SET is_attendable = 1 WHERE id IN (76,77,78,79,87,89);
+-- 91 stays 0: spaces do not mark attendance (see above)
+UPDATE actions SET is_attendable = 1 WHERE id IN (76,77,78,79,87,89,108);
 INSERT INTO composite_actions (department_action_id, member_action_id, `order`)
 VALUES (51,76,0), (52,77,1), (53,78,2), (54,79,3),
        (86,87,4), (88,89,5), (90,91,6), (105,108,7);

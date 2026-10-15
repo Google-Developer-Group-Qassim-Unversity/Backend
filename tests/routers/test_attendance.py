@@ -2,7 +2,7 @@
 Tests for attendance endpoints.
 
 NOTE: This module patches get_attendable_logs because the production code
-hardcodes action IDs [76, 77, 78, 79, 87, 89] instead of making them configurable.
+hardcodes action IDs [76, 77, 78, 79, 87, 89, 108] instead of making them configurable.
 This monkey-patching is a temporary workaround - the production code should be
 refactored to use configurable action IDs (e.g., from config or database).
 """
@@ -333,6 +333,32 @@ def test_backfill_day_out_of_range(admin_client: TestClient):
 def test_backfill_event_not_found(admin_client: TestClient):
     response = admin_client.post("/attendance/9999/backfill", json={"members": [], "day": 1})
     assert_not_found(response)
+
+
+# === attendable actions ===
+
+
+def test_tournament_participation_is_attendable(admin_client: TestClient, db_session: Session):
+    """GDG-47: an event built on the tournament pair (105, 108) 500'd on every
+    attendance route. Runs the real lookup, not the module's patched one."""
+    from app.DB.schema import Actions, ActionsActionType
+
+    db_session.add(
+        Actions(
+            id=108,
+            action_name="tournament participation",
+            points=5,
+            action_type=ActionsActionType.BONUS,
+            ar_action_name="مشاركة في بطولة",
+        )
+    )
+    event_id = create_attendance_ready_event(admin_client, form_type="none")
+    db_session.add(Logs(event_id=event_id, action_id=108))
+    db_session.commit()
+
+    log = _original_get_attendable_logs(db_session, event_id)
+    assert log is not None
+    assert log.action_id == 108
 
 
 # === mark_attendance tests ===

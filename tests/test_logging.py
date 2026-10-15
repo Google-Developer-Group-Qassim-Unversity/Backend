@@ -102,15 +102,42 @@ def test_no_print_calls_remain(path):
 
 def test_filter_stamps_the_current_actor():
     """Identity on every line is what makes a failure recoverable afterwards."""
-    from app.logging_config import actor_var
+    from app.logging_config import ActorSlot, actor_var, set_actor
 
-    token = actor_var.set("42/441200000")
+    token = actor_var.set(ActorSlot())
     try:
+        set_actor("42/441200000")
         record = make_record()
         RequestContextFilter().filter(record)
         assert getattr(record, "actor") == "42/441200000"
     finally:
         actor_var.reset(token)
+
+
+def test_route_lines_carry_the_actor_resolved_in_a_dependency(clerk_client, db_session, caplog):
+    """GDG-47: the caller is resolved in a sync dependency, which FastAPI runs on
+    a copy of the request's context, so the actor it set never reached the
+    route's own lines - every one of them said ``actor:-`` in production."""
+    from app.DB.schema import Members, MembersGender
+
+    member = Members(
+        name="Test Member",
+        email="test@example.com",
+        phone_number="0501234567",
+        uni_id="123456789",
+        gender=MembersGender.MALE,
+    )
+    db_session.add(member)
+    db_session.commit()
+
+    caplog.handler.addFilter(RequestContextFilter())
+    with caplog.at_level(logging.INFO):
+        # no token: resolves the member, logs from the route, then 400s
+        clerk_client.post("/attendance/999999")
+
+    route_lines = [r for r in caplog.records if r.name == "app.routers.attendance"]
+    assert route_lines
+    assert {getattr(r, "actor") for r in route_lines} == {f"{member.id}/123456789"}
 
 
 def test_filter_falls_back_for_anonymous_callers():
