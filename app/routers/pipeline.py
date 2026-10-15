@@ -39,6 +39,7 @@ from app.routers.pipeline_models import (
 from app.services import event_pipeline as pipeline_service
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
+from app.services import pipeline_calendar
 from app.services import pipeline_sweep
 from app.services import pipeline_notion as notion
 from app.services.permissions.catalogue import OFFICER_ROLES
@@ -172,6 +173,7 @@ def ban_pipeline_days(body: BanDaysRequest, session: DB, caller: CurrentCaller, 
         session.commit()
     for request in undated:
         notion.sync_after_commit(background_tasks, request)
+        pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return result
 
 

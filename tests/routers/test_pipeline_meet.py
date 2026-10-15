@@ -4,10 +4,10 @@ import pytest
 
 from app.config import reload_settings
 from app.services import google_meet
-from tests.outbound import MEET_EVENT_ID, MEET_URL
+from tests.outbound import MEET_CALENDAR_ID, MEET_EVENT_ID, MEET_URL
 from tests.pipeline_support import book_complete, submit
 
-CALENDAR_ID = "c_abc123@group.calendar.google.com"
+CALENDAR_ID = MEET_CALENDAR_ID
 
 
 @pytest.fixture

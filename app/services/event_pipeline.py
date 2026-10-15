@@ -48,6 +48,7 @@ from app.services import event_deliverables
 from app.services import event_pipeline_clock as clock
 from app.services import google_meet
 from app.services import pipeline_history as history
+from app.services import pipeline_calendar
 from app.services import pipeline_notion as notion
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail
@@ -258,6 +259,7 @@ def _undate_requests_on(session: Session, caller: Caller, days: list[date], reas
                 {**lost, "reason": reason},
             )
             notion.mark(session, request)
+            pipeline_calendar.mark(session, request)
             undated.append(request)
     return undated
 
@@ -411,6 +413,7 @@ def bump(
     details = {**lost, "outcome": outcome.value, "by_request_id": by.id, "by_department_id": by.department_id}
     history.record(session, PipelineHistoryAction.OVERRIDDEN, caller.member, request, details)
     notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
     if outcome == BumpOutcome.CANCEL:
         request.stage = EventRequestStage.CANCELLED
         # A cancelled request holds no dates; the lost ones are in its history.
@@ -504,6 +507,7 @@ def book(
         request,
         {"start_date": start.isoformat(), "end_date": end.isoformat()},
     )
+    pipeline_calendar.mark(session, request)
     logger.info("Request %s booked %s..%s for department %s", request.id, start, end, department_id)
     emails = [bump(session, caller, r, (bumps or {})[r.id], request) for r in bumped]
     return request, bumped, emails
@@ -550,6 +554,7 @@ def redate(
     if request.day_modes:
         kept = {d.isoformat() for d in days_between(start, end)}
         request.day_modes = {k: v for k, v in request.day_modes.items() if k in kept} or None
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s re-dated to %s..%s", request.id, start, end)
     return bumped, [bump(session, caller, r, (bumps or {})[r.id], request) for r in bumped]
@@ -606,6 +611,7 @@ def cancel(session: Session, caller: Caller, request: EventRequests) -> list[Pen
                 )
             )
     notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s cancelled at %s by member %s", request.id, was.value, caller.member.id)
     return emails
@@ -627,6 +633,8 @@ def delete(session: Session, caller: Caller, request: EventRequests) -> str | No
     design = get_task(request, PipelineTeam.DESIGN)
     page_id = design.notion_page_id if design else None
     history.record(session, PipelineHistoryAction.REQUEST_DELETED, caller.member, request)
+    # Cancelling took its entry off already; this only matters if that write is still pending.
+    pipeline_calendar.mark(session, request)
     queries.delete_request(session, request)
     logger.info("Request %s deleted by member %s", request.id, caller.member.id)
     return page_id
@@ -678,6 +686,7 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
             raise PipelineConflict("partner_not_this_semester", "A partner must be a department of this semester", 422)
         queries.set_partners(session, request, partners)
     history.record(session, PipelineHistoryAction.DETAILS_EDITED, caller.member, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
 
 
@@ -785,6 +794,7 @@ def save_brief(session: Session, caller: Caller, request: EventRequests, team: P
     task.brief = event_briefs.clean_brief(team, brief)
     task.brief_version = event_briefs.BRIEF_VERSION
     history.record(session, PipelineHistoryAction.BRIEF_EDITED, caller.member, request, {"team": team.value})
+    pipeline_calendar.mark(session, request)
     session.flush()
 
 
@@ -816,6 +826,7 @@ def submit(session: Session, caller: Caller, request: EventRequests) -> list[Pen
         task.status = EventRequestTaskStatus.OPEN
         task.opened_at = now
     notion.mark(session, request, reopened=True)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s submitted to Design and Logistics", request.id)
     return [
@@ -881,6 +892,7 @@ def return_request(session: Session, caller: Caller, request: EventRequests, not
     task.status = EventRequestTaskStatus.RETURNED  # type: ignore[union-attr]
     notifications.notify(session, request.department_id, request, PipelineNotificationKind.RETURNED, {"notes": notes})
     notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s returned by Design", request.id)
     return notifications.department_email(
@@ -950,6 +962,7 @@ def resubmit(session: Session, caller: Caller, request: EventRequests) -> Pendin
     task.status = EventRequestTaskStatus.OPEN
     task.opened_at = now
     notion.mark(session, request, reopened=True)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s resubmitted to Design", request.id)
     return reach_team(session, caller, request, PipelineTeam.DESIGN, PipelineNotificationKind.REQUEST_RECEIVED)
@@ -1113,6 +1126,7 @@ def set_poster(session: Session, caller: Caller, request: EventRequests, url: st
     task.deliverable = {"poster_url": url}  # type: ignore[union-attr]
     task.deliverable_version = event_deliverables.DELIVERABLE_VERSION  # type: ignore[union-attr]
     notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s: Design uploaded the poster %s", request.id, url)
 
@@ -1219,6 +1233,7 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
             )
         )
     notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s: %s done", request.id, team.value)
     return emails
@@ -1325,6 +1340,7 @@ def publish(session: Session, caller: Caller, request: EventRequests) -> int:
     request.published_by = caller.member.id
     history.record(session, PipelineHistoryAction.PUBLISHED, caller.member, request, {"event_id": event.id})
     notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s published as event %s by member %s", request.id, event.id, caller.member.id)
     return event.id

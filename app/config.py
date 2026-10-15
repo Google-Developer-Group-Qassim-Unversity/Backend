@@ -83,9 +83,20 @@ class Settings(BaseSettings):
     # Design's Notion board (app/services/pipeline_notion.py). Both unset: no card is written, nothing retries.
     NOTION_TOKEN: Optional[str] = None
     NOTION_DESIGN_DATABASE_ID: Optional[str] = None
+    # The team's Google Calendar (app/services/pipeline_calendar.py), written as
+    # the account that can edit it, through an OAuth client of its own that is
+    # published (in production), so its refresh token does not expire after 7
+    # days like the club's testing client's. Token minted with
+    # `scripts/setup_google_oauth.py --calendar`. The client falls back to
+    # GOOGLE_CLIENT_ID/SECRET. Id or token unset: no entry is written, nothing retries.
+    GOOGLE_CALENDAR_ID: Optional[str] = None
+    GOOGLE_CALENDAR_REFRESH_TOKEN: Optional[str] = None
+    GOOGLE_CALENDAR_CLIENT_ID: Optional[str] = None
+    GOOGLE_CALENDAR_CLIENT_SECRET: Optional[str] = None
     # Google Meet links for online events (app/services/google_meet.py): the
-    # organizer account that owns the club's events calendar, not the Forms
-    # account above. All four unset: the "generate a link" button is hidden.
+    # club's meetings account and the events calendar it owns, as the club's
+    # Telegram meetings bot uses them. Not the Forms account, not the team's
+    # calendar above. Any of the four unset: the "generate a link" button is hidden.
     GOOGLE_MEET_CLIENT_ID: Optional[str] = None
     GOOGLE_MEET_CLIENT_SECRET: Optional[str] = None
     GOOGLE_MEET_REFRESH_TOKEN: Optional[str] = None
@@ -261,6 +272,27 @@ class Config:
         return bool(get_settings().NOTION_TOKEN and get_settings().NOTION_DESIGN_DATABASE_ID)
 
     @property
+    def GOOGLE_CALENDAR_ID(self) -> Optional[str]:
+        return get_settings().GOOGLE_CALENDAR_ID
+
+    @property
+    def GOOGLE_CALENDAR_REFRESH_TOKEN(self) -> Optional[str]:
+        return get_settings().GOOGLE_CALENDAR_REFRESH_TOKEN
+
+    @property
+    def GOOGLE_CALENDAR_CLIENT_ID(self) -> str:
+        return get_settings().GOOGLE_CALENDAR_CLIENT_ID or self.GOOGLE_CLIENT_ID
+
+    @property
+    def GOOGLE_CALENDAR_CLIENT_SECRET(self) -> str:
+        return get_settings().GOOGLE_CALENDAR_CLIENT_SECRET or self.GOOGLE_CLIENT_SECRET
+
+    @property
+    def calendar_enabled(self) -> bool:
+        """The team's Google Calendar is written only when its id and its account's token are set."""
+        return bool(get_settings().GOOGLE_CALENDAR_ID and get_settings().GOOGLE_CALENDAR_REFRESH_TOKEN)
+
+    @property
     def GOOGLE_MEET_CLIENT_ID(self) -> str:
         return env_or_except("GOOGLE_MEET_CLIENT_ID")
 
@@ -278,7 +310,7 @@ class Config:
 
     @property
     def meet_enabled(self) -> bool:
-        """Meet links are generated only when the organizer account and its calendar are all set."""
+        """Meet links are generated only when the meetings account and its calendar are all set."""
         settings = get_settings()
         return bool(
             settings.GOOGLE_MEET_CLIENT_ID

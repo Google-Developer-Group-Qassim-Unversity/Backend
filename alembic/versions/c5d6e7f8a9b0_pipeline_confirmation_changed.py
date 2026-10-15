@@ -8,7 +8,7 @@ for a change that kept the dates: ``pipeline_notifications.kind`` gains
 ``confirmation_changed``.
 
 Revision ID: c5d6e7f8a9b0
-Revises: b4d8e1f6a2c9
+Revises: b8d3f0e5c2a4
 Create Date: 2026-10-15 12:00:00.000000
 
 """
@@ -21,7 +21,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "c5d6e7f8a9b0"
-down_revision: Union[str, Sequence[str], None] = "b4d8e1f6a2c9"
+down_revision: Union[str, Sequence[str], None] = "b8d3f0e5c2a4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

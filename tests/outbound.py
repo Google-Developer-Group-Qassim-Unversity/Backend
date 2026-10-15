@@ -218,9 +218,15 @@ def _default_response(request: httpx.Request) -> httpx.Response:
     if request.url.host == "api.notion.com":
         return _notion_response(request)
 
-    # Google (app/services/google_meet.py): Meet links on the club's events calendar.
-    if request.url.host in ("oauth2.googleapis.com", "www.googleapis.com", "meet.googleapis.com"):
+    # Google (app/services/google_meet.py): Meet links, as the meetings account on its own calendar.
+    if request.url.host in ("oauth2.googleapis.com", "meet.googleapis.com") or (
+        request.url.host == "www.googleapis.com" and f"/calendars/{MEET_CALENDAR_ID}/" in path
+    ):
         return _google_meet_response(request)
+
+    # Google Calendar (app/services/google_calendar.py): the team's calendar.
+    if request.url.host == "www.googleapis.com" and path.startswith("/calendar/v3/"):
+        return _calendar_response(request)
 
     raise AssertionError(
         f"Unstubbed outbound request: {request.method} {request.url}\n"
@@ -262,6 +268,18 @@ def _notion_response(request: httpx.Request) -> httpx.Response:
     raise AssertionError(f"Unexpected Notion call: {request.method} {request.url}")
 
 
+def _calendar_response(request: httpx.Request) -> httpx.Response:
+    """Google Calendar v3 as the sync reads it: a write echoes the entry back, a delete has no body."""
+    if request.method in ("PUT", "POST") and "/events" in request.url.path:
+        body = _body(request)
+        return httpx.Response(200, json={"kind": "calendar#event", "id": request.url.path.rsplit("/", 1)[1], **body})
+    if request.method == "DELETE" and "/events/" in request.url.path:
+        return httpx.Response(204)
+    raise AssertionError(f"Unexpected Google Calendar call: {request.method} {request.url}")
+
+
+# The meetings account's calendar in the tests; the team's calendar (``_calendar_response``) is any other id.
+MEET_CALENDAR_ID = "c_meet@group.calendar.google.com"
 MEET_EVENT_ID = "5kq3v0a7l9m2b1c8d4e6f0g2h4"
 MEET_CODE = "abc-mnop-xyz"
 MEET_URL = f"https://meet.google.com/{MEET_CODE}"
