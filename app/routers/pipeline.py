@@ -17,6 +17,9 @@ from app.routers.pipeline_models import (
     ActingDepartment,
     BanDaysRequest,
     BanResult,
+    BlockedBy,
+    BlockResult,
+    EditBlockRequest,
     CalendarDayRequest,
     CalendarDayResponse,
     CalendarResponse,
@@ -109,7 +112,10 @@ def get_pipeline_calendar(
             CalendarDayResponse(
                 date=d.date,
                 status=d.status.value,
-                reason=d.reason,
+                reason=d.block.reason if d.block else None,
+                block_id=d.block.id if d.block else None,
+                blocked_by=BlockedBy(member_id=d.block.blocker.id, name=d.block.blocker.name) if d.block else None,
+                blocked_at=d.block.created_at if d.block else None,
                 requests=[
                     CalendarDayRequest(
                         id=r.id,
@@ -155,17 +161,18 @@ def get_pipeline_overlaps(
 @router.put(
     "/calendar/bans",
     status_code=status.HTTP_200_OK,
-    response_model=BanResult,
+    response_model=BlockResult,
     dependencies=[Depends(Require(Perm.PIPELINE_BANS))],
 )
 def ban_pipeline_days(body: BanDaysRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
-    """Logistics closes days to bookings. A day already banned takes the new reason."""
+    """Logistics closes days to bookings as one block, with the reason. A day already closed moves to it."""
     with pipeline_service.booking_lock(session):
-        days, undated = pipeline_service.ban(session, caller, body.dates, body.reason)
+        block, undated = pipeline_service.ban(session, caller, body.dates, body.reason)
+        result = BlockResult(block_id=block.id, count=len(block.days))
         session.commit()
     for request in undated:
         notion.sync_after_commit(background_tasks, request)
-    return BanResult(count=len(days))
+    return result
 
 
 @router.delete(
@@ -175,10 +182,39 @@ def ban_pipeline_days(body: BanDaysRequest, session: DB, caller: CurrentCaller, 
     dependencies=[Depends(Require(Perm.PIPELINE_BANS))],
 )
 def unban_pipeline_days(body: UnbanDaysRequest, session: DB, caller: CurrentCaller):
-    """Logistics reopens days. Requests that lost a day to the ban do not get it back."""
+    """Logistics reopens single days, whatever block they are in. Requests that lost a day do not get it back."""
     removed = pipeline_service.unban(session, caller, body.dates)
     session.commit()
     return BanResult(count=removed)
+
+
+@router.patch(
+    "/calendar/blocks/{block_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=BlockResult,
+    dependencies=[Depends(Require(Perm.PIPELINE_BANS))],
+)
+def edit_pipeline_block(block_id: str, body: EditBlockRequest, session: DB, caller: CurrentCaller):
+    """Change why a block's days are closed."""
+    block = pipeline_service.get_block(session, block_id)
+    pipeline_service.edit_block(session, caller, block, body.reason)
+    result = BlockResult(block_id=block.id, count=len(block.days))
+    session.commit()
+    return result
+
+
+@router.delete(
+    "/calendar/blocks/{block_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=BlockResult,
+    dependencies=[Depends(Require(Perm.PIPELINE_BANS))],
+)
+def remove_pipeline_block(block_id: str, session: DB, caller: CurrentCaller):
+    """Reopen every day of a block that is not in the past."""
+    block = pipeline_service.get_block(session, block_id)
+    removed = pipeline_service.remove_block(session, caller, block)
+    session.commit()
+    return BlockResult(block_id=block_id, count=removed)
 
 
 NotificationScope = Literal["mine", "club"]

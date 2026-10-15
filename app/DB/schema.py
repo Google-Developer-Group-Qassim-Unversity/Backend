@@ -1083,20 +1083,51 @@ class PipelineLocks(Base):
     name: Mapped[str] = mapped_column(String(32), primary_key=True)
 
 
-class BookingBans(Base):
-    """A day Logistics closed to bookings, e.g. exams. Every team sees the reason."""
+class BookingBlocks(Base):
+    """Days Logistics closed together for one reason, e.g. midterms or a break.
 
-    __tablename__ = "booking_bans"
+    One day or many, next to each other or not. Every team sees the reason and
+    who closed them. Its days are ``booking_bans`` rows; reopening the last of
+    them deletes the block.
+    """
+
+    __tablename__ = "booking_blocks"
     __table_args__ = (
-        ForeignKeyConstraint(["banned_by"], ["members.id"], name="fk_booking_bans_banned_by", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["blocked_by"], ["members.id"], name="fk_booking_blocks_blocked_by", ondelete="RESTRICT"),
     )
 
-    date: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
-    reason: Mapped[Optional[str]] = mapped_column(VARCHAR(200, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
-    banned_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    reason: Mapped[str] = mapped_column(VARCHAR(200, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
+    blocked_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+
+    blocker: Mapped["Members"] = relationship("Members")
+    days: Mapped[list["BookingBans"]] = relationship(
+        "BookingBans",
+        back_populates="block",
+        order_by="BookingBans.date",
+        passive_deletes=True,
+        cascade="all, delete-orphan",
+    )
+
+
+class BookingBans(Base):
+    """One closed day, and the block that closed it; the block holds the reason and who."""
+
+    __tablename__ = "booking_bans"
+    __table_args__ = (
+        ForeignKeyConstraint(["block_id"], ["booking_blocks.id"], name="fk_booking_bans_block", ondelete="CASCADE"),
+    )
+
+    date: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
+    block_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    block: Mapped["BookingBlocks"] = relationship("BookingBlocks", back_populates="days")
 
 
 class EventRequestStage(str, enum.Enum):
@@ -1359,6 +1390,7 @@ class PipelineNotificationKind(str, enum.Enum):
     READY_TO_PUBLISH = "ready_to_publish"
     DATES_CHANGED = "dates_changed"
     OVERRIDDEN = "overridden"
+    CANCELLED = "cancelled"
 
 
 class PipelineNotifications(Base):
@@ -1434,6 +1466,8 @@ class PipelineHistoryAction(str, enum.Enum):
     DAYS_UNBANNED = "days_unbanned"
     EVENT_DELETED = "event_deleted"
     OVERRIDDEN = "overridden"
+    REQUEST_DELETED = "request_deleted"
+    BLOCK_EDITED = "block_edited"
 
 
 class PipelineHistory(Base):

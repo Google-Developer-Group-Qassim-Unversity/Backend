@@ -3,7 +3,8 @@
 The design team works from a Notion board. When a request reaches Design the
 backend writes its card there, and from then on the card follows the request:
 returned, resubmitted, poster uploaded, dates moved by Logistics, Design done,
-published, cancelled. Nothing is ever typed twice.
+published, cancelled. Nothing is ever typed twice. A cancelled request deleted
+for good takes its card to the Notion trash.
 
 **What goes where.** The board's columns are what a designer sorts and filters
 by: Status (the board's columns), the department, the design type, size and
@@ -284,6 +285,18 @@ def _push(session: Session, request: EventRequests, task: EventRequestTasks) -> 
             notion.delete_block(block["id"])
     notion.append_children(task.notion_page_id, children)
     logger.info("Request %s: Notion card updated", request.id)
+
+
+def trash_card(page_id: str) -> None:
+    """Move a deleted request's card to the Notion trash. Best effort: the request is gone, nothing retries it."""
+    if not config.notion_enabled:
+        return
+    try:
+        notion.trash_page(page_id)
+    except Exception:
+        logger.exception("Notion card %s of a deleted request not moved to the trash", page_id)
+        return
+    logger.info("Notion card %s of a deleted request moved to the trash", page_id)
 
 
 def ensure_schema(database_id: str) -> str:

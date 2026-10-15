@@ -26,6 +26,7 @@ from app.DB import event_pipeline as queries
 from app.DB import actions as action_queries
 from app.DB import logs as log_queries
 from app.DB.schema import (
+    BookingBlocks,
     BumpOutcome,
     Departments,
     EventsLocationType,
@@ -82,7 +83,7 @@ class DayStatus(str, Enum):
 class CalendarDay:
     date: date
     status: DayStatus
-    reason: str | None = None
+    block: BookingBlocks | None = None
     requests: list[EventRequests] = field(default_factory=list)
 
 
@@ -135,7 +136,7 @@ def calendar(session: Session, start: date, end: date) -> list[CalendarDay]:
     for day in days_between(start, end):
         on_day = [r for r in taking if r.start_date <= day <= r.end_date]  # type: ignore[operator]
         if day in bans:
-            days.append(CalendarDay(day, DayStatus.BANNED, bans[day].reason, on_day))
+            days.append(CalendarDay(day, DayStatus.BANNED, bans[day].block, on_day))
         elif on_day:
             status = min((_day_status_for(r) for r in on_day), key=_PRIORITY.index)
             days.append(CalendarDay(day, status, None, on_day))
@@ -204,29 +205,44 @@ def _check_ban_days(days: list[date]) -> list[date]:
     return unique
 
 
-def ban(
-    session: Session, caller: Caller, days: list[date], reason: str | None
-) -> tuple[list[date], list[EventRequests]]:
-    """Close ``days`` and take them away from every request covering one of them.
+def ban(session: Session, caller: Caller, days: list[date], reason: str) -> tuple[BookingBlocks, list[EventRequests]]:
+    """Close ``days`` as one block, and take them away from every request covering one of them.
 
-    That applies at any stage before publish: the request keeps everything
-    else, loses its dates and says why. Returns the days and the requests that
-    lost their dates, so the caller can tell their teams.
+    A day already closed moves to the new block. Taking the days applies at any
+    stage before publish: the request keeps everything else, loses its dates
+    and says why. Returns the block and the requests that lost their dates, so
+    the caller can tell their teams.
     """
     caller.access.require(Perm.PIPELINE_BANS)
     unique = _check_ban_days(days)
-    queries.ban_days(session, unique, reason, caller.member.id)
+    reason = reason.strip()
+    if not reason:
+        raise PipelineConflict("no_reason", "Say why these days are closed", 422)
+    block = queries.block_days(session, unique, reason, caller.member.id)
     history.record(
         session,
         PipelineHistoryAction.DAYS_BANNED,
         caller.member,
-        details={"dates": [d.isoformat() for d in unique], "reason": reason},
+        details={"dates": [d.isoformat() for d in unique], "reason": reason, "block_id": block.id},
     )
+    undated = _undate_requests_on(session, caller, unique, reason)
+    logger.info(
+        "Block %s closed %d day(s) from %s to %s; %d request(s) lost their dates",
+        block.id,
+        len(unique),
+        unique[0],
+        unique[-1],
+        len(undated),
+    )
+    return block, undated
+
+
+def _undate_requests_on(session: Session, caller: Caller, days: list[date], reason: str) -> list[EventRequests]:
     undated = []
-    for request in queries.get_dated_requests(session, unique[0], unique[-1], lock=True):
+    for request in queries.get_dated_requests(session, days[0], days[-1], lock=True):
         if request.stage == EventRequestStage.PUBLISHED:
             continue
-        if any(request.start_date <= day <= request.end_date for day in unique):  # type: ignore[operator]
+        if any(request.start_date <= day <= request.end_date for day in days):  # type: ignore[operator]
             lost = {"start_date": request.start_date.isoformat(), "end_date": request.end_date.isoformat()}  # type: ignore[union-attr]
             _undate(request, EventRequestUndatedReason.DAY_BANNED)
             history.record(
@@ -241,17 +257,11 @@ def ban(
             )
             notion.mark(session, request)
             undated.append(request)
-    logger.info(
-        "Banned %d day(s) from %s to %s; %d request(s) lost their dates",
-        len(unique),
-        unique[0],
-        unique[-1],
-        len(undated),
-    )
-    return unique, undated
+    return undated
 
 
 def unban(session: Session, caller: Caller, days: list[date]) -> int:
+    """Reopen single days, whichever blocks they are in. A block left with no days goes."""
     caller.access.require(Perm.PIPELINE_BANS)
     unique = _check_ban_days(days)
     removed = queries.unban_days(session, unique)
@@ -259,6 +269,54 @@ def unban(session: Session, caller: Caller, days: list[date]) -> int:
         session, PipelineHistoryAction.DAYS_UNBANNED, caller.member, details={"dates": [d.isoformat() for d in unique]}
     )
     logger.info("Unbanned %d day(s)", removed)
+    return removed
+
+
+def get_block(session: Session, block_id: str) -> BookingBlocks:
+    block = queries.get_block(session, block_id, lock=True)
+    if block is None:
+        raise NotFound("Booking block", block_id)
+    return block
+
+
+def edit_block(session: Session, caller: Caller, block: BookingBlocks, reason: str) -> None:
+    """Change why a block's days are closed. The days stay as they are."""
+    caller.access.require(Perm.PIPELINE_BANS)
+    reason = reason.strip()
+    if not reason:
+        raise PipelineConflict("no_reason", "Say why these days are closed", 422)
+    history.record(
+        session,
+        PipelineHistoryAction.BLOCK_EDITED,
+        caller.member,
+        details={"block_id": block.id, "from": block.reason, "to": reason},
+    )
+    block.reason = reason
+    session.flush()
+
+
+def remove_block(session: Session, caller: Caller, block: BookingBlocks) -> int:
+    """Reopen every day of a block. Past days stay closed: they are the record of what was closed.
+
+    Requests that lost a day to it do not get it back.
+    """
+    caller.access.require(Perm.PIPELINE_BANS)
+    today = clock.today()
+    future = [ban.date for ban in block.days if ban.date >= today]
+    if not future:
+        raise PipelineConflict("day_in_past", "Every day of this block is in the past", 422)
+    if len(future) < len(block.days):
+        removed = queries.unban_days(session, future)
+    else:
+        removed = len(block.days)
+        queries.delete_block(session, block)
+    history.record(
+        session,
+        PipelineHistoryAction.DAYS_UNBANNED,
+        caller.member,
+        details={"dates": [d.isoformat() for d in future], "block_id": block.id, "reason": block.reason},
+    )
+    logger.info("Block %s: reopened %d day(s)", block.id, removed)
     return removed
 
 
@@ -353,7 +411,12 @@ def bump(
     notion.mark(session, request)
     if outcome == BumpOutcome.CANCEL:
         request.stage = EventRequestStage.CANCELLED
+        # A cancelled request holds no dates; the lost ones are in its history.
+        request.start_date = None
+        request.end_date = None
+        request.day_modes = None
         request.hold_expires_at = None
+        request.return_due_at = None
         request.cancelled_at = clock.now()
         request.cancelled_by = caller.member.id
     else:
@@ -490,20 +553,81 @@ def redate(
     return bumped, [bump(session, caller, r, (bumps or {})[r.id], request) for r in bumped]
 
 
-def cancel(session: Session, caller: Caller, request: EventRequests) -> None:
-    """A team drops its own draft. Its dates, if it still held any, are free again."""
+def can_cancel(caller: Caller, request: EventRequests) -> bool:
+    """The requesting department (and a super admin) can drop a request at any stage before it is published."""
+    return can_request_for(caller, request.department_id) and request.stage not in (
+        EventRequestStage.PUBLISHED,
+        EventRequestStage.CANCELLED,
+    )
+
+
+def cancel(session: Session, caller: Caller, request: EventRequests) -> list[PendingEmail | None]:
+    """Drop a request, wherever it is in the pipeline.
+
+    It gives up its dates, so the days are free again, and stops every team's
+    work on it: each team it had reached is told, and Design's Notion card says
+    it was cancelled. It stays readable until someone deletes it for good.
+    Returns the teams' emails, to send once this commits.
+    """
     require_request_for(caller, request.department_id)
-    if request.stage != EventRequestStage.DRAFT and not (
-        caller.access.is_super_admin and request.stage != EventRequestStage.PUBLISHED
-    ):
-        raise PipelineConflict("not_a_draft", "Only a draft can be cancelled")
+    if not can_cancel(caller, request):
+        raise PipelineConflict("not_cancellable", f"A {request.stage.value} request cannot be cancelled")
+    was = request.stage
+    dates = [d.isoformat() if d else None for d in (request.start_date, request.end_date)]
     request.stage = EventRequestStage.CANCELLED
+    request.start_date = None
+    request.end_date = None
     request.hold_expires_at = None
+    request.day_modes = None
+    request.return_due_at = None
     request.cancelled_at = clock.now()
     request.cancelled_by = caller.member.id
-    history.record(session, PipelineHistoryAction.CANCELLED, caller.member, request)
+    history.record(
+        session, PipelineHistoryAction.CANCELLED, caller.member, request, {"stage": was.value, "dates": dates}
+    )
+    # The requesting department (a super admin may have cancelled it) and every team it had reached.
+    teams = team_queries.get_teams(session)
+    told: dict[int, str | None] = {request.department_id: None}
+    for task in request.tasks:
+        if task.status != EventRequestTaskStatus.BRIEF and task.team in teams:
+            told.setdefault(teams[task.team].id, task.team.value)
+    emails = []
+    note = f"{dates[0]} → {dates[1]}" if dates[0] else None
+    for department_id, team in told.items():
+        notifications.notify(
+            session, department_id, request, PipelineNotificationKind.CANCELLED, {"team": team} if team else None
+        )
+        if team is not None:
+            emails.append(
+                notifications.department_email(
+                    session, department_id, request, PipelineNotificationKind.CANCELLED, caller.member, note
+                )
+            )
     notion.mark(session, request)
     session.flush()
+    logger.info("Request %s cancelled at %s by member %s", request.id, was.value, caller.member.id)
+    return emails
+
+
+def can_delete(caller: Caller, request: EventRequests) -> bool:
+    return request.stage == EventRequestStage.CANCELLED and can_request_for(caller, request.department_id)
+
+
+def delete(session: Session, caller: Caller, request: EventRequests) -> str | None:
+    """Delete a cancelled request for good. Its history stays, with this as the last entry.
+
+    Returns the id of Design's Notion card, if it had one, to move to the trash
+    once this commits.
+    """
+    require_request_for(caller, request.department_id)
+    if not can_delete(caller, request):
+        raise PipelineConflict("not_cancelled", "Only a cancelled request can be deleted; cancel it first")
+    design = get_task(request, PipelineTeam.DESIGN)
+    page_id = design.notion_page_id if design else None
+    history.record(session, PipelineHistoryAction.REQUEST_DELETED, caller.member, request)
+    queries.delete_request(session, request)
+    logger.info("Request %s deleted by member %s", request.id, caller.member.id)
+    return page_id
 
 
 # --------------------------------------------------------------------------- details
@@ -576,8 +700,9 @@ def within_official_hours(request: EventRequests) -> bool | None:
 
 
 def get_request_for(session: Session, caller: Caller, request_id: str, lock: bool = False) -> EventRequests:
+    """A cancelled request still reads, read-only, until it is deleted."""
     request = queries.get_request(session, request_id, lock=lock)
-    if request is None or request.stage == EventRequestStage.CANCELLED:
+    if request is None:
         raise NotFound("Event request", request_id)
     if not can_view(session, caller, request):
         raise DepartmentForbidden(request.department_id, "see requests of")
