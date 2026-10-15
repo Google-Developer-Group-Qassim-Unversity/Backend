@@ -88,6 +88,33 @@ failed. `app/services/pipeline_notion.py` says what a card holds; the setup step
 are on Notion (Events pipeline → Design's Notion board). Off until
 `NOTION_TOKEN` and `NOTION_DESIGN_DATABASE_ID` are set.
 
+## The team's Google Calendar
+
+Every request is on one Google Calendar from the moment its dates are booked
+(`app/services/pipeline_calendar.py`): tentative and titled `[Held]` while it
+is a draft, then `[In review]`, `[Returned]`, `[Media]`, `[Ready]`, and plain
+once published - the colour is the stage too. The description has who asked,
+which teams are done, each day's mode, the Meet link, the poster and a link to
+the request. A request with daily times is a daily entry over its days;
+without, all day. Before Logistics confirms, times and venue are the ones
+asked for; after publish, the entry follows the event, so edits and Meet-link
+changes from the events page show up. It comes off when the request stops
+holding dates (hold expired, ban, cancel) and when its event is deleted.
+
+Same shape as the Notion card: every transition marks the request's row in
+`pipeline_calendar_entries` in its own transaction, the write happens after
+the commit, and the sweep retries what failed (error kept on the row). The row
+has no foreign key, so it outlives a request deleted with its event. The entry
+id is derived from the request id and the environment, so a write can always
+be run again and staging never touches prod's entries.
+
+It is written as the account that can edit the calendar - a person's own,
+not the club's - with a token of its own, on a published OAuth client of its
+own so the token does not expire weekly: `GOOGLE_CALENDAR_ID`,
+`GOOGLE_CALENDAR_REFRESH_TOKEN`, `GOOGLE_CALENDAR_CLIENT_ID` and
+`GOOGLE_CALENDAR_CLIENT_SECRET` (`docs/ENVIRONMENT_VARIABLES.md`). Either
+unset, nothing is sent and the marks wait; setting them writes them all.
+
 ## Publish
 
 `POST /pipeline/requests/{id}/publish` creates the event through
@@ -102,4 +129,4 @@ image. A late penalty is taken off the department's log for that event as a
 ## Not built yet
 
 - Brief attachments are links, not uploads.
-- Media's deliverables; no Google Calendar sync.
+- Media's deliverables.

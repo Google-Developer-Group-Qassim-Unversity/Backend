@@ -218,6 +218,10 @@ def _default_response(request: httpx.Request) -> httpx.Response:
     if request.url.host == "api.notion.com":
         return _notion_response(request)
 
+    # Google Calendar (app/services/google_calendar.py): the team's calendar.
+    if request.url.host == "www.googleapis.com" and path.startswith("/calendar/v3/"):
+        return _calendar_response(request)
+
     raise AssertionError(
         f"Unstubbed outbound request: {request.method} {request.url}\n"
         "Add it to tests/outbound.py:_default_response with the response the real "
@@ -256,3 +260,13 @@ def _notion_response(request: httpx.Request) -> httpx.Response:
     if request.method == "DELETE" and path.startswith("/v1/blocks/"):
         return httpx.Response(200, json={"object": "block", "archived": True})
     raise AssertionError(f"Unexpected Notion call: {request.method} {request.url}")
+
+
+def _calendar_response(request: httpx.Request) -> httpx.Response:
+    """Google Calendar v3 as the sync reads it: a write echoes the entry back, a delete has no body."""
+    if request.method in ("PUT", "POST") and "/events" in request.url.path:
+        body = _body(request)
+        return httpx.Response(200, json={"kind": "calendar#event", "id": request.url.path.rsplit("/", 1)[1], **body})
+    if request.method == "DELETE" and "/events/" in request.url.path:
+        return httpx.Response(204)
+    raise AssertionError(f"Unexpected Google Calendar call: {request.method} {request.url}")

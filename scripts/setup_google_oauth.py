@@ -27,6 +27,11 @@ fixed precisely so this only needs registering once).
 Run once per environment (or whenever the token is revoked):
 
     uv run python scripts/setup_google_oauth.py
+
+The team's Google Calendar has its own token, from the account that can edit
+that calendar (docs/EVENTS_PIPELINE.md, "The team's Google Calendar"):
+
+    uv run python scripts/setup_google_oauth.py --calendar
 """
 
 import sys
@@ -49,6 +54,12 @@ SCOPES = [
     "https://www.googleapis.com/auth/forms.responses.readonly",
 ]
 
+# ``--calendar``: the team's calendar (app/services/google_calendar.py) is
+# written by whichever account owns or can edit it - a person's own account,
+# not the club's - so it gets a token of its own, with this one scope:
+# writing and removing entries on calendars that account can edit, nothing else.
+CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+
 # Fixed rather than a random free port (the usual InstalledAppFlow default) so
 # there is exactly one redirect URI to register on the Web application OAuth
 # client this reuses - see the module docstring.
@@ -56,29 +67,35 @@ REDIRECT_PORT = 8765
 
 
 def main():
+    calendar = "--calendar" in sys.argv[1:]
     client_config = {
         "installed": {
-            "client_id": config.GOOGLE_CLIENT_ID,
-            "client_secret": config.GOOGLE_CLIENT_SECRET,
+            # The calendar has a published OAuth client of its own, so its token does not expire weekly.
+            "client_id": config.GOOGLE_CALENDAR_CLIENT_ID if calendar else config.GOOGLE_CLIENT_ID,
+            "client_secret": config.GOOGLE_CALENDAR_CLIENT_SECRET if calendar else config.GOOGLE_CLIENT_SECRET,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [f"http://localhost:{REDIRECT_PORT}/"],
         }
     }
 
-    flow = InstalledAppFlow.from_client_config(client_config, scopes=SCOPES)
-    print("Opening a browser window - sign in as the club's Google account, not your own.")
+    flow = InstalledAppFlow.from_client_config(client_config, scopes=CALENDAR_SCOPES if calendar else SCOPES)
+    if calendar:
+        print("Opening a browser window - sign in as the account that can edit the team's calendar.")
+    else:
+        print("Opening a browser window - sign in as the club's Google account, not your own.")
     credentials = flow.run_local_server(port=REDIRECT_PORT, access_type="offline", prompt="consent")
 
     if not credentials.refresh_token:
         print(
-            "\nNo refresh token was returned. This happens when the club account has "
+            "\nNo refresh token was returned. This happens when the account has "
             "already granted this app consent once before - revoke the app's access at "
             "https://myaccount.google.com/permissions and run this script again."
         )
         return
 
-    print("\nSuccess. Paste this into Infisical as GOOGLE_REFRESH_TOKEN under /admin-backend:")
+    name = "GOOGLE_CALENDAR_REFRESH_TOKEN" if calendar else "GOOGLE_REFRESH_TOKEN"
+    print(f"\nSuccess. Paste this into Infisical as {name} under /admin-backend:")
     print(f"\n{credentials.refresh_token}\n")
     print("Do not commit it, email it, or store it anywhere other than Infisical.")
 

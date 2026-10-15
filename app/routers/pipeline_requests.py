@@ -46,6 +46,7 @@ from app.services import event_briefs
 from app.services import event_deliverables
 from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
+from app.services import pipeline_calendar
 from app.services import pipeline_history
 from app.services import pipeline_notifications as notifications
 from app.services import pipeline_notion as notion
@@ -175,11 +176,12 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=EventRequestDetail)
-def book_event_request(body: BookRequest, session: DB, caller: CurrentCaller):
+def book_event_request(body: BookRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
     """Book a date range: a new draft that holds those days for 24 hours."""
     with service.booking_lock(session):
         request = service.book(session, caller, body.department_id, body.start_date, body.end_date)
         session.commit()
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -213,12 +215,15 @@ def get_event_request(request_id: str, session: DB, caller: CurrentCaller):
 
 
 @router.put("/{request_id}/dates", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def redate_event_request(request_id: str, body: RedateRequest, session: DB, caller: CurrentCaller):
+def redate_event_request(
+    request_id: str, body: RedateRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
+):
     """New dates for a request that lost its own; a draft gets a fresh 24-hour hold."""
     with service.booking_lock(session):
         request = service.get_request_for(session, caller, request_id, lock=True)
         service.redate(session, caller, request, body.start_date, body.end_date)
         session.commit()
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -231,6 +236,7 @@ def update_event_request_details(
     service.update_details(session, caller, request, body.model_dump(exclude_unset=True))
     session.commit()
     notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -241,6 +247,7 @@ def cancel_event_request(request_id: str, session: DB, caller: CurrentCaller, ba
     service.cancel(session, caller, request)
     session.commit()
     notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     logger.info("Request %s cancelled", request_id)
     return DetailResponse(detail="Request cancelled")
 
@@ -259,6 +266,7 @@ def save_event_request_brief(
     service.save_brief(session, caller, request, team, body.brief)
     session.commit()
     notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -299,6 +307,7 @@ def upload_event_request_poster(
     service.set_poster(session, caller, request, f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}")
     session.commit()
     notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -310,6 +319,7 @@ def submit_event_request(request_id: str, session: DB, caller: CurrentCaller, ba
     session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
     notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -328,6 +338,7 @@ def return_event_request(
     session.commit()
     notifications.send_after_commit(session, background_tasks, [email])
     notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -339,6 +350,7 @@ def resubmit_event_request(request_id: str, session: DB, caller: CurrentCaller, 
     session.commit()
     notifications.send_after_commit(session, background_tasks, [email])
     notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -358,6 +370,7 @@ def complete_event_request_task(
         session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
     notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -368,6 +381,7 @@ def publish_event_request(request_id: str, session: DB, caller: CurrentCaller, b
     service.publish(session, caller, request)
     session.commit()
     notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     # Best-effort, as after POST /events/: the leaderboard app caches events.
     try:
         reset_leaderboard_cache()
