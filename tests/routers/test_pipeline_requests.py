@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from app.DB.schema import Departments, DepartmentsType, EventRequests, EventRequestStage
+from app.DB.schema import Departments, DepartmentsType, EventRequests
 
 
 @pytest.fixture
@@ -116,7 +116,7 @@ def test_a_ban_undates_every_request_covering_the_day(pipeline, world):
     request_id = book(pipeline, world["ai"]).json()["id"]
 
     pipeline.sign_in(world["logistics_leader"])
-    pipeline.client.put("/pipeline/calendar/bans", json={"dates": ["2026-07-21"]})
+    pipeline.client.put("/pipeline/calendar/bans", json={"dates": ["2026-07-21"], "reason": "Exams"})
 
     pipeline.sign_in(world["ai_leader"])
     body = pipeline.client.get(f"/pipeline/requests/{request_id}").json()
@@ -228,18 +228,45 @@ def test_another_department_cannot_see_the_request(pipeline, world):
 def test_cancelling_a_draft_frees_its_dates(pipeline, world):
     pipeline.sign_in(world["ai_leader"])
     request_id = book(pipeline, world["ai"]).json()["id"]
-    assert pipeline.client.delete(f"/pipeline/requests/{request_id}").status_code == 200
-    row = pipeline.session.scalar(select(EventRequests).where(EventRequests.id == request_id))
-    pipeline.session.refresh(row)
-    assert row.stage == EventRequestStage.CANCELLED
+    response = pipeline.client.post(f"/pipeline/requests/{request_id}/cancel")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["stage"] == "cancelled"
+    assert (body["start_date"], body["end_date"]) == (None, None)
+    assert body["cancelled_by"]["member_id"] == world["ai_leader"].id
+    assert body["actions"]["can_cancel"] is False
+    assert body["actions"]["can_delete"] is True
 
     pipeline.sign_in(world["cyber_leader"])
     assert book(pipeline, world["cyber"]).status_code == 201
 
 
+def test_a_cancelled_request_can_be_deleted_for_good(pipeline, world):
+    pipeline.sign_in(world["ai_leader"])
+    request_id = book(pipeline, world["ai"]).json()["id"]
+    url = f"/pipeline/requests/{request_id}"
+    assert pipeline.client.delete(url).status_code == 409, "only a cancelled request can be deleted"
+
+    assert pipeline.client.post(f"{url}/cancel").status_code == 200
+    assert pipeline.client.get(url).status_code == 200, "a cancelled request still reads"
+    assert pipeline.client.post(f"{url}/cancel").status_code == 409
+
+    assert pipeline.client.delete(url).status_code == 200
+    assert pipeline.client.get(url).status_code == 404
+    assert pipeline.session.scalar(select(EventRequests).where(EventRequests.id == request_id)) is None
+
+
+def test_another_department_cannot_cancel_or_delete(pipeline, world):
+    pipeline.sign_in(world["ai_leader"])
+    request_id = book(pipeline, world["ai"]).json()["id"]
+    pipeline.sign_in(world["cyber_leader"])
+    assert pipeline.client.post(f"/pipeline/requests/{request_id}/cancel").status_code == 403
+    assert pipeline.client.delete(f"/pipeline/requests/{request_id}").status_code == 403
+
+
 def test_a_super_admin_can_book_a_banned_day(pipeline, world):
     pipeline.sign_in(world["logistics_leader"])
-    pipeline.client.put("/pipeline/calendar/bans", json={"dates": ["2026-07-21"]})
+    pipeline.client.put("/pipeline/calendar/bans", json={"dates": ["2026-07-21"], "reason": "Exams"})
     pipeline.sign_in(pipeline.person("Admin"), super_admin=True)
     assert book(pipeline, world["ai"]).status_code == 201
 

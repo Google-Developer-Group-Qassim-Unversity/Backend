@@ -1,4 +1,4 @@
-"""Reads and writes for the events pipeline: bans, and later the requests themselves."""
+"""Reads and writes for the events pipeline: closed days (blocks), and the requests themselves."""
 
 from collections.abc import Sequence
 from datetime import date, datetime
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.DB.schema import (
     BookingBans,
+    BookingBlocks,
     EventRequestPartners,
     EventRequests,
     EventRequestStage,
@@ -21,27 +22,66 @@ from app.DB.schema import (
 
 
 def get_bans(session: Session, start: date, end: date, lock: bool = False) -> Sequence[BookingBans]:
-    statement = select(BookingBans).where(BookingBans.date >= start, BookingBans.date <= end)
+    """The closed days in [start, end], each with its block and who closed it."""
+    statement = (
+        select(BookingBans)
+        .where(BookingBans.date >= start, BookingBans.date <= end)
+        .options(selectinload(BookingBans.block).selectinload(BookingBlocks.blocker))
+    )
     if lock:
         statement = statement.with_for_update()
     return session.scalars(statement.order_by(BookingBans.date)).all()
 
 
-def ban_days(session: Session, days: list[date], reason: str | None, banned_by: int) -> None:
-    """Ban ``days``; a day already banned just takes the new reason."""
+def get_block(session: Session, block_id: str, lock: bool = False) -> BookingBlocks | None:
+    statement = (
+        select(BookingBlocks)
+        .where(BookingBlocks.id == block_id)
+        .options(selectinload(BookingBlocks.days), selectinload(BookingBlocks.blocker))
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return session.scalar(statement)
+
+
+def block_days(session: Session, days: list[date], reason: str, blocked_by: int) -> BookingBlocks:
+    """Close ``days`` as one new block. A day already closed moves to it; a block left with no days goes."""
     existing = {ban.date: ban for ban in get_bans(session, min(days), max(days), lock=True)}
+    block = BookingBlocks(reason=reason, blocked_by=blocked_by)
+    session.add(block)
+    session.flush()
+    left_behind = set()
     for day in days:
         if day in existing:
-            existing[day].reason = reason
+            left_behind.add(existing[day].block_id)
+            existing[day].block_id = block.id
         else:
-            session.add(BookingBans(date=day, reason=reason, banned_by=banned_by))
+            session.add(BookingBans(date=day, block_id=block.id))
     session.flush()
+    delete_empty_blocks(session, left_behind)
+    return block
 
 
 def unban_days(session: Session, days: list[date]) -> int:
+    blocks = set(session.scalars(select(BookingBans.block_id).where(BookingBans.date.in_(days))).all())
     result = session.execute(delete(BookingBans).where(BookingBans.date.in_(days)))
     session.flush()
+    delete_empty_blocks(session, blocks)
     return result.rowcount  # type: ignore[attr-defined]
+
+
+def delete_block(session: Session, block: BookingBlocks) -> None:
+    """Reopen every day of ``block``; its day rows go with it."""
+    session.delete(block)
+    session.flush()
+
+
+def delete_empty_blocks(session: Session, block_ids: set[str]) -> None:
+    if not block_ids:
+        return
+    still_used = select(BookingBans.block_id).where(BookingBans.block_id.in_(block_ids))
+    session.execute(delete(BookingBlocks).where(BookingBlocks.id.in_(block_ids), BookingBlocks.id.not_in(still_used)))
+    session.flush()
 
 
 # --------------------------------------------------------------------------- requests
@@ -171,6 +211,12 @@ def lock_pipeline(session: Session, name: str, wait: bool = True) -> bool:
     statement = select(PipelineLocks.name).where(PipelineLocks.name == name)
     statement = statement.with_for_update() if wait else statement.with_for_update(skip_locked=True)
     return session.scalar(statement) is not None
+
+
+def delete_request(session: Session, request: EventRequests) -> None:
+    """Delete a request for good; its partners, tasks, notifications and penalty go with it."""
+    session.delete(request)
+    session.flush()
 
 
 def get_request_for_event(session: Session, event_id: int) -> EventRequests | None:

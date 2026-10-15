@@ -66,11 +66,20 @@ class CalendarDayRequest(BaseModel):
     stage: EventRequestStage
 
 
+class BlockedBy(BaseModel):
+    member_id: int
+    name: str
+
+
 class CalendarDayResponse(BaseModel):
     date: date
     # locked | banned | open | held | booked | published
     status: str
+    # On a banned day: the block that closed it, why, and who closed it.
     reason: str | None = None
+    block_id: str | None = None
+    blocked_by: BlockedBy | None = None
+    blocked_at: UtcDateTime | None = None
     requests: list[CalendarDayRequest] = []
 
 
@@ -81,8 +90,19 @@ class CalendarResponse(BaseModel):
 
 
 class BanDaysRequest(BaseModel):
+    """Close these days as one block. Every block says why."""
+
     dates: list[date] = Field(min_length=1, max_length=366)
-    reason: str | None = Field(default=None, max_length=200)
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class EditBlockRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class BlockResult(BaseModel):
+    block_id: str
+    count: int
 
 
 class UnbanDaysRequest(BaseModel):
@@ -211,6 +231,9 @@ class RequestActions(BaseModel):
     can_publish: bool = False
     # Design uploads or replaces the poster, until the request is published.
     can_upload_poster: bool = False
+    # The requesting department drops it at any stage before publish, then deletes it for good.
+    can_cancel: bool = False
+    can_delete: bool = False
 
 
 class HistoryItem(BaseModel):
@@ -229,6 +252,8 @@ class EventRequestDetail(EventRequestSummary):
     submitted_by: PersonRef | None
     returned_by: PersonRef | None
     published_by: PersonRef | None
+    cancelled_at: UtcDateTime | None = None
+    cancelled_by: PersonRef | None = None
     details: EventDetails
     partners: list[PipelineDepartment]
     # Worked out from the dates and times: Sun-Thu, 08:00-15:00.

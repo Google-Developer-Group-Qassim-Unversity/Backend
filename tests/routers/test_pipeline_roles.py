@@ -122,7 +122,7 @@ def test_only_a_team_opens_its_desk(pipeline, world):
 def test_past_is_what_was_published_or_cancelled(pipeline, world):
     as_(pipeline, world, "web")
     gone = book_on(pipeline, world["web"], "2026-07-27", complete=False)
-    assert pipeline.client.delete(f"/pipeline/requests/{gone}").status_code == 200
+    assert pipeline.client.post(f"/pipeline/requests/{gone}/cancel").status_code == 200
     kept = book_on(pipeline, world["web"], "2026-07-28", complete=False)
 
     active = pipeline.client.get("/pipeline/requests", params={"state": "active"}).json()

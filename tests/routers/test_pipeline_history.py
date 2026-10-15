@@ -143,11 +143,26 @@ def test_a_ban_is_recorded_on_the_calendar_and_on_each_request_it_undated(pipeli
         select(PipelineHistory).where(PipelineHistory.request_id.is_(None), PipelineHistory.action == "days_banned")
     ).all()
     assert [(r.actor_id, r.details) for r in calendar_rows] == [
-        (logistics.id, {"dates": ["2026-07-21"], "reason": "Exams"})
+        (logistics.id, {"dates": ["2026-07-21"], "reason": "Exams", "block_id": response.json()["block_id"]})
     ]
     pipeline.sign_in(world["people"]["ai"])
     banned = pipeline.client.get(url(world)).json()["history"][-1]
     assert (banned["action"], banned["actor"]) == ("dates_banned", ref(logistics))
+
+
+def test_the_history_outlives_a_deleted_request(pipeline, world):
+    pipeline.sign_in(world["people"]["ai"])
+    submit(pipeline, world["request_id"])
+    assert pipeline.client.post(url(world, "/cancel")).status_code == 200
+    assert pipeline.client.delete(url(world)).status_code == 200
+
+    rows = pipeline.session.scalars(
+        select(PipelineHistory)
+        .where(PipelineHistory.request_id == world["request_id"])
+        .order_by(PipelineHistory.at, PipelineHistory.id)
+    ).all()
+    assert [r.action for r in rows][-2:] == ["cancelled", "request_deleted"]
+    assert rows[-1].request_title is not None
 
 
 def test_the_history_outlives_a_deleted_event(pipeline, world):

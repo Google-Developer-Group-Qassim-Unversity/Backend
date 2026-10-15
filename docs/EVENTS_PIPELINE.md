@@ -8,7 +8,27 @@ plan and every decision are on Notion (GDG → Features → Events pipeline).
 
 `draft` (24-hour hold) → `in_review` (Design + Logistics) ⇄ `returned` (once,
 12 hours to fix) → `media` (Design done) → `ready` (all three done) →
-`published` (an open row in `events`). `cancelled` drops a draft.
+`published` (an open row in `events`).
+
+`cancelled` (`POST /pipeline/requests/{id}/cancel`): the requesting department
+(or a super admin) drops a request at any stage before publish. It gives up
+its dates, every team it had reached gets a notification and an email, and
+Design's Notion card turns "Cancelled". It stays readable, listed under
+`?stage=cancelled`, until someone deletes it for good (`DELETE
+/pipeline/requests/{id}`, cancelled requests only): the row and everything
+hanging off it go, the history stays with `request_deleted` as its last entry,
+and the Notion card moves to the trash.
+
+## Closed days
+
+Logistics closes days in blocks (`booking_blocks`): one or more days, next to
+each other or not, with a required reason and the member who closed them. Each
+closed day is a `booking_bans` row pointing at its block. The calendar shows
+every closed day's reason, block and closer. `PUT /pipeline/calendar/bans`
+makes a block (a day already closed moves to it), `DELETE
+/pipeline/calendar/bans` reopens single days, `PATCH` / `DELETE
+/pipeline/calendar/blocks/{id}` change a block's reason or reopen it whole. A
+block left with no days is deleted.
 
 ## Who can do what
 

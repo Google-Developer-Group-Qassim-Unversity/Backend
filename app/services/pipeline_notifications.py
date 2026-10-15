@@ -113,6 +113,11 @@ _COPY = {
         "نقل قسم اللوجستيات فعاليتكم إلى تواريخ أخرى حسب الحجز المتاح",
         "Logistics moved your event to other dates, the ones it could book",
     ),
+    PipelineNotificationKind.CANCELLED: (
+        "أُلغي طلب فعالية · An event request was cancelled",
+        "ألغى القسم الطالب هذا الطلب، فلا حاجة لإكمال العمل عليه",
+        "The requesting department cancelled this request; there is nothing left to do on it",
+    ),
     PipelineNotificationKind.HOLD_EXPIRED: (
         "انتهت مهلة حجز تواريخكم · Your date hold ran out",
         "انتهت مهلة الـ٢٤ ساعة فأُلغي حجز التواريخ. البيانات محفوظة؛ احجزوا تواريخ جديدة.",

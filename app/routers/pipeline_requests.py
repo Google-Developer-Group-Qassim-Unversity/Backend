@@ -99,6 +99,8 @@ def _actions(session, caller: Caller, request: EventRequests) -> RequestActions:
         complete=[t for t in service.ALL_TEAMS if service.can_complete(session, caller, request, t)],
         can_publish=service.can_publish(caller, request),
         can_upload_poster=service.can_upload_poster(caller, request),
+        can_cancel=service.can_cancel(caller, request),
+        can_delete=service.can_delete(caller, request),
     )
 
 
@@ -137,6 +139,8 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
         submitted_by=person(request.submitter),
         returned_by=person(request.returner),
         published_by=person(request.publisher),
+        cancelled_at=request.cancelled_at,
+        cancelled_by=person(request.canceller),
         details=EventDetails(
             title=request.title,
             description=request.description,
@@ -280,15 +284,26 @@ def update_event_request_details(
     return detail(session, caller, request)
 
 
-@router.delete("/{request_id}", status_code=status.HTTP_200_OK, response_model=DetailResponse)
+@router.post("/{request_id}/cancel", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
 def cancel_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
-    """Drop a draft. Its dates, if it still held any, are free again."""
+    """Drop a request at any stage before publish. Its dates are free again and every team it reached is told."""
     request = service.get_request_for(session, caller, request_id, lock=True)
-    service.cancel(session, caller, request)
+    emails = service.cancel(session, caller, request)
     session.commit()
+    notifications.send_after_commit(session, background_tasks, emails)
     notion.sync_after_commit(background_tasks, request)
-    logger.info("Request %s cancelled", request_id)
-    return DetailResponse(detail="Request cancelled")
+    return detail(session, caller, request)
+
+
+@router.delete("/{request_id}", status_code=status.HTTP_200_OK, response_model=DetailResponse)
+def delete_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
+    """Delete a cancelled request for good. Its history stays; Design's Notion card goes to the trash."""
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    page_id = service.delete(session, caller, request)
+    session.commit()
+    if page_id:
+        background_tasks.add_task(notion.trash_card, page_id)
+    return DetailResponse(detail="Request deleted")
 
 
 @router.put("/{request_id}/briefs/{team}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)

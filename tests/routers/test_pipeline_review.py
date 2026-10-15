@@ -146,3 +146,34 @@ def test_a_super_admin_can_do_every_step(pipeline, world):
     for team in ("design", "logistics", "media"):
         assert finish(pipeline, world["request_id"], team).status_code == 200
     assert pipeline.client.get(url(world)).json()["stage"] == "ready"
+
+
+def test_the_requesting_department_cancels_mid_pipeline(pipeline, world):
+    as_(pipeline, world, "design")
+    assert pipeline.client.get(url(world)).json()["actions"]["can_cancel"] is False
+
+    as_(pipeline, world, "ai")
+    assert pipeline.client.get(url(world)).json()["actions"]["can_cancel"] is True
+    response = pipeline.client.post(url(world, "/cancel"))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["stage"] == "cancelled"
+    assert (body["start_date"], body["end_date"]) == (None, None)
+    assert body["history"][-1]["action"] == "cancelled"
+    assert body["history"][-1]["details"]["stage"] == "in_review"
+
+    # Design's work on it stops, and Design is told.
+    as_(pipeline, world, "design")
+    assert pipeline.client.get("/pipeline/inbox").json() == []
+    kinds = [n["kind"] for n in pipeline.client.get("/pipeline/notifications").json()["items"]]
+    assert "cancelled" in kinds
+    assert pipeline.client.post(url(world, "/tasks/design/complete")).status_code == 409
+
+
+def test_a_published_request_cannot_be_cancelled(pipeline, world):
+    for team in ("design", "logistics", "media"):
+        as_(pipeline, world, team)
+        assert finish(pipeline, world["request_id"], team).status_code == 200
+    as_(pipeline, world, "ai")
+    assert pipeline.client.post(url(world, "/publish")).status_code == 200
+    assert pipeline.client.post(url(world, "/cancel")).status_code == 409
