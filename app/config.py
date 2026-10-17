@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: Optional[str] = None
     GOOGLE_CLIENT_SECRET: Optional[str] = None
     GOOGLE_REFRESH_TOKEN: Optional[str] = None
+    GOOGLE_CALENDAR_ID: Optional[str] = None
+    GOOGLE_ORGANIZER_EMAIL: Optional[str] = None
+    APP_TIMEZONE: Optional[str] = None
     TEMPLATE_FORM_FILE_ID: Optional[str] = None
     GOOGLE_FORMS_TOPIC_NAME: Optional[str] = None
     GOOGLE_ALLOWED_EMAIL_DOMAINS: str = "gmail.com,googlemail.com"
@@ -220,6 +223,18 @@ class Config:
     @property
     def GOOGLE_REFRESH_TOKEN(self) -> str:
         return env_or_except("GOOGLE_REFRESH_TOKEN")
+
+    @property
+    def GOOGLE_CALENDAR_ID(self) -> str:
+        return env_or_except("GOOGLE_CALENDAR_ID")
+
+    @property
+    def GOOGLE_ORGANIZER_EMAIL(self) -> str:
+        return env_or_except("GOOGLE_ORGANIZER_EMAIL")
+
+    @property
+    def APP_TIMEZONE(self) -> str:
+        return env_or_except("APP_TIMEZONE", default="Asia/Riyadh")
 
     @property
     def TEMPLATE_FORM_FILE_ID(self) -> str:

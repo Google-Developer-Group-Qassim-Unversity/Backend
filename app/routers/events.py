@@ -34,7 +34,10 @@ from app.routers.models import (
     UpdateEventMeetingUrl_model,
     CreateEventContentLink_model,
     UpdateEventContentLink_model,
+    DriveRecordingCandidatesResponse,
+    DriveFileMakePublicResponse_model,
 )
+from app.clients import GDrive
 from app.helpers import CurrentMember
 from app.leaderboard_cache import reset_leaderboard_cache_best_effort
 from app.services.events import create_full_event
@@ -43,7 +46,7 @@ from app.semesters import resolve_semester
 from time import perf_counter
 from typing import Annotated, Literal
 from sqlalchemy.exc import IntegrityError
-from app.exceptions import DataIntegrityError
+from app.exceptions import DataIntegrityError, DriveIntegrationNotConfigured
 from app.dependencies import DB
 from sqlalchemy.orm import Session
 from app.DB import event_pipeline as pipeline_queries
@@ -656,6 +659,48 @@ def delete_event_content_link(event_id: int, link_id: UUID, session: DB, member:
     logger.info(f"Event [{event_id}] content link [{link_id}] deleted")
     reset_leaderboard_cache_best_effort()
     return {"detail": "Content link deleted successfully"}
+
+
+@router.get(
+    "/{event_id:int}/drive-recording-candidates",
+    status_code=status.HTTP_200_OK,
+    response_model=DriveRecordingCandidatesResponse,
+    dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
+)
+def get_drive_recording_candidates(event_id: int, session: DB, member: CurrentMember, gdrive: GDrive):
+    """Retrieve Google Meet recording candidates for an event using Meet API v2
+    with fallback to legacy Drive folder search."""
+    if not gdrive.is_configured():
+        raise DriveIntegrationNotConfigured()
+
+    event = events_queries.get_event_by_id(session, event_id)
+    linked_ids = events_queries.get_all_linked_drive_file_ids(session)
+
+    state, candidates = gdrive.find_recording_candidates(
+        meeting_url=event.meeting_url,
+        start_dt=event.start_datetime,
+        end_dt=event.end_datetime,
+        exclude_file_ids=linked_ids,
+    )
+    return {"state": state, "candidates": candidates}
+
+
+@router.post(
+    "/{event_id:int}/drive-recording-candidates/{file_id}/make-public",
+    status_code=status.HTTP_200_OK,
+    response_model=DriveFileMakePublicResponse_model,
+    dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
+)
+def make_drive_recording_candidate_public(
+    event_id: int, file_id: str, session: DB, member: CurrentMember, gdrive: GDrive
+):
+    """Grant public read permission ('anyone with the link can view') to a recording candidate."""
+    if not gdrive.is_configured():
+        raise DriveIntegrationNotConfigured()
+
+    events_queries.get_event_by_id(session, event_id)
+    gdrive.make_public(file_id, raise_on_blocked=True)
+    return {"file_id": file_id, "is_public": True}
 
 
 # TODO: move to submissions router.

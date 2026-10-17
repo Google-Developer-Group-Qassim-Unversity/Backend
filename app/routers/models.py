@@ -123,6 +123,7 @@ class EventContentLink_model(BaseClassModel):
     # read time (app/DB/events.py drive_download_url) - never a column, never
     # settable; a link that is not a recognizable Drive file leaves it null.
     download_url: str | None = None
+    drive_file_id: str | None = None
 
 
 class CreateEventContentLink_model(BaseClassModel):
@@ -141,6 +142,7 @@ class CreateEventContentLink_model(BaseClassModel):
     kind: EventsContentLinkKind
     # Phase 1 has no approval gating: a manually pasted link goes live at once.
     published: bool = True
+    drive_file_id: str | None = None
 
 
 class UpdateEventContentLink_model(BaseClassModel):
@@ -175,6 +177,33 @@ class UpdateEventContentLink_model(BaseClassModel):
 
     kind: EventsContentLinkKind | None = None
     published: bool | None = None
+
+
+class DriveRecordingCandidate_model(BaseClassModel):
+    file_id: str
+    web_view_link: str
+    is_public: bool
+    name: str
+    created_time: datetime | str | None = None
+
+
+class DriveRecordingCandidatesResponse(BaseClassModel):
+    state: Literal["processing", "ready", "absent"]
+    candidates: list[DriveRecordingCandidate_model] = []
+
+
+class DriveFileMakePublicResponse_model(BaseClassModel):
+    file_id: str
+    is_public: bool
+
+
+class DriveStorageQuotaResponse_model(BaseClassModel):
+    configured: bool
+    usage: int | None = None
+    limit: int | None = None
+    usage_in_drive: int | None = None
+    usage_in_drive_trash: int | None = None
+    usage_percentage: float | None = None
 
 
 class EventListItem_model(Events_model):

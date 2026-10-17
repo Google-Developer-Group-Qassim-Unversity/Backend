@@ -313,6 +313,21 @@ def get_event_content_links(session: Session, event_id: int, published_only: boo
     return links
 
 
+def get_all_linked_drive_file_ids(session: Session) -> set[str]:
+    """Return all Google Drive file IDs that are already linked to any event content link."""
+    stmt = select(EventContentLinks.drive_file_id, EventContentLinks.url)
+    results = session.execute(stmt).all()
+    file_ids: set[str] = set()
+    for drive_file_id, url in results:
+        if drive_file_id:
+            file_ids.add(str(drive_file_id))
+        elif url:
+            extracted = _drive_file_id_from_url(url)
+            if extracted:
+                file_ids.add(extracted)
+    return file_ids
+
+
 def create_event_content_link(
     session: Session, event_id: int, link_data: "CreateEventContentLink_model", created_by: int | None = None
 ) -> EventContentLinks:
@@ -322,6 +337,7 @@ def create_event_content_link(
         url=link_data.url,
         kind=link_data.kind,
         published=link_data.published,
+        drive_file_id=getattr(link_data, "drive_file_id", None),
         created_by=created_by,
     )
     session.add(link)

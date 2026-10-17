@@ -41,6 +41,18 @@ def get_r2_client() -> Any:
 R2Client = Annotated[Any, Depends(get_r2_client)]
 
 
+def get_gdrive_client() -> "GDriveClient":
+    """Google Drive client dependency."""
+    from app.services.gdrive_client import get_gdrive_client as _get_client
+
+    return _get_client()
+
+
+from app.services.gdrive_client import GDriveClient  # noqa: E402
+
+GDrive = Annotated[GDriveClient, Depends(get_gdrive_client)]
+
+
 async def open_http_client() -> None:
     """Create the shared client. Called from the app lifespan."""
     global _http_client
