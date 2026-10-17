@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.logging_config import request_id_var
+from app.logging_config import ActorSlot, actor_var, request_id_var
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,9 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         request_id = request.headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex[:12]
         token = request_id_var.set(request_id)
+        # set here, in the request's own context, so the threadpool copies that
+        # resolve the caller and run the route all share the one slot
+        actor_token = actor_var.set(ActorSlot())
         sentry_sdk.set_tag("request_id", request_id)
 
         started = time.perf_counter()
@@ -44,3 +47,4 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         finally:
             # reset last: the lines above must still carry this request's id
             request_id_var.reset(token)
+            actor_var.reset(actor_token)
