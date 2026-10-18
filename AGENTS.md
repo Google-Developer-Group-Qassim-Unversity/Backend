@@ -85,3 +85,22 @@ the public site in `Website`; see `CLAUDE.md`.
   - `test` – `RUN_CLUB_BROWSER=1 uv run pytest` (the fixtures also run `alembic upgrade head` on a fresh MySQL, and `tests/test_migrations.py` fails on multiple heads or models that no migration matches). The Club Structure browser check needs the admin frontend, so the job also checks out `Admin` - the branch with the PR's name if there is one, else `dev`.
 - **deploy.yml** – on push to `dev` (staging, port 7502) or `main` (production, port 7501); SSH-deploys the backend under PM2 with the matching Infisical env. Run it manually to redeploy.
   The deploy builds the release in `~/GDG-backend.new` (or `-staging.new`), runs `alembic upgrade head` against that environment's database, replaces the live release, restarts, and fails unless `/health/db` and `/events/` answer. Migrations are never run by hand.
+
+## Linear: use `linear-gdg`, never `linear`
+
+This project's tickets live in the GDG Linear workspace, reached through an MCP
+server named `linear-gdg` (`https://mcp.linear.app/mcp`). It is declared in this
+repo for every agent we use:
+
+| Agent | File | Sign in once with |
+|-------|------|-------------------|
+| Claude Code | `.mcp.json` | `/mcp` |
+| Codex | `.codex/config.toml` (project must be trusted) | `codex mcp login linear-gdg` |
+| opencode | `opencode.json` | `opencode mcp auth linear-gdg` |
+| Cursor | `.cursor/mcp.json` | Settings → MCP |
+| VS Code (Copilot) | `.vscode/mcp.json` | the server's "Start" prompt |
+| Gemini CLI | `.gemini/settings.json` | `/mcp auth linear-gdg` |
+
+Sign in with the Linear account that is a member of the GDG workspace. No token
+is committed. A `linear` server, if one is loaded, is some other workspace
+configured outside this repo: never read or write GDG tickets through it.
