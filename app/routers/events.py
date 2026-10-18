@@ -708,7 +708,13 @@ def make_drive_recording_candidate_public(
         end_dt=event.end_datetime,
         exclude_file_ids=linked_ids,
     )
-    if file_id not in {c["file_id"] for c in candidates}:
+    is_candidate = file_id in {c["file_id"] for c in candidates}
+    existing_links = events_queries.get_event_content_links(session, event.id, published_only=False)
+    is_event_link = any(
+        link.drive_file_id == file_id or (link.url and events_queries._drive_file_id_from_url(link.url) == file_id)
+        for link in existing_links
+    )
+    if not (is_candidate or is_event_link):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Recording candidate not found for this event"
         )
