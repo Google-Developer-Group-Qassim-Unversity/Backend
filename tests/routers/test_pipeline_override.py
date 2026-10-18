@@ -42,7 +42,6 @@ def row(pipeline, request_id) -> EventRequests:
 def test_the_preview_lists_the_requests_and_who_gets_the_email(pipeline, world):
     pipeline.sign_in(world["admin"], super_admin=True)
     body = pipeline.client.get("/pipeline/overlaps", params={"from": "2026-07-21", "to": "2026-07-22"}).json()
-    assert body["emails_live"] is False
     [entry] = body["requests"]
     assert entry["request"]["id"] == world["request_id"]
     assert entry["request"]["department"]["id"] == world["ai"].id
@@ -104,10 +103,9 @@ def test_reschedule_sends_a_submitted_request_back_to_a_draft_with_no_dates(pipe
     assert history.details["outcome"] == "reschedule"
     assert history.details["by_request_id"] == response.json()["id"]
 
-    # Trial mode: the copy goes to the super admin, listing the department's members.
+    # The bumped department's members are emailed.
     [blast] = pipeline.outbound.to("/blasts")
-    assert blast.params.get_list("emails") == ["admin@example.com"]
-    assert world["ai_member"].email in blast.text
+    assert sorted(blast.params.get_list("emails")) == sorted([world["ai_leader"].email, world["ai_member"].email])
 
     # The department sees it, books new dates, and submits again.
     pipeline.sign_in(world["ai_leader"])

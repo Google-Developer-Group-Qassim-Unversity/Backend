@@ -7,7 +7,6 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
 from app.DB import pipeline_teams as team_queries
-from app.config import config
 from app.DB.schema import PipelineTeam
 from app.dependencies import DB
 from app.exceptions import DepartmentForbidden
@@ -154,8 +153,7 @@ def get_pipeline_overlaps(
                 ],
             )
             for request in pipeline_service.overlapping(session, start, end, ignore)
-        ],
-        emails_live=config.PIPELINE_EMAILS_LIVE,
+        ]
     )
 
 

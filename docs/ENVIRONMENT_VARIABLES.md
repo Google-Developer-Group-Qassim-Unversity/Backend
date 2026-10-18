@@ -54,7 +54,6 @@ duplicated across both apps for that one convenience link.
 | `MEMBER_APP_URL` | when the feature runs | - |  |
 | `MEMBER_APP_REVALIDATE_SECRET` | when the feature runs | - | bearer token for the leaderboard cache reset |
 | `SES_FROM_ADDRESS` | when the feature runs | - |  |
-| `PIPELINE_EMAILS_LIVE` | no | `false` | events pipeline: `false` sends each email only to whoever triggered it, as a trial copy; `true` emails the whole department |
 | `ADMIN_APP_URL` | no | `https://admin.gdg-q.com` | links in events pipeline emails |
 | `NOTION_TOKEN` | for Design's Notion board | - | internal integration secret (`ntn_...`) of the design team's Notion; with `NOTION_DESIGN_DATABASE_ID`, every request that reaches Design gets a card there. Unset: nothing is sent. Setup steps are on Notion (Events pipeline → Design's Notion board) |
 | `NOTION_DESIGN_DATABASE_ID` | for Design's Notion board | - | the database (board) the cards go in; shared with the integration. One board for prod and staging; staging titles carry a `(staging)` prefix |
