@@ -188,6 +188,17 @@ class Config:
         return self.ENV in ("staging", "development")
 
     @property
+    def trusts_metadata_identity(self) -> bool:
+        """Whether a caller's publicMetadata may identify them as a member.
+
+        Staging and local dev run on Clerk's development instance, whose session
+        token has no email claim, so identity there has to come from metadata
+        (docs/STAGING.md). Production never trusts it: members can write their
+        own publicMetadata, so a uni_id or email found there proves nothing.
+        """
+        return self.ENV in ("staging", "development")
+
+    @property
     def EMAIL_REDIRECT_FALLBACK(self) -> list[str]:
         return [email.strip() for email in get_settings().EMAIL_REDIRECT_FALLBACK.split(",") if email.strip()]
 

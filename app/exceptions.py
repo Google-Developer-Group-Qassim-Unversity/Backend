@@ -180,6 +180,20 @@ class MemberNotFound(NotFound):
         super().__init__("Member", id)
 
 
+class MemberClaimedByAnotherLogin(KnownHttpException):
+    """A signup matched a member row that a different Clerk login already owns.
+
+    Production never moves a claimed row to a new login on its own: the claims
+    that matched (a uni_id or an email) are not proof that the caller is that
+    member. An admin has to release the row first.
+    """
+
+    code = "member_claimed"
+
+    def __init__(self, member_id: int):
+        super().__init__(status_code=409, detail=f"Member {member_id} is already linked to a different login")
+
+
 class EmailTemplateNotFound(NotFound):
     def __init__(self, id: str | int):
         super().__init__("Email template", id)

@@ -22,9 +22,14 @@ from app.exceptions import (
 )
 from json import dumps
 import jwt
+import re
 from datetime import datetime, date, timedelta
 
 logger = logging.getLogger(__name__)
+
+# A university-ID account signs in as <9-digit uni_id>@qu.edu.sa, and that
+# address only becomes its Clerk email after a code sent to that mailbox.
+UNIVERSITY_EMAIL = re.compile(r"(\d{9})@qu\.edu\.sa", re.IGNORECASE)
 
 
 def get_effective_date(dt: datetime, threshold: int) -> date:
@@ -84,21 +89,36 @@ def get_email_from_credentials(credentials) -> str | None:
     return decoded.get("email") or decoded.get("primary_email_address") or decoded.get("metadata", {}).get("email")
 
 
+def get_verified_email_from_credentials(credentials) -> str | None:
+    """The caller's email from the claims Clerk issues itself, never publicMetadata."""
+    decoded = credentials.model_dump().get("decoded") or {}
+    return decoded.get("email") or decoded.get("primary_email_address")
+
+
+def get_verified_uni_id_from_credentials(credentials) -> str | None:
+    """The uni_id a university-ID account proves by signing in as <uni_id>@qu.edu.sa."""
+    email = get_verified_email_from_credentials(credentials)
+    match = UNIVERSITY_EMAIL.fullmatch(email.strip()) if email else None
+    return match.group(1) if match else None
+
+
 def resolve_member(session: Session, credentials) -> Members:
     """Resolve the ``Members`` row for the currently authenticated caller.
 
-    One chain, ordered by how much each claim is worth:
-
     1. ``clerk_user_id`` - the token's ``sub``. On every Clerk token, and the
-       only one of the three that cannot drift.
-    2. ``uni_id`` from publicMetadata, for members who have not authenticated
-       since this identity model was introduced.
-    3. the email claim, for a member whose row was created by an admin before
-       they ever signed in, so it carries neither of the first two.
+       only claim that cannot drift.
+    2. Otherwise a row that no login owns yet, for members who have not signed
+       in since this identity model was introduced, or whose row an admin
+       created before they ever signed in. Production finds it through the
+       uni_id and email Clerk verified (``_find_unclaimed_member``); staging
+       and local dev, whose tokens carry no email claim, through
+       publicMetadata (``_find_member_by_metadata``).
 
-    A hit on 2 or 3 writes ``clerk_user_id`` back, so the next request takes the
-    first branch and the fallbacks decay into dead weight rather than a
-    permanent cost.
+    A hit on 2 writes ``clerk_user_id`` back, so the next request takes the
+    first branch and the fallback decays into dead weight rather than a
+    permanent cost. Production never moves a row another login already owns:
+    members can write their own publicMetadata, so a uni_id or email found
+    there proves nothing.
 
     Lookup failures are not swallowed. "This caller is not a member" and "the
     database is unreachable" are different answers, and the wallet router used
@@ -109,20 +129,43 @@ def resolve_member(session: Session, credentials) -> Members:
     if member:
         return member
 
+    if config.trusts_metadata_identity:
+        member = _find_member_by_metadata(session, credentials)
+    else:
+        member = _find_unclaimed_member(session, credentials)
+    if member:
+        return member_queries.set_member_clerk_user_id(session, member, clerk_user_id)
+
+    raise MemberNotFound(clerk_user_id)
+
+
+def _find_unclaimed_member(session: Session, credentials) -> Members | None:
+    """A row no login owns yet, matched only on claims Clerk verified."""
+    uni_id = get_verified_uni_id_from_credentials(credentials)
+    if uni_id:
+        member = member_queries.get_member_by_uni_id_or_none(session, uni_id)
+        if member and member.clerk_user_id is None:
+            return member
+
+    email = get_verified_email_from_credentials(credentials)
+    if email:
+        return member_queries.get_member_without_login_by_email_or_none(session, email)
+    return None
+
+
+def _find_member_by_metadata(session: Session, credentials) -> Members | None:
+    """Staging and local dev: the development instance's token has no email claim (docs/STAGING.md)."""
     decoded = credentials.model_dump()["decoded"]
     uni_id = decoded.get("metadata", {}).get("uni_id")
     if uni_id:
         member = member_queries.get_member_by_uni_id_or_none(session, str(uni_id))
         if member:
-            return member_queries.set_member_clerk_user_id(session, member, clerk_user_id)
+            return member
 
     email = get_email_from_credentials(credentials)
     if email:
-        member = member_queries.get_member_by_email_or_none(session, str(email))
-        if member:
-            return member_queries.set_member_clerk_user_id(session, member, clerk_user_id)
-
-    raise MemberNotFound(clerk_user_id)
+        return member_queries.get_member_by_email_or_none(session, str(email))
+    return None
 
 
 def authenticated_guard(credentials=Depends(config.CLERK_GUARD)):
@@ -218,13 +261,17 @@ def credentials_to_member_model(credentials) -> Member_model:
         logger.error("Invalid credentials structure: %s", credentials_str)
         raise ValueError("Invalid credentials: 'decoded' or 'metadata' missing")
 
-    # 2. create Member_model from metadata
+    # 2. create Member_model from metadata. The uni_id is identity, not profile data,
+    #    so production takes it from the university email Clerk verified instead.
     metadata = credentials_dict["decoded"]["metadata"]
+    uni_id = (
+        metadata.get("uni_id") if config.trusts_metadata_identity else get_verified_uni_id_from_credentials(credentials)
+    )
     member = Member_model(
         name=metadata.get("fullArabicName"),
         email=metadata.get("personalEmail"),
         phone_number=metadata.get("saudiPhone"),
-        uni_id=metadata.get("uni_id"),
+        uni_id=uni_id,
         clerk_user_id=str(credentials_dict["decoded"]["sub"]),
         gender=metadata.get("gender").title(),
         uni_level=metadata.get("uniLevel"),

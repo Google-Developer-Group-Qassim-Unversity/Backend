@@ -111,6 +111,29 @@ def create_test_member(db_session: Session) -> Members:
     return member
 
 
+def get_own_attendance(client: TestClient, event_id: int):
+    """GET ``?type=me`` as the member who checked in.
+
+    ``admin_client`` answers the optional guard with the admin's credentials, a
+    different login. Those used to reach the member's row only because both
+    test identities carry the same uni_id in metadata, which production no
+    longer trusts - so "my attendance" is read with the member's own login.
+    """
+    from app.helpers import optional_clerk_guard
+    from app.main import app
+    from tests.conftest import FAKE_CLERK_CREDENTIALS
+
+    previous = app.dependency_overrides.get(optional_clerk_guard)
+    app.dependency_overrides[optional_clerk_guard] = lambda: FAKE_CLERK_CREDENTIALS
+    try:
+        return client.get(f"/attendance/{event_id}?type=me")
+    finally:
+        if previous is None:
+            app.dependency_overrides.pop(optional_clerk_guard, None)
+        else:
+            app.dependency_overrides[optional_clerk_guard] = previous
+
+
 def get_member_log_id(db_session: Session, event_id: int, member_action_id: int) -> int | None:
     logs = db_session.query(Logs).filter(Logs.event_id == event_id).all()
     for log in logs:
@@ -370,7 +393,7 @@ def test_mark_attendance_success(admin_client: TestClient, clerk_client: TestCli
     token = make_attendance_token(event_id)
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_2xx(response)
-    attendance_response = clerk_client.get(f"/attendance/{event_id}?type=me")
+    attendance_response = get_own_attendance(clerk_client, event_id)
     assert_2xx(attendance_response)
     assert attendance_response.json()["attendance_count"] == 1
 
@@ -483,7 +506,7 @@ def test_mark_form_registration_accepted(clerk_client: TestClient, admin_client:
     token = make_attendance_token(event_id)
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_2xx(response)
-    attendance_response = clerk_client.get(f"/attendance/{event_id}?type=me")
+    attendance_response = get_own_attendance(clerk_client, event_id)
     assert_2xx(attendance_response)
     assert attendance_response.json()["attendance_count"] == 1
 
@@ -516,7 +539,7 @@ def test_mark_form_google_accepted(clerk_client: TestClient, admin_client: TestC
     token = make_attendance_token(event_id)
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_2xx(response)
-    attendance_response = clerk_client.get(f"/attendance/{event_id}?type=me")
+    attendance_response = get_own_attendance(clerk_client, event_id)
     assert_2xx(attendance_response)
     assert attendance_response.json()["attendance_count"] == 1
 

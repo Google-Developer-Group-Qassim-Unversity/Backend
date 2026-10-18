@@ -18,6 +18,7 @@ from app.routers.models import (
     BatchCreateMembersResponse,
 )
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
+from app.config import config
 from app.helpers import CurrentMember, authenticated_guard, credentials_to_member_model
 from typing import Annotated
 from app.dependencies import DB
@@ -246,7 +247,9 @@ def create_member(credentials: Annotated[HTTPAuthorizationCredentials, Depends(a
     try:
         member = credentials_to_member_model(credentials)
         logger.info(f"Creating Member {member.uni_id}")
-        new_member, already_exist = member_queries.create_member_if_not_exists(session, member, is_authenticated=True)
+        new_member, already_exist = member_queries.create_member_if_not_exists(
+            session, member, is_authenticated=True, only_unclaimed=not config.trusts_metadata_identity
+        )
         if new_member is None:
             # The email is already on a different, already-claimed member row (e.g. two
             # distinct people sharing an inbox) - not something we can auto-resolve.

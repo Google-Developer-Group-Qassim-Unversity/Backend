@@ -305,6 +305,9 @@ FAKE_CLERK_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
     credentials="fake-token",
     decoded={
         "sub": "clerk_test_member_sub",
+        # Production tokens carry the Clerk email claim; a university-ID account's is
+        # <uni_id>@qu.edu.sa, which is where production takes the uni_id from.
+        "email": "123456789@qu.edu.sa",
         "metadata": {
             "uni_id": "123456789",
             "fullArabicName": "Test Member",
@@ -322,6 +325,9 @@ FAKE_ADMIN_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
     credentials="fake-admin-token",
     decoded={
         "sub": "clerk_test_admin_sub",
+        # Production tokens carry the Clerk email claim; a university-ID account's is
+        # <uni_id>@qu.edu.sa, which is where production takes the uni_id from.
+        "email": "123456789@qu.edu.sa",
         "metadata": {
             "uni_id": "123456789",
             "fullArabicName": "Test Admin",
@@ -341,6 +347,9 @@ FAKE_SUPER_ADMIN_CREDENTIALS = ClerkHTTPAuthorizationCredentials(
     credentials="fake-super-admin-token",
     decoded={
         "sub": "clerk_test_super_admin_sub",
+        # Production tokens carry the Clerk email claim; a university-ID account's is
+        # <uni_id>@qu.edu.sa, which is where production takes the uni_id from.
+        "email": "123456789@qu.edu.sa",
         "metadata": {
             "uni_id": "123456789",
             "fullArabicName": "Test Super Admin",

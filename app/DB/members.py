@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, func, or_, asc, desc, case
 from app.DB.schema import Members, MembersLogs
-from app.exceptions import MemberNotFound
+from app.exceptions import MemberClaimedByAnotherLogin, MemberNotFound
 from app.routers.models import Member_model
 from datetime import datetime
 
@@ -35,13 +35,25 @@ def create_member(session: Session, member: Member_model, is_authenticated: bool
 
 
 def create_member_if_not_exists(
-    session: Session, member: Member_model, is_authenticated: bool = False
+    session: Session, member: Member_model, is_authenticated: bool = False, *, only_unclaimed: bool = False
 ) -> tuple[Members | None, bool]:
+    """Find the caller's row (by Clerk id, uni_id, then an unclaimed email) and update it, or create one.
+
+    With ``only_unclaimed`` (production), a row found by uni_id that a different
+    login already owns raises ``MemberClaimedByAnotherLogin`` instead of being
+    moved to the caller and overwritten.
+    """
     existing_member = None
     if member.clerk_user_id is not None:
         existing_member = session.scalar(select(Members).where(Members.clerk_user_id == member.clerk_user_id))
     if not existing_member and member.uni_id is not None:
         existing_member = session.scalar(select(Members).where(Members.uni_id == member.uni_id))
+        if (
+            only_unclaimed
+            and existing_member is not None
+            and existing_member.clerk_user_id not in (None, member.clerk_user_id)
+        ):
+            raise MemberClaimedByAnotherLogin(existing_member.id)
     if not existing_member and member.email is not None:
         # Clerk verifies the signup email (and doesn't let members change it), so an
         # unclaimed admin-created row with a matching email is safe to fold in
@@ -160,6 +172,18 @@ def get_member_by_uni_id_or_none(session: Session, uni_id: str) -> Members | Non
 
 def get_member_by_email_or_none(session: Session, email: str) -> Members | None:
     statement = select(Members).where(func.lower(Members.email) == email.strip().lower())
+    return session.scalars(statement).first()
+
+
+def get_member_without_login_by_email_or_none(session: Session, email: str) -> Members | None:
+    """A member row that no Clerk login owns yet, by email.
+
+    Unlike ``get_unclaimed_member_by_email_or_none`` this includes rows that
+    signed in before Clerk ids were stored (``is_authenticated`` set, no
+    ``clerk_user_id``) - they still belong to nobody's login."""
+    statement = select(Members).where(
+        func.lower(Members.email) == email.strip().lower(), Members.clerk_user_id.is_(None)
+    )
     return session.scalars(statement).first()
 
 
