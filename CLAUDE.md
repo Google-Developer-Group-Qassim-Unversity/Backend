@@ -105,6 +105,14 @@ patch the lookup out. Read
 [docs/HARDCODED_ACTION_IDS.md](docs/HARDCODED_ACTION_IDS.md)
 before changing anything in that area; it has the fix plan and a checklist.
 
+## Linear: use `linear-gdg`, never `linear`
+
+This project's tickets live in the GDG Linear workspace, reached through the
+`linear-gdg` MCP server declared in `.mcp.json` (run `/mcp` once to sign in with
+the account that owns that workspace). A `linear` server, if one is loaded, is
+some other workspace configured outside this repo: never read or write GDG
+tickets through it.
+
 ## Commands
 
 ```bash
