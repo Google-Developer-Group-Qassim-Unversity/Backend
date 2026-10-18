@@ -37,7 +37,9 @@ def Require(perm: Perm, departments: DepartmentResolver | None = None) -> Callab
         # Held nowhere: refused before anything is looked up.
         access.require(perm)
         if departments is not None:
-            access.require_any(perm, departments(session, request.path_params))
+            params = dict(request.query_params)
+            params.update(request.path_params)
+            access.require_any(perm, departments(session, params))
         return access
 
     label = perm.value if departments is None else f"{perm.value} for {getattr(departments, 'label')}"

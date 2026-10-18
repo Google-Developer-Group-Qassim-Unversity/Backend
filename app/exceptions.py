@@ -35,6 +35,13 @@ class InvalidClubStructure(KnownHttpException):
         super().__init__(status_code=422, detail=detail)
 
 
+class InvalidEventId(KnownHttpException):
+    code = "invalid_event_id"
+
+    def __init__(self, detail: str = "Invalid event_id; integer expected"):
+        super().__init__(status_code=422, detail=detail)
+
+
 class PermissionDenied(KnownHttpException):
     """The caller lacks a permission (app/services/permissions). ``detail`` names it, so the UI can say what is missing."""
 
@@ -290,3 +297,21 @@ class AttendanceTokenEventMismatch(AttendanceTokenError):
 class AttendanceTokenInvalid(AttendanceTokenError):
     def __init__(self, reason: str):
         super().__init__(400, "token_invalid", f"Invalid attendance token ({reason})")
+
+
+class DriveIntegrationNotConfigured(KnownHttpException):
+    """The Google Drive / Workspace integration credentials are missing or expired."""
+
+    code = "drive_not_configured"
+
+    def __init__(self, detail: str = "Drive integration not configured — contact a super admin"):
+        super().__init__(status_code=503, detail=detail)
+
+
+class DrivePolicyBlocked(KnownHttpException):
+    """The Google Workspace organization policy blocked public link sharing."""
+
+    code = "drive_policy_blocked"
+
+    def __init__(self, detail: str = "The workspace policy blocked public sharing — contact the board"):
+        super().__init__(status_code=403, detail=detail)

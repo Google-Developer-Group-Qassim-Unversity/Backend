@@ -10,11 +10,14 @@ from sqlalchemy.orm import Session
 
 from app.DB import events as event_queries
 from app.DB import forms as form_queries
-from app.exceptions import NotFound
+from app.exceptions import InvalidEventId, NotFound
 
 
 def event_departments(session: Session, path: dict) -> frozenset[int]:
-    event_id = int(path["event_id"])
+    try:
+        event_id = int(path["event_id"])
+    except (ValueError, TypeError, KeyError):
+        raise InvalidEventId()
     event_queries.get_event_by_id(session, event_id)  # raises EventNotFound
     return frozenset(event_queries.get_event_department_ids(session, event_id))
 

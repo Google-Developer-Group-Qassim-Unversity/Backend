@@ -36,6 +36,9 @@ the boot rather than the first request.
 | `TEMPLATE_FORM_FILE_ID` | when the feature runs | - | Drive file ID of the template form copied for each event |
 | `GOOGLE_FORMS_TOPIC_NAME` | when the feature runs | - | Pub/Sub topic used for Forms response-change watches |
 | `GOOGLE_ALLOWED_EMAIL_DOMAINS` | optional | `gmail.com,googlemail.com` | comma-separated allow-list checked before inviting an admin to a form |
+| `GOOGLE_CALENDAR_ID` | when the feature runs | - | Google Calendar ID for events (read-only) |
+| `GOOGLE_ORGANIZER_EMAIL` | when the feature runs | - | GDG organizer Google account email address |
+| `APP_TIMEZONE` | optional | `Asia/Riyadh` | Club and event display timezone |
 
 Everything about this integration - the one-time club OAuth, the Drive
 template copy, the Pub/Sub watch registration, and the Forms publish calls -

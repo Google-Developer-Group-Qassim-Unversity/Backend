@@ -18,6 +18,7 @@ from botocore.config import Config as BotoConfig
 from fastapi import Depends
 
 from app.config import config
+from app.services.gdrive_client import GDriveClient, get_gdrive_client as _get_client
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,14 @@ def get_r2_client() -> Any:
 
 
 R2Client = Annotated[Any, Depends(get_r2_client)]
+
+
+def get_gdrive_client() -> GDriveClient:
+    """Google Drive client dependency."""
+    return _get_client()
+
+
+GDrive = Annotated[GDriveClient, Depends(get_gdrive_client)]
 
 
 async def open_http_client() -> None:
