@@ -1,8 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
 from app.DB import (
     events as events_queries,
@@ -52,7 +51,7 @@ from app.dependencies import DB
 from sqlalchemy.orm import Session
 from app.DB import event_pipeline as pipeline_queries
 from app.DB.schema import EventHistoryAction, EventsLocationType, EventsStatus, FormType, Members, PipelineHistoryAction
-from app.services import event_history, pipeline_history
+from app.services import event_history, pipeline_calendar, pipeline_history
 
 from app.routers.responses import DetailResponse
 from app.services.permissions.catalogue import Perm
@@ -253,7 +252,9 @@ def create_event(event_data: createEvent_model, session: DB, member: CurrentMemb
     },
     dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
 )
-def update_event(event_id: int, event_data: UpdateEventModel, session: DB, member: CurrentMember):
+def update_event(
+    event_id: int, event_data: UpdateEventModel, session: DB, member: CurrentMember, background_tasks: BackgroundTasks
+):
     try:
         logger.info(f"Updating Event [{event_id}]")
         existing = events_queries.get_event_by_id(session, event_id)
@@ -379,7 +380,9 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB, membe
             changed |= event_history.changes(points_before, points_after)
         if changed:
             event_history.record(session, updated_event, EventHistoryAction.EDITED, member, changed)
+        calendar_request = pipeline_calendar.mark_event(session, event_id)
         session.commit()
+        pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
         session.refresh(updated_event)
         logger.info(f"Event [{event_id}] updated successfully")
         return updated_event
@@ -398,7 +401,7 @@ def update_event(event_id: int, event_data: UpdateEventModel, session: DB, membe
     dependencies=[Depends(Require(Perm.EVENTS_DELETE, event_departments))],
     response_model=DetailResponse,
 )
-def delete_event(event_id: int, session: DB, member: CurrentMember):
+def delete_event(event_id: int, session: DB, member: CurrentMember, background_tasks: BackgroundTasks):
     logger.info(f"Deleting Event [{event_id}]")
 
     event = events_queries.get_event_by_id(session, event_id)
@@ -412,7 +415,8 @@ def delete_event(event_id: int, session: DB, member: CurrentMember):
 
     # A pipeline request that published it goes too, through the foreign key:
     # its tasks, penalty and points, and its days are free again. Its history
-    # stays, with this as the last entry.
+    # stays, with this as the last entry, and its calendar entry comes off.
+    calendar_request = pipeline_calendar.mark_event(session, event_id)
     request = pipeline_queries.get_request_for_event(session, event_id)
     if request is not None:
         pipeline_history.record(
@@ -426,6 +430,7 @@ def delete_event(event_id: int, session: DB, member: CurrentMember):
     event_name = event.name
     events_queries.delete_event(session, event_id)
     session.commit()
+    pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
     logger.info(f"Event [{event_id}]: {event_name} deleted successfully")
     return {"detail": "Event deleted successfully"}
 
@@ -492,7 +497,11 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, ses
     dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
 )
 def update_event_meeting_url(
-    event_id: int, meeting_url_data: UpdateEventMeetingUrl_model, session: DB, member: CurrentMember
+    event_id: int,
+    meeting_url_data: UpdateEventMeetingUrl_model,
+    session: DB,
+    member: CurrentMember,
+    background_tasks: BackgroundTasks,
 ):
     """Set or clear the join link shown to members on a remote event."""
     existing_event = events_queries.get_event_by_id(session, event_id)
@@ -513,7 +522,9 @@ def update_event_meeting_url(
             member,
             {"meeting_url": [old_url, event.meeting_url]},
         )
+    calendar_request = pipeline_calendar.mark_event(session, event_id)
     session.commit()
+    pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
     session.refresh(event)
     logger.info(f"Event [{event_id}] meeting url {'set' if meeting_url_data.meeting_url else 'cleared'}")
 

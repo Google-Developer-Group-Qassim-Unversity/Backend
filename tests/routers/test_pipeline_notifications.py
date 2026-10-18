@@ -1,4 +1,4 @@
-"""Notifications and department emails, including trial mode."""
+"""Notifications and department emails."""
 
 import asyncio
 
@@ -26,22 +26,17 @@ def world(pipeline):
     }
 
 
-def test_trial_mode_emails_only_whoever_submitted(pipeline, world):
+def test_submitting_emails_every_member_of_design_and_logistics(pipeline, world):
     pipeline.sign_in(world["admin"], super_admin=True)
     request_id = book_complete(pipeline, world["ai"])
     assert submit(pipeline, request_id).status_code == 200
 
-    blasts = pipeline.outbound.to("/blasts")
-    assert len(blasts) == 2  # one for Design, one for Logistics
-    for blast in blasts:
-        assert blast.params.get_list("emails") == ["admin@example.com"]
-        assert blast.params["subject"].startswith("[تجربة · Trial]")
-    design_blast = next(b for b in blasts if world["designers"][0].email in b.text)
-    for designer in world["designers"]:
-        assert designer.email in design_blast.text  # listed as who would have received it
+    recipients = sorted(sorted(b.params.get_list("emails")) for b in pipeline.outbound.to("/blasts"))
+    assert recipients == sorted([sorted(m.email for m in world["designers"]), [world["logistics_team"][0].email]])
+    assert not any(b.params["subject"].startswith("[") for b in pipeline.outbound.to("/blasts"))
 
     jobs = pipeline.session.scalars(select(EmailJobs).where(EmailJobs.created_by == world["admin"].id)).all()
-    assert [j.total for j in jobs] == [1, 1]
+    assert sorted(j.total for j in jobs) == [1, 2]
 
 
 def test_the_email_job_records_its_outcome(pipeline, world):
@@ -57,19 +52,6 @@ def test_the_email_job_records_its_outcome(pipeline, world):
     finished = job_queries.get_job(pipeline.session, job.id)
     assert finished is not None and finished.status == EmailJobsStatus.SUCCEEDED
     assert pipeline.outbound.one("/blasts").params.get_list("emails") == ["a@example.com"]
-
-
-def test_live_mode_emails_every_member_of_the_department(pipeline, world, monkeypatch):
-    monkeypatch.setenv("PIPELINE_EMAILS_LIVE", "true")
-    from app.config import reload_settings
-
-    reload_settings()
-    pipeline.sign_in(world["ai_leader"])
-    submit(pipeline, book_complete(pipeline, world["ai"]))
-
-    recipients = sorted(sorted(b.params.get_list("emails")) for b in pipeline.outbound.to("/blasts"))
-    assert recipients == sorted([sorted(m.email for m in world["designers"]), [world["logistics_team"][0].email]])
-    assert not any(b.params["subject"].startswith("[") for b in pipeline.outbound.to("/blasts"))
 
 
 def test_a_failed_email_does_not_undo_the_submit(pipeline, world):

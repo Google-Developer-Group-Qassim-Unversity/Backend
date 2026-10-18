@@ -107,7 +107,9 @@ def mark_attendance(
     prevent_duplicate_daily = token_claims.get("preventDuplicateDailyAttendance", True)
     require_registration = token_claims.get("requireAttendanceRegistration", True)
 
-    logger.info(f"Marking attendance for member [{member.name}] with uni_id [{member.uni_id}]")
+    # id as well as uni_id: members who sign up with Google never enter a uni_id,
+    # and a failed check-in has to be attributable to be backfilled
+    logger.info(f"Marking attendance for member [{member.id}] [{member.name}] with uni_id [{member.uni_id}]")
 
     event, event_log = get_event_with_attendable_log(session, event_id)
     logger.info(f"Attendace for event [{event.name}] for member [{member.name}]")

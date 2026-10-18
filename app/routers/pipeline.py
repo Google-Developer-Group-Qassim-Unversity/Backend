@@ -2,27 +2,33 @@
 
 import logging
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 
 from app.DB import pipeline_teams as team_queries
-from app.DB.schema import EventRequests, PipelineTeam
+from app.DB.schema import PipelineTeam
 from app.dependencies import DB
 from app.exceptions import DepartmentForbidden
 
+from app.routers.pipeline_requests import summary
 from app.routers.pipeline_models import (
     ActingDepartment,
     BanDaysRequest,
     BanResult,
+    BlockedBy,
+    BlockResult,
+    EditBlockRequest,
     CalendarDayRequest,
     CalendarDayResponse,
     CalendarResponse,
-    EventRequestSummary,
     InboxItem,
     NotificationItem,
     NotificationRequest,
+    OverlapEntry,
+    OverlapResponse,
     PaginatedNotifications,
+    PersonRef,
     UnbanDaysRequest,
     PipelineDepartment,
     PipelineMeResponse,
@@ -32,7 +38,9 @@ from app.routers.pipeline_models import (
 from app.services import event_pipeline as pipeline_service
 from app.services import event_pipeline_clock as clock
 from app.services import pipeline_notifications as notifications
+from app.services import pipeline_calendar
 from app.services import pipeline_sweep
+from app.services import pipeline_notion as notion
 from app.services.permissions.catalogue import OFFICER_ROLES
 from app.services.permissions.dependencies import Caller, CurrentCaller
 from app.services.permissions.catalogue import Perm
@@ -82,6 +90,8 @@ def get_pipeline_me(session: DB, caller: CurrentCaller):
             for department in departments
         ],
         teams=teams,
+        own_department_ids=sorted(pipeline_service.own_department_ids(caller)),
+        own_teams=pipeline_service.own_teams(caller),
     )
 
 
@@ -102,7 +112,10 @@ def get_pipeline_calendar(
             CalendarDayResponse(
                 date=d.date,
                 status=d.status.value,
-                reason=d.reason,
+                reason=d.block.reason if d.block else None,
+                block_id=d.block.id if d.block else None,
+                blocked_by=BlockedBy(member_id=d.block.blocker.id, name=d.block.blocker.name) if d.block else None,
+                blocked_at=d.block.created_at if d.block else None,
                 requests=[
                     CalendarDayRequest(
                         id=r.id,
@@ -118,18 +131,48 @@ def get_pipeline_calendar(
     )
 
 
+@router.get(
+    "/overlaps", status_code=status.HTTP_200_OK, response_model=OverlapResponse, dependencies=[Depends(SuperAdmin)]
+)
+def get_pipeline_overlaps(
+    session: DB,
+    start: Annotated[date, Query(alias="from")],
+    end: Annotated[date, Query(alias="to")],
+    ignore: Annotated[str | None, Query(description="The request being re-dated, which never bumps itself")] = None,
+):
+    """The requests a super admin would bump by booking ``from``..``to``, and who each email goes to."""
+    pipeline_service.check_range(start, end)
+    return OverlapResponse(
+        requests=[
+            OverlapEntry(
+                request=summary(request),
+                recipients=[
+                    PersonRef(member_id=m.id, name=m.name)
+                    for m in notifications.department_members(session, request.department_id)
+                    if m.email
+                ],
+            )
+            for request in pipeline_service.overlapping(session, start, end, ignore)
+        ]
+    )
+
+
 @router.put(
     "/calendar/bans",
     status_code=status.HTTP_200_OK,
-    response_model=BanResult,
+    response_model=BlockResult,
     dependencies=[Depends(Require(Perm.PIPELINE_BANS))],
 )
-def ban_pipeline_days(body: BanDaysRequest, session: DB, caller: CurrentCaller):
-    """Logistics closes days to bookings. A day already banned takes the new reason."""
+def ban_pipeline_days(body: BanDaysRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
+    """Logistics closes days to bookings as one block, with the reason. A day already closed moves to it."""
     with pipeline_service.booking_lock(session):
-        days, _undated = pipeline_service.ban(session, caller, body.dates, body.reason)
+        block, undated = pipeline_service.ban(session, caller, body.dates, body.reason)
+        result = BlockResult(block_id=block.id, count=len(block.days))
         session.commit()
-    return BanResult(count=len(days))
+    for request in undated:
+        notion.sync_after_commit(background_tasks, request)
+        pipeline_calendar.sync_after_commit(background_tasks, request.id)
+    return result
 
 
 @router.delete(
@@ -139,14 +182,48 @@ def ban_pipeline_days(body: BanDaysRequest, session: DB, caller: CurrentCaller):
     dependencies=[Depends(Require(Perm.PIPELINE_BANS))],
 )
 def unban_pipeline_days(body: UnbanDaysRequest, session: DB, caller: CurrentCaller):
-    """Logistics reopens days. Requests that lost a day to the ban do not get it back."""
+    """Logistics reopens single days, whatever block they are in. Requests that lost a day do not get it back."""
     removed = pipeline_service.unban(session, caller, body.dates)
     session.commit()
     return BanResult(count=removed)
 
 
-def _visible_departments(session, caller: Caller) -> set[int] | None:
-    return pipeline_service.visible_department_ids(session, caller)
+@router.patch(
+    "/calendar/blocks/{block_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=BlockResult,
+    dependencies=[Depends(Require(Perm.PIPELINE_BANS))],
+)
+def edit_pipeline_block(block_id: str, body: EditBlockRequest, session: DB, caller: CurrentCaller):
+    """Change why a block's days are closed."""
+    block = pipeline_service.get_block(session, block_id)
+    pipeline_service.edit_block(session, caller, block, body.reason)
+    result = BlockResult(block_id=block.id, count=len(block.days))
+    session.commit()
+    return result
+
+
+@router.delete(
+    "/calendar/blocks/{block_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=BlockResult,
+    dependencies=[Depends(Require(Perm.PIPELINE_BANS))],
+)
+def remove_pipeline_block(block_id: str, session: DB, caller: CurrentCaller):
+    """Reopen every day of a block that is not in the past."""
+    block = pipeline_service.get_block(session, block_id)
+    removed = pipeline_service.remove_block(session, caller, block)
+    session.commit()
+    return BlockResult(block_id=block_id, count=removed)
+
+
+NotificationScope = Literal["mine", "club"]
+
+
+def _notified_departments(session, caller: Caller, scope: NotificationScope) -> set[int] | None:
+    if scope == "club":
+        return pipeline_service.visible_department_ids(session, caller)
+    return pipeline_service.notified_department_ids(session, caller)
 
 
 @router.get("/notifications", status_code=status.HTTP_200_OK, response_model=PaginatedNotifications)
@@ -154,13 +231,24 @@ def list_pipeline_notifications(
     session: DB,
     caller: CurrentCaller,
     unread: Annotated[bool, Query()] = False,
+    scope: Annotated[NotificationScope, Query()] = "mine",
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    """The caller's departments' notifications, newest first. Read state is per person."""
+    """The caller's notifications, newest first. Read state is per person.
+
+    ``mine`` is what concerns the caller's own departments and teams. For a super
+    admin that is far less than everything they can see; ``club`` is every
+    department they can see, for when they want the whole picture.
+    """
     _require_access(caller)
     total, unread_count, rows, read = notifications.list_for(
-        session, _visible_departments(session, caller), caller.member.id, unread, page_size, (page - 1) * page_size
+        session,
+        _notified_departments(session, caller, scope),
+        caller.member.id,
+        unread,
+        page_size,
+        (page - 1) * page_size,
     )
     return PaginatedNotifications(
         items=[
@@ -187,7 +275,7 @@ def list_pipeline_notifications(
 def read_pipeline_notification(notification_id: str, session: DB, caller: CurrentCaller):
     _require_access(caller)
     _, _, rows, _ = notifications.list_for(
-        session, _visible_departments(session, caller), caller.member.id, True, 1000, 0
+        session, _notified_departments(session, caller, "club"), caller.member.id, True, 1000, 0
     )
     count = notifications.mark_read(session, caller.member.id, [n.id for n in rows if n.id == notification_id])
     session.commit()
@@ -195,10 +283,12 @@ def read_pipeline_notification(notification_id: str, session: DB, caller: Curren
 
 
 @router.post("/notifications/read-all", status_code=status.HTTP_200_OK, response_model=BanResult)
-def read_all_pipeline_notifications(session: DB, caller: CurrentCaller):
+def read_all_pipeline_notifications(
+    session: DB, caller: CurrentCaller, scope: Annotated[NotificationScope, Query()] = "mine"
+):
     _require_access(caller)
     _, _, rows, _ = notifications.list_for(
-        session, _visible_departments(session, caller), caller.member.id, True, 1000, 0
+        session, _notified_departments(session, caller, scope), caller.member.id, True, 1000, 0
     )
     count = notifications.mark_read(session, caller.member.id, [n.id for n in rows])
     session.commit()
@@ -220,20 +310,6 @@ def get_pipeline_inbox(session: DB, caller: CurrentCaller, team: Annotated[Pipel
     """Requests waiting on the caller's team(s), oldest first."""
     _require_access(caller)
     return [
-        InboxItem(request=_summary(request), team=task.team, status=task.status, opened_at=task.opened_at)
+        InboxItem(request=summary(request), team=task.team, status=task.status, opened_at=task.opened_at)
         for request, task in pipeline_service.inbox(session, caller, team)
     ]
-
-
-def _summary(request: EventRequests) -> EventRequestSummary:
-    return EventRequestSummary(
-        id=request.id,
-        department=PipelineDepartment.model_validate(request.department),
-        stage=request.stage,
-        title=request.title,
-        start_date=request.start_date,
-        end_date=request.end_date,
-        hold_expires_at=request.hold_expires_at,
-        undated_reason=request.undated_reason,
-        requested_at=request.requested_at,
-    )

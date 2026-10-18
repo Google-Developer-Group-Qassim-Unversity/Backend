@@ -1083,20 +1083,51 @@ class PipelineLocks(Base):
     name: Mapped[str] = mapped_column(String(32), primary_key=True)
 
 
-class BookingBans(Base):
-    """A day Logistics closed to bookings, e.g. exams. Every team sees the reason."""
+class BookingBlocks(Base):
+    """Days Logistics closed together for one reason, e.g. midterms or a break.
 
-    __tablename__ = "booking_bans"
+    One day or many, next to each other or not. Every team sees the reason and
+    who closed them. Its days are ``booking_bans`` rows; reopening the last of
+    them deletes the block.
+    """
+
+    __tablename__ = "booking_blocks"
     __table_args__ = (
-        ForeignKeyConstraint(["banned_by"], ["members.id"], name="fk_booking_bans_banned_by", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["blocked_by"], ["members.id"], name="fk_booking_blocks_blocked_by", ondelete="RESTRICT"),
     )
 
-    date: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
-    reason: Mapped[Optional[str]] = mapped_column(VARCHAR(200, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
-    banned_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    reason: Mapped[str] = mapped_column(VARCHAR(200, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
+    blocked_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+
+    blocker: Mapped["Members"] = relationship("Members")
+    days: Mapped[list["BookingBans"]] = relationship(
+        "BookingBans",
+        back_populates="block",
+        order_by="BookingBans.date",
+        passive_deletes=True,
+        cascade="all, delete-orphan",
+    )
+
+
+class BookingBans(Base):
+    """One closed day, and the block that closed it; the block holds the reason and who."""
+
+    __tablename__ = "booking_bans"
+    __table_args__ = (
+        ForeignKeyConstraint(["block_id"], ["booking_blocks.id"], name="fk_booking_bans_block", ondelete="CASCADE"),
+    )
+
+    date: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
+    block_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    block: Mapped["BookingBlocks"] = relationship("BookingBlocks", back_populates="days")
 
 
 class EventRequestStage(str, enum.Enum):
@@ -1114,6 +1145,16 @@ class EventRequestStage(str, enum.Enum):
 class EventRequestUndatedReason(str, enum.Enum):
     HOLD_EXPIRED = "hold_expired"
     DAY_BANNED = "day_banned"
+    # A super admin booked these days for another request.
+    OVERRIDDEN = "overridden"
+
+
+class BumpOutcome(str, enum.Enum):
+    """What happens to a request a super admin books over. Never stored: the history records it as text."""
+
+    # Back to a draft holding no dates; the department picks new ones and submits again.
+    RESCHEDULE = "reschedule"
+    CANCEL = "cancel"
 
 
 class EventRequestType(str, enum.Enum):
@@ -1327,6 +1368,14 @@ class EventRequestTasks(Base):
     # Who marked this team's part done, and when.
     done_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     done_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    # Design's card on the team's Notion board (app/services/pipeline_notion.py).
+    # ``notion_sync_pending`` is set in the same transaction as every change the
+    # card should show; the sync after commit (or the sweep) clears it.
+    notion_page_id: Mapped[Optional[str]] = mapped_column(String(36))
+    notion_page_url: Mapped[Optional[str]] = mapped_column(String(255))
+    notion_sync_pending: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    notion_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    notion_error: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
 
     done_by_member: Mapped[Optional["Members"]] = relationship("Members")
 
@@ -1340,6 +1389,10 @@ class PipelineNotificationKind(str, enum.Enum):
     MEDIA_RECEIVED = "media_received"
     READY_TO_PUBLISH = "ready_to_publish"
     DATES_CHANGED = "dates_changed"
+    OVERRIDDEN = "overridden"
+    CANCELLED = "cancelled"
+    # Logistics confirmed the event with another time, place or detail than the one requested, but the same dates.
+    CONFIRMATION_CHANGED = "confirmation_changed"
 
 
 class PipelineNotifications(Base):
@@ -1414,6 +1467,9 @@ class PipelineHistoryAction(str, enum.Enum):
     DAYS_BANNED = "days_banned"
     DAYS_UNBANNED = "days_unbanned"
     EVENT_DELETED = "event_deleted"
+    OVERRIDDEN = "overridden"
+    REQUEST_DELETED = "request_deleted"
+    BLOCK_EDITED = "block_edited"
 
 
 class PipelineHistory(Base):
@@ -1531,6 +1587,28 @@ class PipelinePenalties(Base):
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     )
     applied_log_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+
+
+class PipelineCalendarEntries(Base):
+    """A request's entry on the team's Google Calendar (``app/services/pipeline_calendar.py``).
+
+    ``sync_pending`` is set in the same transaction as every change the entry
+    should show; the sync after commit (or the sweep) clears it. ``request_id``
+    has no foreign key: deleting a published event deletes its request, and
+    this row has to outlive it so the entry still comes off the calendar.
+    """
+
+    __tablename__ = "pipeline_calendar_entries"
+    __table_args__ = (
+        Index("uq_pipeline_calendar_entries_request", "request_id", unique=True),
+        Index("ix_pipeline_calendar_entries_pending", "sync_pending"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    request_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    sync_pending: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    error: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
 
 
 class EventContentLinks(Base):

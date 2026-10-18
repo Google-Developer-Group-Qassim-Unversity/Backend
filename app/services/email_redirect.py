@@ -11,7 +11,7 @@ its own, with nobody at the keyboard. Outside production, every send in
   person who did has no address.
 
 Each redirected email that has an HTML body opens with a box naming who it
-would have gone to, the way the pipeline's trial copies already do.
+would have gone to.
 
 Only ``ENV=staging`` and ``ENV=development`` redirect (``config.redirects_email``).
 Production sends for real, and ``testing`` is left alone so the suite keeps

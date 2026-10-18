@@ -34,7 +34,7 @@ CLERK_NAME = "Test Member"
 # `log_queries.get_attendable_logs` decides whether an event can be attended by
 # testing the log's action against a hardcoded list of production row IDs:
 #
-#     ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89]
+#     ATTENDABLE_ACTION_IDS = [76, 77, 78, 79, 87, 89, 108]
 #
 # so an event built on the seeded actions (IDs 1 and 2) is unattendable and the
 # endpoint 500s with "Event has no attendable logs". tests/routers/test_attendance.py

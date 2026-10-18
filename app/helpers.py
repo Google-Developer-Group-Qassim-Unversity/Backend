@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from typing import Annotated
 from app.config import config
 from app.dependencies import DB
-from app.logging_config import actor_var
+from app.logging_config import set_actor
 from app.routers.models import Member_model
 from app.DB.schema import Members
 from app.DB import members as member_queries
@@ -186,7 +186,7 @@ def identify_actor(member: Members) -> None:
     the same identity, which is what turns "Users Impacted: 0" into a list of
     people to follow up with.
     """
-    actor_var.set(f"{member.id}/{member.uni_id}")
+    set_actor(f"{member.id}/{member.uni_id}")
     sentry_sdk.set_user({"id": str(member.id), "username": str(member.uni_id)})
 
 
