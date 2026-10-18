@@ -35,6 +35,13 @@ class InvalidClubStructure(KnownHttpException):
         super().__init__(status_code=422, detail=detail)
 
 
+class InvalidEventId(KnownHttpException):
+    code = "invalid_event_id"
+
+    def __init__(self, detail: str = "Invalid event_id; integer expected"):
+        super().__init__(status_code=422, detail=detail)
+
+
 class PermissionDenied(KnownHttpException):
     """The caller lacks a permission (app/services/permissions). ``detail`` names it, so the UI can say what is missing."""
 

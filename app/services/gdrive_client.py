@@ -6,9 +6,11 @@ refresh token (without passing scope= during refresh).
 
 import logging
 import re
+import threading
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request as GoogleRequest
@@ -57,7 +59,8 @@ def extract_meet_code(url_or_code: str | None) -> str | None:
 def _format_rfc3339(dt: datetime) -> str:
     """Format datetime as RFC 3339 timestamp for Google Drive search queries."""
     if dt.tzinfo is None:
-        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        settings = get_settings()
+        dt = dt.replace(tzinfo=ZoneInfo(settings.APP_TIMEZONE))
     return dt.isoformat()
 
 
@@ -72,30 +75,48 @@ def is_drive_configured() -> bool:
     return bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET and settings.GOOGLE_REFRESH_TOKEN)
 
 
+_credentials_cache: dict[tuple[str, str, str], Credentials] = {}
+_credentials_lock = threading.Lock()
+
+
+def _clear_credentials_cache() -> None:
+    """Clear cached credentials. Intended for test isolation."""
+    with _credentials_lock:
+        _credentials_cache.clear()
+
+
 def get_drive_credentials() -> Credentials:
     """Build Credentials using the refresh token flow without scope= parameter.
 
+    Caches valid credentials in memory under a lock to prevent duplicate refreshes.
     Raises DriveIntegrationNotConfigured if credentials are not configured or invalid.
     """
     settings = get_settings()
     if not (settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET and settings.GOOGLE_REFRESH_TOKEN):
         raise DriveIntegrationNotConfigured()
 
-    try:
-        credentials = Credentials(
-            None,
-            refresh_token=settings.GOOGLE_REFRESH_TOKEN,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=settings.GOOGLE_CLIENT_ID,
-            client_secret=settings.GOOGLE_CLIENT_SECRET,
-        )
-        if not credentials.valid:
-            # HARD RULE: NEVER pass scope= or scopes= when refreshing
-            credentials.refresh(GoogleRequest())
-        return credentials
-    except RefreshError as exc:
-        logger.error("Failed to refresh Google Drive credentials: %s", exc)
-        raise DriveIntegrationNotConfigured() from exc
+    key = (settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET, settings.GOOGLE_REFRESH_TOKEN)
+    with _credentials_lock:
+        creds = _credentials_cache.get(key)
+        if creds is not None and creds.valid:
+            return creds
+
+        try:
+            credentials = Credentials(
+                None,
+                refresh_token=settings.GOOGLE_REFRESH_TOKEN,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=settings.GOOGLE_CLIENT_ID,
+                client_secret=settings.GOOGLE_CLIENT_SECRET,
+            )
+            if not credentials.valid:
+                # HARD RULE: NEVER pass scope= or scopes= when refreshing
+                credentials.refresh(GoogleRequest())
+            _credentials_cache[key] = credentials
+            return credentials
+        except RefreshError as exc:
+            logger.error("Failed to refresh Google Drive credentials: %s", exc)
+            raise DriveIntegrationNotConfigured() from exc
 
 
 class GDriveClient:
@@ -201,7 +222,7 @@ class GDriveClient:
         service = self.get_service()
         escaped_name = _escape_drive_query(folder_name)
         q = f"name = '{escaped_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        res = service.files().list(q=q, fields="files(id, name)", spaces="drive").execute()
+        res = service.files().list(q=q, fields="files(id, name)", spaces="drive", orderBy="createdTime").execute()
         files = res.get("files", [])
         if files:
             return str(files[0]["id"])
@@ -228,7 +249,8 @@ class GDriveClient:
             f"'{root_folder_id}' in parents and name = '{escaped_name}' and "
             f"mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         )
-        res = service.files().list(q=q, fields="files(id, name)", spaces="drive").execute()
+        res = service.files().list(q=q, fields="files(id, name)", spaces="drive", orderBy="createdTime").execute()
+
         files = res.get("files", [])
         if files:
             return str(files[0]["id"])

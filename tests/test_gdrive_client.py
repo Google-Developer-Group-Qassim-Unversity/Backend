@@ -10,7 +10,20 @@ from httplib2 import Response
 from app.clients import GDriveClient as AppGDriveClient, get_gdrive_client as app_get_gdrive_client
 from app.config import MissingSettingError, config, reload_settings
 from app.exceptions import DriveIntegrationNotConfigured, DrivePolicyBlocked, NotFound
-from app.services.gdrive_client import GDriveClient, get_drive_credentials, get_gdrive_client, is_drive_configured
+from app.services.gdrive_client import (
+    GDriveClient,
+    _clear_credentials_cache,
+    get_drive_credentials,
+    get_gdrive_client,
+    is_drive_configured,
+)
+
+
+@pytest.fixture(autouse=True)
+def clear_creds_cache():
+    _clear_credentials_cache()
+    yield
+    _clear_credentials_cache()
 
 
 def _make_http_error(status: int, reason: str = "") -> HttpError:

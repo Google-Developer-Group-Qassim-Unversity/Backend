@@ -274,8 +274,14 @@ def test_get_recording_candidates_endpoint_unconfigured(admin_client: TestClient
 def test_make_recording_candidate_public_success(admin_client: TestClient, recording_test_event_id: int):
     drive_mock = MagicMock()
     drive_mock.permissions.return_value.create.return_value.execute.return_value = {"id": "new_perm_id"}
+    drive_mock.permissions.return_value.list.return_value.execute.return_value = {
+        "permissions": [{"type": "anyone", "role": "reader"}]
+    }
 
     client = GDriveClient(service=drive_mock)
+    client.find_recording_candidates = MagicMock(
+        return_value=("present", [{"file_id": "file_candidate_123", "name": "Meeting.mp4"}])
+    )
     app.dependency_overrides[get_gdrive_client] = lambda: client
 
     try:
@@ -290,6 +296,27 @@ def test_make_recording_candidate_public_success(admin_client: TestClient, recor
         app.dependency_overrides.pop(get_gdrive_client, None)
 
 
+def test_make_recording_candidate_public_404_when_not_a_candidate(
+    admin_client: TestClient, recording_test_event_id: int
+):
+    """Calling make-public with an arbitrary file_id not in event's candidates returns 404."""
+    drive_mock = MagicMock()
+    client = GDriveClient(service=drive_mock)
+    client.find_recording_candidates = MagicMock(
+        return_value=("present", [{"file_id": "file_candidate_123", "name": "Meeting.mp4"}])
+    )
+    app.dependency_overrides[get_gdrive_client] = lambda: client
+
+    try:
+        res = admin_client.post(
+            f"/events/{recording_test_event_id}/drive-recording-candidates/unrelated_organizer_file_999/make-public"
+        )
+        assert res.status_code == 404, res.text
+        assert "not found for this event" in res.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.pop(get_gdrive_client, None)
+
+
 def test_make_recording_candidate_public_403_policy_blocked(admin_client: TestClient, recording_test_event_id: int):
     drive_mock = MagicMock()
     drive_mock.permissions.return_value.create.return_value.execute.side_effect = _make_http_error(
@@ -297,6 +324,9 @@ def test_make_recording_candidate_public_403_policy_blocked(admin_client: TestCl
     )
 
     client = GDriveClient(service=drive_mock)
+    client.find_recording_candidates = MagicMock(
+        return_value=("present", [{"file_id": "file_candidate_123", "name": "Meeting.mp4"}])
+    )
     app.dependency_overrides[get_gdrive_client] = lambda: client
 
     try:

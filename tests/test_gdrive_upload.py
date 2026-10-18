@@ -252,3 +252,82 @@ def test_drive_storage_quota_endpoint_unconfigured(admin_client: TestClient):
         assert res.json()["code"] == "drive_not_configured"
     finally:
         app.dependency_overrides.pop(get_gdrive_client, None)
+
+
+def test_upload_slides_rejects_invalid_extension(admin_client: TestClient, test_event_id: int, drive_client_override):
+    files = {"file": ("malicious_payload.exe", io.BytesIO(b"binary executable data"), "application/octet-stream")}
+    res = admin_client.post(f"/upload/drive-slides/?event_id={test_event_id}", files=files)
+    assert res.status_code == 422, res.text
+    assert "Only presentation files" in res.json()["detail"]
+
+
+def test_upload_slides_enforces_size_limit(
+    admin_client: TestClient, test_event_id: int, drive_client_override, monkeypatch
+):
+    import app.routers.upload as upload_module
+
+    # Monkeypatch limit to 100 bytes to avoid materializing large memory buffers
+    monkeypatch.setattr(upload_module, "MAX_SLIDES_SIZE_BYTES", 100)
+
+    def fake_upload(stream, filename, content_type, folder_id):
+
+        # Simulate Google client reading until it hits the exception
+        while stream.read(50):
+            pass
+        return {"id": "mock_id", "name": filename}
+
+    mock_client, _ = drive_client_override
+    monkeypatch.setattr(mock_client, "upload_file", fake_upload)
+
+    oversized_data = b"X" * 250
+    files = {"file": ("big_deck.pptx", io.BytesIO(oversized_data), "application/vnd.ms-powerpoint")}
+    res = admin_client.post(f"/upload/drive-slides/?event_id={test_event_id}", files=files)
+    assert res.status_code == 413, res.text
+    assert "exceeds" in res.json()["detail"].lower()
+
+
+def test_upload_slides_deletes_drive_file_on_db_conflict(
+    admin_client: TestClient, test_event_id: int, drive_client_override, monkeypatch
+):
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session
+
+    client, mock_service = drive_client_override
+    files_mock = mock_service.files.return_value
+
+    # Simulate upload succeeding on Drive
+    monkeypatch.setattr(
+        client,
+        "upload_file",
+        lambda stream, filename, content_type, folder_id: {
+            "id": "drive_file_to_rollback",
+            "name": filename,
+            "webViewLink": "https://drive.google.com/view",
+        },
+    )
+
+    class MockOrig:
+        args = (1062, "Duplicate entry 'deck' for key 'uq_event_content_links_event_label'")
+
+    fake_integrity_error = IntegrityError("statement", {}, MockOrig())
+
+    def mock_commit(self):
+        raise fake_integrity_error
+
+    monkeypatch.setattr(Session, "commit", mock_commit)
+
+    files = {"file": ("deck.pdf", io.BytesIO(b"slide content"), "application/pdf")}
+    res = admin_client.post(f"/upload/drive-slides/?event_id={test_event_id}", files=files)
+    assert res.status_code == 409, res.text
+    assert "already exists" in res.json()["detail"]
+
+    # Verify Drive file was deleted
+    files_mock.delete.assert_called_with(fileId="drive_file_to_rollback")
+
+
+def test_upload_slides_invalid_event_id_query_param_422(admin_client: TestClient, drive_client_override):
+    """Passing a non-numeric event_id query parameter returns 422 with code invalid_event_id (not 500)."""
+    files = {"file": ("slides.pdf", io.BytesIO(b"content"), "application/pdf")}
+    res = admin_client.post("/upload/drive-slides/?event_id=not_an_integer", files=files)
+    assert res.status_code == 422, res.text
+    assert res.json().get("code") == "invalid_event_id"

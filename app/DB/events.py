@@ -198,7 +198,6 @@ def attach_published_content_links_of_semester(session: Session, events: list[Ev
         select(EventContentLinks)
         .join(Events, Events.id == EventContentLinks.event_id)
         .where(Events.semester_id == semester_id, EventContentLinks.published == True)  # noqa: E712
-        .order_by(EventContentLinks.created_at, EventContentLinks.id)
     )
     return _attach_published_content_links(session, events, stmt)
 
@@ -206,9 +205,7 @@ def attach_published_content_links_of_semester(session: Session, events: list[Ev
 def attach_published_content_links_of_event(session: Session, event: Events):
     """One event, e.g. ``GET /events/{id}``: a plain WHERE on its own id."""
     stmt = (
-        select(EventContentLinks)
-        .where(EventContentLinks.event_id == event.id, EventContentLinks.published == True)  # noqa: E712
-        .order_by(EventContentLinks.created_at, EventContentLinks.id)
+        select(EventContentLinks).where(EventContentLinks.event_id == event.id, EventContentLinks.published == True)  # noqa: E712
     )
     return _attach_published_content_links(session, [event], stmt)
 
@@ -244,6 +241,7 @@ def _attach_published_content_links(session: Session, events: list[Events], stmt
 # application/octet-stream). The Drive API's documented equivalent
 # (files.get?alt=media) needs an access token, so it is not usable by a public
 # web page - this one is, for links that are public by design.
+# Note: For files approaching the 100MB ceiling, Google may present an HTML virus-scan warning interstitial instead of the raw blob.
 _DRIVE_DOWNLOAD_URL = "https://drive.usercontent.google.com/download?id={file_id}&export=download"
 
 _DRIVE_FILE_ID_RE = r"[A-Za-z0-9_-]+"
@@ -391,6 +389,20 @@ def delete_event_content_link(session: Session, event_id: int, link_id: str) -> 
     session.delete(link)
     session.flush()
     return link
+
+
+def content_link_snapshot(link: EventContentLinks) -> dict:
+    """The row as the event history records it: what an admin published,
+    repointed or deleted, in the ``{"field": [before, after]}`` style."""
+    return {"label": link.label, "url": link.url, "kind": link.kind.value, "published": bool(link.published)}
+
+
+def is_duplicate_label_error(exc: IntegrityError) -> bool:
+    """True only when MySQL error 1062 named our unique index uq_event_content_links_event_label."""
+    args = getattr(exc.orig, "args", None) or ()
+    if not args or args[0] != 1062:
+        return False
+    return "uq_event_content_links_event_label" in str(args[1])
 
 
 def create_event(session: Session, event_data: Events_model, responsible_member_id: int, created_by: int):

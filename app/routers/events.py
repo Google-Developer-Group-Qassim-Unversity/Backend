@@ -1,7 +1,8 @@
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from uuid import UUID
+
 
 from app.DB import (
     events as events_queries,
@@ -523,25 +524,12 @@ def update_event_meeting_url(
     return event
 
 
-def _content_link_snapshot(link) -> dict:
-    """The row as the event history records it: what an admin published,
-    repointed or deleted, in the ``{"field": [before, after]}`` style."""
-    return {"label": link.label, "url": link.url, "kind": link.kind.value, "published": bool(link.published)}
+_content_link_snapshot = events_queries.content_link_snapshot
+_duplicate_label_error = events_queries.is_duplicate_label_error
 
 
 def _label_taken_response(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
-
-
-def _duplicate_label_error(exc: IntegrityError) -> bool:
-    """True only when the question was "is that label taken?" - MySQL error
-    1062 naming our unique index. A 1062 without it is some other duplicate
-    (the PK, say) and a 1452/1451 is an FK problem; those mean something else
-    and must not be reported as a label clash."""
-    args = getattr(exc.orig, "args", None) or ()
-    if not args or args[0] != 1062:
-        return False
-    return "uq_event_content_links_event_label" in str(args[1])
 
 
 @router.post(
@@ -689,6 +677,9 @@ def get_drive_recording_candidates(event_id: int, session: DB, member: CurrentMe
     "/{event_id:int}/drive-recording-candidates/{file_id}/make-public",
     status_code=status.HTTP_200_OK,
     response_model=DriveFileMakePublicResponse_model,
+    responses={
+        404: {"model": NotFoundResponse, "description": "Event or recording candidate not found for this event"}
+    },
     dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
 )
 def make_drive_recording_candidate_public(
@@ -698,9 +689,22 @@ def make_drive_recording_candidate_public(
     if not gdrive.is_configured():
         raise DriveIntegrationNotConfigured()
 
-    events_queries.get_event_by_id(session, event_id)
+    event = events_queries.get_event_by_id(session, event_id)
+    linked_ids = events_queries.get_all_linked_drive_file_ids(session)
+    state, candidates = gdrive.find_recording_candidates(
+        meeting_url=event.meeting_url,
+        start_dt=event.start_datetime,
+        end_dt=event.end_datetime,
+        exclude_file_ids=linked_ids,
+    )
+    if file_id not in {c["file_id"] for c in candidates}:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Recording candidate not found for this event"
+        )
+
     gdrive.make_public(file_id, raise_on_blocked=True)
-    return {"file_id": file_id, "is_public": True}
+    is_public = gdrive.is_file_public(file_id)
+    return {"file_id": file_id, "is_public": is_public}
 
 
 # TODO: move to submissions router.
