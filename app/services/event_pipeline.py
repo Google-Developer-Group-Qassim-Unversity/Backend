@@ -996,15 +996,20 @@ def _require_open_task(session: Session, caller: Caller, request: EventRequests,
 def save_deliverable(
     session: Session, caller: Caller, request: EventRequests, team: PipelineTeam, deliverable: dict
 ) -> None:
-    """Save Logistics' confirmation as a draft, while its part is open. Confirming checks it."""
-    if team != PipelineTeam.LOGISTICS:
+    """Save Logistics' confirmation or Media's shares as a draft, while the part is open. Finishing checks it.
+
+    Design hands over its poster through its own upload instead.
+    """
+    if team not in (PipelineTeam.LOGISTICS, PipelineTeam.MEDIA):
         raise PipelineConflict("no_form", f"The {team.value} team hands over no form", 422)
     _require_open_task(session, caller, request, team)
     parsed = event_deliverables.parse(team, deliverable)
     task = get_task(request, team)
     task.deliverable = parsed  # type: ignore[union-attr]
     task.deliverable_version = event_deliverables.DELIVERABLE_VERSION  # type: ignore[union-attr]
-    history.record(session, PipelineHistoryAction.CONFIRMATION_EDITED, caller.member, request)
+    # Media's drafts leave no history; where it shared goes on its task_done.
+    if team == PipelineTeam.LOGISTICS:
+        history.record(session, PipelineHistoryAction.CONFIRMATION_EDITED, caller.member, request)
     session.flush()
 
 
@@ -1185,7 +1190,8 @@ def _apply_confirmation(
 def complete(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> list[PendingEmail | None]:
     """A team finishes its part. Design done sends the request to Media; all three done makes it ready.
 
-    Design finishes once it has uploaded the poster. Logistics finishes by
+    Design finishes once it has uploaded the poster; Media's shares, all
+    optional, must be whole (a link is a link). Logistics finishes by
     confirming the event (``event_deliverables``); if it confirmed other dates,
     call this inside ``booking_lock``.
     """
@@ -1195,7 +1201,7 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
     emails: list[PendingEmail | None] = []
     if team == PipelineTeam.LOGISTICS:
         emails.append(_apply_confirmation(session, caller, request, task))  # type: ignore[arg-type]
-    elif team == PipelineTeam.DESIGN:
+    else:
         missing = event_deliverables.missing(team, task.deliverable)  # type: ignore[union-attr]
         if missing:
             raise IncompleteRequest(missing)
@@ -1209,6 +1215,8 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
         if changes:
             done["changes"] = changes
             done["reason"] = (task.deliverable or {}).get("change_reason")  # type: ignore[union-attr]
+    if team == PipelineTeam.MEDIA:
+        done["platforms"] = (task.deliverable or {}).get("platforms", [])  # type: ignore[union-attr]
     history.record(session, PipelineHistoryAction.TASK_DONE, caller.member, request, done)
     notifications.notify(
         session, request.department_id, request, PipelineNotificationKind.TASK_DONE, {"team": team.value}

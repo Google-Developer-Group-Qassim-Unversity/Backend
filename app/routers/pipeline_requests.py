@@ -339,7 +339,7 @@ def save_event_request_brief(
 def save_event_request_deliverable(
     request_id: str, team: PipelineTeam, body: SaveDeliverableRequest, session: DB, caller: CurrentCaller
 ):
-    """Save Logistics' confirmation as a draft while its part is open; confirming checks it."""
+    """Save Logistics' confirmation or Media's shares as a draft while the part is open; finishing checks it."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.save_deliverable(session, caller, request, team, body.deliverable)
     session.commit()
