@@ -131,11 +131,10 @@ deleted with its event. The request page shows it as "Who did what".
 
 ## Emails
 
-`PIPELINE_EMAILS_LIVE` (default `false`). Off, a department email goes only to
-the person whose action sent it (for the sweep: whoever booked), subject
-prefixed `[تجربة · Trial]`, with the list of who would have received it. On,
-it goes to every member of the department's current roster. Every send is an
-`email_jobs` row (type `blast`) and shows in the email jobs page.
+A department email goes to every member of the department's current roster.
+Every send is an `email_jobs` row (type `blast`) and shows in the email jobs
+page. On staging and in local development it goes to whoever did the step
+instead (`app/services/email_redirect.py`, `docs/STAGING.md`).
 
 ## Design's Notion board
 

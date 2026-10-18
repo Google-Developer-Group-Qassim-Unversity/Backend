@@ -89,7 +89,7 @@ def expire_holds(session: Session, now: datetime, result: SweepResult) -> None:
         notifications.notify(session, request.department_id, request, PipelineNotificationKind.HOLD_EXPIRED, lost)
         history.record(session, PipelineHistoryAction.HOLD_EXPIRED, None, request, lost, at=now)
         pipeline_calendar.mark(session, request)
-        # Nobody clicked anything, so the trial copy goes to whoever booked it.
+        # Sent on behalf of whoever booked it, though nobody clicked anything.
         email = notifications.department_email(
             session, request.department_id, request, PipelineNotificationKind.HOLD_EXPIRED, request.requester
         )

@@ -5,10 +5,8 @@
 - ``department_email`` prepares the email for a department. Every current
   member of the department is a recipient, permission or not.
 
-**Trial mode.** Until ``PIPELINE_EMAILS_LIVE`` is on, the department gets no
-email at all. The same email goes only to the person whose action sent it -
-a super admin testing the flow - marked as a trial copy and listing who would
-have received it. Turning the setting on is the only change needed to go live.
+Staging and local development never reach the department: every send
+there goes to whoever clicked instead (``app/services/email_redirect.py``).
 
 Emails are sent after the transition commits, as one ``email_jobs`` row each,
 through the same blast endpoint and job tracker as the other emails. A failed
@@ -220,7 +218,7 @@ def department_email(
     changes: list[dict] | None = None,
     reason: str | None = None,
 ) -> PendingEmail | None:
-    """The email for ``department_id`` - or, in trial mode, its copy for ``triggered_by``.
+    """The email for every current member of ``department_id``, sent on ``triggered_by``'s behalf.
 
     ``changes`` and ``reason`` are what Logistics confirmed differently and why
     (``event_deliverables.changes``), listed in both languages.
@@ -232,27 +230,7 @@ def department_email(
     body = _render(request, kind, department_name, note, changes, reason)
     data = {"pipeline": {"request_id": request.id, "kind": kind.value, "department_id": department_id}}
 
-    if config.PIPELINE_EMAILS_LIVE:
-        emails = [m.email for m in members if m.email]
-    else:
-        if not triggered_by.email:
-            logger.info("Trial pipeline email for request %s skipped: the trigger has no email", request.id)
-            return None
-        emails = [triggered_by.email]
-        would_have = "".join(f"<li>{html.escape(m.name)} &lt;{html.escape(m.email or '')}&gt;</li>" for m in members)
-        banner = (
-            '<div style="background:#fef7e0;border:1px solid #fbbc04;padding:12px;margin-bottom:16px;'
-            'font-family:Arial,sans-serif">'
-            "<b>نسخة تجريبية · Trial copy.</b> "
-            f"This email goes to you because you did this step. When the pipeline is live it goes to every "
-            f"member of {html.escape(department_name)} ({len(members)}):"
-            f"<ul>{would_have or '<li>(no members with an email this semester)</li>'}</ul></div>"
-        )
-        subject = f"[تجربة · Trial] {subject}"
-        body = banner + body
-        data["pipeline"]["trial"] = True
-        data["pipeline"]["would_have_sent_to"] = [m.email for m in members]
-
+    emails = [m.email for m in members if m.email]
     if not emails:
         return None
     return PendingEmail(emails=emails, subject=subject, html=body, sent_by_id=triggered_by.id, data=data)

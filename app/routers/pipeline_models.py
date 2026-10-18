@@ -357,5 +357,3 @@ class OverlapResponse(BaseModel):
     """What booking ``from``..``to`` would bump. A published event cannot be bumped: the booking is refused."""
 
     requests: list[OverlapEntry]
-    # Off: the emails go only to the super admin, as trial copies.
-    emails_live: bool

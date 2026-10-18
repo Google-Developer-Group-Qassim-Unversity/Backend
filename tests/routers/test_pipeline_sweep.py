@@ -62,7 +62,7 @@ def test_submitted_requests_are_never_touched(pipeline, world):
     assert request_row(pipeline, request_id).start_date is not None
 
 
-def test_trial_email_goes_to_whoever_booked(pipeline, world):
+def test_an_expired_hold_emails_the_department(pipeline, world):
     book_complete(pipeline, world["ai"])
     result = sweep(pipeline, pipeline.now + timedelta(hours=25))
     assert [e.emails for e in result.emails] == [[world["leader"].email]]
@@ -77,8 +77,8 @@ def test_only_a_super_admin_can_run_the_sweep_by_hand(pipeline, world):
 
 
 def test_its_emails_are_not_attributed_to_a_click(pipeline, world):
-    """The copy goes to whoever booked the event - a real member. On staging
-    that must not count as them clicking (app/services/email_redirect.py)."""
+    """It is sent on behalf of whoever booked the event - a real member. On
+    staging that must not count as them clicking (app/services/email_redirect.py)."""
     book_complete(pipeline, world["ai"])
     result = sweep(pipeline, pipeline.now + timedelta(hours=25))
 
