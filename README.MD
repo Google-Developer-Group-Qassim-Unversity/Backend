@@ -62,3 +62,9 @@ uv run poe revision -m "describe change"
 # > alembic upgrade head
 uv run poe migrate 
 ```
+
+## Pull request notifications
+
+New pull requests targeting `dev` are announced in Discord when the
+`DISCORD_WEBHOOK_URL` Actions secret is configured. Each message includes the
+author, PR title and number, repository, and a direct link for review.
