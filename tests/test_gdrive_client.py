@@ -78,11 +78,10 @@ class TestGDriveConfig:
         assert config.GOOGLE_ORGANIZER_EMAIL == "organizer@gdg-q.com"
         assert config.APP_TIMEZONE == "Asia/Riyadh"
 
-    def test_calendar_missing_raises_missing_setting_error(self, monkeypatch):
+    def test_calendar_missing_returns_none(self, monkeypatch):
         monkeypatch.delenv("GOOGLE_CALENDAR_ID", raising=False)
         reload_settings()
-        with pytest.raises(MissingSettingError, match="GOOGLE_CALENDAR_ID"):
-            _ = config.GOOGLE_CALENDAR_ID
+        assert config.GOOGLE_CALENDAR_ID is None
 
     def test_organizer_email_missing_raises_missing_setting_error(self, monkeypatch):
         monkeypatch.delenv("GOOGLE_ORGANIZER_EMAIL", raising=False)
