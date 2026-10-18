@@ -183,9 +183,10 @@ def test_find_recording_candidates_absent_on_zero_conference_records():
 
 
 def test_find_recording_candidates_absent_on_missing_url():
-    """When meeting_url is None, returns absent without searching Drive."""
+    """When meeting_url is None and legacy fallback finds no files, returns absent."""
     drive_mock = MagicMock()
     meet_mock = MagicMock()
+    drive_mock.files.return_value.list.return_value.execute.return_value = {"files": []}
 
     client = GDriveClient(service=drive_mock, meet_service=meet_mock)
     start_dt = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
@@ -194,6 +195,47 @@ def test_find_recording_candidates_absent_on_missing_url():
     state, candidates = client.find_recording_candidates(None, start_dt, end_dt)
     assert state == "absent"
     assert candidates == []
+
+
+def test_find_recording_candidates_legacy_fallback_when_meet_api_404():
+    """When Meet API returns 404, falls back to legacy Drive search."""
+    drive_mock = MagicMock()
+    meet_mock = MagicMock()
+    meet_mock.spaces.return_value.get.return_value.execute.side_effect = _make_http_error(404, "Space not found")
+
+    client = GDriveClient(service=drive_mock, meet_service=meet_mock)
+    fallback_candidates = [
+        {"file_id": "legacy_rec_1", "name": "Legacy.mp4", "web_view_link": "http://link", "is_public": True}
+    ]
+    client.search_legacy_recordings = MagicMock(return_value=fallback_candidates)
+
+    start_dt = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
+    end_dt = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+
+    state, candidates = client.find_recording_candidates("abc-defg-hij", start_dt, end_dt)
+    assert state == "ready"
+    assert candidates == fallback_candidates
+    client.search_legacy_recordings.assert_called_once_with(start_dt, end_dt, set())
+
+
+def test_find_recording_candidates_legacy_fallback_when_no_meeting_url():
+    """When meeting_url is None, invokes legacy Drive search fallback."""
+    drive_mock = MagicMock()
+    meet_mock = MagicMock()
+
+    client = GDriveClient(service=drive_mock, meet_service=meet_mock)
+    fallback_candidates = [
+        {"file_id": "legacy_rec_2", "name": "NoUrl.mp4", "web_view_link": "http://link", "is_public": False}
+    ]
+    client.search_legacy_recordings = MagicMock(return_value=fallback_candidates)
+
+    start_dt = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
+    end_dt = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+
+    state, candidates = client.find_recording_candidates(None, start_dt, end_dt)
+    assert state == "ready"
+    assert candidates == fallback_candidates
+    client.search_legacy_recordings.assert_called_once_with(start_dt, end_dt, set())
 
 
 # ==========================================
@@ -361,3 +403,41 @@ def test_approve_candidate_creates_content_link_with_drive_file_id(
     assert row is not None
     assert row.drive_file_id == "approved_drive_file_999"
     assert row.kind == EventsContentLinkKind.RECORDING
+
+
+def test_make_recording_candidate_public_allowed_when_already_linked(
+    admin_client: TestClient, recording_test_event_id: int
+):
+    """Calling make-public on a file already linked to this event succeeds even if excluded from candidates."""
+    drive_mock = MagicMock()
+    drive_mock.permissions.return_value.create.return_value.execute.return_value = {"id": "perm_already_linked"}
+    drive_mock.permissions.return_value.list.return_value.execute.return_value = {
+        "permissions": [{"type": "anyone", "role": "reader"}]
+    }
+
+    # Attach the content link to the event first
+    link_res = admin_client.post(
+        f"/events/{recording_test_event_id}/content-links",
+        json={
+            "label": "Previously Attached Recording",
+            "url": "https://drive.google.com/file/d/already_linked_file_555/view",
+            "kind": "recording",
+            "published": True,
+            "drive_file_id": "already_linked_file_555",
+        },
+    )
+    assert_2xx(link_res)
+
+    client = GDriveClient(service=drive_mock)
+    client.find_recording_candidates = MagicMock(return_value=("absent", []))
+    app.dependency_overrides[get_gdrive_client] = lambda: client
+
+    try:
+        res = admin_client.post(
+            f"/events/{recording_test_event_id}/drive-recording-candidates/already_linked_file_555/make-public"
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["file_id"] == "already_linked_file_555"
+        assert res.json()["is_public"] is True
+    finally:
+        app.dependency_overrides.pop(get_gdrive_client, None)

@@ -5,7 +5,7 @@ import uuid
 from typing import Annotated, Any
 
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 
 from sqlalchemy.exc import IntegrityError
@@ -162,6 +162,7 @@ class _CountingReader:
     dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
 )
 def upload_drive_slides(
+    request: Request,
     file: Annotated[UploadFile, File()],
     event_id: Annotated[int, Query(...)],
     session: DB,
@@ -172,11 +173,21 @@ def upload_drive_slides(
     if not gdrive.is_configured():
         raise DriveIntegrationNotConfigured()
 
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_SLIDES_SIZE_BYTES + 2 * 1024 * 1024:
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="File exceeds the 100MB limit"
+                )
+        except ValueError:
+            pass
+
     filename = file.filename or "slides"
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_SLIDE_EXTENSIONS:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Only presentation files (PDF/PPTX/PPT/KEY/ODP) are supported",
         )
 

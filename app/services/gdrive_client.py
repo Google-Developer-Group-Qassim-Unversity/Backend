@@ -512,6 +512,10 @@ class GDriveClient:
         if has_started:
             return ("processing", [])
 
+        legacy_candidates = self.search_legacy_recordings(start_dt, end_dt, exclude_ids)
+        if legacy_candidates:
+            return ("ready", legacy_candidates)
+
         return ("absent", [])
 
 

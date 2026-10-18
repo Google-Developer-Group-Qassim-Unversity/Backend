@@ -331,3 +331,14 @@ def test_upload_slides_invalid_event_id_query_param_422(admin_client: TestClient
     res = admin_client.post("/upload/drive-slides/?event_id=not_an_integer", files=files)
     assert res.status_code == 422, res.text
     assert res.json().get("code") == "invalid_event_id"
+
+
+def test_upload_slides_rejects_content_length_header_too_large(
+    admin_client: TestClient, test_event_id: int, drive_client_override
+):
+    """Requests with Content-Length header exceeding 100MB + headroom are rejected with 413 upfront."""
+    files = {"file": ("huge.pdf", io.BytesIO(b"small body"), "application/pdf")}
+    headers = {"Content-Length": str(150 * 1024 * 1024)}
+    res = admin_client.post(f"/upload/drive-slides/?event_id={test_event_id}", files=files, headers=headers)
+    assert res.status_code == 413, res.text
+    assert "exceeds" in res.json()["detail"].lower()
