@@ -2,7 +2,7 @@ name: Discord PR notification
 
 on:
   pull_request_target:
-    types: [opened]
+    types: [opened, closed]
     branches: [dev]
 
 permissions: {}
@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 2
     steps:
       # Read event data only. Never check out or execute code from the PR.
-      - name: Announce the new pull request
+      - name: Announce the pull request event
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -36,11 +36,24 @@ jobs:
           author = pr["user"]["login"]
           number = pr["number"]
           url = f"https://github.com/{repo}/pull/{number}"
-          draft = " (Draft)" if pr.get("draft") else ""
+          action = event["action"]
+          if action == "opened":
+              icon, verb, actor = "🔔", "opened", author
+          elif action == "closed":
+              actor = (event.get("sender") or {}).get("login", author)
+              if pr.get("merged"):
+                  icon, verb = "✅", "merged"
+                  actor = (pr.get("merged_by") or {}).get("login", actor)
+              else:
+                  icon, verb = "❌", "closed without merging"
+          else:
+              raise SystemExit(0)
+          draft = " (Draft)" if action == "opened" and pr.get("draft") else ""
           payload = {
               "content": (
-                  f"🔔 **{author}** opened **#{number} — {title}**{draft}\n"
+                  f"{icon} **{actor}** {verb} **#{number} — {title}**{draft}\n"
                   f"Repository: **{repo.split('/')[-1]}**\n"
+                  f"Author: **{author}**\n"
                   f"🔗 {url}"
               ),
               "allowed_mentions": {"parse": []},
