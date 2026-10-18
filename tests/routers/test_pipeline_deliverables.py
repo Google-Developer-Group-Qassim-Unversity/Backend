@@ -1,9 +1,9 @@
-"""What the teams hand over: Logistics' confirmation, and the points tier the requesting team picks."""
+"""What the teams hand over: Logistics' confirmation, Design's poster, Media's shares, and the points tier the requesting team picks."""
 
 import pytest
 from sqlalchemy import select
 
-from app.DB.schema import EventRequests, PipelineNotifications
+from app.DB.schema import EventRequests, PipelineHistory, PipelineHistoryAction, PipelineNotifications
 from tests.pipeline_support import MEET_LINK, book_complete, finish, submit, upload_poster
 from tests.r2_support import PNG
 
@@ -16,6 +16,7 @@ def world(pipeline):
         "ai": pipeline.officer(ai),
         "design": pipeline.officer(design, name="Designer"),
         "logistics": pipeline.officer(logistics, name="Logistics"),
+        "media": pipeline.officer(media, name="Media"),
     }
     pipeline.sign_in(people["ai"])
     request_id = book_complete(pipeline, ai)
@@ -310,3 +311,97 @@ def test_the_poster_must_be_an_image(pipeline, world):
     response = upload_poster(pipeline, world["request_id"], b"%PDF-1.4", "application/pdf")
     assert response.status_code == 422
     assert response.json()["code"] == "not_an_image"
+
+
+# --------------------------------------------------------------------------- Media's shares
+
+
+def media_task(body):
+    return next(t for t in body["tasks"] if t["team"] == "media")
+
+
+@pytest.fixture
+def at_media(pipeline, world):
+    """Design has handed over its poster, so Media's part is open."""
+    pipeline.sign_in(world["people"]["design"])
+    assert finish(pipeline, world["request_id"], "design").status_code == 200
+    pipeline.sign_in(world["people"]["media"])
+    return world
+
+
+def share(pipeline, world, **deliverable):
+    return pipeline.client.put(url(world, "/deliverables/media"), json={"deliverable": deliverable})
+
+
+def test_media_opens_with_nothing_shared_and_can_finish_so(pipeline, at_media):
+    task = media_task(pipeline.client.get(url(at_media)).json())
+    assert task["deliverable"] == {"platforms": [], "other_platform": None, "links": {}}
+    assert task["deliverable_missing"] == []
+    assert pipeline.client.post(url(at_media, "/tasks/media/complete")).status_code == 200
+
+
+def test_media_keeps_where_it_shared_with_the_links(pipeline, db_session, at_media):
+    body = share(
+        pipeline,
+        at_media,
+        platforms=["tiktok", "x", "instagram", "x"],
+        links={"x": " https://x.com/gdgq/status/1 ", "tiktok": ""},
+    ).json()
+    # The form's order, each once; a blank link is no link.
+    assert media_task(body)["deliverable"] == {
+        "platforms": ["x", "instagram", "tiktok"],
+        "other_platform": None,
+        "links": {"x": "https://x.com/gdgq/status/1"},
+    }
+    assert pipeline.client.post(url(at_media, "/tasks/media/complete")).status_code == 200
+    done = db_session.scalars(
+        select(PipelineHistory.details).where(
+            PipelineHistory.request_id == at_media["request_id"],
+            PipelineHistory.action == PipelineHistoryAction.TASK_DONE,
+        )
+    ).all()
+    assert {"team": "media", "platforms": ["x", "instagram", "tiktok"]} in done
+
+
+def test_an_unticked_platform_keeps_no_link_or_name(pipeline, at_media):
+    body = share(
+        pipeline, at_media, platforms=["x"], other_platform="LinkedIn", links={"instagram": "https://instagram.com/p/1"}
+    ).json()
+    assert media_task(body)["deliverable"] == {"platforms": ["x"], "other_platform": None, "links": {}}
+
+
+def test_somewhere_else_needs_its_name_and_a_link_must_be_a_link(pipeline, at_media):
+    body = share(pipeline, at_media, platforms=["other", "instagram"], links={"instagram": "my story"}).json()
+    assert media_task(body)["deliverable_missing"] == ["share.other_platform", "share.links.instagram"]
+    response = pipeline.client.post(url(at_media, "/tasks/media/complete"))
+    assert response.status_code == 422
+    assert response.json()["code"] == "incomplete"
+
+    share(
+        pipeline,
+        at_media,
+        platforms=["other", "instagram"],
+        other_platform="LinkedIn",
+        links={"instagram": "https://instagram.com/p/1"},
+    )
+    assert pipeline.client.post(url(at_media, "/tasks/media/complete")).status_code == 200
+
+
+def test_an_unknown_platform_is_refused(pipeline, at_media):
+    response = share(pipeline, at_media, platforms=["myspace"])
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][:3] == ["body", "deliverable", "platforms"]
+
+
+def test_only_media_says_where_it_shared(pipeline, at_media):
+    pipeline.sign_in(at_media["people"]["design"])
+    assert share(pipeline, at_media, platforms=["x"]).status_code == 403
+    pipeline.sign_in(at_media["people"]["ai"])
+    assert share(pipeline, at_media, platforms=["x"]).status_code == 403
+
+
+def test_design_still_hands_over_no_form(pipeline, at_media):
+    pipeline.sign_in(at_media["people"]["design"])
+    response = pipeline.client.put(url(at_media, "/deliverables/design"), json={"deliverable": {}})
+    assert response.status_code == 422
+    assert response.json()["code"] == "no_form"

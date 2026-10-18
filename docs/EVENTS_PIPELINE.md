@@ -68,7 +68,8 @@ a time. `POST /pipeline/sweep` (super admin) runs it now.
 What a team hands back, the way a brief is what the requesting team asks for:
 JSON on the team's `event_request_tasks` row (`deliverable`,
 `deliverable_version`), one Pydantic model per team in
-`app/services/event_deliverables.py`. A team cannot finish without it.
+`app/services/event_deliverables.py`. A team cannot finish while
+`deliverable_missing` lists anything.
 
 - **Logistics confirms the event as it was booked**: dates, each day's mode,
   daily times, venue and room, the Google Meet link for online days, the
@@ -102,7 +103,13 @@ JSON on the team's `event_request_tasks` row (`deliverable`,
 - **Design uploads the poster** (`POST .../poster`, PNG/JPEG/WebP up to
   10 MB, stored in R2 under `event-images/`). Design can replace it until the
   event is published.
-- Media still finishes with "Mark done".
+- **Media says where it shared the event**: X, Instagram, TikTok, or
+  `other` with its name in `other_platform`, each with the post's link in
+  `links` if it has one (`PUT .../deliverables/media` saves a draft; it
+  opens empty). All of it is optional, so "Mark done" works with nothing
+  ticked; a ticked `other` needs its name (`share.other_platform`) and a link
+  must be a web link (`share.links.<platform>`). Media's `task_done` history
+  keeps the platforms; its draft saves leave no history.
 
 ## Who did what
 
@@ -181,4 +188,3 @@ image. A late penalty is taken off the department's log for that event as a
 ## Not built yet
 
 - Brief attachments are links, not uploads.
-- Media's deliverables.
