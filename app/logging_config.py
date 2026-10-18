@@ -19,9 +19,38 @@ from contextvars import ContextVar
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
-# Who the request is acting as, set once the caller is resolved. "-" until then,
-# and for anything unauthenticated.
-actor_var: ContextVar[str] = ContextVar("actor", default="-")
+
+class ActorSlot:
+    """Who the request is acting as. "-" until the caller is resolved, and for
+    anything unauthenticated.
+
+    A mutable box rather than a plain string in the ContextVar because the caller
+    is resolved in a sync dependency, and FastAPI runs sync dependencies and sync
+    routes in a threadpool, each on its own *copy* of the request's context. A
+    ``set()`` made in the dependency's copy is invisible to the route's copy, so
+    every line logged by the route said ``actor:-`` (GDG-47). The middleware puts
+    one slot in the request's context before any copy is taken; the copies all
+    share it, and filling it in is seen everywhere.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self) -> None:
+        self.value = "-"
+
+
+actor_var: ContextVar[ActorSlot | None] = ContextVar("actor", default=None)
+
+
+def set_actor(actor: str) -> None:
+    slot = actor_var.get()
+    if slot is None:
+        # outside a request (scripts, tests): nothing to share with, so a slot of
+        # this context's own is enough
+        slot = ActorSlot()
+        actor_var.set(slot)
+    slot.value = actor
+
 
 # no leading timestamp: `pm2 --time` already prefixes one
 LOG_FORMAT = "%(levelname)s [pid:%(process)d] [req:%(request_id)s] [actor:%(actor)s] %(name)s: %(message)s"
@@ -36,7 +65,8 @@ class RequestContextFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = request_id_var.get()
-        record.actor = actor_var.get()
+        slot = actor_var.get()
+        record.actor = slot.value if slot is not None else "-"
         return True
 
 

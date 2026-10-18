@@ -214,8 +214,112 @@ def _default_response(request: httpx.Request) -> httpx.Response:
     if path == "/api/revalidate":
         return httpx.Response(200, json={"revalidated": True})
 
+    # Notion (app/services/notion_client.py): the design team's board.
+    if request.url.host == "api.notion.com":
+        return _notion_response(request)
+
+    # Google (app/services/google_meet.py): Meet links, as the meetings account on its own calendar.
+    if request.url.host in ("oauth2.googleapis.com", "meet.googleapis.com") or (
+        request.url.host == "www.googleapis.com" and f"/calendars/{MEET_CALENDAR_ID}/" in path
+    ):
+        return _google_meet_response(request)
+
+    # Google Calendar (app/services/google_calendar.py): the team's calendar.
+    if request.url.host == "www.googleapis.com" and path.startswith("/calendar/v3/"):
+        return _calendar_response(request)
+
     raise AssertionError(
         f"Unstubbed outbound request: {request.method} {request.url}\n"
         "Add it to tests/outbound.py:_default_response with the response the real "
         "service returns, or stub it in the test with outbound.stub(...)."
     )
+
+
+NOTION_PAGE_ID = "11111111-2222-3333-4444-555555555555"
+NOTION_PAGE_URL = "https://www.notion.so/Intro-to-ML-11111111222233334444555555555555"
+
+
+def _notion_response(request: httpx.Request) -> httpx.Response:
+    """The shapes Notion's public API (version 2022-06-28) answers with, as far as the sync reads them."""
+    path = request.url.path
+    if request.method == "GET" and path.startswith("/v1/databases/"):
+        return httpx.Response(200, json={"object": "database", "properties": {"Name": {"type": "title"}}})
+    if request.method == "PATCH" and path.startswith("/v1/databases/"):
+        return httpx.Response(200, json={"object": "database"})
+    if request.method == "POST" and path == "/v1/pages":
+        return httpx.Response(200, json={"object": "page", "id": NOTION_PAGE_ID, "url": NOTION_PAGE_URL})
+    if request.method == "PATCH" and path.startswith("/v1/pages/"):
+        return httpx.Response(200, json={"object": "page", "id": path.rsplit("/", 1)[1]})
+    if request.method == "GET" and path.endswith("/children"):
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"id": "block-ours", "type": "synced_block", "synced_block": {"synced_from": None}},
+                    {"id": "block-theirs", "type": "paragraph", "paragraph": {"rich_text": []}},
+                ],
+                "has_more": False,
+            },
+        )
+    if request.method == "PATCH" and path.endswith("/children"):
+        return httpx.Response(200, json={"results": []})
+    if request.method == "DELETE" and path.startswith("/v1/blocks/"):
+        return httpx.Response(200, json={"object": "block", "archived": True})
+    raise AssertionError(f"Unexpected Notion call: {request.method} {request.url}")
+
+
+def _calendar_response(request: httpx.Request) -> httpx.Response:
+    """Google Calendar v3 as the sync reads it: a write echoes the entry back, a delete has no body."""
+    if request.method in ("PUT", "POST") and "/events" in request.url.path:
+        body = _body(request)
+        return httpx.Response(200, json={"kind": "calendar#event", "id": request.url.path.rsplit("/", 1)[1], **body})
+    if request.method == "DELETE" and "/events/" in request.url.path:
+        return httpx.Response(204)
+    raise AssertionError(f"Unexpected Google Calendar call: {request.method} {request.url}")
+
+
+# The meetings account's calendar in the tests; the team's calendar (``_calendar_response``) is any other id.
+MEET_CALENDAR_ID = "c_meet@group.calendar.google.com"
+MEET_EVENT_ID = "5kq3v0a7l9m2b1c8d4e6f0g2h4"
+MEET_CODE = "abc-mnop-xyz"
+MEET_URL = f"https://meet.google.com/{MEET_CODE}"
+MEET_CALENDAR_URL = "https://www.google.com/calendar/event?eid=NWtxM3Yw"
+
+
+def _google_meet_response(request: httpx.Request) -> httpx.Response:
+    """What Google's OAuth, Calendar v3 and Meet v2 endpoints answer, as far as ``google_meet`` reads them."""
+    path = request.url.path
+    if request.url.host == "oauth2.googleapis.com" and path == "/token":
+        return httpx.Response(200, json={"access_token": "ya29.test", "expires_in": 3599, "token_type": "Bearer"})
+    if request.url.host == "www.googleapis.com" and "/calendar/v3/calendars/" in path:
+        if request.method == "POST":
+            body = _body(request)
+            return httpx.Response(
+                200,
+                json={
+                    "id": MEET_EVENT_ID,
+                    "status": "confirmed",
+                    "htmlLink": MEET_CALENDAR_URL,
+                    "hangoutLink": MEET_URL,
+                    "conferenceData": {
+                        "conferenceId": MEET_CODE,
+                        "entryPoints": [
+                            {"entryPointType": "video", "uri": MEET_URL, "label": f"meet.google.com/{MEET_CODE}"}
+                        ],
+                    },
+                    "start": body.get("start"),
+                    "end": body.get("end"),
+                },
+            )
+        if request.method == "PATCH":
+            return httpx.Response(200, json={"id": path.rsplit("/", 1)[1], "status": "confirmed"})
+        if request.method == "DELETE":
+            return httpx.Response(204)
+    if request.url.host == "meet.googleapis.com":
+        if request.method == "GET" and path.startswith("/v2/spaces/"):
+            return httpx.Response(
+                200, json={"name": "spaces/jQCFfuBOdN5z", "meetingUri": MEET_URL, "meetingCode": MEET_CODE}
+            )
+        if request.method == "PATCH" and path.startswith("/v2/spaces/"):
+            return httpx.Response(200, json={"name": "spaces/jQCFfuBOdN5z"})
+    raise AssertionError(f"Unexpected Google call: {request.method} {request.url}")

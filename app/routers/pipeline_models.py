@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.DB.schema import (
+    BumpOutcome,
     EventRequestAudience,
     EventRequestLocationScope,
     EventRequestRegistration,
@@ -13,6 +14,7 @@ from app.DB.schema import (
     EventRequestTaskStatus,
     EventRequestType,
     EventRequestUndatedReason,
+    PipelineHistoryAction,
     PipelineNotificationKind,
     PipelineTeam,
 )
@@ -50,6 +52,11 @@ class PipelineMeResponse(BaseModel):
     has_access: bool
     departments: list[ActingDepartment]
     teams: list[PipelineTeamEntry]
+    # What the caller does as themselves, through their own roster, as if they
+    # were not a super admin. For anyone else these are simply what they can do.
+    # A super admin acts for everyone else on their behalf.
+    own_department_ids: list[int]
+    own_teams: list[PipelineTeam]
 
 
 class CalendarDayRequest(BaseModel):
@@ -59,11 +66,20 @@ class CalendarDayRequest(BaseModel):
     stage: EventRequestStage
 
 
+class BlockedBy(BaseModel):
+    member_id: int
+    name: str
+
+
 class CalendarDayResponse(BaseModel):
     date: date
     # locked | banned | open | held | booked | published
     status: str
+    # On a banned day: the block that closed it, why, and who closed it.
     reason: str | None = None
+    block_id: str | None = None
+    blocked_by: BlockedBy | None = None
+    blocked_at: UtcDateTime | None = None
     requests: list[CalendarDayRequest] = []
 
 
@@ -74,8 +90,19 @@ class CalendarResponse(BaseModel):
 
 
 class BanDaysRequest(BaseModel):
+    """Close these days as one block. Every block says why."""
+
     dates: list[date] = Field(min_length=1, max_length=366)
-    reason: str | None = Field(default=None, max_length=200)
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class EditBlockRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class BlockResult(BaseModel):
+    block_id: str
+    count: int
 
 
 class UnbanDaysRequest(BaseModel):
@@ -95,11 +122,14 @@ class BookRequest(BaseModel):
     department_id: int = Field(gt=0)
     start_date: date
     end_date: date
+    # A super admin booking over other requests: what happens to each, by request id (``GET /pipeline/overlaps``).
+    bumps: dict[str, BumpOutcome] = Field(default_factory=dict)
 
 
 class RedateRequest(BaseModel):
     start_date: date
     end_date: date
+    bumps: dict[str, BumpOutcome] = Field(default_factory=dict)
 
 
 class EventDetails(BaseModel):
@@ -122,6 +152,10 @@ class EventDetails(BaseModel):
     # 0 saves with the draft like any half-filled field; submit needs at least 1.
     expected_accepted: int | None = Field(default=None, ge=0, le=100000)
     help_needed: str | None = Field(default=None, max_length=5000)
+    # The points tier: one of the composite (department, member) action pairs from ``GET /actions``.
+    # Sent together; submit reports either missing as ``details.points_tier``.
+    department_action_id: int | None = Field(default=None, gt=0)
+    member_action_id: int | None = Field(default=None, gt=0)
 
 
 class UpdateDetailsRequest(EventDetails):
@@ -135,6 +169,15 @@ class PersonRef(BaseModel):
     name: str
 
 
+class TaskState(BaseModel):
+    """Where one team's part of a request stands, for a list row."""
+
+    team: PipelineTeam
+    status: EventRequestTaskStatus
+    opened_at: UtcDateTime | None
+    done_at: UtcDateTime | None
+
+
 class EventRequestSummary(BaseModel):
     id: str
     department: PipelineDepartment
@@ -144,7 +187,11 @@ class EventRequestSummary(BaseModel):
     end_date: date | None
     hold_expires_at: UtcDateTime | None
     undated_reason: EventRequestUndatedReason | None
-    created_at: UtcDateTime
+    requested_at: UtcDateTime
+    published_at: UtcDateTime | None
+    # Where each team's part stands (briefs not yet sent included), so a list can
+    # say whose turn it is without loading every request.
+    task_states: list[TaskState]
 
 
 class TaskResponse(BaseModel):
@@ -152,9 +199,23 @@ class TaskResponse(BaseModel):
     status: EventRequestTaskStatus
     brief: dict | None
     brief_version: int | None
+    # What the team hands over (app/services/event_deliverables.py). Logistics'
+    # confirmation shows prefilled from the request until Logistics saves it.
+    deliverable: dict | None
+    # What the team still has to hand over before it can finish: "confirm.venue", "poster.poster_url".
+    deliverable_missing: list[str]
+    # Logistics only: the fields its saved confirmation changes from what was requested
+    # ("daily_start_time", "venue", ...). Any makes ``confirm.change_reason`` required.
+    confirmation_changes: list[str] = []
     opened_at: UtcDateTime | None
-    completed_at: UtcDateTime | None
-    completed_by: PersonRef | None
+    # Who marked this team's part done, and when.
+    done_at: UtcDateTime | None
+    done_by: PersonRef | None
+    # Design only: its card on the team's Notion board (app/services/pipeline_notion.py).
+    # ``notion_pending`` while a change is still to be written there; the error is shown to super admins.
+    notion_url: str | None = None
+    notion_pending: bool = False
+    notion_error: str | None = None
 
 
 class PenaltyResponse(BaseModel):
@@ -171,10 +232,33 @@ class RequestActions(BaseModel):
     can_resubmit: bool
     complete: list[PipelineTeam]
     can_publish: bool = False
+    # Design uploads or replaces the poster, until the request is published.
+    can_upload_poster: bool = False
+    # Logistics can have a Meet link made on the club's calendar while it confirms (needs the organizer account set up).
+    can_generate_meet: bool = False
+    # The requesting department drops it at any stage before publish, then deletes it for good.
+    can_cancel: bool = False
+    can_delete: bool = False
+
+
+class HistoryItem(BaseModel):
+    """One step in a request's history (app/services/pipeline_history.py)."""
+
+    action: PipelineHistoryAction
+    at: UtcDateTime
+    # Null for what the sweep did on its own.
+    actor: PersonRef | None
+    details: dict | None
 
 
 class EventRequestDetail(EventRequestSummary):
-    created_by: PersonRef
+    # Who did each step, and when. Each task says who marked its part done.
+    requested_by: PersonRef
+    submitted_by: PersonRef | None
+    returned_by: PersonRef | None
+    published_by: PersonRef | None
+    cancelled_at: UtcDateTime | None = None
+    cancelled_by: PersonRef | None = None
     details: EventDetails
     partners: list[PipelineDepartment]
     # Worked out from the dates and times: Sun-Thu, 08:00-15:00.
@@ -194,6 +278,8 @@ class EventRequestDetail(EventRequestSummary):
     return_deadline: UtcDateTime | None
     penalty: PenaltyResponse | None
     actions: RequestActions
+    # Everything that happened to the request, oldest first.
+    history: list[HistoryItem]
     now: UtcDateTime
 
 
@@ -240,6 +326,8 @@ class SweepResponse(BaseModel):
     ran: bool
     expired_holds: int = 0
     penalties_grown: int = 0
+    notion_synced: int = 0
+    calendar_synced: int = 0
 
 
 class ReturnRequest(BaseModel):
@@ -253,9 +341,19 @@ class InboxItem(BaseModel):
     opened_at: UtcDateTime | None
 
 
-class PublishRequest(BaseModel):
-    """The points tier: one of the composite (department, member) action pairs from ``GET /actions``."""
+class SaveDeliverableRequest(BaseModel):
+    """A draft of what the team hands over, saved as it is. Its fields are the team's form (app/services/event_deliverables.py)."""
 
-    department_action_id: int = Field(gt=0)
-    member_action_id: int = Field(gt=0)
-    image_url: str | None = Field(default=None, max_length=500)
+    deliverable: dict
+
+
+class OverlapEntry(BaseModel):
+    request: EventRequestSummary
+    # Who its department's email goes to: every current member with an email.
+    recipients: list[PersonRef]
+
+
+class OverlapResponse(BaseModel):
+    """What booking ``from``..``to`` would bump. A published event cannot be bumped: the booking is refused."""
+
+    requests: list[OverlapEntry]

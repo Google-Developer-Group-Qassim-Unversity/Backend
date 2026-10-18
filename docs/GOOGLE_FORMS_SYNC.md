@@ -28,7 +28,7 @@ Confirmed by checking two real event forms' schemas via `forms.get()`:
 
 So a hardcoded `questionId` is wrong on essentially every form - there's no single constant that works, and the two forms above prove the same ID can mean two different questions on different forms.
 
-The frontend's prefill (`score-leaderboard-app/app/(google-form)/events/[id]/form/page.tsx`) uses **entry IDs**, which are the stable system - that's why prefilling the form when a member opens it has always worked fine, even while the backend's response-matching (which only ever sees `questionId`s, since that's the API's response format) was silently broken.
+The frontend's prefill (`Website/app/(google-form)/events/[id]/form/page.tsx`) uses **entry IDs**, which are the stable system - that's why prefilling the form when a member opens it has always worked fine, even while the backend's response-matching (which only ever sees `questionId`s, since that's the API's response format) was silently broken.
 
 ## The Fix
 
@@ -63,7 +63,7 @@ This works regardless of which `questionId` holds the email on a given form, and
 - **Why**: the Google client used to be built inline in the router, so nothing could stand in for it and only `extract_email_answer` was reachable from a test. Reading a form needs the per-form refresh token, which the caller resolves (`resolve_form_access`) and passes in as a `FormAccess` - that keeps the adapters free of database access.
 - **Failures raise.** The old `fetch_form_responses` caught everything and returned `None`, so a form nobody had linked came back looking exactly like an empty inbox. A missing form now raises `NotFound`, a form with no refresh token raises `GoogleFormNotLinked`, and dead credentials raise `GoogleFormAuthExpired`.
 
-### 3. `score-leaderboard-app/app/(google-form)/events/[id]/form/page.tsx`
+### 3. `Website/app/(google-form)/events/[id]/form/page.tsx`
 - **What**: `PERSONAL_EMAIL_ENTRY_ID` and friends (`UNI_ID_ENTRY_ID`, `NAME_ENTRY_ID`, `GENDER_ENTRY_ID`) - the entry-ID-based prefill.
 - **Left as-is**: entry IDs are the stable system, so this still works. Commented to flag that these IDs are unrelated to the backend's `questionId`-based matching, so nobody "fixes" one by copying values from the other.
 

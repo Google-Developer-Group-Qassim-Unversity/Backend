@@ -39,9 +39,9 @@ the boot rather than the first request.
 
 Everything about this integration - the one-time club OAuth, the Drive
 template copy, the Pub/Sub watch registration, and the Forms publish calls -
-runs here in the Backend now. There is no Frontend-side OAuth flow anymore
-(see `docs/GOOGLE_FORMS.md`). The Frontend keeps its own copy of
-`TEMPLATE_FORM_FILE_ID` (declared in `Frontend/lib/config-server.ts`, set
+runs here in the Backend now. There is no frontend-side OAuth flow anymore
+(see `docs/GOOGLE_FORMS.md`). The admin frontend keeps its own copy of
+`TEMPLATE_FORM_FILE_ID` (declared in `Admin/lib/config-server.ts`, set
 under its own Infisical path `/admin-frontend`) purely so a super admin can
 open the template from the Settings page - that file id isn't a secret, just
 duplicated across both apps for that one convenience link.
@@ -54,9 +54,26 @@ duplicated across both apps for that one convenience link.
 | `MEMBER_APP_URL` | when the feature runs | - |  |
 | `MEMBER_APP_REVALIDATE_SECRET` | when the feature runs | - | bearer token for the leaderboard cache reset |
 | `SES_FROM_ADDRESS` | when the feature runs | - |  |
-| `PIPELINE_EMAILS_LIVE` | no | `false` | events pipeline: `false` sends each email only to whoever triggered it, as a trial copy; `true` emails the whole department |
 | `ADMIN_APP_URL` | no | `https://admin.gdg-q.com` | links in events pipeline emails |
+| `NOTION_TOKEN` | for Design's Notion board | - | internal integration secret (`ntn_...`) of the design team's Notion; with `NOTION_DESIGN_DATABASE_ID`, every request that reaches Design gets a card there. Unset: nothing is sent. Setup steps are on Notion (Events pipeline → Design's Notion board) |
+| `NOTION_DESIGN_DATABASE_ID` | for Design's Notion board | - | the database (board) the cards go in; shared with the integration. One board for prod and staging; staging titles carry a `(staging)` prefix |
+| `GOOGLE_CALENDAR_ID` | for the team's Google Calendar | - | the calendar every event request goes on, from booking to the published event (Google Calendar → the calendar's settings → Integrate calendar → Calendar ID). With `GOOGLE_CALENDAR_REFRESH_TOKEN`; either unset: nothing is sent. Give staging its own calendar - entry ids carry the environment, so the two never overwrite each other, but staging's entries would sit next to prod's |
+| `GOOGLE_CALENDAR_REFRESH_TOKEN` | for the team's Google Calendar | - | refresh token of the account that can edit that calendar (a person's own account, not the club's), `calendar.events` scope only. Mint it with `infisical run --env=dev --path=/admin-backend -- uv run python scripts/setup_google_oauth.py --calendar` |
+| `GOOGLE_CALENDAR_CLIENT_ID` | for the team's Google Calendar | `GOOGLE_CLIENT_ID` | the calendar's own OAuth client (Desktop app), in a Google Cloud project of that account, **published** (in production) so the token does not expire after 7 days like the club's testing client's. `calendar.events` is sensitive, not restricted: no verification needed, one "unverified app" screen when approving |
+| `GOOGLE_CALENDAR_CLIENT_SECRET` | for the team's Google Calendar | `GOOGLE_CLIENT_SECRET` | that client's secret |
+| `GOOGLE_MEET_CLIENT_ID` | for Meet links | - | OAuth client of the club's meetings account, the one its Telegram meetings bot uses (`app/services/google_meet.py`). Not the Forms account, not the team's calendar account. With the other three, Logistics gets a "generate a link" button on its confirmation; any unset hides it |
+| `GOOGLE_MEET_CLIENT_SECRET` | for Meet links | - |  |
+| `GOOGLE_MEET_REFRESH_TOKEN` | for Meet links | - | granted `calendar.events`, `meetings.space.created` and `meetings.space.settings`. Shared with the live bot: never revoke it or re-run consent for it; ask for a second token instead. Refreshed without a `scope` |
+| `GOOGLE_MEET_CALENDAR_ID` | for Meet links | - | the meetings account's events calendar (`...@group.calendar.google.com`) every generated link's event goes on; never taken from a request. Not `GOOGLE_CALENDAR_ID`, which is the team's calendar |
 | `EMAIL_REDIRECT_FALLBACK` | on staging | - | comma-separated developer addresses. With `ENV` `Staging` or `development`, an email goes to the member who clicked send instead of its recipients; emails nobody clicked for (the pipeline sweep) go here. Unset there, those emails fail rather than reach real members - see `app/services/email_redirect.py` |
+
+**Dev note on `MEMBER_APP_URL`:** Infisical's dev env points it at
+`https://gdg-q.com`, so a cache reset from a local backend purges the real
+site's cache instead of the one running on your machine. `.env.local`
+therefore overrides it with the local Website app (`http://localhost:3001`) -
+that file is gitignored and specific to one machine. Remove or change the
+override if you run the Website elsewhere; set it before the first
+content/event edit or the local Website's cache never refreshes.
 
 ### Cloudflare R2 (uploads)
 

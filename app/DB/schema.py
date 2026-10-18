@@ -1,5 +1,5 @@
 from app.member_names import default_public_name
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import datetime
 import enum
 import uuid
@@ -76,6 +76,12 @@ class EventsLocationType(str, enum.Enum):
     ON_SITE = "on-site"
     NONE = "none"
     HIDDEN = "hidden"
+
+
+class EventsContentLinkKind(str, enum.Enum):
+    SLIDES = "slides"
+    RECORDING = "recording"
+    OTHER = "other"
 
 
 class EventsStatus(str, enum.Enum):
@@ -457,6 +463,12 @@ class Events(Base):
     forms: Mapped[list["Forms"]] = relationship("Forms", back_populates="event", passive_deletes=True)
     logs: Mapped[list["Logs"]] = relationship("Logs", back_populates="event", passive_deletes=True)
     email_logs: Mapped[list["EmailLogs"]] = relationship("EmailLogs", back_populates="event", passive_deletes=True)
+
+    if TYPE_CHECKING:
+        # Transient: set in app/DB/events.py (one grouped query per response) right
+        # before the row is serialized - the published rows of the
+        # leaderboard-serving payloads, never the full admin set on an event row.
+        content_links: list["EventContentLinks"]
 
 
 class Members(Base):
@@ -1071,20 +1083,51 @@ class PipelineLocks(Base):
     name: Mapped[str] = mapped_column(String(32), primary_key=True)
 
 
-class BookingBans(Base):
-    """A day Logistics closed to bookings, e.g. exams. Every team sees the reason."""
+class BookingBlocks(Base):
+    """Days Logistics closed together for one reason, e.g. midterms or a break.
 
-    __tablename__ = "booking_bans"
+    One day or many, next to each other or not. Every team sees the reason and
+    who closed them. Its days are ``booking_bans`` rows; reopening the last of
+    them deletes the block.
+    """
+
+    __tablename__ = "booking_blocks"
     __table_args__ = (
-        ForeignKeyConstraint(["banned_by"], ["members.id"], name="fk_booking_bans_banned_by", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["blocked_by"], ["members.id"], name="fk_booking_blocks_blocked_by", ondelete="RESTRICT"),
     )
 
-    date: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
-    reason: Mapped[Optional[str]] = mapped_column(VARCHAR(200, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
-    banned_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    reason: Mapped[str] = mapped_column(VARCHAR(200, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
+    blocked_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+
+    blocker: Mapped["Members"] = relationship("Members")
+    days: Mapped[list["BookingBans"]] = relationship(
+        "BookingBans",
+        back_populates="block",
+        order_by="BookingBans.date",
+        passive_deletes=True,
+        cascade="all, delete-orphan",
+    )
+
+
+class BookingBans(Base):
+    """One closed day, and the block that closed it; the block holds the reason and who."""
+
+    __tablename__ = "booking_bans"
+    __table_args__ = (
+        ForeignKeyConstraint(["block_id"], ["booking_blocks.id"], name="fk_booking_bans_block", ondelete="CASCADE"),
+    )
+
+    date: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
+    block_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    block: Mapped["BookingBlocks"] = relationship("BookingBlocks", back_populates="days")
 
 
 class EventRequestStage(str, enum.Enum):
@@ -1102,6 +1145,16 @@ class EventRequestStage(str, enum.Enum):
 class EventRequestUndatedReason(str, enum.Enum):
     HOLD_EXPIRED = "hold_expired"
     DAY_BANNED = "day_banned"
+    # A super admin booked these days for another request.
+    OVERRIDDEN = "overridden"
+
+
+class BumpOutcome(str, enum.Enum):
+    """What happens to a request a super admin books over. Never stored: the history records it as text."""
+
+    # Back to a draft holding no dates; the department picks new ones and submits again.
+    RESCHEDULE = "reschedule"
+    CANCEL = "cancel"
 
 
 class EventRequestType(str, enum.Enum):
@@ -1150,17 +1203,43 @@ class EventRequests(Base):
         ForeignKeyConstraint(
             ["department_id"], ["departments.id"], name="fk_event_requests_department", ondelete="RESTRICT"
         ),
-        ForeignKeyConstraint(["created_by"], ["members.id"], name="fk_event_requests_created_by", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["requested_by"], ["members.id"], name="fk_event_requests_requested_by", ondelete="RESTRICT"
+        ),
         ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_event_requests_event", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["department_action_id"], ["actions.id"], name="fk_event_requests_department_action", ondelete="SET NULL"
+        ),
+        ForeignKeyConstraint(
+            ["member_action_id"], ["actions.id"], name="fk_event_requests_member_action", ondelete="SET NULL"
+        ),
+        ForeignKeyConstraint(
+            ["submitted_by"], ["members.id"], name="fk_event_requests_submitted_by", ondelete="SET NULL"
+        ),
+        ForeignKeyConstraint(
+            ["returned_by"], ["members.id"], name="fk_event_requests_returned_by", ondelete="SET NULL"
+        ),
+        ForeignKeyConstraint(
+            ["published_by"], ["members.id"], name="fk_event_requests_published_by", ondelete="SET NULL"
+        ),
+        ForeignKeyConstraint(
+            ["cancelled_by"], ["members.id"], name="fk_event_requests_cancelled_by", ondelete="SET NULL"
+        ),
         CheckConstraint("end_date >= start_date", name="ck_event_requests_dates"),
         Index("ix_event_requests_dates", "start_date", "end_date"),
         Index("ix_event_requests_department_stage", "department_id", "stage"),
         Index("ix_event_requests_stage", "stage"),
+        Index("fk_event_requests_department_action", "department_action_id"),
+        Index("fk_event_requests_member_action", "member_action_id"),
+        Index("fk_event_requests_requested_by", "requested_by"),
+        Index("fk_event_requests_submitted_by", "submitted_by"),
+        Index("fk_event_requests_returned_by", "returned_by"),
+        Index("fk_event_requests_published_by", "published_by"),
+        Index("fk_event_requests_cancelled_by", "cancelled_by"),
     )
 
     id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
     department_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
-    created_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
     stage: Mapped[EventRequestStage] = mapped_column(
         _enum(EventRequestStage), nullable=False, server_default=text("'draft'")
     )
@@ -1186,24 +1265,42 @@ class EventRequests(Base):
     registration: Mapped[Optional[EventRequestRegistration]] = mapped_column(_enum(EventRequestRegistration))
     expected_accepted: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     help_needed: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    # The points tier: one of the (department action, member action) pairs from
+    # ``app/DB/actions.py``, picked by the requesting team. The event is created with it.
+    department_action_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    member_action_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
-    )
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     )
+    # Who did each step, and when. Each team's task records who marked its part
+    # done (``done_by``/``done_at``), and ``pipeline_history`` keeps every step,
+    # edit and automatic change in order.
+    requested_by: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    requested_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
     submitted_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    submitted_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    published_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    published_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    cancelled_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    cancelled_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
 
     # Design can return a request once, within two days of receiving it; the team then has 12 hours.
     returned_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    returned_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     return_count: Mapped[int] = mapped_column(TINYINT(unsigned=True), nullable=False, server_default=text("'0'"))
     return_notes: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     return_due_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
     department: Mapped["Departments"] = relationship("Departments")
-    creator: Mapped["Members"] = relationship("Members")
+    requester: Mapped["Members"] = relationship("Members", foreign_keys=[requested_by])
+    submitter: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[submitted_by])
+    returner: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[returned_by])
+    publisher: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[published_by])
+    canceller: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[cancelled_by])
     partners: Mapped[list["EventRequestPartners"]] = relationship(
         "EventRequestPartners", passive_deletes=True, cascade="all, delete-orphan"
     )
@@ -1239,16 +1336,20 @@ class EventRequestTaskStatus(str, enum.Enum):
 
 
 class EventRequestTasks(Base):
-    """One team's part of a request: its brief (JSON, versioned by a Pydantic model in code) and its progress."""
+    """One team's part of a request: its brief, what the team hands over, and its progress.
+
+    The brief is what the requesting team asks for, the deliverable what the
+    team hands back (Logistics' confirmation, Design's poster). Both are JSON,
+    versioned by a Pydantic model in code (``event_briefs``, ``event_deliverables``).
+    """
 
     __tablename__ = "event_request_tasks"
     __table_args__ = (
         ForeignKeyConstraint(
             ["request_id"], ["event_requests.id"], name="fk_event_request_tasks_request", ondelete="CASCADE"
         ),
-        ForeignKeyConstraint(
-            ["completed_by"], ["members.id"], name="fk_event_request_tasks_completed_by", ondelete="RESTRICT"
-        ),
+        ForeignKeyConstraint(["done_by"], ["members.id"], name="fk_event_request_tasks_done_by", ondelete="RESTRICT"),
+        Index("fk_event_request_tasks_done_by", "done_by"),
         Index("uq_event_request_tasks_team", "request_id", "team", unique=True),
         Index("ix_event_request_tasks_team_status", "team", "status"),
     )
@@ -1261,11 +1362,22 @@ class EventRequestTasks(Base):
     )
     brief: Mapped[Optional[dict]] = mapped_column(JSON)
     brief_version: Mapped[Optional[int]] = mapped_column(SMALLINT(unsigned=True))
+    deliverable: Mapped[Optional[dict]] = mapped_column(JSON)
+    deliverable_version: Mapped[Optional[int]] = mapped_column(SMALLINT(unsigned=True))
     opened_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
-    completed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
-    completed_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    # Who marked this team's part done, and when.
+    done_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    done_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    # Design's card on the team's Notion board (app/services/pipeline_notion.py).
+    # ``notion_sync_pending`` is set in the same transaction as every change the
+    # card should show; the sync after commit (or the sweep) clears it.
+    notion_page_id: Mapped[Optional[str]] = mapped_column(String(36))
+    notion_page_url: Mapped[Optional[str]] = mapped_column(String(255))
+    notion_sync_pending: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    notion_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    notion_error: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
 
-    completer: Mapped[Optional["Members"]] = relationship("Members")
+    done_by_member: Mapped[Optional["Members"]] = relationship("Members")
 
 
 class PipelineNotificationKind(str, enum.Enum):
@@ -1276,6 +1388,11 @@ class PipelineNotificationKind(str, enum.Enum):
     TASK_DONE = "task_done"
     MEDIA_RECEIVED = "media_received"
     READY_TO_PUBLISH = "ready_to_publish"
+    DATES_CHANGED = "dates_changed"
+    OVERRIDDEN = "overridden"
+    CANCELLED = "cancelled"
+    # Logistics confirmed the event with another time, place or detail than the one requested, but the same dates.
+    CONFIRMATION_CHANGED = "confirmation_changed"
 
 
 class PipelineNotifications(Base):
@@ -1328,6 +1445,115 @@ class PipelineNotificationReads(Base):
     )
 
 
+class PipelineHistoryAction(str, enum.Enum):
+    """Everything that can happen to a request (or to the calendar), as ``pipeline_history`` records it."""
+
+    BOOKED = "booked"
+    REDATED = "redated"
+    DETAILS_EDITED = "details_edited"
+    BRIEF_EDITED = "brief_edited"
+    SUBMITTED = "submitted"
+    RETURNED = "returned"
+    RESUBMITTED = "resubmitted"
+    CANCELLED = "cancelled"
+    CONFIRMATION_EDITED = "confirmation_edited"
+    DATES_MOVED = "dates_moved"
+    POSTER_UPLOADED = "poster_uploaded"
+    TASK_DONE = "task_done"
+    PUBLISHED = "published"
+    HOLD_EXPIRED = "hold_expired"
+    DATES_BANNED = "dates_banned"
+    PENALTY_GROWN = "penalty_grown"
+    DAYS_BANNED = "days_banned"
+    DAYS_UNBANNED = "days_unbanned"
+    EVENT_DELETED = "event_deleted"
+    OVERRIDDEN = "overridden"
+    REQUEST_DELETED = "request_deleted"
+    BLOCK_EDITED = "block_edited"
+
+
+class PipelineHistory(Base):
+    """Who did what to a request, and when: one row per step, edit or automatic change, never updated after.
+
+    ``actor_id`` is null for what the sweep did on its own. Calendar-wide
+    actions (banning days) have no request. ``request_id`` has no foreign key
+    on purpose: deleting a published event deletes its request, and its history
+    must outlive it, so the id stays, with the title and department copied in. Saving a form as you type would be a
+    row per keystroke pause, so consecutive edits of the same thing by the same
+    person within 30 minutes are one row, its time the last edit's.
+    """
+
+    __tablename__ = "pipeline_history"
+    __table_args__ = (
+        ForeignKeyConstraint(["actor_id"], ["members.id"], name="fk_pipeline_history_actor", ondelete="SET NULL"),
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_pipeline_history_department", ondelete="SET NULL"
+        ),
+        Index("ix_pipeline_history_request", "request_id", "at"),
+        Index("ix_pipeline_history_actor", "actor_id", "at"),
+        Index("fk_pipeline_history_department", "department_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    request_id: Mapped[Optional[str]] = mapped_column(UUID_CHAR)
+    actor_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    action: Mapped[PipelineHistoryAction] = mapped_column(_enum(PipelineHistoryAction), nullable=False)
+    at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSON)
+    request_title: Mapped[Optional[str]] = mapped_column(
+        VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
+    )
+    department_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+
+    actor: Mapped[Optional["Members"]] = relationship("Members")
+
+
+class EventHistoryAction(str, enum.Enum):
+    """What an admin did to an event from /events, as ``event_history`` records it."""
+
+    CREATED = "created"
+    EDITED = "edited"
+    STATUS_CHANGED = "status_changed"
+    MEETING_URL_CHANGED = "meeting_url_changed"
+    CONTENT_LINK_CHANGED = "content_link_changed"
+    DELETED = "deleted"
+    ATTENDANCE_MARKED = "attendance_marked"
+    ATTENDANCE_SCANNED = "attendance_scanned"
+    ATTENDANCE_BACKFILLED = "attendance_backfilled"
+    ATTENDANCE_REMOVED = "attendance_removed"
+    SUBMISSIONS_REVIEWED = "submissions_reviewed"
+    FORM_UPDATED = "form_updated"
+    FORM_ATTACHED = "form_attached"
+    FORM_DETACHED = "form_detached"
+
+
+class EventHistory(Base):
+    """Who did what to an event from /events, and when: one row per change, never updated after.
+
+    Members registering or attending on their own leave their own rows
+    (submissions, logs); this is for what admins do. ``event_id`` has no
+    foreign key on purpose, so the history outlives a deleted event, with its
+    name copied in. A pipeline event's earlier steps are in ``pipeline_history``.
+    """
+
+    __tablename__ = "event_history"
+    __table_args__ = (
+        ForeignKeyConstraint(["actor_id"], ["members.id"], name="fk_event_history_actor", ondelete="SET NULL"),
+        Index("ix_event_history_event", "event_id", "at"),
+        Index("ix_event_history_actor", "actor_id", "at"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    event_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    actor_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    action: Mapped[EventHistoryAction] = mapped_column(_enum(EventHistoryAction), nullable=False)
+    at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSON)
+    event_name: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+
+    actor: Mapped[Optional["Members"]] = relationship("Members")
+
+
 class PipelinePenalties(Base):
     """Points a department loses for fixing a returned request late.
 
@@ -1361,6 +1587,75 @@ class PipelinePenalties(Base):
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     )
     applied_log_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+
+
+class PipelineCalendarEntries(Base):
+    """A request's entry on the team's Google Calendar (``app/services/pipeline_calendar.py``).
+
+    ``sync_pending`` is set in the same transaction as every change the entry
+    should show; the sync after commit (or the sweep) clears it. ``request_id``
+    has no foreign key: deleting a published event deletes its request, and
+    this row has to outlive it so the entry still comes off the calendar.
+    """
+
+    __tablename__ = "pipeline_calendar_entries"
+    __table_args__ = (
+        Index("uq_pipeline_calendar_entries_request", "request_id", unique=True),
+        Index("ix_pipeline_calendar_entries_pending", "sync_pending"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    request_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    sync_pending: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    error: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+
+
+class EventContentLinks(Base):
+    """Links an event's content (slides, recordings) on the public event page.
+
+    Members upload to Google Drive / YouTube themselves; the admin pastes the
+    URL here with a display `label`, so the Drive filename behind the link is
+    never rendered to members. `drive_file_id` is reserved for the Phase 2
+    drag-drop Drive upload - this table is its landing spot.
+    """
+
+    __tablename__ = "event_content_links"
+    __table_args__ = (
+        # Two links of one event never share a name - members pick by label, so
+        # the names must differ. The columns' utf8mb4_0900_ai_ci collation makes
+        # this case- AND accent-insensitive. The API pre-checks for a friendlier
+        # 409; this index is the race-proof backstop. Its leading event_id is
+        # also the backing index the event FK rides on, so no separate one.
+        Index("uq_event_content_links_event_label", "event_id", "label", unique=True),
+        ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_event_content_links_event", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["created_by"], ["members.id"], name="fk_event_content_links_created_by", ondelete="SET NULL"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    event_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    label: Mapped[str] = mapped_column(VARCHAR(200, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
+    url: Mapped[str] = mapped_column(VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
+    kind: Mapped[EventsContentLinkKind] = mapped_column(
+        Enum(EventsContentLinkKind, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    )
+    # Reserved for Phase 2; stays NULL until the Drive upload flow exists.
+    drive_file_id: Mapped[Optional[str]] = mapped_column(
+        VARCHAR(255, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
+    )
+    published: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    created_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+
+    if TYPE_CHECKING:
+        # Transient, never a column: the canonical public direct-download URL,
+        # derived at read time (app/DB/events.py drive_download_url) and not
+        # settable through the API.
+        download_url: Optional[str]
 
 
 # =============================================================================

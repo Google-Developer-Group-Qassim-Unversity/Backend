@@ -18,7 +18,7 @@ from enum import Enum
 
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.DB import pipeline_teams as team_queries
 from app.DB import departments as department_queries
@@ -26,6 +26,8 @@ from app.DB import event_pipeline as queries
 from app.DB import actions as action_queries
 from app.DB import logs as log_queries
 from app.DB.schema import (
+    BookingBlocks,
+    BumpOutcome,
     Departments,
     EventsLocationType,
     EventRequests,
@@ -33,14 +35,21 @@ from app.DB.schema import (
     EventRequestTasks,
     EventRequestTaskStatus,
     EventRequestUndatedReason,
+    PipelineHistoryAction,
     PipelineNotificationKind,
     PipelinePenalties,
     PipelineTeam,
 )
+from app.config import config
 from app.exceptions import DepartmentForbidden, IncompleteRequest, NotFound, PipelineConflict
 from app.routers.models import Events_model, createEvent_model
 from app.services import event_briefs
+from app.services import event_deliverables
 from app.services import event_pipeline_clock as clock
+from app.services import google_meet
+from app.services import pipeline_history as history
+from app.services import pipeline_calendar
+from app.services import pipeline_notion as notion
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail
 from app.services.permissions.catalogue import Perm
@@ -77,7 +86,7 @@ class DayStatus(str, Enum):
 class CalendarDay:
     date: date
     status: DayStatus
-    reason: str | None = None
+    block: BookingBlocks | None = None
     requests: list[EventRequests] = field(default_factory=list)
 
 
@@ -130,7 +139,7 @@ def calendar(session: Session, start: date, end: date) -> list[CalendarDay]:
     for day in days_between(start, end):
         on_day = [r for r in taking if r.start_date <= day <= r.end_date]  # type: ignore[operator]
         if day in bans:
-            days.append(CalendarDay(day, DayStatus.BANNED, bans[day].reason, on_day))
+            days.append(CalendarDay(day, DayStatus.BANNED, bans[day].block, on_day))
         elif on_day:
             status = min((_day_status_for(r) for r in on_day), key=_PRIORITY.index)
             days.append(CalendarDay(day, status, None, on_day))
@@ -199,25 +208,49 @@ def _check_ban_days(days: list[date]) -> list[date]:
     return unique
 
 
-def ban(
-    session: Session, caller: Caller, days: list[date], reason: str | None
-) -> tuple[list[date], list[EventRequests]]:
-    """Close ``days`` and take them away from every request covering one of them.
+def ban(session: Session, caller: Caller, days: list[date], reason: str) -> tuple[BookingBlocks, list[EventRequests]]:
+    """Close ``days`` as one block, and take them away from every request covering one of them.
 
-    That applies at any stage before publish: the request keeps everything
-    else, loses its dates and says why. Returns the days and the requests that
-    lost their dates, so the caller can tell their teams.
+    A day already closed moves to the new block. Taking the days applies at any
+    stage before publish: the request keeps everything else, loses its dates
+    and says why. Returns the block and the requests that lost their dates, so
+    the caller can tell their teams.
     """
     caller.access.require(Perm.PIPELINE_BANS)
     unique = _check_ban_days(days)
-    queries.ban_days(session, unique, reason, caller.member.id)
+    reason = reason.strip()
+    if not reason:
+        raise PipelineConflict("no_reason", "Say why these days are closed", 422)
+    block = queries.block_days(session, unique, reason, caller.member.id)
+    history.record(
+        session,
+        PipelineHistoryAction.DAYS_BANNED,
+        caller.member,
+        details={"dates": [d.isoformat() for d in unique], "reason": reason, "block_id": block.id},
+    )
+    undated = _undate_requests_on(session, caller, unique, reason)
+    logger.info(
+        "Block %s closed %d day(s) from %s to %s; %d request(s) lost their dates",
+        block.id,
+        len(unique),
+        unique[0],
+        unique[-1],
+        len(undated),
+    )
+    return block, undated
+
+
+def _undate_requests_on(session: Session, caller: Caller, days: list[date], reason: str) -> list[EventRequests]:
     undated = []
-    for request in queries.get_dated_requests(session, unique[0], unique[-1], lock=True):
+    for request in queries.get_dated_requests(session, days[0], days[-1], lock=True):
         if request.stage == EventRequestStage.PUBLISHED:
             continue
-        if any(request.start_date <= day <= request.end_date for day in unique):  # type: ignore[operator]
+        if any(request.start_date <= day <= request.end_date for day in days):  # type: ignore[operator]
             lost = {"start_date": request.start_date.isoformat(), "end_date": request.end_date.isoformat()}  # type: ignore[union-attr]
             _undate(request, EventRequestUndatedReason.DAY_BANNED)
+            history.record(
+                session, PipelineHistoryAction.DATES_BANNED, caller.member, request, {**lost, "reason": reason}
+            )
             notifications.notify(
                 session,
                 request.department_id,
@@ -225,22 +258,69 @@ def ban(
                 PipelineNotificationKind.DATES_BANNED,
                 {**lost, "reason": reason},
             )
+            notion.mark(session, request)
+            pipeline_calendar.mark(session, request)
             undated.append(request)
-    logger.info(
-        "Banned %d day(s) from %s to %s; %d request(s) lost their dates",
-        len(unique),
-        unique[0],
-        unique[-1],
-        len(undated),
-    )
-    return unique, undated
+    return undated
 
 
 def unban(session: Session, caller: Caller, days: list[date]) -> int:
+    """Reopen single days, whichever blocks they are in. A block left with no days goes."""
     caller.access.require(Perm.PIPELINE_BANS)
     unique = _check_ban_days(days)
     removed = queries.unban_days(session, unique)
+    history.record(
+        session, PipelineHistoryAction.DAYS_UNBANNED, caller.member, details={"dates": [d.isoformat() for d in unique]}
+    )
     logger.info("Unbanned %d day(s)", removed)
+    return removed
+
+
+def get_block(session: Session, block_id: str) -> BookingBlocks:
+    block = queries.get_block(session, block_id, lock=True)
+    if block is None:
+        raise NotFound("Booking block", block_id)
+    return block
+
+
+def edit_block(session: Session, caller: Caller, block: BookingBlocks, reason: str) -> None:
+    """Change why a block's days are closed. The days stay as they are."""
+    caller.access.require(Perm.PIPELINE_BANS)
+    reason = reason.strip()
+    if not reason:
+        raise PipelineConflict("no_reason", "Say why these days are closed", 422)
+    history.record(
+        session,
+        PipelineHistoryAction.BLOCK_EDITED,
+        caller.member,
+        details={"block_id": block.id, "from": block.reason, "to": reason},
+    )
+    block.reason = reason
+    session.flush()
+
+
+def remove_block(session: Session, caller: Caller, block: BookingBlocks) -> int:
+    """Reopen every day of a block. Past days stay closed: they are the record of what was closed.
+
+    Requests that lost a day to it do not get it back.
+    """
+    caller.access.require(Perm.PIPELINE_BANS)
+    today = clock.today()
+    future = [ban.date for ban in block.days if ban.date >= today]
+    if not future:
+        raise PipelineConflict("day_in_past", "Every day of this block is in the past", 422)
+    if len(future) < len(block.days):
+        removed = queries.unban_days(session, future)
+    else:
+        removed = len(block.days)
+        queries.delete_block(session, block)
+    history.record(
+        session,
+        PipelineHistoryAction.DAYS_UNBANNED,
+        caller.member,
+        details={"dates": [d.isoformat() for d in future], "block_id": block.id, "reason": block.reason},
+    )
+    logger.info("Block %s: reopened %d day(s)", block.id, removed)
     return removed
 
 
@@ -270,22 +350,117 @@ def booking_lock(session: Session):
     yield
 
 
-def _check_bookable(session: Session, caller: Caller, start: date, end: date, ignore_id: str | None) -> None:
-    """Super admins have full authority: they skip every rule here but a sane range."""
-    if caller.access.is_super_admin:
-        check_range(start, end, MAX_CALENDAR_DAYS)
-        return
+def overlapping(
+    session: Session, start: date, end: date, ignore_id: str | None = None, lock: bool = False
+) -> list[EventRequests]:
+    """The requests holding any of ``start``..``end`` right now."""
+    now = clock.now()
+    return [
+        r
+        for r in queries.get_dated_requests(session, start, end, lock=lock)
+        if r.id != ignore_id and takes_its_days(r, now)
+    ]
+
+
+def _check_bookable(
+    session: Session,
+    caller: Caller,
+    start: date,
+    end: date,
+    ignore_id: str | None,
+    bumps: dict[str, BumpOutcome] | None = None,
+) -> list[EventRequests]:
+    """Whether ``start``..``end`` can be booked; returns the requests to bump off them.
+
+    The length and the lockout bind everyone. A super admin may book a banned
+    day, and may book over other requests when ``bumps`` says what happens to
+    each one of them (``None``: this change cannot bump, so a taken day is
+    refused). A published event is never bumped.
+    """
     check_range(start, end, MAX_BOOKING_DAYS)
     if start < first_bookable_day():
         raise PipelineConflict(
             "day_locked", f"The first day you can book is {first_bookable_day().isoformat()}", status_code=409
         )
-    if queries.get_bans(session, start, end, lock=True):
+    super_admin = caller.access.is_super_admin
+    if not super_admin and queries.get_bans(session, start, end, lock=True):
         raise PipelineConflict("day_banned", "Logistics closed one of these days")
-    now = clock.now()
-    for request in queries.get_dated_requests(session, start, end, lock=True):
-        if request.id != ignore_id and takes_its_days(request, now):
-            raise PipelineConflict("day_taken", "One of these days is already taken")
+    taking = overlapping(session, start, end, ignore_id, lock=True)
+    if not taking:
+        return []
+    if not super_admin or bumps is None:
+        raise PipelineConflict("day_taken", "One of these days is already taken")
+    if any(r.stage == EventRequestStage.PUBLISHED for r in taking):
+        raise PipelineConflict("day_published", "A published event is on one of these days")
+    if set(bumps) != {r.id for r in taking}:
+        raise PipelineConflict(
+            "overlap_undecided", "Other requests hold these days; choose what happens to each of them"
+        )
+    return taking
+
+
+def bump(
+    session: Session, caller: Caller, request: EventRequests, outcome: BumpOutcome, by: EventRequests
+) -> PendingEmail | None:
+    """A super admin booked ``by`` over ``request``'s days: reschedule or cancel it, and tell its department.
+
+    Rescheduling sends it back to a draft holding no dates, whatever stage it
+    reached. Its details and briefs stay; the teams' parts go back to briefs
+    and Logistics' confirmation, made for the old dates, is dropped. The
+    department books new dates and submits again.
+    """
+    lost = {"start_date": request.start_date.isoformat(), "end_date": request.end_date.isoformat()}  # type: ignore[union-attr]
+    details = {**lost, "outcome": outcome.value, "by_request_id": by.id, "by_department_id": by.department_id}
+    history.record(session, PipelineHistoryAction.OVERRIDDEN, caller.member, request, details)
+    notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
+    if outcome == BumpOutcome.CANCEL:
+        request.stage = EventRequestStage.CANCELLED
+        # A cancelled request holds no dates; the lost ones are in its history.
+        request.start_date = None
+        request.end_date = None
+        request.day_modes = None
+        request.hold_expires_at = None
+        request.return_due_at = None
+        request.cancelled_at = clock.now()
+        request.cancelled_by = caller.member.id
+    else:
+        request.stage = EventRequestStage.DRAFT
+        request.return_due_at = None
+        _undate(request, EventRequestUndatedReason.OVERRIDDEN)
+        for task in request.tasks:
+            task.status = EventRequestTaskStatus.BRIEF
+            task.opened_at = None
+            task.done_at = None
+            task.done_by = None
+            if task.team == PipelineTeam.LOGISTICS:
+                task.deliverable = None
+                task.deliverable_version = None
+    notifications.notify(session, request.department_id, request, PipelineNotificationKind.OVERRIDDEN, details)
+    session.flush()
+    logger.info("Request %s bumped (%s) by request %s", request.id, outcome.value, by.id)
+    return notifications.department_email(
+        session,
+        request.department_id,
+        request,
+        PipelineNotificationKind.OVERRIDDEN,
+        caller.member,
+        _BUMP_NOTES[outcome].format(start=lost["start_date"], end=lost["end_date"]),
+    )
+
+
+_BUMP_NOTES = {
+    BumpOutcome.RESCHEDULE: (
+        "حجز مشرف عام تواريخكم ({start} → {end}) لفعالية أخرى. عاد طلبكم مسودة بلا تواريخ، وكل بياناته محفوظة؛ "
+        "احجزوا تواريخ جديدة ثم أرسلوه من جديد.\n"
+        "A super admin booked your dates ({start} → {end}) for another event. Your request is a draft again with "
+        "no dates, everything in it kept; book new dates and submit it again."
+    ),
+    BumpOutcome.CANCEL: (
+        "حجز مشرف عام تواريخكم ({start} → {end}) لفعالية أخرى، وأُلغي طلبكم.\n"
+        "A super admin booked your dates ({start} → {end}) for another event, and your request was cancelled."
+    ),
+}
 
 
 def _check_one_live_hold(session: Session, department_id: int, ignore_id: str | None = None) -> None:
@@ -298,17 +473,26 @@ def _check_one_live_hold(session: Session, department_id: int, ignore_id: str | 
         )
 
 
-def book(session: Session, caller: Caller, department_id: int, start: date, end: date) -> EventRequests:
-    """Create a draft holding ``start``..``end`` for 24 hours. Call inside ``booking_lock``."""
+def book(
+    session: Session,
+    caller: Caller,
+    department_id: int,
+    start: date,
+    end: date,
+    bumps: dict[str, BumpOutcome] | None = None,
+) -> tuple[EventRequests, list[EventRequests], list[PendingEmail | None]]:
+    """Create a draft holding ``start``..``end`` for 24 hours. Call inside ``booking_lock``.
+
+    Returns the request, the requests it bumped (see ``bump``) and their emails.
+    """
     require_request_for(caller, department_id)
     if session.get(Departments, department_id) is None:
         raise NotFound("Department", department_id)
-    if not caller.access.is_super_admin:
-        _check_one_live_hold(session, department_id)
-    _check_bookable(session, caller, start, end, None)
+    _check_one_live_hold(session, department_id)
+    bumped = _check_bookable(session, caller, start, end, None, bumps or {})
     request = EventRequests(
         department_id=department_id,
-        created_by=caller.member.id,
+        requested_by=caller.member.id,
         stage=EventRequestStage.DRAFT,
         start_date=start,
         end_date=end,
@@ -316,15 +500,32 @@ def book(session: Session, caller: Caller, department_id: int, start: date, end:
     )
     session.add(request)
     session.flush()
+    history.record(
+        session,
+        PipelineHistoryAction.BOOKED,
+        caller.member,
+        request,
+        {"start_date": start.isoformat(), "end_date": end.isoformat()},
+    )
+    pipeline_calendar.mark(session, request)
     logger.info("Request %s booked %s..%s for department %s", request.id, start, end, department_id)
-    return request
+    emails = [bump(session, caller, r, (bumps or {})[r.id], request) for r in bumped]
+    return request, bumped, emails
 
 
-def redate(session: Session, caller: Caller, request: EventRequests, start: date, end: date) -> None:
+def redate(
+    session: Session,
+    caller: Caller,
+    request: EventRequests,
+    start: date,
+    end: date,
+    bumps: dict[str, BumpOutcome] | None = None,
+) -> tuple[list[EventRequests], list[PendingEmail | None]]:
     """Give a request that lost its dates new ones. Call inside ``booking_lock``.
 
     A draft gets a fresh 24-hour hold. A submitted request that lost its days
-    to a ban takes the new ones outright, as its old ones were.
+    to a ban takes the new ones outright, as its old ones were. Returns the
+    requests it bumped (see ``bump``) and their emails.
     """
     require_request_for(caller, request.department_id)
     if request.stage in (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED):
@@ -332,9 +533,19 @@ def redate(session: Session, caller: Caller, request: EventRequests, start: date
     if takes_its_days(request, clock.now()) and not caller.access.is_super_admin:
         raise PipelineConflict("still_held", "This request still holds its dates")
     is_draft = request.stage == EventRequestStage.DRAFT
-    if is_draft and not caller.access.is_super_admin:
+    if is_draft:
         _check_one_live_hold(session, request.department_id, ignore_id=request.id)
-    _check_bookable(session, caller, start, end, request.id)
+    bumped = _check_bookable(session, caller, start, end, request.id, bumps or {})
+    history.record(
+        session,
+        PipelineHistoryAction.REDATED,
+        caller.member,
+        request,
+        {
+            "from": [d.isoformat() if d else None for d in (request.start_date, request.end_date)],
+            "to": [start.isoformat(), end.isoformat()],
+        },
+    )
     request.start_date = start
     request.end_date = end
     request.hold_expires_at = clock.now() + HOLD if is_draft else None
@@ -343,20 +554,90 @@ def redate(session: Session, caller: Caller, request: EventRequests, start: date
     if request.day_modes:
         kept = {d.isoformat() for d in days_between(start, end)}
         request.day_modes = {k: v for k, v in request.day_modes.items() if k in kept} or None
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s re-dated to %s..%s", request.id, start, end)
+    return bumped, [bump(session, caller, r, (bumps or {})[r.id], request) for r in bumped]
 
 
-def cancel(session: Session, caller: Caller, request: EventRequests) -> None:
-    """A team drops its own draft. Its dates, if it still held any, are free again."""
+def can_cancel(caller: Caller, request: EventRequests) -> bool:
+    """The requesting department (and a super admin) can drop a request at any stage before it is published."""
+    return can_request_for(caller, request.department_id) and request.stage not in (
+        EventRequestStage.PUBLISHED,
+        EventRequestStage.CANCELLED,
+    )
+
+
+def cancel(session: Session, caller: Caller, request: EventRequests) -> list[PendingEmail | None]:
+    """Drop a request, wherever it is in the pipeline.
+
+    It gives up its dates, so the days are free again, and stops every team's
+    work on it: each team it had reached is told, and Design's Notion card says
+    it was cancelled. It stays readable until someone deletes it for good.
+    Returns the teams' emails, to send once this commits.
+    """
     require_request_for(caller, request.department_id)
-    if request.stage != EventRequestStage.DRAFT and not (
-        caller.access.is_super_admin and request.stage != EventRequestStage.PUBLISHED
-    ):
-        raise PipelineConflict("not_a_draft", "Only a draft can be cancelled")
+    if not can_cancel(caller, request):
+        raise PipelineConflict("not_cancellable", f"A {request.stage.value} request cannot be cancelled")
+    was = request.stage
+    dates = [d.isoformat() if d else None for d in (request.start_date, request.end_date)]
     request.stage = EventRequestStage.CANCELLED
+    request.start_date = None
+    request.end_date = None
     request.hold_expires_at = None
+    request.day_modes = None
+    request.return_due_at = None
+    request.cancelled_at = clock.now()
+    request.cancelled_by = caller.member.id
+    history.record(
+        session, PipelineHistoryAction.CANCELLED, caller.member, request, {"stage": was.value, "dates": dates}
+    )
+    # The requesting department (a super admin may have cancelled it) and every team it had reached.
+    teams = team_queries.get_teams(session)
+    told: dict[int, str | None] = {request.department_id: None}
+    for task in request.tasks:
+        if task.status != EventRequestTaskStatus.BRIEF and task.team in teams:
+            told.setdefault(teams[task.team].id, task.team.value)
+    emails = []
+    note = f"{dates[0]} → {dates[1]}" if dates[0] else None
+    for department_id, team in told.items():
+        notifications.notify(
+            session, department_id, request, PipelineNotificationKind.CANCELLED, {"team": team} if team else None
+        )
+        if team is not None:
+            emails.append(
+                notifications.department_email(
+                    session, department_id, request, PipelineNotificationKind.CANCELLED, caller.member, note
+                )
+            )
+    notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
+    logger.info("Request %s cancelled at %s by member %s", request.id, was.value, caller.member.id)
+    return emails
+
+
+def can_delete(caller: Caller, request: EventRequests) -> bool:
+    return request.stage == EventRequestStage.CANCELLED and can_request_for(caller, request.department_id)
+
+
+def delete(session: Session, caller: Caller, request: EventRequests) -> str | None:
+    """Delete a cancelled request for good. Its history stays, with this as the last entry.
+
+    Returns the id of Design's Notion card, if it had one, to move to the trash
+    once this commits.
+    """
+    require_request_for(caller, request.department_id)
+    if not can_delete(caller, request):
+        raise PipelineConflict("not_cancelled", "Only a cancelled request can be deleted; cancel it first")
+    design = get_task(request, PipelineTeam.DESIGN)
+    page_id = design.notion_page_id if design else None
+    history.record(session, PipelineHistoryAction.REQUEST_DELETED, caller.member, request)
+    # Cancelling took its entry off already; this only matters if that write is still pending.
+    pipeline_calendar.mark(session, request)
+    queries.delete_request(session, request)
+    logger.info("Request %s deleted by member %s", request.id, caller.member.id)
+    return page_id
 
 
 # --------------------------------------------------------------------------- details
@@ -366,9 +647,7 @@ EDITABLE_STAGES = {EventRequestStage.DRAFT, EventRequestStage.RETURNED}
 
 
 def can_edit(caller: Caller, request: EventRequests) -> bool:
-    """The team edits its draft; a super admin edits anything not yet published."""
-    if caller.access.is_super_admin:
-        return request.stage not in (EventRequestStage.PUBLISHED, EventRequestStage.CANCELLED)
+    """The team edits its draft, or its request Design returned. Once submitted, the teams work from it as it is."""
     return can_request_for(caller, request.department_id) and request.stage in EDITABLE_STAGES
 
 
@@ -396,6 +675,8 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
     for key in ("is_official",):
         if key in fields and fields[key] is not None:
             fields[key] = int(fields[key])
+    if fields.get("department_action_id") is not None or fields.get("member_action_id") is not None:
+        check_points_tier(session, fields.get("department_action_id"), fields.get("member_action_id"))
     for key, value in fields.items():
         setattr(request, key, value)
     if partners is not None:
@@ -404,7 +685,16 @@ def update_details(session: Session, caller: Caller, request: EventRequests, fie
         if not set(partners) <= {d.id for d in partner_options(session)}:
             raise PipelineConflict("partner_not_this_semester", "A partner must be a department of this semester", 422)
         queries.set_partners(session, request, partners)
+    history.record(session, PipelineHistoryAction.DETAILS_EDITED, caller.member, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
+
+
+def check_points_tier(session: Session, department_action_id: int | None, member_action_id: int | None) -> None:
+    """A points tier is one of the pairs ``GET /actions`` offers as composite actions, both halves together."""
+    pairs = {(d.id, m.id) for d, m in action_queries.get_composite_pairs(session)}
+    if (department_action_id, member_action_id) not in pairs:
+        raise PipelineConflict("not_a_points_tier", "Pick one of the points tiers", 422)
 
 
 def within_official_hours(request: EventRequests) -> bool | None:
@@ -421,8 +711,9 @@ def within_official_hours(request: EventRequests) -> bool | None:
 
 
 def get_request_for(session: Session, caller: Caller, request_id: str, lock: bool = False) -> EventRequests:
+    """A cancelled request still reads, read-only, until it is deleted."""
     request = queries.get_request(session, request_id, lock=lock)
-    if request is None or request.stage == EventRequestStage.CANCELLED:
+    if request is None:
         raise NotFound("Event request", request_id)
     if not can_view(session, caller, request):
         raise DepartmentForbidden(request.department_id, "see requests of")
@@ -447,6 +738,31 @@ def visible_department_ids(session: Session, caller: Caller) -> set[int] | None:
         return None
     teams = {d.id for team, d in team_queries.get_teams(session).items() if caller.access.can(TEAM_PERMS[team])}
     return set(requesting) | teams
+
+
+def own_department_ids(caller: Caller) -> set[int]:
+    """The departments the caller requests for as themselves, through their own roster.
+
+    Everyone but a super admin: the same as ``visible_department_ids`` without
+    the team departments. A super admin can request for every department, but
+    only these are theirs.
+    """
+    return {d for d in caller.access.roles if caller.access.holds(Perm.PIPELINE_REQUEST, d)}
+
+
+def own_teams(caller: Caller) -> list[PipelineTeam]:
+    """The teams the caller works as themselves. A super admin steps in for the rest."""
+    return [team for team in ALL_TEAMS if caller.access.holds(TEAM_PERMS[team])]
+
+
+def notified_department_ids(session: Session, caller: Caller) -> set[int] | None:
+    """Whose notifications are the caller's: what they see, except that a super admin
+    gets only their own departments' and teams'. Every department's notifications
+    reach a super admin only when they ask for the whole club."""
+    if not caller.access.is_super_admin:
+        return visible_department_ids(session, caller)
+    teams = team_queries.get_teams(session)
+    return own_department_ids(caller) | {teams[team].id for team in own_teams(caller) if team in teams}
 
 
 # --------------------------------------------------------------------------- briefs and submit
@@ -477,6 +793,8 @@ def save_brief(session: Session, caller: Caller, request: EventRequests, team: P
     task = ensure_task(session, request, team)
     task.brief = event_briefs.clean_brief(team, brief)
     task.brief_version = event_briefs.BRIEF_VERSION
+    history.record(session, PipelineHistoryAction.BRIEF_EDITED, caller.member, request, {"team": team.value})
+    pipeline_calendar.mark(session, request)
     session.flush()
 
 
@@ -489,9 +807,7 @@ def submit(session: Session, caller: Caller, request: EventRequests) -> list[Pen
     require_request_for(caller, request.department_id)
     if request.stage != EventRequestStage.DRAFT:
         raise PipelineConflict("not_a_draft", "Only a draft can be submitted")
-    if not takes_its_days(request, clock.now()) and not (
-        caller.access.is_super_admin and request.start_date is not None
-    ):
+    if not takes_its_days(request, clock.now()):
         raise PipelineConflict("hold_expired", "The hold on your dates ran out; book dates again, then submit")
     for team in BRIEF_TEAMS:
         ensure_task(session, request, team)
@@ -501,12 +817,16 @@ def submit(session: Session, caller: Caller, request: EventRequests) -> list[Pen
     now = clock.now()
     request.stage = EventRequestStage.IN_REVIEW
     request.submitted_at = now
+    request.submitted_by = caller.member.id
+    history.record(session, PipelineHistoryAction.SUBMITTED, caller.member, request)
     request.hold_expires_at = None
     request.undated_reason = None
     for team in BRIEF_TEAMS:
         task = ensure_task(session, request, team)
         task.status = EventRequestTaskStatus.OPEN
         task.opened_at = now
+    notion.mark(session, request, reopened=True)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s submitted to Design and Logistics", request.id)
     return [
@@ -541,14 +861,12 @@ def return_deadline(request: EventRequests) -> datetime | None:
 
 
 def can_return(session: Session, caller: Caller, request: EventRequests) -> bool:
-    """Design can return a request once, within two days of receiving it. Super admins any time."""
+    """Design can return a request once, within two days of receiving it."""
     if request.stage != EventRequestStage.IN_REVIEW:
         return False
     design = get_task(request, PipelineTeam.DESIGN)
     if design is None or design.status != EventRequestTaskStatus.OPEN:
         return False
-    if caller.access.is_super_admin:
-        return True
     deadline = return_deadline(request)
     return (
         caller.access.can(Perm.PIPELINE_DESIGN)
@@ -565,12 +883,16 @@ def return_request(session: Session, caller: Caller, request: EventRequests, not
     now = clock.now()
     request.stage = EventRequestStage.RETURNED
     request.returned_at = now
+    request.returned_by = caller.member.id
+    history.record(session, PipelineHistoryAction.RETURNED, caller.member, request, {"notes": notes})
     request.return_due_at = now + FIX_WINDOW
     request.return_notes = notes
     request.return_count += 1
     task = get_task(request, PipelineTeam.DESIGN)
     task.status = EventRequestTaskStatus.RETURNED  # type: ignore[union-attr]
     notifications.notify(session, request.department_id, request, PipelineNotificationKind.RETURNED, {"notes": notes})
+    notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s returned by Design", request.id)
     return notifications.department_email(
@@ -626,19 +948,27 @@ def resubmit(session: Session, caller: Caller, request: EventRequests) -> Pendin
     if missing:
         raise IncompleteRequest(missing)
     now = clock.now()
-    record_penalty(session, request, now)
+    penalty = record_penalty(session, request, now)
+    history.record(
+        session,
+        PipelineHistoryAction.RESUBMITTED,
+        caller.member,
+        request,
+        {"late_days": penalty.late_days, "points": penalty.points} if penalty else None,
+    )
     request.stage = EventRequestStage.IN_REVIEW
     request.return_due_at = None
     task = ensure_task(session, request, PipelineTeam.DESIGN)
     task.status = EventRequestTaskStatus.OPEN
     task.opened_at = now
+    notion.mark(session, request, reopened=True)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s resubmitted to Design", request.id)
     return reach_team(session, caller, request, PipelineTeam.DESIGN, PipelineNotificationKind.REQUEST_RECEIVED)
 
 
-# While the teams are working on it. A request published early by a super admin
-# can have a task left open; it stays open, and completing it changes nothing.
+# While the teams are working on it.
 WORKING_STAGES = {EventRequestStage.IN_REVIEW, EventRequestStage.RETURNED, EventRequestStage.MEDIA}
 
 
@@ -653,8 +983,7 @@ def can_complete(session: Session, caller: Caller, request: EventRequests, team:
     return caller.access.can(TEAM_PERMS[team])
 
 
-def complete(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> list[PendingEmail | None]:
-    """A team marks its part done. Design done sends the request to Media; all three done makes it ready."""
+def _require_open_task(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> None:
     if not can_complete(session, caller, request, team):
         require_team(session, caller, team)
         if request.stage not in WORKING_STAGES:
@@ -662,15 +991,236 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
                 "cannot_complete", f"The request is {request.stage.value}; there is nothing to mark done"
             )
         raise PipelineConflict("cannot_complete", f"The {team.value} part is not open")
+
+
+def save_deliverable(
+    session: Session, caller: Caller, request: EventRequests, team: PipelineTeam, deliverable: dict
+) -> None:
+    """Save Logistics' confirmation or Media's shares as a draft, while the part is open. Finishing checks it.
+
+    Design hands over its poster through its own upload instead.
+    """
+    if team not in (PipelineTeam.LOGISTICS, PipelineTeam.MEDIA):
+        raise PipelineConflict("no_form", f"The {team.value} team hands over no form", 422)
+    _require_open_task(session, caller, request, team)
+    parsed = event_deliverables.parse(team, deliverable)
+    task = get_task(request, team)
+    task.deliverable = parsed  # type: ignore[union-attr]
+    task.deliverable_version = event_deliverables.DELIVERABLE_VERSION  # type: ignore[union-attr]
+    # Media's drafts leave no history; where it shared goes on its task_done.
+    if team == PipelineTeam.LOGISTICS:
+        history.record(session, PipelineHistoryAction.CONFIRMATION_EDITED, caller.member, request)
+    session.flush()
+
+
+# --------------------------------------------------------------------------- Meet links
+
+
+def can_generate_meet(session: Session, caller: Caller, request: EventRequests) -> bool:
+    """Logistics can have a Meet link made while it is confirming, when the organizer account is set up."""
+    return config.meet_enabled and can_complete(session, caller, request, PipelineTeam.LOGISTICS)
+
+
+def meet_schedule(request: EventRequests, task: EventRequestTasks) -> google_meet.Schedule:
+    """When the confirmation says the event is: needed before a link can be made. Also needs an online day."""
+    confirmation = event_deliverables.logistics_confirmation(request, task)
+    assert confirmation is not None
+    if "online" not in (confirmation.day_modes or {}).values():
+        raise PipelineConflict("meet_not_online", "No day is online; a Meet link is only for online days", 422)
+    if not (confirmation.start_date and confirmation.end_date and confirmation.end_date >= confirmation.start_date):
+        raise PipelineConflict("meet_needs_dates", "Set the first and last day before generating a link", 422)
+    if not (confirmation.daily_start_time and confirmation.daily_end_time):
+        raise PipelineConflict("meet_needs_times", "Set the daily start and end times before generating a link", 422)
+    return google_meet.Schedule(
+        confirmation.start_date, confirmation.end_date, confirmation.daily_start_time, confirmation.daily_end_time
+    )
+
+
+def check_meet_generation(session: Session, caller: Caller, request: EventRequests) -> google_meet.Schedule:
+    """Refuse before anything is created on the calendar: Logistics, an open part, a schedule to put it on."""
+    if not config.meet_enabled:
+        raise PipelineConflict("meet_not_configured", "Generating Meet links is not set up on this server", 422)
+    _require_open_task(session, caller, request, PipelineTeam.LOGISTICS)
+    return meet_schedule(request, get_task(request, PipelineTeam.LOGISTICS))  # type: ignore[arg-type]
+
+
+def meet_title(request: EventRequests, task: EventRequestTasks | None) -> tuple[str, str | None]:
+    """The calendar event's title and description: the confirmed ones, else the request's."""
+    confirmation = event_deliverables.logistics_confirmation(request, task) if task else None
+    title = request.title or f"GDG event #{request.id[:8]}"
+    description = confirmation.description if confirmation and confirmation.description else request.description
+    return title, description
+
+
+def set_meet_link(session: Session, caller: Caller, request: EventRequests, meeting: google_meet.Meeting) -> str:
+    """Keep the generated link on the confirmation. Returns the calendar event the link replaced, if any."""
+    check_meet_generation(session, caller, request)
+    task = get_task(request, PipelineTeam.LOGISTICS)
+    confirmation = event_deliverables.logistics_confirmation(request, task)
+    assert task is not None and confirmation is not None
+    replaced = confirmation.meet_event_id or ""
+    confirmation.meet_link = meeting.meet_url
+    confirmation.meet_event_id = meeting.event_id
+    task.deliverable = confirmation.model_dump(mode="json")
+    task.deliverable_version = event_deliverables.DELIVERABLE_VERSION
+    history.record(
+        session, PipelineHistoryAction.CONFIRMATION_EDITED, caller.member, request, {"meet_link": meeting.meet_url}
+    )
+    session.flush()
+    logger.info("Request %s: Meet link %s generated by Logistics", request.id, meeting.meet_url)
+    return replaced
+
+
+def sync_meeting(request_id: str, task_deliverable: dict, title: str, description: str | None) -> None:
+    """After Logistics confirmed: move a generated link's calendar event to the confirmed times, best effort.
+
+    Runs after the commit, outside any lock; the link works whatever the
+    calendar says, so a failure is only logged.
+    """
+    confirmation = event_deliverables.LogisticsDeliverableV1.model_validate(task_deliverable)
+    if not confirmation.meet_event_id or not (
+        confirmation.start_date
+        and confirmation.end_date
+        and confirmation.daily_start_time
+        and confirmation.daily_end_time
+    ):
+        return
+    schedule = google_meet.Schedule(
+        confirmation.start_date, confirmation.end_date, confirmation.daily_start_time, confirmation.daily_end_time
+    )
+    try:
+        google_meet.update_meeting(confirmation.meet_event_id, title, description, schedule)
+    except Exception:
+        logger.exception(
+            "Request %s: could not move the Meet calendar event %s", request_id, confirmation.meet_event_id
+        )
+
+
+# Design can replace the poster until the request is published.
+POSTER_STAGES = WORKING_STAGES | {EventRequestStage.READY}
+
+
+def can_upload_poster(caller: Caller, request: EventRequests) -> bool:
+    if request.stage not in POSTER_STAGES:
+        return False
+    task = get_task(request, PipelineTeam.DESIGN)
+    if task is None or task.status == EventRequestTaskStatus.BRIEF:
+        return False
+    return caller.access.is_super_admin or caller.access.can(Perm.PIPELINE_DESIGN)
+
+
+def check_poster_upload(session: Session, caller: Caller, request: EventRequests) -> None:
+    """Refuse before anything is uploaded: Design, while the request is on its way to publish."""
+    if not can_upload_poster(caller, request):
+        require_team(session, caller, PipelineTeam.DESIGN)
+        raise PipelineConflict("cannot_upload_poster", f"The request is {request.stage.value}; its poster is final")
+
+
+def set_poster(session: Session, caller: Caller, request: EventRequests, url: str) -> None:
+    """Design's deliverable: the poster, already stored. It becomes the event's image at publish."""
+    check_poster_upload(session, caller, request)
+    task = get_task(request, PipelineTeam.DESIGN)
+    replaced = (task.deliverable or {}).get("poster_url")  # type: ignore[union-attr]
+    history.record(
+        session,
+        PipelineHistoryAction.POSTER_UPLOADED,
+        caller.member,
+        request,
+        {"poster_url": url, "replaced": replaced} if replaced else {"poster_url": url},
+    )
+    task.deliverable = {"poster_url": url}  # type: ignore[union-attr]
+    task.deliverable_version = event_deliverables.DELIVERABLE_VERSION  # type: ignore[union-attr]
+    notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
+    session.flush()
+    logger.info("Request %s: Design uploaded the poster %s", request.id, url)
+
+
+def _apply_confirmation(
+    session: Session, caller: Caller, request: EventRequests, task: EventRequestTasks
+) -> PendingEmail | None:
+    """Logistics confirms: keep what it confirmed, and move the request to the confirmed dates.
+
+    Moving the dates follows the calendar's rules, like booking them; the
+    requesting department is told. Call inside ``booking_lock``.
+    """
+    confirmation = event_deliverables.logistics_confirmation(request, task)
+    assert confirmation is not None
+    changes = event_deliverables.changes(event_deliverables.logistics_prefill(request, task.brief), confirmation)
+    missing = event_deliverables.missing(PipelineTeam.LOGISTICS, confirmation, changes)
+    if missing:
+        raise IncompleteRequest(missing)
+    assert confirmation.start_date and confirmation.end_date
+    if not changes:
+        # Nothing differs, so there is nothing to explain; a stale reason is not kept.
+        confirmation.change_reason = None
+    reason = confirmation.change_reason.strip() if confirmation.change_reason else None
+    task.deliverable = confirmation.model_dump(mode="json")
+    task.deliverable_version = event_deliverables.DELIVERABLE_VERSION
+    if not changes:
+        return None
+
+    old = (request.start_date, request.end_date)
+    new = (confirmation.start_date, confirmation.end_date)
+    payload: dict = {"changes": changes, "reason": reason}
+    if old == new:
+        kind = PipelineNotificationKind.CONFIRMATION_CHANGED
+        logger.info("Request %s confirmed by Logistics with changes: %s", request.id, [c["field"] for c in changes])
+    else:
+        kind = PipelineNotificationKind.DATES_CHANGED
+        _check_bookable(session, caller, new[0], new[1], request.id)
+        request.start_date, request.end_date = new
+        request.day_modes = {d.isoformat(): m for d, m in (confirmation.day_modes or {}).items()}
+        payload["from"] = [d.isoformat() if d else None for d in old]
+        payload["to"] = [d.isoformat() for d in new]
+        history.record(
+            session,
+            PipelineHistoryAction.DATES_MOVED,
+            caller.member,
+            request,
+            {"from": payload["from"], "to": payload["to"], "reason": reason},
+        )
+        logger.info("Request %s moved by Logistics from %s..%s to %s..%s", request.id, *old, *new)
+    notifications.notify(session, request.department_id, request, kind, payload)
+    return notifications.department_email(
+        session, request.department_id, request, kind, caller.member, changes=changes, reason=reason
+    )
+
+
+def complete(session: Session, caller: Caller, request: EventRequests, team: PipelineTeam) -> list[PendingEmail | None]:
+    """A team finishes its part. Design done sends the request to Media; all three done makes it ready.
+
+    Design finishes once it has uploaded the poster; Media's shares, all
+    optional, must be whole (a link is a link). Logistics finishes by
+    confirming the event (``event_deliverables``); if it confirmed other dates,
+    call this inside ``booking_lock``.
+    """
+    _require_open_task(session, caller, request, team)
     now = clock.now()
     task = get_task(request, team)
+    emails: list[PendingEmail | None] = []
+    if team == PipelineTeam.LOGISTICS:
+        emails.append(_apply_confirmation(session, caller, request, task))  # type: ignore[arg-type]
+    else:
+        missing = event_deliverables.missing(team, task.deliverable)  # type: ignore[union-attr]
+        if missing:
+            raise IncompleteRequest(missing)
     task.status = EventRequestTaskStatus.DONE  # type: ignore[union-attr]
-    task.completed_at = now  # type: ignore[union-attr]
-    task.completed_by = caller.member.id  # type: ignore[union-attr]
+    task.done_at = now  # type: ignore[union-attr]
+    task.done_by = caller.member.id  # type: ignore[union-attr]
+    done: dict = {"team": team.value}
+    if team == PipelineTeam.LOGISTICS:
+        # The history keeps what Logistics changed from the request, and why, next to its finishing.
+        changes = event_deliverables.logistics_changes(request, task)
+        if changes:
+            done["changes"] = changes
+            done["reason"] = (task.deliverable or {}).get("change_reason")  # type: ignore[union-attr]
+    if team == PipelineTeam.MEDIA:
+        done["platforms"] = (task.deliverable or {}).get("platforms", [])  # type: ignore[union-attr]
+    history.record(session, PipelineHistoryAction.TASK_DONE, caller.member, request, done)
     notifications.notify(
         session, request.department_id, request, PipelineNotificationKind.TASK_DONE, {"team": team.value}
     )
-    emails: list[PendingEmail | None] = []
 
     if team == PipelineTeam.DESIGN:
         media = ensure_task(session, request, PipelineTeam.MEDIA)
@@ -690,6 +1240,8 @@ def complete(session: Session, caller: Caller, request: EventRequests, team: Pip
                 session, request.department_id, request, PipelineNotificationKind.READY_TO_PUBLISH, caller.member
             )
         )
+    notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s: %s done", request.id, team.value)
     return emails
@@ -708,6 +1260,7 @@ def inbox(session: Session, caller: Caller, team: PipelineTeam | None) -> list[t
             EventRequestTasks.status.in_([EventRequestTaskStatus.OPEN, EventRequestTaskStatus.RETURNED]),
             EventRequests.stage.not_in([EventRequestStage.CANCELLED, EventRequestStage.PUBLISHED]),
         )
+        .options(selectinload(EventRequests.department), selectinload(EventRequests.tasks))
         .order_by(EventRequestTasks.opened_at)
     ).all()
     return [(r, t) for r, t in rows]
@@ -715,61 +1268,57 @@ def inbox(session: Session, caller: Caller, team: PipelineTeam | None) -> list[t
 
 # --------------------------------------------------------------------------- publish
 
-PUBLISHABLE_BY_SUPER_ADMIN = {
-    EventRequestStage.IN_REVIEW,
-    EventRequestStage.RETURNED,
-    EventRequestStage.MEDIA,
-    EventRequestStage.READY,
-}
-
 
 def can_publish(caller: Caller, request: EventRequests) -> bool:
-    if caller.access.is_super_admin:
-        return request.stage in PUBLISHABLE_BY_SUPER_ADMIN
+    """Only once every team has finished, for a super admin too: the event is what the teams handed over."""
     return can_request_for(caller, request.department_id) and request.stage == EventRequestStage.READY
 
 
-def event_for(request: EventRequests, department_action_id: int, member_action_id: int, image_url: str | None):
+def event_for(request: EventRequests) -> createEvent_model:
     """The ``POST /events/`` payload a ready request becomes.
 
-    Times are wall-clock Riyadh times, the way the event form stores them. A
-    day mix of on-site and online is published as on-site; the Meet link is
-    added from the event page like any other.
+    Nothing is typed again at publish. The when, where and what come from Logistics' confirmation,
+    and the image is Design's poster. Times are wall-clock Riyadh
+    times, the way the event form stores them. A mix of on-site and online days
+    is published as on-site at the venue, with the Meet link for the online days.
+    The event opens straight away: publishing is the team's decision, with no
+    admin review after it.
     """
-    modes = set((request.day_modes or {}).values())
+    confirmed = event_deliverables.logistics_confirmation(request, get_task(request, PipelineTeam.LOGISTICS))
+    # A ready request has every task done, Logistics' confirmation included.
+    assert confirmed is not None
+    modes = set((confirmed.day_modes or {}).values())
     on_site = "on_site" in modes or not modes
-    logistics = get_task(request, PipelineTeam.LOGISTICS)
-    venue = (logistics.brief or {}).get("venue") if logistics else None
+    place = " · ".join(p.strip() for p in (confirmed.venue, confirmed.room) if p and p.strip())
+    design = get_task(request, PipelineTeam.DESIGN)
+    poster = (design.deliverable or {}).get("poster_url") if design else None
     registration = request.registration.value if request.registration else "none"
     return createEvent_model(
         event=Events_model(
             name=request.title or f"Event request {request.id}",
-            description=request.description,
+            description=confirmed.description,
             location_type=EventsLocationType.ON_SITE if on_site else EventsLocationType.ONLINE,
-            location=(venue or "-")[:100] if on_site else "Online",
-            start_datetime=datetime.combine(request.start_date, request.daily_start_time or time(0, 0)),  # type: ignore[arg-type]
-            end_datetime=datetime.combine(request.end_date, request.daily_end_time or time(23, 59)),  # type: ignore[arg-type]
-            # A draft: admins review a published request before members can see it.
-            status="draft",
-            image_url=image_url,
+            location=(place or "-")[:100] if on_site else "Online",
+            start_datetime=datetime.combine(confirmed.start_date, confirmed.daily_start_time or time(0, 0)),  # type: ignore[arg-type]
+            end_datetime=datetime.combine(confirmed.end_date, confirmed.daily_end_time or time(23, 59)),  # type: ignore[arg-type]
+            status="open",
+            image_url=poster,
+            meeting_url=confirmed.meet_link if "online" in modes else None,
             is_official=int(bool(request.is_official)),
         ),
         form_type="none" if registration == "none" else "registration",
-        department_action_id=department_action_id,
-        member_action_id=member_action_id,
+        # publish refuses a request without its points tier before getting here.
+        department_action_id=request.department_action_id,  # type: ignore[arg-type]
+        member_action_id=request.member_action_id,  # type: ignore[arg-type]
         department_id=request.department_id,
     )
 
 
-def publish(
-    session: Session,
-    caller: Caller,
-    request: EventRequests,
-    department_action_id: int,
-    member_action_id: int,
-    image_url: str | None,
-) -> int:
-    """Create the real event, in the same transaction, the same way ``POST /events/`` does.
+def publish(session: Session, caller: Caller, request: EventRequests) -> int:
+    """Create the real event, open, in the same transaction, the same way ``POST /events/`` does.
+
+    Everything comes from the request and what the teams handed over
+    (``event_for``). The member who requested it is responsible for it.
 
     Any late penalty is taken off the department once, on a log of its own for
     the new event, the way custom points are: the event's department log has a
@@ -781,11 +1330,11 @@ def publish(
         raise PipelineConflict("not_ready", "Only a request every team has finished can be published")
     if request.start_date is None:
         raise PipelineConflict("no_dates", "This request has no dates")
+    if request.department_action_id is None or request.member_action_id is None:
+        raise PipelineConflict("no_points_tier", "Pick the points tier in the request's details first")
+    check_points_tier(session, request.department_action_id, request.member_action_id)
     event, _department_log = create_full_event(
-        session,
-        event_for(request, department_action_id, member_action_id, image_url),
-        responsible_member_id=request.created_by,
-        created_by=caller.member.id,
+        session, event_for(request), responsible_member_id=request.requested_by, created_by=caller.member.id
     )
     penalty = get_penalty(session, request)
     if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:
@@ -795,6 +1344,11 @@ def publish(
         penalty.applied_log_id = penalty_log.id
     request.event_id = event.id
     request.stage = EventRequestStage.PUBLISHED
+    request.published_at = clock.now()
+    request.published_by = caller.member.id
+    history.record(session, PipelineHistoryAction.PUBLISHED, caller.member, request, {"event_id": event.id})
+    notion.mark(session, request)
+    pipeline_calendar.mark(session, request)
     session.flush()
     logger.info("Request %s published as event %s by member %s", request.id, event.id, caller.member.id)
     return event.id

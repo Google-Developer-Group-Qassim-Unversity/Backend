@@ -24,7 +24,7 @@ The rules:
 - Everyone else is a regular user, with nothing here.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from sqlalchemy.orm import Session
@@ -91,6 +91,15 @@ class Access:
         if self.is_super_admin:
             return None
         return frozenset(d for d, perms in self.held.items() if perm in perms)
+
+    def holds(self, perm: Perm, department_id: int | None = None) -> bool:
+        """Whether the caller has ``perm`` through the roster alone, as if they were not a super admin.
+
+        A super admin can do anything, but most of it they do on someone else's
+        behalf. This says what is theirs: the screens use it to tell "waiting on
+        you" from "waiting on a team you can step in for".
+        """
+        return replace(self, is_super_admin=False).can(perm, department_id)
 
     def permissions(self) -> frozenset[Perm]:
         """Every permission the caller has somewhere."""

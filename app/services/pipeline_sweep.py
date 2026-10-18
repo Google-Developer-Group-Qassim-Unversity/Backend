@@ -30,10 +30,14 @@ from app.DB.schema import (
     EventRequests,
     EventRequestStage,
     EventRequestUndatedReason,
+    PipelineHistoryAction,
     PipelineNotificationKind,
 )
 from app.services import event_pipeline
 from app.services import event_pipeline_clock as clock
+from app.services import pipeline_calendar
+from app.services import pipeline_history as history
+from app.services import pipeline_notion as notion
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail, send_pipeline_email_job
 
@@ -48,9 +52,20 @@ class SweepResult:
     expired_holds: int = 0
     penalties_grown: int = 0
     emails: list[PendingEmail] = field(default_factory=list)
+    # Requests whose Notion card still has to be written; pushed after the commit.
+    notion_requests: list[str] = field(default_factory=list)
+    notion_synced: int = 0
+    # Requests whose calendar entry still has to be written or removed; pushed after the commit.
+    calendar_requests: list[str] = field(default_factory=list)
+    calendar_synced: int = 0
 
     def counts(self) -> dict[str, int]:
-        return {"expired_holds": self.expired_holds, "penalties_grown": self.penalties_grown}
+        return {
+            "expired_holds": self.expired_holds,
+            "penalties_grown": self.penalties_grown,
+            "notion_synced": self.notion_synced,
+            "calendar_synced": self.calendar_synced,
+        }
 
 
 def expire_holds(session: Session, now: datetime, result: SweepResult) -> None:
@@ -62,7 +77,7 @@ def expire_holds(session: Session, now: datetime, result: SweepResult) -> None:
             EventRequests.hold_expires_at.is_not(None),
             EventRequests.hold_expires_at <= now,
         )
-        .options(selectinload(EventRequests.creator), selectinload(EventRequests.department))
+        .options(selectinload(EventRequests.requester), selectinload(EventRequests.department))
         .with_for_update()
     ).all()
     for request in rows:
@@ -72,9 +87,11 @@ def expire_holds(session: Session, now: datetime, result: SweepResult) -> None:
         request.hold_expires_at = None
         request.undated_reason = EventRequestUndatedReason.HOLD_EXPIRED
         notifications.notify(session, request.department_id, request, PipelineNotificationKind.HOLD_EXPIRED, lost)
-        # Nobody clicked anything, so the trial copy goes to whoever booked it.
+        history.record(session, PipelineHistoryAction.HOLD_EXPIRED, None, request, lost, at=now)
+        pipeline_calendar.mark(session, request)
+        # Sent on behalf of whoever booked it, though nobody clicked anything.
         email = notifications.department_email(
-            session, request.department_id, request, PipelineNotificationKind.HOLD_EXPIRED, request.creator
+            session, request.department_id, request, PipelineNotificationKind.HOLD_EXPIRED, request.requester
         )
         if email:
             email.clicked = False
@@ -99,10 +116,28 @@ def grow_penalties(session: Session, now: datetime, result: SweepResult) -> None
         days_before = before.late_days if before else 0
         penalty = event_pipeline.record_penalty(session, request, now)
         if penalty is not None and penalty.late_days != days_before:
+            history.record(
+                session,
+                PipelineHistoryAction.PENALTY_GROWN,
+                None,
+                request,
+                {"late_days": penalty.late_days, "points": penalty.points},
+                at=now,
+            )
             result.penalties_grown += 1
 
 
-RULES = [expire_holds, grow_penalties]
+def collect_notion_cards(session: Session, now: datetime, result: SweepResult) -> None:
+    """A Notion card whose last write failed, or that never got written: retried after the commit."""
+    result.notion_requests = notion.pending_request_ids(session)
+
+
+def collect_calendar_entries(session: Session, now: datetime, result: SweepResult) -> None:
+    """A calendar entry whose last write failed, or that a rule above just marked: pushed after the commit."""
+    result.calendar_requests = pipeline_calendar.pending_request_ids(session)
+
+
+RULES = [expire_holds, grow_penalties, collect_notion_cards, collect_calendar_entries]
 
 
 def run_sweep(session: Session, now: datetime | None = None) -> SweepResult:
@@ -126,6 +161,11 @@ def sweep_once() -> SweepResult | None:
             job = job_queries.create_job(session, EmailJobsType.BLAST, email.sent_by_id, total=len(email.emails))
             email.data["job_id"] = job.id
         session.commit()
+    # Outside the sweep's session: each sync has its own, and talks to Notion or Google.
+    result.notion_synced = sum(1 for request_id in result.notion_requests if notion.sync_request(request_id))
+    result.calendar_synced = sum(
+        1 for request_id in result.calendar_requests if pipeline_calendar.sync_request(request_id)
+    )
     logger.info("Pipeline sweep: %s", result.counts())
     return result
 

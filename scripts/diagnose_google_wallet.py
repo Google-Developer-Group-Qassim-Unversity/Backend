@@ -2,7 +2,7 @@
 with the issuer/class/object, instead of guessing from the vague
 "something went wrong" page pay.google.com shows end users.
 
-Run from Backend/:
+Run from the repo root:
     infisical run --env=dev --path=/admin-backend -- uv run python scripts/diagnose_google_wallet.py
 """
 

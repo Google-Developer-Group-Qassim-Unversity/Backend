@@ -1,13 +1,26 @@
 """Event requests: book dates, fill in the event, and move it along the pipeline."""
 
 import logging
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
+import uuid
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile, status
 
 from app.DB import event_pipeline as queries
-from app.DB.schema import EventRequests, EventRequestStage, PipelineTeam
+from app.DB.schema import (
+    EventRequests,
+    EventRequestStage,
+    EventRequestTasks,
+    EventRequestTaskStatus,
+    Members,
+    PipelineTeam,
+)
+from app.clients import R2Client
+from app.config import config
 from app.dependencies import DB
+from app.exceptions import PipelineConflict
+from app.routers.upload import get_extension
 
 from app.leaderboard_cache import reset_leaderboard_cache
 from app.routers.pipeline_models import (
@@ -15,23 +28,31 @@ from app.routers.pipeline_models import (
     EventDetails,
     EventRequestDetail,
     EventRequestSummary,
+    HistoryItem,
     PenaltyResponse,
     RequestActions,
     ReturnRequest,
     PaginatedEventRequests,
     PersonRef,
     PipelineDepartment,
-    PublishRequest,
     RedateRequest,
     SaveBriefRequest,
+    SaveDeliverableRequest,
     TaskResponse,
+    TaskState,
     UpdateDetailsRequest,
 )
 from app.routers.responses import DetailResponse
 from app.services import event_briefs
+from app.services import event_deliverables
 from app.services import event_pipeline as service
 from app.services import event_pipeline_clock as clock
+from app.services import google_meet
+from app.services import pipeline_calendar
+from app.services import pipeline_history
 from app.services import pipeline_notifications as notifications
+from app.services import pipeline_notion as notion
+from app.services.pipeline_notifications import PendingEmail
 from app.services.permissions.dependencies import Caller, CurrentCaller
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.guards import Require, Staff
@@ -53,7 +74,12 @@ def summary(request: EventRequests) -> EventRequestSummary:
         end_date=request.end_date,
         hold_expires_at=request.hold_expires_at,
         undated_reason=request.undated_reason,
-        created_at=request.created_at,
+        requested_at=request.requested_at,
+        published_at=request.published_at,
+        task_states=[
+            TaskState(team=task.team, status=task.status, opened_at=task.opened_at, done_at=task.done_at)
+            for task in sorted(request.tasks, key=lambda task: service.ALL_TEAMS.index(task.team))
+        ],
     )
 
 
@@ -74,6 +100,39 @@ def _actions(session, caller: Caller, request: EventRequests) -> RequestActions:
         can_resubmit=requester and request.stage == EventRequestStage.RETURNED,
         complete=[t for t in service.ALL_TEAMS if service.can_complete(session, caller, request, t)],
         can_publish=service.can_publish(caller, request),
+        can_upload_poster=service.can_upload_poster(caller, request),
+        can_generate_meet=service.can_generate_meet(session, caller, request),
+        can_cancel=service.can_cancel(caller, request),
+        can_delete=service.can_delete(caller, request),
+    )
+
+
+def person(member: Members | None) -> PersonRef | None:
+    return PersonRef(member_id=member.id, name=member.name) if member else None
+
+
+def task_response(request: EventRequests, task: EventRequestTasks, caller: Caller | None = None) -> TaskResponse:
+    deliverable = event_deliverables.shown_deliverable(request, task)
+    reached = task.status != EventRequestTaskStatus.BRIEF
+    changes = event_deliverables.logistics_changes(request, task) if task.team == PipelineTeam.LOGISTICS else []
+    # Why the card is missing is for whoever can fix it (the token, the board).
+    show_error = caller is not None and caller.access.is_super_admin
+    return TaskResponse(
+        team=task.team,
+        status=task.status,
+        brief=task.brief,
+        brief_version=task.brief_version,
+        deliverable=deliverable,
+        deliverable_missing=event_deliverables.missing(task.team, deliverable, changes)
+        if reached and task.team in event_deliverables.DELIVERABLE_MODELS
+        else [],
+        confirmation_changes=[c["field"] for c in changes],
+        opened_at=task.opened_at,
+        done_at=task.done_at,
+        done_by=person(task.done_by_member),
+        notion_url=task.notion_page_url,
+        notion_pending=bool(task.notion_sync_pending) and config.notion_enabled,
+        notion_error=task.notion_error if show_error else None,
     )
 
 
@@ -81,7 +140,12 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
     session.refresh(request)
     return EventRequestDetail(
         **summary(request).model_dump(),
-        created_by=PersonRef(member_id=request.creator.id, name=request.creator.name),
+        requested_by=PersonRef(member_id=request.requester.id, name=request.requester.name),
+        submitted_by=person(request.submitter),
+        returned_by=person(request.returner),
+        published_by=person(request.publisher),
+        cancelled_at=request.cancelled_at,
+        cancelled_by=person(request.canceller),
         details=EventDetails(
             title=request.title,
             description=request.description,
@@ -97,6 +161,8 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
             registration=request.registration,
             expected_accepted=request.expected_accepted,
             help_needed=request.help_needed,
+            department_action_id=request.department_action_id,
+            member_action_id=request.member_action_id,
         ),
         partners=[PipelineDepartment.model_validate(p.department) for p in request.partners],
         within_official_hours=service.within_official_hours(request),
@@ -104,20 +170,7 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
         updated_at=request.updated_at,
         event_id=request.event_id,
         can_edit=service.can_edit(caller, request),
-        tasks=[
-            TaskResponse(
-                team=task.team,
-                status=task.status,
-                brief=task.brief,
-                brief_version=task.brief_version,
-                opened_at=task.opened_at,
-                completed_at=task.completed_at,
-                completed_by=PersonRef(member_id=task.completer.id, name=task.completer.name)
-                if task.completer
-                else None,
-            )
-            for task in request.tasks
-        ],
+        tasks=[task_response(request, task, caller) for task in request.tasks],
         missing=event_briefs.missing_fields(request)
         if request.stage in (EventRequestStage.DRAFT, EventRequestStage.RETURNED)
         else [],
@@ -128,34 +181,77 @@ def detail(session, caller: Caller, request: EventRequests) -> EventRequestDetai
         return_deadline=service.return_deadline(request),
         penalty=_penalty(session, request),
         actions=_actions(session, caller, request),
+        history=[
+            HistoryItem(action=row.action, at=row.at, actor=person(row.actor), details=row.details)
+            for row in pipeline_history.for_request(session, request.id)
+        ],
         now=clock.now(),
     )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=EventRequestDetail)
-def book_event_request(body: BookRequest, session: DB, caller: CurrentCaller):
-    """Book a date range: a new draft that holds those days for 24 hours."""
+def book_event_request(body: BookRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
+    """Book a date range: a new draft that holds those days for 24 hours.
+
+    A super admin may book over other requests, saying in ``bumps`` what happens to each.
+    """
     with service.booking_lock(session):
-        request = service.book(session, caller, body.department_id, body.start_date, body.end_date)
+        request, bumped, emails = service.book(
+            session, caller, body.department_id, body.start_date, body.end_date, body.bumps
+        )
         session.commit()
+    _after_bumps(session, background_tasks, bumped, emails)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
+
+
+def _after_bumps(
+    session, background_tasks: BackgroundTasks, bumped: list[EventRequests], emails: list[PendingEmail | None]
+) -> None:
+    notifications.send_after_commit(session, background_tasks, emails)
+    for request in bumped:
+        notion.sync_after_commit(background_tasks, request)
+        pipeline_calendar.sync_after_commit(background_tasks, request.id)
 
 
 @router.get("", status_code=status.HTTP_200_OK, response_model=PaginatedEventRequests)
 def list_event_requests(
     session: DB,
     caller: CurrentCaller,
-    department_id: Annotated[int | None, Query()] = None,
+    department_id: Annotated[list[int] | None, Query()] = None,
     stage: Annotated[EventRequestStage | None, Query()] = None,
+    state: Annotated[Literal["active", "past"] | None, Query()] = None,
+    team: Annotated[PipelineTeam | None, Query()] = None,
+    team_status: Annotated[list[EventRequestTaskStatus] | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    """The requests of the departments the caller acts for (every department for a super admin)."""
-    visible = service.visible_department_ids(session, caller)
-    if department_id is not None:
-        service.require_request_for(caller, department_id)
-        visible = {department_id}
-    total, rows = queries.list_requests(session, visible, stage, page_size, (page - 1) * page_size)
+    """The requests of the departments the caller acts for (every department for a super admin).
+
+    - ``department_id`` (repeatable) narrows it to those departments; the caller must request for each.
+    - ``state``: ``active`` is everything still moving, ``past`` what was published or cancelled.
+    - ``team`` is a team's desk instead: every request that reached that team, whichever
+      department asked, for whoever works that team. ``team_status`` narrows it to the
+      team's parts in those states (``open``, ``returned``, ``done``).
+    """
+    if team is not None:
+        service.require_team(session, caller, team)
+        visible = None
+        statuses = [s for s in (team_status or []) if s != EventRequestTaskStatus.BRIEF] or [
+            EventRequestTaskStatus.OPEN,
+            EventRequestTaskStatus.RETURNED,
+            EventRequestTaskStatus.DONE,
+        ]
+    else:
+        visible = service.visible_department_ids(session, caller)
+        statuses = None
+    if department_id:
+        for d in department_id:
+            service.require_request_for(caller, d)
+        visible = set(department_id)
+    total, rows = queries.list_requests(
+        session, visible, stage, page_size, (page - 1) * page_size, state=state, team=team, team_statuses=statuses
+    )
     return PaginatedEventRequests(
         items=[summary(r) for r in rows],
         total=total,
@@ -171,42 +267,152 @@ def get_event_request(request_id: str, session: DB, caller: CurrentCaller):
 
 
 @router.put("/{request_id}/dates", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def redate_event_request(request_id: str, body: RedateRequest, session: DB, caller: CurrentCaller):
+def redate_event_request(
+    request_id: str, body: RedateRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
+):
     """New dates for a request that lost its own; a draft gets a fresh 24-hour hold."""
     with service.booking_lock(session):
         request = service.get_request_for(session, caller, request_id, lock=True)
-        service.redate(session, caller, request, body.start_date, body.end_date)
+        bumped, emails = service.redate(session, caller, request, body.start_date, body.end_date, body.bumps)
         session.commit()
+    _after_bumps(session, background_tasks, bumped, emails)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
 @router.put("/{request_id}/details", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def update_event_request_details(request_id: str, body: UpdateDetailsRequest, session: DB, caller: CurrentCaller):
+def update_event_request_details(
+    request_id: str, body: UpdateDetailsRequest, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
+):
     """Save any of the event details; only the fields sent change."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.update_details(session, caller, request, body.model_dump(exclude_unset=True))
     session.commit()
+    notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
+    return detail(session, caller, request)
+
+
+@router.post("/{request_id}/cancel", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def cancel_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
+    """Drop a request at any stage before publish. Its dates are free again and every team it reached is told."""
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    emails = service.cancel(session, caller, request)
+    session.commit()
+    notifications.send_after_commit(session, background_tasks, emails)
+    notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
 @router.delete("/{request_id}", status_code=status.HTTP_200_OK, response_model=DetailResponse)
-def cancel_event_request(request_id: str, session: DB, caller: CurrentCaller):
-    """Drop a draft. Its dates, if it still held any, are free again."""
+def delete_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
+    """Delete a cancelled request for good. Its history stays; Design's Notion card goes to the trash."""
     request = service.get_request_for(session, caller, request_id, lock=True)
-    service.cancel(session, caller, request)
+    page_id = service.delete(session, caller, request)
     session.commit()
-    logger.info("Request %s cancelled", request_id)
-    return DetailResponse(detail="Request cancelled")
+    if page_id:
+        background_tasks.add_task(notion.trash_card, page_id)
+    pipeline_calendar.sync_after_commit(background_tasks, request_id)
+    return DetailResponse(detail="Request deleted")
 
 
 @router.put("/{request_id}/briefs/{team}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
 def save_event_request_brief(
-    request_id: str, team: PipelineTeam, body: SaveBriefRequest, session: DB, caller: CurrentCaller
+    request_id: str,
+    team: PipelineTeam,
+    body: SaveBriefRequest,
+    session: DB,
+    caller: CurrentCaller,
+    background_tasks: BackgroundTasks,
 ):
     """Save the Design or Logistics brief as a draft; submit checks it."""
     request = service.get_request_for(session, caller, request_id, lock=True)
     service.save_brief(session, caller, request, team, body.brief)
     session.commit()
+    notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
+    return detail(session, caller, request)
+
+
+@router.put("/{request_id}/deliverables/{team}", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def save_event_request_deliverable(
+    request_id: str, team: PipelineTeam, body: SaveDeliverableRequest, session: DB, caller: CurrentCaller
+):
+    """Save Logistics' confirmation or Media's shares as a draft while the part is open; finishing checks it."""
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    service.save_deliverable(session, caller, request, team, body.deliverable)
+    session.commit()
+    return detail(session, caller, request)
+
+
+@router.post(
+    "/{request_id}/deliverables/logistics/meet", status_code=status.HTTP_200_OK, response_model=EventRequestDetail
+)
+def generate_event_request_meet(request_id: str, session: DB, caller: CurrentCaller):
+    """Logistics has a Google Meet link made on the club's calendar, from the confirmation's dates and times.
+
+    The calendar call happens before the row is locked, so nothing waits on
+    Google; generating again replaces the earlier link and drops its calendar event.
+    """
+    request = service.get_request_for(session, caller, request_id)
+    schedule = service.check_meet_generation(session, caller, request)
+    title, description = service.meet_title(request, service.get_task(request, PipelineTeam.LOGISTICS))
+    try:
+        meeting = google_meet.create_meeting(title, description, schedule)
+    except google_meet.MeetError as error:
+        logger.error("Request %s: Google refused the Meet link (%s)", request_id, error)
+        raise PipelineConflict("meet_failed", f"Google could not create the link: {error}", 502) from error
+    try:
+        request = service.get_request_for(session, caller, request_id, lock=True)
+        replaced = service.set_meet_link(session, caller, request, meeting)
+        session.commit()
+    except Exception:
+        session.rollback()
+        # Nothing refers to the event any more; a stray one on the calendar would only confuse.
+        _drop_meeting(meeting.event_id)
+        raise
+    _drop_meeting(replaced)
+    return detail(session, caller, request)
+
+
+def _drop_meeting(event_id: str) -> None:
+    """Delete a calendar event the confirmation no longer points at. Best effort: it is only tidiness."""
+    if not event_id:
+        return
+    try:
+        google_meet.delete_meeting(event_id)
+    except Exception:
+        logger.exception("Could not delete the Meet calendar event %s", event_id)
+
+
+POSTER_TYPES = {"image/png", "image/jpeg", "image/webp"}
+MAX_POSTER_BYTES = 10 * 1024 * 1024
+
+
+@router.post("/{request_id}/poster", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
+def upload_event_request_poster(
+    request_id: str,
+    file: Annotated[UploadFile, File()],
+    session: DB,
+    caller: CurrentCaller,
+    client: R2Client,
+    background_tasks: BackgroundTasks,
+):
+    """Design hands over the poster: stored in R2 like any event image, and the event's image once published."""
+    request = service.get_request_for(session, caller, request_id, lock=True)
+    service.check_poster_upload(session, caller, request)
+    if file.content_type not in POSTER_TYPES:
+        raise PipelineConflict("not_an_image", "The poster must be a PNG, JPEG or WebP image", 422)
+    content = file.file.read(MAX_POSTER_BYTES + 1)
+    if len(content) > MAX_POSTER_BYTES:
+        raise PipelineConflict("too_large", "The poster must be 10 MB or smaller", 422)
+    key = f"event-images/{uuid.uuid4()}{get_extension(file.filename, file.content_type)}"
+    client.put_object(Bucket=config.R2_BUCKET_NAME, Key=key, Body=content, ContentType=file.content_type)
+    service.set_poster(session, caller, request, f"{config.R2_PUBLIC_URL.rstrip('/')}/{key}")
+    session.commit()
+    notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -217,6 +423,8 @@ def submit_event_request(request_id: str, session: DB, caller: CurrentCaller, ba
     emails = service.submit(session, caller, request)
     session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
+    notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -234,6 +442,8 @@ def return_event_request(
     email = service.return_request(session, caller, request, body.notes)
     session.commit()
     notifications.send_after_commit(session, background_tasks, [email])
+    notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -244,6 +454,8 @@ def resubmit_event_request(request_id: str, session: DB, caller: CurrentCaller, 
     email = service.resubmit(session, caller, request)
     session.commit()
     notifications.send_after_commit(session, background_tasks, [email])
+    notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
@@ -251,20 +463,35 @@ def resubmit_event_request(request_id: str, session: DB, caller: CurrentCaller, 
 def complete_event_request_task(
     request_id: str, team: PipelineTeam, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks
 ):
-    """A team marks its part done."""
-    request = service.get_request_for(session, caller, request_id, lock=True)
-    emails = service.complete(session, caller, request, team)
-    session.commit()
+    """A team finishes its part. Logistics finishes by confirming the event, which may move its dates."""
+    if team == PipelineTeam.LOGISTICS:
+        with service.booking_lock(session):
+            request = service.get_request_for(session, caller, request_id, lock=True)
+            emails = service.complete(session, caller, request, team)
+            session.commit()
+        # A generated Meet link's calendar event follows the confirmed times, after the commit.
+        task = service.get_task(request, team)
+        if task is not None and task.deliverable and task.deliverable.get("meet_event_id"):
+            title, description = service.meet_title(request, task)
+            background_tasks.add_task(service.sync_meeting, request.id, dict(task.deliverable), title, description)
+    else:
+        request = service.get_request_for(session, caller, request_id, lock=True)
+        emails = service.complete(session, caller, request, team)
+        session.commit()
     notifications.send_after_commit(session, background_tasks, emails)
+    notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     return detail(session, caller, request)
 
 
 @router.post("/{request_id}/publish", status_code=status.HTTP_200_OK, response_model=EventRequestDetail)
-def publish_event_request(request_id: str, body: PublishRequest, session: DB, caller: CurrentCaller):
-    """Turn a ready request into a real event in /events, created as a draft for admins to review."""
+def publish_event_request(request_id: str, session: DB, caller: CurrentCaller, background_tasks: BackgroundTasks):
+    """Turn a ready request into a real, open event in /events, from what the teams handed over."""
     request = service.get_request_for(session, caller, request_id, lock=True)
-    service.publish(session, caller, request, body.department_action_id, body.member_action_id, body.image_url)
+    service.publish(session, caller, request)
     session.commit()
+    notion.sync_after_commit(background_tasks, request)
+    pipeline_calendar.sync_after_commit(background_tasks, request.id)
     # Best-effort, as after POST /events/: the leaderboard app caches events.
     try:
         reset_leaderboard_cache()

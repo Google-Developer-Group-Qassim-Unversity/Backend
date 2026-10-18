@@ -15,7 +15,7 @@ through a change on real data before it reaches `main`.
 | Frontend (docker)  | `gdg-admin-web`, port 3012 | `gdg-admin-web-staging`, port 3013 |
 | Sentry environment | `production`               | `staging`                      |
 | Clerk instance     | production (`clerk.gdg-q.com`) | development (`quality-ram-46`), shared with local dev |
-| Sign-in            | Clerk's email code         | developer email + `8888`       |
+| Sign-in            | Clerk's email code         | any email + `8888`             |
 
 Local `poe dev` uses the Infisical `dev` env, whose `DATABASE_URL` is a MySQL
 on your own machine (`127.0.0.1/scores-local`), so a migration you are still
@@ -26,14 +26,20 @@ at; `ALEMBIC_DATABASE_URL` is set in every env but nothing reads it.
 
 Every change goes through `dev`; nothing is pushed or PR'd into `main` directly.
 
+The backend (this repo) and the admin frontend (the `Admin` repo) deploy
+separately, each from its own `.github/workflows/deploy.yml`, and both follow
+the same flow:
+
 1. Branch from `dev`, open the PR into `dev`. PR checks run there.
-2. Merging it deploys staging. `.github/workflows/deploy.yml` deploys whichever
-   half changed and migrates `scores_staging` to the release's head first, so a
-   broken migration fails the deploy and leaves the running staging app alone.
+2. Merging it deploys staging. The backend deploy migrates `scores_staging` to
+   the release's head first, so a broken migration fails the deploy and leaves
+   the running staging app alone.
 3. Once staging looks right, open a `dev` -> `main` PR and merge it with a merge
    commit. That push to `main` deploys production the same way.
 
-Run the workflow by hand on either branch to redeploy both halves.
+Run a repo's deploy workflow by hand on either branch to redeploy it. A change
+that spans both repos merges the backend first: the frontend expects the API
+it calls to exist.
 
 ## Emails never reach real members
 
@@ -51,15 +57,18 @@ Local dev (`ENV=development`) redirects the same way.
 
 ## Signing in
 
-Staging's sign-in page asks for an email and the fixed code `8888` instead of
-running Clerk's emailed code (`Frontend/lib/staging-sign-in.ts`). It accepts only
-the emails in `STAGING_LOGIN_EMAILS` (comma-separated, Infisical `staging` /
-`/admin-frontend`): staging holds a copy of every member's real data, so add a
-developer there before they can sign in. It holds the Development department's
-members (six on 9 Oct 2026, Fall 2026); update it when the team changes. The
-frontend reads it when its container starts, so a change needs a staging
-redeploy (run the Deploy workflow by hand on `dev`). `STAGING_OTP` holds the code; with it
-unset, the page is Clerk's normal one.
+Staging's sign-in looks and flows like production's Clerk page: email, then
+"Check your email" with code boxes. No email is sent, and the code is always
+`8888` (`STAGING_OTP`). The page is a redrawn copy of Clerk's screens
+(`Admin/components/staging-sign-in.tsx`, using Clerk's own wording), because
+Clerk cannot be told to accept a fixed code. "Continue with Google" is real
+Clerk Google sign-in.
+
+Any email gets past the email step; there is no list to keep. What happens
+next is the permissions system's call, exactly as on production: the
+middleware asks `GET /access/me` and lets in only current staff (anyone on the
+current semester's roster, and super admins). Everyone else lands on
+"access denied". With `STAGING_OTP` unset, the page is Clerk's own.
 
 It works by minting a Clerk sign-in ticket for the email, which is only safe
 because staging uses Clerk's **development** instance. A session on the
@@ -67,9 +76,10 @@ production instance would also be a session on `admin.gdg-q.com`, so the code
 refuses to run with a live (`sk_live_`) key even if `STAGING_OTP` is set.
 
 The development instance's session token has no email claim, so the route
-writes the email into the user's `publicMetadata`; the backend's
-`resolve_member` finds the member by `metadata.email` and stores the new Clerk
-id on the `scores_staging` row.
+writes the email into the user's `publicMetadata`, and for a university address
+(`<uni id>@qu.edu.sa`) the uni id too, since many rows hold a personal email.
+The backend's `resolve_member` finds the member by `metadata.uni_id`, then
+`metadata.email`, and stores the new Clerk id on the `scores_staging` row.
 
 ## What staging still shares with production
 

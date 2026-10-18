@@ -59,7 +59,7 @@ the department it is held for - an AI leader edits AI's events, not Robotics'.
   `department`, `team`, `grant`). It backs the Member lookup tab on
   `/permissions`, which the member card links to (`?tab=member&member=<id>`).
 
-Frontend: `middleware.ts` lets in staff only (signed 5-minute `gdg_access`
+Admin frontend (`Admin` repo): `middleware.ts` lets in staff only (signed 5-minute `gdg_access`
 cookie over `/access/me`); `lib/access.ts` mirrors the keys and each page's
 permission; `useAccess()` in pages and components.
 
@@ -76,7 +76,7 @@ If the department is in the body, take `access: CurrentAccess` and call
 
 **Add a permission.** Add it to `Perm` and `CATALOGUE` (scope, English and
 Arabic label), and to `PERMS` / `DEPARTMENT_SCOPED` / `PERM_GROUPS` (the
-section it shows under on `/permissions`) in `Frontend/lib/access.ts`.
+section it shows under on `/permissions`) in `Admin/lib/access.ts`.
 Nobody holds it until a super admin assigns it on `/permissions` (or a
 migration seeds it).
 

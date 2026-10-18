@@ -1,6 +1,8 @@
 """Opt-in Chromium → real HTTP routes → isolated MySQL integration check.
 
-Run with RUN_CLUB_BROWSER=1 after installing Frontend dependencies and Chromium.
+Run with RUN_CLUB_BROWSER=1 after installing the Admin repo's dependencies and
+Chromium. The Admin repo is expected next to this one (../Admin); set ADMIN_DIR
+to point somewhere else.
 JWT verification is replaced only in this test process; real permission guards,
 request schemas, services, transactions and queries run unchanged.
 """
@@ -48,7 +50,7 @@ from tests.factories import make_member
 
 @pytest.mark.skipif(os.environ.get("RUN_CLUB_BROWSER") != "1", reason="Set RUN_CLUB_BROWSER=1 for Chromium integration")
 def test_browser_manages_club_through_real_api(engine, seed_core_data, monkeypatch, tmp_path):
-    frontend = Path(__file__).resolve().parents[2] / "Frontend"
+    frontend = Path(os.environ.get("ADMIN_DIR") or Path(__file__).resolve().parents[2] / "Admin")
     prefix = f"Browser-{uuid4().hex[:10]}"
     with Session(engine) as session:
         current = session.scalar(select(Semesters).where(Semesters.hijri_code == 475))

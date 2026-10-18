@@ -1,3 +1,11 @@
+# Backend
+
+The one backend for GDG Qassim's score system: the API behind the
+[Admin](https://github.com/Google-Developer-Group-Qassim-Unversity/Admin) panel
+and the public [Website](https://github.com/Google-Developer-Group-Qassim-Unversity/Website).
+FastAPI + SQLAlchemy + Alembic on MySQL. See [CLAUDE.md](CLAUDE.md) for how the
+repos fit together, the branch flow and the conventions the tests enforce.
+
 # Local Development
 ## Virtual Environment and Dependencies
 This project uses [uv](https://docs.astral.sh/uv/) for package and project management. [install](https://docs.astral.sh/uv/#installation)
