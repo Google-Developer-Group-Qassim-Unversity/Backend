@@ -40,6 +40,8 @@ from app.services import pipeline_history as history
 from app.services import pipeline_notion as notion
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail, send_pipeline_email_job
+from app.services.push import delivery as push_delivery
+from app.services.push import triggers as push_triggers
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,10 @@ class SweepResult:
     # Requests whose calendar entry still has to be written or removed; pushed after the commit.
     calendar_requests: list[str] = field(default_factory=list)
     calendar_synced: int = 0
+    # The member app's pushes (app/services/push/triggers.py): queued here, sent after the commit.
+    push_reminders: int = 0
+    push_new_events: int = 0
+    push_cleaned: int = 0
 
     def counts(self) -> dict[str, int]:
         return {
@@ -65,6 +71,9 @@ class SweepResult:
             "penalties_grown": self.penalties_grown,
             "notion_synced": self.notion_synced,
             "calendar_synced": self.calendar_synced,
+            "push_reminders": self.push_reminders,
+            "push_new_events": self.push_new_events,
+            "push_cleaned": self.push_cleaned,
         }
 
 
@@ -137,7 +146,7 @@ def collect_calendar_entries(session: Session, now: datetime, result: SweepResul
     result.calendar_requests = pipeline_calendar.pending_request_ids(session)
 
 
-RULES = [expire_holds, grow_penalties, collect_notion_cards, collect_calendar_entries]
+RULES = [expire_holds, grow_penalties, collect_notion_cards, collect_calendar_entries, *push_triggers.SWEEP_RULES]
 
 
 def run_sweep(session: Session, now: datetime | None = None) -> SweepResult:
@@ -188,4 +197,6 @@ async def sweep_forever() -> None:
             raise
         except Exception:
             logger.exception("Pipeline sweep failed")
+        # Every worker, whether or not it swept: delivery claims its own rows (FOR UPDATE SKIP LOCKED).
+        await push_delivery.kick()
         await asyncio.sleep(SWEEP_EVERY_SECONDS)

@@ -80,6 +80,8 @@ from app.dependencies import DB
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.guards import Require, Staff
 from app.services.permissions.departments import event_departments
+from app.services.push import delivery as push_delivery
+from app.services.push import triggers as push_triggers
 
 
 # endregion
@@ -621,11 +623,14 @@ async def send_acceptance_blasts(
             session, EmailJobsType.ACCEPTANCE, requesting_member.id, total=len(emails), event_id=event.id
         )
         submissions_queries.mark_submissions_as_invited(session, submission_ids)
+        # The app's "registration accepted" push, for members who have the app (docs/PUSH.md).
+        push_triggers.acceptance_sent(session, event, submissions)
         session.commit()
         return job.id
 
     job_id = await run_in_threadpool(claim)
     logger.info(f"Claimed [{len(submission_ids)}] submissions as invited under job [{job_id}]")
+    background_tasks.add_task(push_delivery.kick)
 
     background_tasks.add_task(
         send_acceptance_job,

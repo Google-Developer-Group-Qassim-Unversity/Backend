@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from typing import Literal, Annotated
 from sqlalchemy.orm import Session
@@ -40,6 +40,8 @@ from app.services.permissions.catalogue import Perm
 from app.services.permissions.dependencies import CurrentAccess
 from app.services.permissions.guards import Require
 from app.services.permissions.departments import event_departments
+from app.services.push import delivery as push_delivery
+from app.services.push import triggers as push_triggers
 
 
 logger = logging.getLogger(__name__)
@@ -170,7 +172,13 @@ def mark_attendance(
     response_model=BackfillAttendanceResponse,
     dependencies=[Depends(Require(Perm.ATTENDANCE_BACKFILL, event_departments))],
 )
-def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, session: DB, actor: CurrentMember):
+def backfill_attendance(
+    event_id: int,
+    request: BackfillAttendanceRequest,
+    session: DB,
+    actor: CurrentMember,
+    background_tasks: BackgroundTasks,
+):
 
     logger.info(f"Backfill attendance for event [{event_id}], {len(request.members)} members, day [{request.day}]")
 
@@ -211,7 +219,8 @@ def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, sessi
             logger.info(f"Member [{member.name}] already has attendance for day [{request.day}], skipping")
             continue
 
-        log_queries.create_member_log(session, member.id, event_log.id, target_date)
+        member_log = log_queries.create_member_log(session, member.id, event_log.id, target_date)
+        push_triggers.attendance_recorded(session, event, event_log, member_log)
         marked.append({"member_id": member.id, "name": member.name})
         logger.info(f"Backfilled attendance for member [{member.name}] on day [{request.day}]")
 
@@ -224,6 +233,7 @@ def backfill_attendance(event_id: int, request: BackfillAttendanceRequest, sessi
             {"day": request.day, "members": marked, "new_members": created_count},
         )
     session.commit()
+    background_tasks.add_task(push_delivery.kick)
     marked_count = (created_count + existing_count) - already_attended_count
     return BackfillAttendanceResponse(
         created_count=created_count,
@@ -288,7 +298,13 @@ def get_event_attendance(
     dependencies=[Depends(Require(Perm.ATTENDANCE_TAKE, event_departments))],
     response_model=CountsResponse,
 )
-def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, session: DB, actor: CurrentMember):
+def mark_attendance_manual(
+    event_id: int,
+    request: ManualAttendanceRequest,
+    session: DB,
+    actor: CurrentMember,
+    background_tasks: BackgroundTasks,
+):
     logger.info(f"Manual attendance for event [{event_id}], members {request.member_ids}")
 
     event, event_log = get_event_with_attendable_log(session, event_id)
@@ -321,7 +337,8 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
             if is_member_marked_for_day(session, member.id, event_log.id, target_date):
                 continue
 
-            log_queries.create_member_log(session, member.id, event_log.id, target_date)
+            member_log = log_queries.create_member_log(session, member.id, event_log.id, target_date)
+            push_triggers.attendance_recorded(session, event, event_log, member_log)
             member_success = True
             logger.info(f"Manual attendance marked for member [{member.name}] on day [{day or 'today'}]")
 
@@ -336,6 +353,7 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
             session, event, EventHistoryAction.ATTENDANCE_MARKED, actor, {"days": days_to_mark, "members": marked}
         )
     session.commit()
+    background_tasks.add_task(push_delivery.kick)
     return {"success": success_count, "failed": failed_count}
 
 
@@ -345,7 +363,9 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
     dependencies=[Depends(Require(Perm.ATTENDANCE_TAKE, event_departments))],
     response_model=ScanAttendanceResponse,
 )
-def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB, actor: CurrentMember):
+def scan_attendance(
+    event_id: int, request: ScanAttendanceRequest, session: DB, actor: CurrentMember, background_tasks: BackgroundTasks
+):
     """Marks attendance from a member's wallet-card QR (`/p/{uuid}`), scanned by an admin."""
     logger.info(f"Scan attendance for event [{event_id}], uuid [{request.uuid}]")
 
@@ -372,7 +392,8 @@ def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB, 
             status="already_marked", member_id=member.id, member_name=member.name, uni_id=member.uni_id
         )
 
-    log_queries.create_member_log(session, member.id, event_log.id, target_date)
+    member_log = log_queries.create_member_log(session, member.id, event_log.id, target_date)
+    push_triggers.attendance_recorded(session, event, event_log, member_log)
     event_history.record(
         session,
         event,
@@ -381,6 +402,7 @@ def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB, 
         {"day": request.day, "members": [{"member_id": member.id, "name": member.name}]},
     )
     session.commit()
+    background_tasks.add_task(push_delivery.kick)
     logger.info(f"Scan attendance: marked member [{member.name}] for event [{event.name}]")
     return ScanAttendanceResponse(status="marked", member_id=member.id, member_name=member.name, uni_id=member.uni_id)
 
