@@ -547,6 +547,55 @@ def test_an_email_on_another_members_record_is_a_conflict(sign_in, outbound, see
     assert response.json()["code"] == "email_in_use"
 
 
+def test_a_linked_record_with_another_university_id_is_not_rewritten(sign_in, outbound, db_session):
+    """The sign-in proves 444111222, but the record linked to it is 555555555's."""
+    linked = Members(
+        name="Someone Else",
+        email="someone.else@example.com",
+        uni_id="555555555",
+        clerk_user_id=QU_USER,
+        gender=MembersGender.MALE,
+        is_authenticated=1,
+    )
+    db_session.add(linked)
+    db_session.commit()
+    stub_qu_account(outbound)
+
+    response = sign_in(QU_USER).post("/members/onboarding", json=answers())
+
+    assert_conflict(response)
+    assert response.json()["code"] == "member_not_verified"
+    db_session.refresh(linked)
+    assert (linked.name, linked.email, linked.uni_id) == ("Someone Else", "someone.else@example.com", "555555555")
+    assert outbound.to(f"/v1/users/{QU_USER}/metadata") == []
+
+
+def test_a_second_account_proving_the_email_of_a_linked_record_does_not_take_it(sign_in, outbound, db_session):
+    """The record is linked to the member's university-ID sign-in; a Google sign-in proving its email is refused."""
+    owned = Members(
+        name="Owner",
+        email="fatima.m@gmail.com",
+        uni_id="444999888",
+        clerk_user_id="user_owner",
+        gender=MembersGender.FEMALE,
+        is_authenticated=1,
+    )
+    db_session.add(owned)
+    db_session.commit()
+    stub_google_account(outbound)
+
+    response = sign_in(GOOGLE_USER).post(
+        "/members/onboarding", json=answers("graduate", gender="Female", personal_email=None)
+    )
+
+    assert_conflict(response)
+    assert response.json()["code"] == "email_in_use"
+    db_session.refresh(owned)
+    assert (owned.clerk_user_id, owned.name) == ("user_owner", "Owner")
+    assert member_row(db_session, GOOGLE_USER) is None
+    assert outbound.to(f"/v1/users/{GOOGLE_USER}/metadata") == []
+
+
 def test_a_changed_public_name_refreshes_the_leaderboard_cache(sign_in, outbound):
     stub_qu_account(outbound)
     client = sign_in(QU_USER)
@@ -873,6 +922,78 @@ def test_anonymizing_writes_every_field_whatever_the_session_last_read(db_sessio
     row = db_session.get(Members, seed_refs.ahmed.id)
     assert row is not None
     assert (row.phone_number, row.email, row.uni_id, row.name) == (None, None, None, "Deleted member")
+
+
+def test_a_record_carrying_nothing_the_sign_in_proved_is_left_for_an_admin(sign_in, outbound, db_session):
+    """The record linked to this Google sign-in carries a university ID and an email the sign-in never proved."""
+    linked = Members(
+        name="Someone Else",
+        email="someone.else@example.com",
+        uni_id="555555555",
+        clerk_user_id=GOOGLE_USER,
+        gender=MembersGender.MALE,
+        is_authenticated=1,
+    )
+    db_session.add(linked)
+    db_session.commit()
+    stub_google_account(outbound)
+
+    response = sign_in(GOOGLE_USER).delete("/members/me")
+
+    assert_conflict(response)
+    assert response.json()["code"] == "member_not_verified"
+    db_session.refresh(linked)
+    assert linked.deleted_at is None
+    assert (linked.name, linked.email, linked.uni_id, linked.clerk_user_id) == (
+        "Someone Else",
+        "someone.else@example.com",
+        "555555555",
+        GOOGLE_USER,
+    )
+    assert [call.method for call in outbound.to(f"/v1/users/{GOOGLE_USER}")] == ["GET"], "the sign-in stays too"
+
+
+def test_a_google_account_deletes_the_record_carrying_its_email(sign_in, outbound, db_session):
+    """A record from before the Google sign-in, with a university ID, linked by the address the account proved."""
+    linked = Members(
+        name="فاطمة",
+        email="Fatima.M@gmail.com",
+        uni_id="441000111",
+        clerk_user_id=GOOGLE_USER,
+        gender=MembersGender.FEMALE,
+        is_authenticated=1,
+    )
+    db_session.add(linked)
+    db_session.commit()
+    stub_google_account(outbound)
+
+    response = sign_in(GOOGLE_USER).delete("/members/me")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"deleted": True, "member_anonymized": True}
+
+
+def test_a_university_id_proved_on_a_secondary_address_counts(sign_in, outbound, db_session):
+    """Signed up with the university ID, then made a Google address the primary one."""
+    linked = Members(
+        name="عبدالله",
+        email="changed@example.com",
+        uni_id="444111222",
+        clerk_user_id=QU_USER,
+        gender=MembersGender.MALE,
+        is_authenticated=1,
+    )
+    db_session.add(linked)
+    db_session.commit()
+    outbound.stub(
+        f"/v1/users/{QU_USER}",
+        json=clerk_user(QU_USER, ("abdullah@gmail.com", "from_oauth_google"), ("444111222@qu.edu.sa", "email_code")),
+    )
+
+    response = sign_in(QU_USER).delete("/members/me")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["member_anonymized"] is True
 
 
 def test_a_sign_in_deleted_in_clerk_meanwhile_still_counts_as_deleted(sign_in, outbound, db_session):

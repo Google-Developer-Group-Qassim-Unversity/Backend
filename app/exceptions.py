@@ -385,6 +385,25 @@ class StaffAccountDeletion(KnownHttpException):
         )
 
 
+class AccountRecordNotProven(KnownHttpException):
+    """The member record linked to this sign-in does not match what the sign-in proved to Clerk.
+
+    Onboarding refuses a record that carries a university ID other than the one
+    the sign-in proved. Deleting the account, which anonymizes the record for
+    good, refuses a record that carries neither that university ID nor an email
+    address the sign-in proved. Either way an admin checks whose it is.
+    """
+
+    code = "member_not_verified"
+
+    def __init__(self, member_id: int):
+        super().__init__(
+            status_code=409,
+            detail=f"Member {member_id} does not match the university ID or email this sign-in proved; an admin "
+            "has to check it",
+        )
+
+
 class ClerkUnavailable(KnownHttpException):
     """A call to the Clerk Backend API failed. Nothing about it is permanent: retry."""
 

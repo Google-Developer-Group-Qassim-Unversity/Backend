@@ -72,7 +72,11 @@ def update_current_member(updates: MemberUpdateModel, member: CurrentMember, ses
     response_model=DeletedAccountResponse,
     responses={
         401: {"model": CodedErrorResponse, "description": "No session token, or one that does not verify"},
-        409: {"model": CodedErrorResponse, "description": "member_is_staff: has a club role this semester"},
+        409: {
+            "model": CodedErrorResponse,
+            "description": "member_is_staff: has a club role this semester; member_not_verified: the record "
+            "carries no university ID or email this sign-in proved, so an admin deletes it",
+        },
         502: {"model": CodedErrorResponse, "description": "clerk_unavailable: retry; repeating the call is safe"},
         503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
     },
@@ -274,7 +278,11 @@ def get_member_by_id(member_id: int, session: DB):
             "model": CodedErrorResponse,
             "description": "No session token, one that does not verify, or a sign-in deleted meanwhile",
         },
-        409: {"model": CodedErrorResponse, "description": "member_claimed or email_in_use"},
+        409: {
+            "model": CodedErrorResponse,
+            "description": "member_claimed, email_in_use, or member_not_verified: the record linked to this "
+            "sign-in carries a different university ID",
+        },
         502: {"model": CodedErrorResponse, "description": "clerk_unavailable: retry"},
         503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
     },

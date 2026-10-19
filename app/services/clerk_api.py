@@ -57,6 +57,14 @@ class ClerkUser:
     def owns_email(self, email: str) -> bool:
         return email.strip().lower() in self.proven_emails
 
+    @property
+    def proven_uni_ids(self) -> frozenset[str]:
+        """Every university ID whose <uni_id>@qu.edu.sa mailbox the user proved, primary or not.
+
+        ``uni_id`` is only the primary's, the one onboarding records; this is
+        for checking that a record carrying a university ID is the user's."""
+        return frozenset(match.group(1) for email in self.proven_emails if (match := UNIVERSITY_EMAIL.fullmatch(email)))
+
 
 def parse_user(data: dict[str, Any]) -> ClerkUser:
     """A ``ClerkUser`` from the Backend API's user object."""

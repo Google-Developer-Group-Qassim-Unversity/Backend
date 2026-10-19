@@ -23,6 +23,7 @@ from app.DB import members as member_queries
 from app.DB.schema import MemberProfiles, Members, MembersGender
 from app.DB.wallet import update_member_profile
 from app.exceptions import (
+    AccountRecordNotProven,
     InvalidPersonalEmail,
     MemberEmailInUse,
     MemberLinkedToAnotherLogin,
@@ -77,6 +78,9 @@ def _lock_for(session: Session, member: Members, user: ClerkUser) -> Members:
     linked the record to a different sign-in since, or this account may have
     been deleted. Rereading the row under a lock settles it: until this
     transaction ends, no other request can change it.
+
+    A record that carries a university ID other than the one the user proved is
+    left as it is, for an admin to check (409 ``member_not_verified``).
     """
     linked_to_caller = member.clerk_user_id == user.id
     locked = member_queries.lock_member(session, member.id)
@@ -86,6 +90,8 @@ def _lock_for(session: Session, member: Members, user: ClerkUser) -> Members:
         raise MemberLinkedToAnotherLogin(member.id)
     if locked.clerk_user_id not in (None, user.id):
         raise MemberLinkedToAnotherLogin(locked.id)
+    if locked.uni_id is not None and user.uni_id is not None and locked.uni_id != user.uni_id:
+        raise AccountRecordNotProven(locked.id)
     return locked
 
 
@@ -235,6 +241,13 @@ def onboard(session: Session, clerk_user_id: str, answers: MemberOnboardingReque
     return member, already_existed
 
 
+def _carries_proven_identity(user: ClerkUser, member: Members) -> bool:
+    """Whether the record carries a university ID or an email address the user proved to Clerk."""
+    if member.uni_id is not None and member.uni_id in user.proven_uni_ids:
+        return True
+    return member.email is not None and user.owns_email(member.email)
+
+
 def delete_account(session: Session, clerk_user_id: str) -> bool:
     """Delete the caller's account: anonymize their member record, then delete their sign-in.
 
@@ -250,13 +263,18 @@ def delete_account(session: Session, clerk_user_id: str) -> bool:
 
     Only the record linked to this sign-in is touched, and it is locked until
     the commit: an onboarding running at the same time for this sign-in waits,
-    then finds the account deleted instead of writing its answers back.
+    then finds the account deleted instead of writing its answers back. The
+    record must also carry the university ID or an email address the user
+    proved to Clerk (409 ``member_not_verified`` otherwise): anonymizing cannot
+    be undone, so any other record is left for an admin to check and delete.
     Returns whether there was a record.
     """
-    clerk_api.get_user(clerk_user_id)
+    user = clerk_api.get_user(clerk_user_id)
     member = member_queries.lock_member_by_clerk_user_id_or_none(session, clerk_user_id)
     if member is not None:
         identify_actor(member)
+        if not _carries_proven_identity(user, member):
+            raise AccountRecordNotProven(member.id)
         if resolve_access(session, member).is_staff:
             raise StaffAccountDeletion(member.id)
         member_queries.anonymize_member(session, member)
