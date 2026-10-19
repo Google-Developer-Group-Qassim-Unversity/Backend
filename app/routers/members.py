@@ -262,7 +262,10 @@ def get_member_by_id(member_id: int, session: DB):
     responses={
         200: {"model": CreatedMemberModel, "description": "An existing member record was linked or updated"},
         401: {"model": CodedErrorResponse, "description": "not_authenticated"},
-        409: {"model": CodedErrorResponse, "description": "member_claimed, email_in_use, member_not_verified"},
+        409: {
+            "model": CodedErrorResponse,
+            "description": "member_claimed, member_exists, email_in_use, member_not_verified",
+        },
         502: {"model": CodedErrorResponse, "description": "clerk_unavailable"},
         503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
     },

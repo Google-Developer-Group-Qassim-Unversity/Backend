@@ -1,9 +1,10 @@
 import logging
+import re
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, func, or_, asc, desc, case, delete, null, update
 from app.DB.schema import EmailLogs, MemberProfiles, Members, MembersLogs, Submissions
-from app.exceptions import MemberNotFound
+from app.exceptions import MemberAlreadyExists, MemberNotFound
 from app.routers.models import Member_model
 from datetime import datetime
 
@@ -52,8 +53,35 @@ def create_member_if_not_exists(
         already_exist = True
         updated_member = update_member(session, member, is_authenticated)
         return updated_member, already_exist
+    refuse_second_record(session, member.phone_number, member.clerk_user_id)
     already_exist = False
     return create_member(session, member, is_authenticated), already_exist
+
+
+def refuse_second_record(session: Session, phone_number: str | None, clerk_user_id: str | None) -> None:
+    """Stop a sign-up from creating a second record for someone who already has one.
+
+    Runs only after every proven match (Clerk id, university ID, email) has
+    missed, right before a new row would be inserted. A member who signs up
+    again with a different account - Google instead of their university ID,
+    say - shares nothing proven with their first record, but they type the same
+    phone number. On 2026-10-20 every pair of live records sharing a phone
+    number on production (46 of them) was one person twice.
+
+    The phone number is typed, not proven, so it never links the sign-in to the
+    record: that would let anyone take over a record by typing its number. It
+    only refuses, and the person signs in with their first account or has an
+    admin move the record.
+    """
+    existing = get_member_by_phone_or_none(session, phone_number)
+    if existing is not None:
+        logger.warning(
+            "Sign-up %s has the phone number of member %s (signed in as %s); refusing a second record",
+            clerk_user_id,
+            existing.id,
+            existing.clerk_user_id,
+        )
+        raise MemberAlreadyExists(existing.id)
 
 
 def get_members(session: Session):
@@ -166,6 +194,24 @@ def get_member_by_uni_id_or_none(session: Session, uni_id: str) -> Members | Non
 def get_member_by_email_or_none(session: Session, email: str) -> Members | None:
     statement = select(Members).where(func.lower(Members.email) == email.strip().lower())
     return session.scalars(statement).first()
+
+
+def phone_key(phone_number: str | None) -> str | None:
+    """A Saudi mobile number's last nine digits, so 05XXXXXXXX, 5XXXXXXXX and +9665XXXXXXXX compare equal."""
+    digits = re.sub(r"\D", "", phone_number or "")
+    return digits[-9:] if len(digits) >= 9 else None
+
+
+def get_member_by_phone_or_none(session: Session, phone_number: str | None) -> Members | None:
+    """A live member row with this phone number, however either side is written."""
+    key = phone_key(phone_number)
+    if key is None:
+        return None
+    digits_only = Members.phone_number
+    for separator in (" ", "-", "+", "(", ")"):
+        digits_only = func.replace(digits_only, separator, "")
+    statement = select(Members).where(digits_only.endswith(key), Members.deleted_at.is_(None))
+    return next((m for m in session.scalars(statement) if phone_key(m.phone_number) == key), None)
 
 
 def get_unclaimed_member_by_email_or_none(session: Session, email: str) -> Members | None:

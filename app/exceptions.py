@@ -370,6 +370,19 @@ class StaffAccountDeletion(KnownHttpException):
         )
 
 
+class MemberAlreadyExists(KnownHttpException):
+    """Signing up would create a second record for a member who already has one under another sign-in."""
+
+    code = "member_exists"
+
+    def __init__(self, member_id: int):
+        super().__init__(
+            status_code=409,
+            detail=f"Member {member_id} has this phone number. Sign in with the account that record uses, or have "
+            "an admin move the record to this one",
+        )
+
+
 class AccountRecordNotProven(KnownHttpException):
     """The member record linked to this sign-in does not match what the sign-in proved to Clerk."""
 

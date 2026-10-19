@@ -132,6 +132,8 @@ def onboard(session: Session, clerk_user_id: str, answers: MemberOnboardingReque
     member = find_member_for(session, user)
     if member is not None:
         member = _lock_for(session, member, user)
+    else:
+        member_queries.refuse_second_record(session, answers.phone_number, user.id)
     holder = member_queries.get_member_by_email_or_none(session, personal_email)
     if holder is not None and (member is None or holder.id != member.id):
         raise MemberEmailInUse()
