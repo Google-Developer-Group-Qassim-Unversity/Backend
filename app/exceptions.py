@@ -414,7 +414,7 @@ class ClerkUnavailable(KnownHttpException):
 
 
 class ClerkNotConfigured(KnownHttpException):
-    """``CLERK_SECRET_KEY`` is not set for this deployment."""
+    """``CLERK_SECRET_KEY`` is not set for this deployment, or Clerk refuses it."""
 
     code = "clerk_not_configured"
 

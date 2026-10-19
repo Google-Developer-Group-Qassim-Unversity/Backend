@@ -10,6 +10,7 @@ from datetime import datetime
 import httpx
 import pytest
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
+from sentry_sdk.scrubber import DEFAULT_DENYLIST
 from sqlalchemy import func, select, update
 
 from app.config import config, reload_settings
@@ -34,8 +35,10 @@ from app.DB.schema import (
     SubmissionsSubmissionType,
     SuperAdmins,
 )
-from app.exceptions import MemberNotFound
+from app.exceptions import ClerkUnavailable, MemberNotFound
 from app.main import app
+from app.services import clerk_api
+from app.services import club_structure as club_service
 from app.services.clerk_api import parse_user
 from tests.utils import assert_2xx, assert_conflict, assert_unprocessable, semester_id_on
 
@@ -290,7 +293,9 @@ def test_graduate(sign_in, outbound, db_session):
         answers("qu_student", uni_level=0),
         answers("qu_student", uni_level=11),
         answers("other_university", university_name="x" * 151),
+        answers("other_university", university_name="ج" * 151),
         answers("qu_student", uni_college="x" * 101),
+        answers("high_school", school_name="ث" * 151),
         answers("alumni"),
     ],
     ids=[
@@ -305,7 +310,9 @@ def test_graduate(sign_in, outbound, db_session):
         "level 0",
         "level 11",
         "university_name too long",
+        "Arabic university_name too long",
         "college too long",
+        "Arabic school_name too long",
         "unknown status",
     ],
 )
@@ -320,6 +327,7 @@ def test_fields_must_fit_the_status(sign_in, outbound, body):
     "fields",
     [
         {"name": "x" * 51},
+        {"name": "ع" * 51},
         {"name": "   "},
         {"public_name": "x" * 151},
         {"gender": "male"},
@@ -335,6 +343,63 @@ def test_personal_fields_are_validated(sign_in, outbound, fields):
     stub_qu_account(outbound)
 
     assert_unprocessable(sign_in(QU_USER).post("/members/onboarding", json=answers(**fields)))
+
+
+def test_arabic_answers_are_kept_as_typed_up_to_each_length(sign_in, outbound, db_session):
+    """Lengths count characters, as the database columns do, not the bytes Arabic takes."""
+    stub_google_account(outbound)
+    name, university, college = "ع" * 50, "جامعة " + "ق" * 144, "ك" * 100
+    assert (len(name), len(university), len(college)) == (50, 150, 100)
+
+    response = sign_in(GOOGLE_USER).post(
+        "/members/onboarding",
+        json=answers(
+            "other_university",
+            name=name,
+            personal_email=None,
+            university_name=university,
+            uni_college=college,
+            uni_level=2,
+        ),
+    )
+
+    assert response.status_code == 201, response.text
+    member = response.json()["member"]
+    assert (member["name"], member["public_name"], member["uni_college"]) == (name, name, college)
+    profile = card(db_session, member["id"])
+    assert profile is not None and (profile.institution, profile.major) == (university, college)
+    metadata = metadata_written(outbound, GOOGLE_USER)
+    assert (metadata["fullArabicName"], metadata["universityName"], metadata["uniCollege"]) == (
+        name,
+        university,
+        college,
+    )
+
+
+@pytest.mark.parametrize("level", [True, "4", 4.0], ids=["a boolean", "a string", "a float"])
+def test_the_level_is_a_whole_number(sign_in, outbound, level):
+    stub_qu_account(outbound)
+
+    assert_unprocessable(sign_in(QU_USER).post("/members/onboarding", json=answers(uni_level=level)))
+
+
+def test_a_personal_email_longer_than_a_member_record_holds_is_a_422(sign_in, outbound):
+    stub_qu_account(outbound)
+    email = "a" * 41 + "@" + "b" * 55 + ".com"
+    assert len(email) == 101
+
+    assert_unprocessable(sign_in(QU_USER).post("/members/onboarding", json=answers(personal_email=email)))
+    assert outbound.calls == []
+
+
+def test_an_account_email_longer_than_a_member_record_holds_is_personal_email_invalid(sign_in, outbound, db_session):
+    stub_google_account(outbound, email="f" * 41 + "@" + "g" * 55 + ".com")
+
+    response = sign_in(GOOGLE_USER).post("/members/onboarding", json=answers("graduate", personal_email=None))
+
+    assert_unprocessable(response)
+    assert response.json()["code"] == "personal_email_invalid"
+    assert member_row(db_session, GOOGLE_USER) is None
 
 
 def test_gender_is_required(sign_in, outbound):
@@ -650,6 +715,30 @@ def test_clerk_down_before_anything_is_written(sign_in, outbound, db_session):
     assert member_row(db_session, QU_USER) is None
 
 
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_a_secret_key_clerk_refuses_is_a_configuration_error(sign_in, outbound, db_session, status_code):
+    """Retrying cannot help until the key is fixed, so it is not reported as an outage."""
+    outbound.stub(f"/v1/users/{QU_USER}", status_code=status_code, json={"errors": []})
+
+    for response in (
+        sign_in(QU_USER).post("/members/onboarding", json=answers()),
+        sign_in(QU_USER).delete("/members/me"),
+    ):
+        assert response.status_code == 503, response.text
+        assert response.json()["code"] == "clerk_not_configured"
+    assert member_row(db_session, QU_USER) is None
+
+
+def test_a_user_object_clerk_garbled_is_an_outage(sign_in, outbound, db_session):
+    outbound.stub(f"/v1/users/{QU_USER}", content=b"<html>Bad gateway</html>")
+
+    response = sign_in(QU_USER).post("/members/onboarding", json=answers())
+
+    assert response.status_code == 502, response.text
+    assert response.json()["code"] == "clerk_unavailable"
+    assert member_row(db_session, QU_USER) is None
+
+
 def test_clerk_unreachable(sign_in, outbound, db_session):
     outbound.stub(f"/v1/users/{QU_USER}", exc=httpx.ConnectError("no route"))
 
@@ -716,6 +805,28 @@ def test_a_sign_in_deleted_while_onboarding_leaves_an_existing_record_as_it_was_
     assert response.status_code == 401, response.text
     row = member_row(db_session, QU_USER)
     assert row is not None and row.deleted_at is None and row.uni_level == 5
+
+
+def test_a_clerk_outage_keeps_the_secret_key_out_of_the_traceback(outbound):
+    """Error reports copy every frame's variables; only names Sentry scrubs may hold the key."""
+    outbound.stub(f"/v1/users/{QU_USER}", exc=httpx.ConnectError("no route"))
+
+    with pytest.raises(ClerkUnavailable) as raised:
+        clerk_api.get_user(QU_USER)
+
+    error = raised.value
+    assert error.__cause__ is None and error.__context__ is None, "httpx's frames hold the request's headers"
+    scrubbed = {name.lower() for name in DEFAULT_DENYLIST}
+    frame = error.__traceback__
+    checked = 0
+    while frame is not None:
+        if "/app/" in frame.tb_frame.f_code.co_filename:
+            checked += 1
+            for name, value in frame.tb_frame.f_locals.items():
+                if name.lower() not in scrubbed:
+                    assert "sk_test_member_accounts" not in repr(value), (frame.tb_frame.f_code.co_name, name)
+        frame = frame.tb_next
+    assert checked >= 2, "the traceback reaches into app/services/clerk_api.py"
 
 
 def test_without_a_clerk_secret_nothing_happens(sign_in, outbound, monkeypatch, db_session):
@@ -994,6 +1105,18 @@ def test_a_university_id_proved_on_a_secondary_address_counts(sign_in, outbound,
 
     assert response.status_code == 200, response.text
     assert response.json()["member_anonymized"] is True
+
+
+def test_a_deleted_account_cannot_be_given_a_seat(sign_in, outbound, db_session, club):
+    member, _ = _onboarded_member_with_history(sign_in, outbound, db_session)
+    member_id = member.id
+    department = club.department("Media")
+    assert sign_in(QU_USER).delete("/members/me").status_code == 200
+
+    with pytest.raises(MemberNotFound):
+        club_service.add_member(db_session, club.current.id, department.id, member_id, actor="clerk_admin")
+    with pytest.raises(MemberNotFound):
+        club_service.grant_role(db_session, club.current.id, department.id, member_id, "leader", actor="clerk_admin")
 
 
 def test_a_sign_in_deleted_in_clerk_meanwhile_still_counts_as_deleted(sign_in, outbound, db_session):

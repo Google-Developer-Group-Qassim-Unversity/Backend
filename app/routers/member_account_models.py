@@ -22,6 +22,9 @@ STATUS_FIELDS: dict[str, frozenset[str]] = {
 # What the Website's onboarding accepts: 05 and eight more digits, ASCII only.
 SAUDI_MOBILE = re.compile(r"05[0-9]{8}")
 
+# members.email is a VARCHAR(100).
+MAX_EMAIL_LENGTH = 100
+
 
 def _blank_to_none(value: Any) -> Any:
     if isinstance(value, str) and not value.strip():
@@ -66,7 +69,9 @@ class MemberOnboardingRequest(BaseModel):
         description="Required for university-ID accounts (not an @qu.edu.sa address); "
         "Google and Apple accounts default to, and may only use, an address on the account",
     )
-    uni_level: int | None = Field(default=None, ge=1, le=10, description="qu_student and other_university only")
+    uni_level: int | None = Field(
+        default=None, ge=1, le=10, strict=True, description="qu_student and other_university only"
+    )
     uni_college: str | None = Field(
         default=None, description="College (or major), up to 100 characters; qu_student, graduate, other_university"
     )
@@ -98,7 +103,12 @@ class MemberOnboardingRequest(BaseModel):
     @classmethod
     def validate_personal_email(cls, value):
         value = _blank_to_none(value)
-        return value.strip() if isinstance(value, str) else value
+        if not isinstance(value, str):
+            return value
+        value = value.strip()
+        if len(value) > MAX_EMAIL_LENGTH:
+            raise ValueError(f"personal_email must be at most {MAX_EMAIL_LENGTH} characters")
+        return value
 
     @field_validator("uni_college", mode="before")
     @classmethod

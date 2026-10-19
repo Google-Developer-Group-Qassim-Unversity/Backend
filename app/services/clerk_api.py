@@ -105,13 +105,20 @@ def _user_path(user_id: str) -> str:
 
 
 def _request(method: str, path: str, *, json: Any = None) -> httpx.Response:
-    headers = {"Authorization": f"Bearer {_secret_key()}"}
+    # Error reports copy the variables of every frame in a traceback, so the key
+    # is only ever held in one named ``secret``, which Sentry scrubs, and a
+    # failure is raised on its own rather than chained to httpx's exception,
+    # whose frames hold the request's headers.
+    secret = _secret_key()
     try:
-        with httpx.Client(base_url=CLERK_API_URL, headers=headers, timeout=TIMEOUT_SECONDS) as client:
+        with httpx.Client(
+            base_url=CLERK_API_URL, headers={"Authorization": f"Bearer {secret}"}, timeout=TIMEOUT_SECONDS
+        ) as client:
             return client.request(method, path, json=json)
     except httpx.HTTPError as exc:
-        logger.error("Clerk %s %s failed: %s", method, path, type(exc).__name__)
-        raise ClerkUnavailable() from exc
+        failure = type(exc).__name__
+    logger.error("Clerk %s %s failed: %s", method, path, failure)
+    raise ClerkUnavailable()
 
 
 def _raise_for_status(response: httpx.Response, action: str, user_id: str) -> None:
@@ -119,6 +126,9 @@ def _raise_for_status(response: httpx.Response, action: str, user_id: str) -> No
         return
     # The body can carry the user's details, so only the status is logged.
     logger.error("Clerk could not %s for %s: HTTP %s", action, user_id, response.status_code)
+    if response.status_code in (401, 403):
+        # Clerk refused the secret key itself: a retry cannot help until the setting is fixed.
+        raise ClerkNotConfigured()
     raise ClerkUnavailable()
 
 
@@ -128,7 +138,11 @@ def get_user(user_id: str) -> ClerkUser:
     if response.status_code == 404:
         raise NotSignedIn("This sign-in no longer exists")
     _raise_for_status(response, "read the user", user_id)
-    return parse_user(response.json())
+    try:
+        return parse_user(response.json())
+    except (ValueError, KeyError, TypeError, AttributeError):
+        logger.error("Clerk answered with a user object that could not be read, for %s", user_id)
+    raise ClerkUnavailable()
 
 
 def update_public_metadata(user_id: str, metadata: dict[str, Any]) -> bool:

@@ -32,7 +32,7 @@ from app.exceptions import (
 )
 from app.helpers import identify_actor
 from app.leaderboard_cache import refresh_member_names_cache
-from app.routers.member_account_models import MemberOnboardingRequest
+from app.routers.member_account_models import MAX_EMAIL_LENGTH, MemberOnboardingRequest
 from app.routers.models import Member_model
 from app.services import clerk_api
 from app.services.clerk_api import ClerkUser
@@ -114,6 +114,8 @@ def _personal_email(user: ClerkUser, answers: MemberOnboardingRequest) -> str:
     if typed is None:
         if user.primary_email is None:
             raise InvalidPersonalEmail("personal_email_required", "The account has no verified email; send one")
+        if len(user.primary_email) > MAX_EMAIL_LENGTH:
+            raise InvalidPersonalEmail("personal_email_invalid", "The account's email is not usable; send one")
         return user.primary_email
     if typed.lower() != user.primary_email and not user.owns_email(typed):
         raise InvalidPersonalEmail("personal_email_not_on_account", "Use an email address that is on this account")
