@@ -3,7 +3,7 @@ name: Discord PR notification
 on:
   pull_request_target:
     types: [opened, closed]
-    branches: [dev]
+    branches: [dev, main]
 
 permissions: {}
 
