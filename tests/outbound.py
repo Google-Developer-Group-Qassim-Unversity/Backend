@@ -28,7 +28,8 @@ call                                         client
 ``call_direct_email_api``
 ``call_certificate_api``,                    a fresh ``httpx.Client`` per
 ``call_certificate_download``,               call
-``reset_leaderboard_cache``
+``reset_leaderboard_cache``,
+the Clerk Backend API (``clerk_api``)
 ``download_certificate``'s file fetch        module-level ``httpx.get``
 ===========================================  ==============================
 
@@ -101,6 +102,8 @@ class OutboundRecorder:
 
     calls: list[RecordedRequest] = field(default_factory=list)
     _stubs: dict[str, _Stub] = field(default_factory=dict)
+    # (method, path) -> stub, for a path that answers several methods differently.
+    _method_stubs: dict[tuple[str, str], _Stub] = field(default_factory=dict)
 
     # ---------- inspection ----------
 
@@ -131,6 +134,7 @@ class OutboundRecorder:
         self,
         path: str,
         *,
+        method: str | None = None,
         status_code: int = 200,
         json: Any = None,
         content: bytes | None = None,
@@ -138,10 +142,16 @@ class OutboundRecorder:
     ) -> None:
         """Answer ``path`` with something other than the default.
 
-        ``exc`` raises instead of responding, for the connection-failure paths
-        ``email_gateway`` maps onto ``ServiceUnavailable``.
+        ``method`` limits the stub to one HTTP method, for a path that serves
+        several (Clerk's ``/v1/users/<id>`` is read and deleted), and wins over
+        a stub for every method. ``exc`` raises instead of responding, for the
+        connection-failure paths ``email_gateway`` maps onto ``ServiceUnavailable``.
         """
-        self._stubs[path] = _Stub(status_code=status_code, json_body=json, content=content, exc=exc)
+        stub = _Stub(status_code=status_code, json_body=json, content=content, exc=exc)
+        if method is None:
+            self._stubs[path] = stub
+        else:
+            self._method_stubs[(method.upper(), path)] = stub
 
     # ---------- transport ----------
 
@@ -150,7 +160,7 @@ class OutboundRecorder:
             RecordedRequest(method=request.method, url=request.url, headers=request.headers, content=request.content)
         )
 
-        stub = self._stubs.get(request.url.path)
+        stub = self._method_stubs.get((request.method, request.url.path)) or self._stubs.get(request.url.path)
         if stub is None:
             return _default_response(request)
         if stub.exc is not None:
@@ -214,6 +224,10 @@ def _default_response(request: httpx.Request) -> httpx.Response:
     if path == "/api/revalidate":
         return httpx.Response(200, json={"revalidated": True})
 
+    # Clerk's Backend API (app/services/clerk_api.py), for the member app's account routes.
+    if request.url.host == "api.clerk.com":
+        return _clerk_response(request)
+
     # Notion (app/services/notion_client.py): the design team's board.
     if request.url.host == "api.notion.com":
         return _notion_response(request)
@@ -233,6 +247,20 @@ def _default_response(request: httpx.Request) -> httpx.Response:
         "Add it to tests/outbound.py:_default_response with the response the real "
         "service returns, or stub it in the test with outbound.stub(...)."
     )
+
+
+def _clerk_response(request: httpx.Request) -> httpx.Response:
+    """Clerk's answers to a metadata merge and a user delete. Reading a user has no
+    default: a test stubs ``/v1/users/<id>`` with the user it is about."""
+    path = request.url.path
+    parts = path.split("/")  # ["", "v1", "users", "<id>", ...]
+    if request.method == "PATCH" and len(parts) == 5 and parts[2] == "users" and parts[4] == "metadata":
+        return httpx.Response(
+            200, json={"object": "user", "id": parts[3], "public_metadata": _body(request).get("public_metadata", {})}
+        )
+    if request.method == "DELETE" and len(parts) == 4 and parts[2] == "users":
+        return httpx.Response(200, json={"object": "user", "id": parts[3], "deleted": True})
+    raise AssertionError(f"Unstubbed Clerk call: {request.method} {request.url} - stub it with outbound.stub(...)")
 
 
 NOTION_PAGE_ID = "11111111-2222-3333-4444-555555555555"

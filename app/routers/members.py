@@ -1,6 +1,6 @@
 import logging
 from app.leaderboard_cache import refresh_member_names_cache
-from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fastapi import APIRouter, HTTPException, Response, status, Depends, Query
 from app.DB import members as member_queries
 from app.DB.schema import Members
 
@@ -17,8 +17,10 @@ from app.routers.models import (
     BatchCreateMembersRequest,
     BatchCreateMembersResponse,
 )
+from app.routers.member_account_models import CodedErrorResponse, DeletedAccountResponse, MemberOnboardingRequest
+from app.services import member_accounts
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.helpers import CurrentMember, authenticated_guard, credentials_to_member_model
+from app.helpers import CurrentMember, SignedInClerkUserId, authenticated_guard, credentials_to_member_model
 from typing import Annotated
 from app.dependencies import DB
 from app.services.permissions.catalogue import Perm
@@ -62,6 +64,23 @@ def update_current_member(updates: MemberUpdateModel, member: CurrentMember, ses
     if public_name_changed:
         refresh_member_names_cache()
     return updated_member
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_200_OK,
+    response_model=DeletedAccountResponse,
+    responses={
+        401: {"model": CodedErrorResponse, "description": "not_authenticated"},
+        409: {"model": CodedErrorResponse, "description": "member_is_staff, member_not_verified"},
+        502: {"model": CodedErrorResponse, "description": "clerk_unavailable"},
+        503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
+    },
+)
+def delete_my_account(clerk_user_id: SignedInClerkUserId, session: DB):
+    """Delete the caller's account (App Store 5.1.1(v), Google Play account deletion)."""
+    member_anonymized = member_accounts.delete_account(session, clerk_user_id)
+    return {"deleted": True, "member_anonymized": member_anonymized}
 
 
 @router.get(
@@ -234,6 +253,28 @@ def get_member_by_uni_id(uni_id: str, session: DB):
 def get_member_by_id(member_id: int, session: DB):
     member = member_queries.get_member_by_id(session, member_id)
     return member
+
+
+@router.post(
+    "/onboarding",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CreatedMemberModel,
+    responses={
+        200: {"model": CreatedMemberModel, "description": "An existing member record was linked or updated"},
+        401: {"model": CodedErrorResponse, "description": "not_authenticated"},
+        409: {"model": CodedErrorResponse, "description": "member_claimed, email_in_use, member_not_verified"},
+        502: {"model": CodedErrorResponse, "description": "clerk_unavailable"},
+        503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
+    },
+)
+def onboard_member(
+    answers: MemberOnboardingRequest, clerk_user_id: SignedInClerkUserId, session: DB, response: Response
+):
+    """The member app's onboarding: what the Website does with publicMetadata and ``POST /`` together."""
+    member, already_exists = member_accounts.onboard(session, clerk_user_id, answers)
+    if already_exists:
+        response.status_code = status.HTTP_200_OK
+    return {"member": member, "already_exists": already_exists}
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=CreatedMemberModel)

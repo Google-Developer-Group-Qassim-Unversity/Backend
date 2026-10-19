@@ -502,6 +502,10 @@ class Members(Base):
     is_authenticated: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
     email: Mapped[Optional[str]] = mapped_column(String(100))
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
+    # Set when the member deleted their account (DELETE /members/me). The row
+    # stays, anonymized, because points, attendance and the club's records
+    # point at it; every list of members leaves it out.
+    deleted_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
     profile: Mapped[Optional["MemberProfiles"]] = relationship(
         "MemberProfiles", back_populates="member", uselist=False, passive_deletes=True

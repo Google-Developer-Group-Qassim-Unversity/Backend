@@ -24,10 +24,11 @@ _MEMBERS_POINTS_BASE_QUERY = """
 
 
 def get_members_points_semester(session: Session, semester_id: str) -> list[dict]:
-    """Every member's total points for the semester, ordered highest first."""
+    """Every member's total points for the semester, ordered highest first. Deleted accounts are left out."""
     query = (
         _MEMBERS_POINTS_BASE_QUERY
-        + """GROUP BY m.id, m.public_name
+        + """WHERE m.deleted_at IS NULL
+        GROUP BY m.id, m.public_name
         ORDER BY total_points DESC
     """
     )
@@ -36,10 +37,10 @@ def get_members_points_semester(session: Session, semester_id: str) -> list[dict
 
 
 def get_member_points_by_id_semester(session: Session, semester_id: str, member_id: int) -> dict | None:
-    """One member's total points for the semester, or None if they do not exist."""
+    """One member's total points for the semester, or None if they do not exist or deleted their account."""
     query = (
         _MEMBERS_POINTS_BASE_QUERY
-        + """WHERE m.id = :member_id
+        + """WHERE m.id = :member_id AND m.deleted_at IS NULL
     GROUP BY m.id, m.public_name
         ORDER BY total_points DESC
     """
@@ -77,6 +78,7 @@ def get_member_points_history_semester(session: Session, semester_id: str, membe
         JOIN actions a ON l.action_id = a.id
         LEFT JOIN log_modifications lm ON l.id = lm.log_id
         WHERE m.id = :member_id
+            AND m.deleted_at IS NULL
             AND e.semester_id = :semester_id
             AND e.status <> 'draft'
             AND e.location_type <> 'hidden'

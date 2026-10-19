@@ -24,6 +24,7 @@ the boot rather than the first request.
 | `SENTRY_DSN` | optional | - | leave unset to disable Sentry |
 | `DATABASE_URL` | **at startup** | - | the app refuses to start without it |
 | `CLERK_JWKS_URL` | **at startup** | - | the app refuses to start without it |
+| `CLERK_SECRET_KEY` | for the member app's account routes | - | the same Clerk instance's secret key (`sk_live_...` in prod; the development instance's `sk_test_...` on staging and local dev). `POST /members/onboarding` and `DELETE /members/me` read the caller's verified emails, write their publicMetadata and delete their sign-in with it (`app/services/clerk_api.py`); unset, or refused by Clerk, both answer 503 `clerk_not_configured`. The scripts in `scripts/` read it too |
 | `JWT_SECRET` | when the feature runs | - | signs attendance QR tokens |
 
 ### Google Forms sync

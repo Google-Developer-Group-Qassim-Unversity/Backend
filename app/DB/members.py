@@ -1,8 +1,8 @@
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select, func, or_, asc, desc, case
-from app.DB.schema import Members, MembersLogs
+from sqlalchemy import select, func, or_, asc, desc, case, delete, null, update
+from app.DB.schema import EmailLogs, MemberProfiles, Members, MembersLogs, Submissions
 from app.exceptions import MemberNotFound
 from app.routers.models import Member_model
 from datetime import datetime
@@ -62,8 +62,10 @@ def get_members(session: Session):
         .group_by(MembersLogs.member_id)
         .subquery()
     )
-    statement = select(Members, last_activity_subq.c.last_activity).outerjoin(
-        last_activity_subq, last_activity_subq.c.member_id == Members.id
+    statement = (
+        select(Members, last_activity_subq.c.last_activity)
+        .outerjoin(last_activity_subq, last_activity_subq.c.member_id == Members.id)
+        .where(Members.deleted_at.is_(None))
     )
     members = []
     for member, last_activity in session.execute(statement).all():
@@ -94,7 +96,7 @@ def _member_search_filter(search: str | None):
 
 
 def count_members(session: Session, search: str | None = None) -> int:
-    stmt = select(func.count()).select_from(Members)
+    stmt = select(func.count()).select_from(Members).where(Members.deleted_at.is_(None))
     search_filter = _member_search_filter(search)
     if search_filter is not None:
         stmt = stmt.where(search_filter)
@@ -111,8 +113,10 @@ def get_members_paginated(
         .group_by(MembersLogs.member_id)
         .subquery()
     )
-    statement = select(Members, last_activity_subq.c.last_activity).outerjoin(
-        last_activity_subq, last_activity_subq.c.member_id == Members.id
+    statement = (
+        select(Members, last_activity_subq.c.last_activity)
+        .outerjoin(last_activity_subq, last_activity_subq.c.member_id == Members.id)
+        .where(Members.deleted_at.is_(None))
     )
     search_filter = _member_search_filter(search)
     if search_filter is not None:
@@ -134,7 +138,8 @@ def get_members_paginated(
 
 
 def get_member_by_id(session: Session, member_id: int):
-    statement = select(Members).where(Members.id == member_id)
+    """A member by id. A deleted account is not found: nothing should act on it any more."""
+    statement = select(Members).where(Members.id == member_id, Members.deleted_at.is_(None))
     member = session.scalars(statement).first()
     if not member:
         raise MemberNotFound(member_id)
@@ -176,6 +181,16 @@ def get_unclaimed_member_by_email_or_none(session: Session, email: str) -> Membe
     return session.scalars(statement).first()
 
 
+def get_unlinked_member_by_email_or_none(session: Session, email: str) -> Members | None:
+    """A member row that no Clerk sign-in uses yet, by email (case-insensitive)."""
+    statement = select(Members).where(
+        func.lower(Members.email) == email.strip().lower(),
+        Members.clerk_user_id.is_(None),
+        Members.deleted_at.is_(None),
+    )
+    return session.scalars(statement).first()
+
+
 def get_member_by_clerk_user_id(session: Session, clerk_user_id: str) -> Members:
     member = get_member_by_clerk_user_id_or_none(session, clerk_user_id)
     if not member:
@@ -185,6 +200,25 @@ def get_member_by_clerk_user_id(session: Session, clerk_user_id: str) -> Members
 
 def get_member_by_clerk_user_id_or_none(session: Session, clerk_user_id: str) -> Members | None:
     statement = select(Members).where(Members.clerk_user_id == clerk_user_id)
+    return session.scalars(statement).first()
+
+
+def lock_member(session: Session, member_id: int) -> Members | None:
+    """A member row read as it is now and locked until the transaction ends."""
+    statement = (
+        select(Members).where(Members.id == member_id).with_for_update().execution_options(populate_existing=True)
+    )
+    return session.scalars(statement).first()
+
+
+def lock_member_by_clerk_user_id_or_none(session: Session, clerk_user_id: str) -> Members | None:
+    """Like ``lock_member``, by the Clerk id."""
+    statement = (
+        select(Members)
+        .where(Members.clerk_user_id == clerk_user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     return session.scalars(statement).first()
 
 
@@ -281,7 +315,7 @@ def get_member_stats(session: Session) -> dict:
             func.coalesce(func.sum(case((Members.is_authenticated == 1, 1), else_=0)), 0).label("authenticated"),
             func.coalesce(func.sum(case((Members.gender == "Male", 1), else_=0)), 0).label("male"),
             func.coalesce(func.sum(case((Members.gender == "Female", 1), else_=0)), 0).label("female"),
-        )
+        ).where(Members.deleted_at.is_(None))
     ).one()
     total = int(row.total)
     authenticated = int(row.authenticated)
@@ -292,3 +326,32 @@ def get_member_stats(session: Session) -> dict:
         "male": int(row.male),
         "female": int(row.female),
     }
+
+
+DELETED_MEMBER_NAME = "Deleted member"
+
+
+def anonymize_member(session: Session, member: Members) -> None:
+    """Strip a member's personal data and mark the account deleted."""
+    now = datetime.now()
+    session.execute(delete(MemberProfiles).where(MemberProfiles.member_id == member.id))
+    session.execute(delete(Submissions).where(Submissions.member_id == member.id))
+    session.execute(update(EmailLogs).where(EmailLogs.member_id == member.id).values(member_id=None, data=null()))
+    session.execute(
+        update(Members)
+        .where(Members.id == member.id)
+        .values(
+            name=DELETED_MEMBER_NAME,
+            public_name=DELETED_MEMBER_NAME,
+            email=None,
+            phone_number=None,
+            uni_id=None,
+            clerk_user_id=None,
+            uni_level=None,
+            uni_college=None,
+            updated_at=now,
+            deleted_at=now,
+        )
+    )
+    session.flush()
+    logger.info("Anonymized member %s", member.id)
