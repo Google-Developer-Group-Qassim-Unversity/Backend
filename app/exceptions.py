@@ -315,3 +315,74 @@ class DrivePolicyBlocked(KnownHttpException):
 
     def __init__(self, detail: str = "The workspace policy blocked public sharing — contact the board"):
         super().__init__(status_code=403, detail=detail)
+
+
+# ---------- the member app's own account routes (app/services/member_accounts.py) ----------
+
+
+class NotSignedIn(KnownHttpException):
+    """No session token, or one that Clerk's keys do not verify.
+
+    401 rather than the 403 ``authenticated_guard`` answers with, so the member
+    app knows to refresh its session token and try again.
+    """
+
+    code = "not_authenticated"
+
+    def __init__(self, detail: str = "Sign in again: the session token is missing or could not be verified"):
+        super().__init__(status_code=401, detail=detail, headers={"WWW-Authenticate": "Bearer"})
+
+
+class MemberLinkedToAnotherLogin(KnownHttpException):
+    """The caller's university ID belongs to a member record that a different sign-in uses.
+
+    A record is never moved from one sign-in to another automatically; an admin
+    clears its ``clerk_user_id`` first if it really is this person's.
+    """
+
+    code = "member_claimed"
+
+    def __init__(self, member_id: int):
+        super().__init__(status_code=409, detail=f"Member {member_id} is already linked to a different sign-in")
+
+
+class MemberEmailInUse(KnownHttpException):
+    """The personal email is already on another member's record."""
+
+    code = "email_in_use"
+
+    def __init__(self):
+        super().__init__(
+            status_code=409,
+            detail="This email is already on another member's record. If it is yours, verify it on your "
+            "account first; otherwise use a different email.",
+        )
+
+
+class InvalidPersonalEmail(KnownHttpException):
+    """The personal email breaks a rule that depends on how the caller signed up.
+
+    ``detail`` is shaped like FastAPI's own 422, so a client renders both the same way.
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(status_code=422, detail=[{"loc": ["body", "personal_email"], "msg": message, "type": code}])
+        self.code = code
+
+
+class ClerkUnavailable(KnownHttpException):
+    """A call to the Clerk Backend API failed. Nothing about it is permanent: retry."""
+
+    code = "clerk_unavailable"
+
+    def __init__(self, detail: str = "Clerk could not be reached. Try again."):
+        super().__init__(status_code=502, detail=detail)
+
+
+class ClerkNotConfigured(KnownHttpException):
+    """``CLERK_SECRET_KEY`` is not set for this deployment."""
+
+    code = "clerk_not_configured"
+
+    def __init__(self):
+        super().__init__(status_code=503, detail="Account changes are not available on this server yet")

@@ -176,6 +176,18 @@ def get_unclaimed_member_by_email_or_none(session: Session, email: str) -> Membe
     return session.scalars(statement).first()
 
 
+def get_unlinked_member_by_email_or_none(session: Session, email: str) -> Members | None:
+    """A member row that no Clerk sign-in uses yet, by email (case-insensitive).
+
+    Unlike ``get_unclaimed_member_by_email_or_none`` this includes rows that
+    signed in before Clerk ids were stored (``is_authenticated`` set, no
+    ``clerk_user_id``): they still belong to no sign-in."""
+    statement = select(Members).where(
+        func.lower(Members.email) == email.strip().lower(), Members.clerk_user_id.is_(None)
+    )
+    return session.scalars(statement).first()
+
+
 def get_member_by_clerk_user_id(session: Session, clerk_user_id: str) -> Members:
     member = get_member_by_clerk_user_id_or_none(session, clerk_user_id)
     if not member:

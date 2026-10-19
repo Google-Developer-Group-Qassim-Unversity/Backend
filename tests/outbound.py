@@ -28,7 +28,8 @@ call                                         client
 ``call_direct_email_api``
 ``call_certificate_api``,                    a fresh ``httpx.Client`` per
 ``call_certificate_download``,               call
-``reset_leaderboard_cache``
+``reset_leaderboard_cache``,
+the Clerk Backend API (``clerk_api``)
 ``download_certificate``'s file fetch        module-level ``httpx.get``
 ===========================================  ==============================
 
@@ -214,6 +215,10 @@ def _default_response(request: httpx.Request) -> httpx.Response:
     if path == "/api/revalidate":
         return httpx.Response(200, json={"revalidated": True})
 
+    # Clerk's Backend API (app/services/clerk_api.py), for the member app's account routes.
+    if request.url.host == "api.clerk.com":
+        return _clerk_response(request)
+
     # Notion (app/services/notion_client.py): the design team's board.
     if request.url.host == "api.notion.com":
         return _notion_response(request)
@@ -233,6 +238,18 @@ def _default_response(request: httpx.Request) -> httpx.Response:
         "Add it to tests/outbound.py:_default_response with the response the real "
         "service returns, or stub it in the test with outbound.stub(...)."
     )
+
+
+def _clerk_response(request: httpx.Request) -> httpx.Response:
+    """Clerk's answer to a metadata merge. Reading a user has no default: a test
+    stubs ``/v1/users/<id>`` with the user it is about."""
+    path = request.url.path
+    parts = path.split("/")  # ["", "v1", "users", "<id>", ...]
+    if request.method == "PATCH" and len(parts) == 5 and parts[2] == "users" and parts[4] == "metadata":
+        return httpx.Response(
+            200, json={"object": "user", "id": parts[3], "public_metadata": _body(request).get("public_metadata", {})}
+        )
+    raise AssertionError(f"Unstubbed Clerk call: {request.method} {request.url} - stub it with outbound.stub(...)")
 
 
 NOTION_PAGE_ID = "11111111-2222-3333-4444-555555555555"

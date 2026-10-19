@@ -62,6 +62,9 @@ class Settings(BaseSettings):
 
     DATABASE_URL: Optional[str] = None
     CLERK_JWKS_URL: Optional[str] = None
+    # The Clerk Backend API (app/services/clerk_api.py): the member app's
+    # onboarding. The scripts in scripts/ read it too.
+    CLERK_SECRET_KEY: Optional[str] = None
     JWT_SECRET: Optional[str] = None
 
     GOOGLE_CLIENT_ID: Optional[str] = None
@@ -197,6 +200,10 @@ class Config:
     @property
     def DATABASE_URL(self) -> str:
         return env_or_except("DATABASE_URL")
+
+    @property
+    def CLERK_SECRET_KEY(self) -> str:
+        return env_or_except("CLERK_SECRET_KEY")
 
     @property
     def CLERK_GUARD(self):

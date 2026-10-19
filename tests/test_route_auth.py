@@ -35,7 +35,10 @@ from app.main import app
 # (app/services/permissions/guards.py) and is named by its ``auth_label``: a
 # permission key such as "events.edit", "events.edit for event" when it is checked
 # against the department of the event in the path, or "super_admin".
-CLERK_GUARDS = {"authenticated_guard", "optional_clerk_guard"}
+# ``signed_in_guard`` requires a session like ``authenticated_guard`` but answers
+# 401 instead of 403 (the member app's account routes); it reads the token through
+# ``optional_clerk_guard``, which is why it outranks it below.
+CLERK_GUARDS = {"authenticated_guard", "signed_in_guard", "optional_clerk_guard"}
 
 
 def _guards(dependant) -> set[str]:
@@ -57,7 +60,7 @@ def _strictness(label: str) -> int:
     if label not in CLERK_GUARDS:
         # The staff baseline (admin.access) is weaker than any specific permission on the same route.
         return 2 if label == "admin.access" else 3
-    return 1 if label == "authenticated_guard" else 0
+    return 0 if label == "optional_clerk_guard" else 1
 
 
 def _strictest(guards: set[str]) -> str | None:
@@ -184,6 +187,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "POST /forms/{event_id:int}/unattach": "forms.manage for event",
     "POST /forms/watches/renew": "forms.admin",
     "POST /members/": "authenticated_guard",
+    "POST /members/onboarding": "signed_in_guard",
     "POST /members/batch": "members.create",
     "POST /members/manual": "members.create",
     "POST /semesters": "semesters.manage",

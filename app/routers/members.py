@@ -1,6 +1,6 @@
 import logging
 from app.leaderboard_cache import refresh_member_names_cache
-from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fastapi import APIRouter, HTTPException, Response, status, Depends, Query
 from app.DB import members as member_queries
 from app.DB.schema import Members
 
@@ -17,8 +17,10 @@ from app.routers.models import (
     BatchCreateMembersRequest,
     BatchCreateMembersResponse,
 )
+from app.routers.member_account_models import CodedErrorResponse, MemberOnboardingRequest
+from app.services import member_accounts
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from app.helpers import CurrentMember, authenticated_guard, credentials_to_member_model
+from app.helpers import CurrentMember, SignedInClerkUserId, authenticated_guard, credentials_to_member_model
 from typing import Annotated
 from app.dependencies import DB
 from app.services.permissions.catalogue import Perm
@@ -234,6 +236,38 @@ def get_member_by_uni_id(uni_id: str, session: DB):
 def get_member_by_id(member_id: int, session: DB):
     member = member_queries.get_member_by_id(session, member_id)
     return member
+
+
+@router.post(
+    "/onboarding",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CreatedMemberModel,
+    responses={
+        200: {"model": CreatedMemberModel, "description": "An existing member record was linked or updated"},
+        401: {"model": CodedErrorResponse, "description": "No session token, or one that does not verify"},
+        409: {"model": CodedErrorResponse, "description": "member_claimed or email_in_use"},
+        502: {"model": CodedErrorResponse, "description": "clerk_unavailable: retry"},
+        503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
+    },
+)
+def onboard_member(
+    answers: MemberOnboardingRequest, clerk_user_id: SignedInClerkUserId, session: DB, response: Response
+):
+    """The member app's onboarding: what the Website does with publicMetadata and ``POST /`` together.
+
+    Creates the caller's member record, or links the one that is theirs (by the
+    university ID or an email address they proved to Clerk, never by anything
+    in the body) and updates it with these answers. Seeds the card's status,
+    and writes the same Clerk publicMetadata the Website's onboarding writes,
+    ``onboardingComplete`` included, so the Website treats the member as
+    onboarded too. 201 when a record was created, 200 when one already existed.
+    Repeating the call is safe. Refresh the session token afterwards: it still
+    carries the old metadata.
+    """
+    member, already_exists = member_accounts.onboard(session, clerk_user_id, answers)
+    if already_exists:
+        response.status_code = status.HTTP_200_OK
+    return {"member": member, "already_exists": already_exists}
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=CreatedMemberModel)
