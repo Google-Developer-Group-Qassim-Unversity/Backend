@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "linear-gdg": {
+      "httpUrl": "https://mcp.linear.app/mcp"
+    }
+  },
+  "context": {
+    "fileName": [
+      "AGENTS.md",
+      "GEMINI.md"
+    ]
+  }
+}
