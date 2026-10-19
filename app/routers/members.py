@@ -71,27 +71,14 @@ def update_current_member(updates: MemberUpdateModel, member: CurrentMember, ses
     status_code=status.HTTP_200_OK,
     response_model=DeletedAccountResponse,
     responses={
-        401: {"model": CodedErrorResponse, "description": "No session token, or one that does not verify"},
-        409: {
-            "model": CodedErrorResponse,
-            "description": "member_is_staff: has a club role this semester; member_not_verified: the record "
-            "carries no university ID or email this sign-in proved, so an admin deletes it",
-        },
-        502: {"model": CodedErrorResponse, "description": "clerk_unavailable: retry; repeating the call is safe"},
+        401: {"model": CodedErrorResponse, "description": "not_authenticated"},
+        409: {"model": CodedErrorResponse, "description": "member_is_staff, member_not_verified"},
+        502: {"model": CodedErrorResponse, "description": "clerk_unavailable"},
         503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
     },
 )
 def delete_my_account(clerk_user_id: SignedInClerkUserId, session: DB):
-    """Delete the caller's account (App Store 5.1.1(v), Google Play account deletion).
-
-    The member record linked to this sign-in is anonymized: names, emails,
-    phone, university ID, Clerk link, academic details, card and public
-    profile, and registrations with their form answers are removed, and the
-    record leaves every leaderboard, history and member list. Its points and
-    attendance rows stay, under no name. Then the Clerk sign-in is deleted.
-    Repeating the call is safe, and is how a 502 is recovered from; once the
-    sign-in is gone, a repeat answers 401.
-    """
+    """Delete the caller's account (App Store 5.1.1(v), Google Play account deletion)."""
     member_anonymized = member_accounts.delete_account(session, clerk_user_id)
     return {"deleted": True, "member_anonymized": member_anonymized}
 
@@ -274,33 +261,16 @@ def get_member_by_id(member_id: int, session: DB):
     response_model=CreatedMemberModel,
     responses={
         200: {"model": CreatedMemberModel, "description": "An existing member record was linked or updated"},
-        401: {
-            "model": CodedErrorResponse,
-            "description": "No session token, one that does not verify, or a sign-in deleted meanwhile",
-        },
-        409: {
-            "model": CodedErrorResponse,
-            "description": "member_claimed, email_in_use, or member_not_verified: the record linked to this "
-            "sign-in carries a different university ID",
-        },
-        502: {"model": CodedErrorResponse, "description": "clerk_unavailable: retry"},
+        401: {"model": CodedErrorResponse, "description": "not_authenticated"},
+        409: {"model": CodedErrorResponse, "description": "member_claimed, email_in_use, member_not_verified"},
+        502: {"model": CodedErrorResponse, "description": "clerk_unavailable"},
         503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
     },
 )
 def onboard_member(
     answers: MemberOnboardingRequest, clerk_user_id: SignedInClerkUserId, session: DB, response: Response
 ):
-    """The member app's onboarding: what the Website does with publicMetadata and ``POST /`` together.
-
-    Creates the caller's member record, or links the one that is theirs (by the
-    university ID or an email address they proved to Clerk, never by anything
-    in the body) and updates it with these answers. Seeds the card's status,
-    and writes the same Clerk publicMetadata the Website's onboarding writes,
-    ``onboardingComplete`` included, so the Website treats the member as
-    onboarded too. 201 when a record was created, 200 when one already existed.
-    Repeating the call is safe. Refresh the session token afterwards: it still
-    carries the old metadata.
-    """
+    """The member app's onboarding: what the Website does with publicMetadata and ``POST /`` together."""
     member, already_exists = member_accounts.onboard(session, clerk_user_id, answers)
     if already_exists:
         response.status_code = status.HTTP_200_OK

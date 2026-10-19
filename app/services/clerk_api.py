@@ -1,14 +1,4 @@
-"""Clerk's Backend API, for what a session token cannot do on its own.
-
-The session token says who the caller is. Reading which email addresses they
-proved, writing the publicMetadata the Website reads, and deleting their
-sign-in need the instance's secret key (``CLERK_SECRET_KEY``), so the member
-app's account routes do those through here.
-https://clerk.com/docs/reference/backend-api
-
-A fresh ``httpx.Client`` per call, like ``app/leaderboard_cache.py``: these run
-from sync handlers, and it is what ``tests/outbound.py`` intercepts.
-"""
+"""Clerk's Backend API, for what a session token cannot do on its own."""
 
 import logging
 import re
@@ -26,14 +16,10 @@ logger = logging.getLogger(__name__)
 CLERK_API_URL = "https://api.clerk.com/v1"
 TIMEOUT_SECONDS = 10.0
 
-# An address is the user's own when they proved they receive mail there: Clerk
-# sent it a code or a link, or an OAuth provider (Google, Apple) vouched for it.
-# The verification strategies are in the Backend API's EmailAddress schema.
+# Verification strategies that prove the user receives mail at the address.
 PROVEN_STRATEGIES = frozenset({"email_code", "reset_password_email_code", "email_link"})
 PROVEN_STRATEGY_PREFIX = "from_oauth_"
 
-# A university-ID account signs up as <9-digit uni_id>@qu.edu.sa and proves it
-# with a code sent to that mailbox.
 UNIVERSITY_EMAIL = re.compile(r"([0-9]{9})@qu\.edu\.sa", re.IGNORECASE)
 
 
@@ -59,10 +45,7 @@ class ClerkUser:
 
     @property
     def proven_uni_ids(self) -> frozenset[str]:
-        """Every university ID whose <uni_id>@qu.edu.sa mailbox the user proved, primary or not.
-
-        ``uni_id`` is only the primary's, the one onboarding records; this is
-        for checking that a record carrying a university ID is the user's."""
+        """Every university ID whose <uni_id>@qu.edu.sa mailbox the user proved, primary or not."""
         return frozenset(match.group(1) for email in self.proven_emails if (match := UNIVERSITY_EMAIL.fullmatch(email)))
 
 
@@ -105,10 +88,7 @@ def _user_path(user_id: str) -> str:
 
 
 def _request(method: str, path: str, *, json: Any = None) -> httpx.Response:
-    # Error reports copy the variables of every frame in a traceback, so the key
-    # is only ever held in one named ``secret``, which Sentry scrubs, and a
-    # failure is raised on its own rather than chained to httpx's exception,
-    # whose frames hold the request's headers.
+    # Keep the key in a variable named ``secret`` (Sentry scrubs it) and don't chain httpx's exception.
     secret = _secret_key()
     try:
         with httpx.Client(
@@ -146,10 +126,7 @@ def get_user(user_id: str) -> ClerkUser:
 
 
 def update_public_metadata(user_id: str, metadata: dict[str, Any]) -> bool:
-    """Merge ``metadata`` into the user's publicMetadata. A key set to ``None`` is removed.
-
-    ``False`` when Clerk no longer has the user: the sign-in was deleted since it was read.
-    """
+    """Merge ``metadata`` into the user's publicMetadata. A key set to ``None`` is removed."""
     response = _request("PATCH", f"{_user_path(user_id)}/metadata", json={"public_metadata": metadata})
     if response.status_code == 404:
         return False

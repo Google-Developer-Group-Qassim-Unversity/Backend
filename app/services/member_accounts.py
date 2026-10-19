@@ -1,16 +1,4 @@
-"""The member app's account flows: onboarding, and deleting an account.
-
-The Website onboards in two steps - its server writes the answers into Clerk
-publicMetadata, then ``POST /members/`` reads them back - and offers account
-deletion through Clerk's own account page. A native app has neither, so
-``POST /members/onboarding`` and ``DELETE /members/me`` do the whole job here,
-with the Clerk Backend API (``app/services/clerk_api.py``).
-
-Who the caller is never comes from the request: the Clerk user id is the
-verified session token's ``sub``, and the university ID and email addresses
-come from Clerk's record of what that user proved. A member record that another
-sign-in uses is never moved to this one.
-"""
+"""The member app's account flows: onboarding, and deleting an account."""
 
 import logging
 from typing import Any
@@ -44,15 +32,7 @@ UNIVERSITY_DOMAIN = "qu.edu.sa"
 
 
 def find_member_for(session: Session, user: ClerkUser) -> Members | None:
-    """The member record that is this Clerk user's, or None when they have none yet.
-
-    1. The record linked to the sign-in (``clerk_user_id``).
-    2. Otherwise the record with the university ID the user proved, as long as
-       no sign-in uses it yet. One that another sign-in uses is a 409.
-    3. Otherwise a record no sign-in uses yet whose email the user proved: an
-       admin-created record from before they signed up. One that carries a
-       different university ID from the one this user proved is someone else's.
-    """
+    """The member record that is this Clerk user's, or None when they have none yet."""
     member = member_queries.get_member_by_clerk_user_id_or_none(session, user.id)
     if member is not None:
         return member
@@ -72,16 +52,7 @@ def find_member_for(session: Session, user: ClerkUser) -> Members | None:
 
 
 def _lock_for(session: Session, member: Members, user: ClerkUser) -> Members:
-    """Lock the record this call is about to write, and check it is still this sign-in's to write.
-
-    ``find_member_for`` reads without locks, so another request may have
-    linked the record to a different sign-in since, or this account may have
-    been deleted. Rereading the row under a lock settles it: until this
-    transaction ends, no other request can change it.
-
-    A record that carries a university ID other than the one the user proved is
-    left as it is, for an admin to check (409 ``member_not_verified``).
-    """
+    """Lock the record this call is about to write, and check it is still this sign-in's to write."""
     linked_to_caller = member.clerk_user_id == user.id
     locked = member_queries.lock_member(session, member.id)
     if locked is None or locked.deleted_at is not None:
@@ -96,13 +67,7 @@ def _lock_for(session: Session, member: Members, user: ClerkUser) -> Members:
 
 
 def _personal_email(user: ClerkUser, answers: MemberOnboardingRequest) -> str:
-    """The personal email, by the Website's rules.
-
-    A university-ID account types one, and it cannot be the university address.
-    Any other account (Google, Apple) uses the address it signed up with, which
-    the Website shows locked; the app may send it, or another address the
-    account proved, or leave it out.
-    """
+    """The personal email, by the Website's rules."""
     typed = str(answers.personal_email).strip() if answers.personal_email else None
     if user.is_university_id_account:
         if typed is None:
@@ -123,13 +88,7 @@ def _personal_email(user: ClerkUser, answers: MemberOnboardingRequest) -> str:
 
 
 def _seed_card(session: Session, member: Members, answers: MemberOnboardingRequest) -> None:
-    """The card's academic half, as the Website seeds it right after onboarding.
-
-    The status lives on the card (``member_profiles``), so a student at another
-    university is a ``student`` at ``university`` level whose institution is
-    that university, with their college as the major. A new card also gets the
-    default colour for the member's gender; an existing card keeps its own.
-    """
+    """The card's academic half, as the Website seeds it right after onboarding."""
     is_new_card = session.scalar(select(MemberProfiles.id).where(MemberProfiles.member_id == member.id)) is None
     institution = {
         "qu_student": answers.uni_college,
@@ -149,11 +108,7 @@ def _seed_card(session: Session, member: Members, answers: MemberOnboardingReque
 
 
 def _public_metadata(user: ClerkUser, answers: MemberOnboardingRequest, personal_email: str) -> dict[str, Any]:
-    """The publicMetadata the Website's onboarding writes, so the Website, its
-    middleware and its Google Form prefill treat an app-onboarded member the
-    same way. ``universityName`` is new, for the new status. ``None`` removes a
-    key, so answers that no longer apply do not linger, and ``uni_id`` is only
-    ever the one the user proved."""
+    """The publicMetadata keys the Website's onboarding writes. ``None`` removes a key."""
     return {
         "uni_id": user.uni_id,
         "fullArabicName": answers.name,
@@ -170,18 +125,7 @@ def _public_metadata(user: ClerkUser, answers: MemberOnboardingRequest, personal
 
 
 def onboard(session: Session, clerk_user_id: str, answers: MemberOnboardingRequest) -> tuple[Members, bool]:
-    """Create the caller's member record, or link and update the one that is theirs.
-
-    Returns the member and whether the record already existed. Safe to repeat:
-    a second call finds the record by its Clerk id and writes the same values.
-
-    The record is committed before Clerk's publicMetadata is written - the
-    Website's order too: onboarding is only marked complete once the record
-    exists. When that write fails the call answers 502 and a retry finishes it.
-    When Clerk no longer has the user by then (the account was deleted while
-    this call ran), a record this call created is anonymized and the call
-    answers 401.
-    """
+    """Create the caller's member record, or link and update the one that is theirs."""
     user = clerk_api.get_user(clerk_user_id)
     personal_email = _personal_email(user, answers)
 
@@ -210,8 +154,7 @@ def onboard(session: Session, clerk_user_id: str, answers: MemberOnboardingReque
     if member is None:
         member = member_queries.create_member(session, data, is_authenticated=True)
         if member is None:
-            # A concurrent call for the same sign-in got there first, or the email was just taken.
-            # A locking read, so the row the other call committed is visible to this transaction.
+            # Lost an insert race: a locking read sees the row the other call committed.
             member = member_queries.lock_member_by_clerk_user_id_or_none(session, user.id)
             if member is None:
                 raise MemberEmailInUse()
@@ -251,26 +194,7 @@ def _carries_proven_identity(user: ClerkUser, member: Members) -> bool:
 
 
 def delete_account(session: Session, clerk_user_id: str) -> bool:
-    """Delete the caller's account: anonymize their member record, then delete their sign-in.
-
-    Clerk is asked for the sign-in first, so an outage or a key for the wrong
-    Clerk instance fails the call (502, or 401 for a sign-in Clerk does not
-    have) before anything is removed. Then the record is anonymized and
-    committed, and only then is the sign-in deleted: if that last call fails
-    (502), the data is already gone, the sign-in still works, and repeating the
-    call finishes the job. The other order could leave the personal data behind
-    a sign-in that no longer exists. The Website's leaderboard cache is
-    refreshed last, so the sign-in does not outlast the data any longer than
-    the delete itself takes.
-
-    Only the record linked to this sign-in is touched, and it is locked until
-    the commit: an onboarding running at the same time for this sign-in waits,
-    then finds the account deleted instead of writing its answers back. The
-    record must also carry the university ID or an email address the user
-    proved to Clerk (409 ``member_not_verified`` otherwise): anonymizing cannot
-    be undone, so any other record is left for an admin to check and delete.
-    Returns whether there was a record.
-    """
+    """Delete the caller's account: anonymize their member record, then delete their sign-in."""
     user = clerk_api.get_user(clerk_user_id)
     member = member_queries.lock_member_by_clerk_user_id_or_none(session, clerk_user_id)
     if member is not None:

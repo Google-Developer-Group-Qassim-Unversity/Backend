@@ -10,8 +10,7 @@ from app.member_names import validate_member_name
 
 MemberStatus = Literal["qu_student", "other_university", "high_school", "graduate"]
 
-# The optional fields each status takes. Anything else sent with it is a 422,
-# the way the Website's form clears the fields a status hides.
+# The optional fields each status takes; anything else is a 422.
 STATUS_FIELDS: dict[str, frozenset[str]] = {
     "qu_student": frozenset({"uni_level", "uni_college"}),
     "other_university": frozenset({"university_name", "uni_level", "uni_college"}),
@@ -47,13 +46,7 @@ def _optional_text(value: Any, max_length: int) -> str | None:
 
 
 class MemberOnboardingRequest(BaseModel):
-    """The member app's onboarding answers.
-
-    The Website's onboarding questions, plus a fourth status: a student at
-    another university. Who the caller is is not part of it - the Clerk user,
-    their university ID and their emails come from Clerk - so a body that
-    tries to carry anything else is rejected.
-    """
+    """The member app's onboarding answers."""
 
     model_config = ConfigDict(extra="forbid")
 

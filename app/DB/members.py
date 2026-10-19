@@ -182,11 +182,7 @@ def get_unclaimed_member_by_email_or_none(session: Session, email: str) -> Membe
 
 
 def get_unlinked_member_by_email_or_none(session: Session, email: str) -> Members | None:
-    """A member row that no Clerk sign-in uses yet, by email (case-insensitive).
-
-    Unlike ``get_unclaimed_member_by_email_or_none`` this includes rows that
-    signed in before Clerk ids were stored (``is_authenticated`` set, no
-    ``clerk_user_id``): they still belong to no sign-in."""
+    """A member row that no Clerk sign-in uses yet, by email (case-insensitive)."""
     statement = select(Members).where(
         func.lower(Members.email) == email.strip().lower(),
         Members.clerk_user_id.is_(None),
@@ -208,14 +204,7 @@ def get_member_by_clerk_user_id_or_none(session: Session, clerk_user_id: str) ->
 
 
 def lock_member(session: Session, member_id: int) -> Members | None:
-    """A member row read as it is now and locked until the transaction ends.
-
-    A plain read can be older than that: under MySQL's repeatable read it shows
-    the row as of the transaction's first read. This one reads the latest
-    committed row and holds a lock on it, so no other request changes it before
-    this one commits or rolls back. ``populate_existing`` refreshes an instance
-    the session already holds instead of keeping its older values.
-    """
+    """A member row read as it is now and locked until the transaction ends."""
     statement = (
         select(Members).where(Members.id == member_id).with_for_update().execution_options(populate_existing=True)
     )
@@ -223,8 +212,7 @@ def lock_member(session: Session, member_id: int) -> Members | None:
 
 
 def lock_member_by_clerk_user_id_or_none(session: Session, clerk_user_id: str) -> Members | None:
-    """Like ``lock_member``, by the Clerk id. When no row has it, the lock still keeps another
-    transaction from inserting one with that id until this one ends."""
+    """Like ``lock_member``, by the Clerk id."""
     statement = (
         select(Members)
         .where(Members.clerk_user_id == clerk_user_id)
@@ -344,20 +332,7 @@ DELETED_MEMBER_NAME = "Deleted member"
 
 
 def anonymize_member(session: Session, member: Members) -> None:
-    """Strip a member's personal data and mark the account deleted.
-
-    The row stays: attendance and points, roster history, the events pipeline
-    and email logs point at it, and an event's attendance count still includes
-    it. What is left is an id and a gender. Removed: both names, the email,
-    phone and university ID, the Clerk link, the academic details, the card and
-    public profile (``member_profiles``), and the registrations with their form
-    answers (``submissions``). Emails sent to the member stay logged for the
-    senders' daily quota, without who they went to or what they said.
-
-    Every field is written by one UPDATE, whatever ``member`` holds in memory:
-    setting attributes would only send the ones that differ from the values the
-    session loaded, and those can be older than the row.
-    """
+    """Strip a member's personal data and mark the account deleted."""
     now = datetime.now()
     session.execute(delete(MemberProfiles).where(MemberProfiles.member_id == member.id))
     session.execute(delete(Submissions).where(Submissions.member_id == member.id))

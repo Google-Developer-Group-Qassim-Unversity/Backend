@@ -135,13 +135,7 @@ def optional_clerk_guard(credentials=Depends(config.CLERK_GUARD_optional)):
 
 
 def signed_in_guard(credentials=Depends(optional_clerk_guard)) -> str:
-    """The Clerk user id (the verified token's ``sub``) of the caller, or 401.
-
-    For the member app's account routes. ``authenticated_guard`` answers a
-    missing or unverifiable token with the library's 403; these answer 401
-    (``code`` ``not_authenticated``) so the app knows to refresh its session
-    token and retry.
-    """
+    """The Clerk user id (the verified token's ``sub``) of the caller, or 401."""
     decoded = credentials.decoded if credentials is not None else None
     if not decoded or not decoded.get("sub"):
         raise NotSignedIn()

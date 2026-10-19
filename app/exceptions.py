@@ -321,11 +321,7 @@ class DrivePolicyBlocked(KnownHttpException):
 
 
 class NotSignedIn(KnownHttpException):
-    """No session token, or one that Clerk's keys do not verify.
-
-    401 rather than the 403 ``authenticated_guard`` answers with, so the member
-    app knows to refresh its session token and try again.
-    """
+    """No session token, or one that Clerk's keys do not verify."""
 
     code = "not_authenticated"
 
@@ -334,11 +330,7 @@ class NotSignedIn(KnownHttpException):
 
 
 class MemberLinkedToAnotherLogin(KnownHttpException):
-    """The caller's university ID belongs to a member record that a different sign-in uses.
-
-    A record is never moved from one sign-in to another automatically; an admin
-    clears its ``clerk_user_id`` first if it really is this person's.
-    """
+    """The caller's university ID belongs to a member record that a different sign-in uses."""
 
     code = "member_claimed"
 
@@ -360,10 +352,7 @@ class MemberEmailInUse(KnownHttpException):
 
 
 class InvalidPersonalEmail(KnownHttpException):
-    """The personal email breaks a rule that depends on how the caller signed up.
-
-    ``detail`` is shaped like FastAPI's own 422, so a client renders both the same way.
-    """
+    """The personal email breaks a rule that depends on how the caller signed up."""
 
     def __init__(self, code: str, message: str):
         super().__init__(status_code=422, detail=[{"loc": ["body", "personal_email"], "msg": message, "type": code}])
@@ -371,11 +360,7 @@ class InvalidPersonalEmail(KnownHttpException):
 
 
 class StaffAccountDeletion(KnownHttpException):
-    """A member on this semester's club roster, or a super admin, asked to delete their account.
-
-    Their seat and permissions are the club's to change: an admin removes them
-    from the roster (or the super admins) first, then the account can go.
-    """
+    """A member on this semester's club roster, or a super admin, asked to delete their account."""
 
     code = "member_is_staff"
 
@@ -386,13 +371,7 @@ class StaffAccountDeletion(KnownHttpException):
 
 
 class AccountRecordNotProven(KnownHttpException):
-    """The member record linked to this sign-in does not match what the sign-in proved to Clerk.
-
-    Onboarding refuses a record that carries a university ID other than the one
-    the sign-in proved. Deleting the account, which anonymizes the record for
-    good, refuses a record that carries neither that university ID nor an email
-    address the sign-in proved. Either way an admin checks whose it is.
-    """
+    """The member record linked to this sign-in does not match what the sign-in proved to Clerk."""
 
     code = "member_not_verified"
 
