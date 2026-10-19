@@ -395,6 +395,25 @@ def test_a_google_account_may_send_its_own_address(sign_in, outbound):
     assert response.status_code == 201, response.text
 
 
+def test_an_account_without_a_verified_email_must_send_one(sign_in, outbound):
+    outbound.stub(f"/v1/users/{GOOGLE_USER}", json=clerk_user(GOOGLE_USER))
+
+    response = sign_in(GOOGLE_USER).post("/members/onboarding", json=answers(personal_email=None))
+
+    assert_unprocessable(response)
+    assert response.json()["code"] == "personal_email_required"
+
+
+def test_an_account_email_that_cannot_be_a_members_email_is_a_422(sign_in, outbound, db_session):
+    stub_google_account(outbound, email="fatima@school.test")
+
+    response = sign_in(GOOGLE_USER).post("/members/onboarding", json=answers(personal_email=None))
+
+    assert_unprocessable(response)
+    assert response.json()["code"] == "personal_email_invalid"
+    assert member_row(db_session, GOOGLE_USER) is None
+
+
 # ---------- repeating, linking and conflicts ----------
 
 
@@ -523,6 +542,47 @@ def test_an_email_on_another_members_record_is_a_conflict(sign_in, outbound, see
     stub_qu_account(outbound)
 
     response = sign_in(QU_USER).post("/members/onboarding", json=answers(personal_email=seed_refs.ahmed.email))
+
+    assert_conflict(response)
+    assert response.json()["code"] == "email_in_use"
+
+
+def test_a_changed_public_name_refreshes_the_leaderboard_cache(sign_in, outbound):
+    stub_qu_account(outbound)
+    client = sign_in(QU_USER)
+    assert client.post("/members/onboarding", json=answers()).status_code == 201
+    assert outbound.to("/api/revalidate") == [], "a new member has no cached name to refresh"
+
+    response = client.post("/members/onboarding", json=answers(public_name="Abdullah A."))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["member"]["public_name"] == "Abdullah A."
+    assert len(outbound.to("/api/revalidate")) == 1
+
+
+def test_losing_an_insert_race_to_the_same_sign_in_is_not_an_error(sign_in, outbound, monkeypatch):
+    """Two onboarding calls for one new member at once: the one whose insert loses updates the other's record."""
+    create_member = member_queries.create_member
+
+    def insert_lost_to_a_concurrent_call(session, member, is_authenticated=False):
+        create_member(session, member, is_authenticated)  # the concurrent call's row
+        return None
+
+    monkeypatch.setattr(member_queries, "create_member", insert_lost_to_a_concurrent_call)
+    stub_qu_account(outbound)
+
+    response = sign_in(QU_USER).post("/members/onboarding", json=answers())
+
+    assert response.status_code == 200, response.text
+    assert response.json()["already_exists"] is True
+    assert response.json()["member"]["clerk_user_id"] == QU_USER
+
+
+def test_an_email_taken_between_the_check_and_the_insert_is_a_conflict(sign_in, outbound, monkeypatch):
+    monkeypatch.setattr(member_queries, "create_member", lambda session, member, is_authenticated=False: None)
+    stub_qu_account(outbound)
+
+    response = sign_in(QU_USER).post("/members/onboarding", json=answers())
 
     assert_conflict(response)
     assert response.json()["code"] == "email_in_use"
