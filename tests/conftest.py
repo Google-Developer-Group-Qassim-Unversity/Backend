@@ -549,3 +549,7 @@ def outbound(monkeypatch) -> Generator:
     yield recorder
 
     clients._http_client = previous_async_client
+
+
+# The push notification tests' fixtures (tests/push_support.py).
+from tests.push_support import apns_mock, frozen, push_on  # noqa: E402, F401
