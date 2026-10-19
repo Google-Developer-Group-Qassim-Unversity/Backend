@@ -723,7 +723,8 @@ def test_deleting_an_account_anonymizes_the_member_and_deletes_the_sign_in(sign_
 
     assert response.status_code == 200, response.text
     assert response.json() == {"deleted": True, "member_anonymized": True}
-    assert [call.method for call in outbound.to(f"/v1/users/{QU_USER}")] == ["GET", "DELETE"]
+    # onboarding read the user; deleting reads it again, then deletes it
+    assert [call.method for call in outbound.to(f"/v1/users/{QU_USER}")] == ["GET", "GET", "DELETE"]
 
     db_session.expire_all()
     row = db_session.get(Members, member_id)
@@ -754,7 +755,7 @@ def test_deleting_an_account_anonymizes_the_member_and_deletes_the_sign_in(sign_
     assert client.get("/members/me").status_code == 404
 
 
-def test_deleting_again_only_asks_clerk_again(sign_in, outbound, db_session):
+def test_deleting_again_once_the_sign_in_is_gone_is_a_401(sign_in, outbound, db_session):
     _onboarded_member_with_history(sign_in, outbound, db_session)
     client = sign_in(QU_USER)
     assert client.delete("/members/me").status_code == 200
@@ -762,13 +763,29 @@ def test_deleting_again_only_asks_clerk_again(sign_in, outbound, db_session):
     outbound.stub(f"/v1/users/{QU_USER}", status_code=404, json={"errors": [{"code": "resource_not_found"}]})
     again = client.delete("/members/me")
 
-    assert again.status_code == 200, again.text
-    assert again.json() == {"deleted": True, "member_anonymized": False}
+    assert again.status_code == 401, again.text
+    assert again.json()["code"] == "not_authenticated"
 
 
-def test_a_clerk_failure_leaves_a_retry_path(sign_in, outbound, db_session):
+def test_clerk_failing_before_the_delete_removes_nothing(sign_in, outbound, db_session):
+    """An outage, or a key for another Clerk instance, is found before any data goes."""
     member, _ = _onboarded_member_with_history(sign_in, outbound, db_session)
     outbound.stub(f"/v1/users/{QU_USER}", status_code=500, json={"errors": []})
+
+    response = sign_in(QU_USER).delete("/members/me")
+
+    assert response.status_code == 502, response.text
+    assert response.json()["code"] == "clerk_unavailable"
+    db_session.expire_all()
+    row = db_session.get(Members, member.id)
+    assert row is not None and row.deleted_at is None and row.clerk_user_id == QU_USER
+    assert row.email == "abdullah.m@gmail.com"
+    assert "DELETE" not in [call.method for call in outbound.to(f"/v1/users/{QU_USER}")]
+
+
+def test_a_failed_sign_in_delete_leaves_a_retry_path(sign_in, outbound, db_session):
+    member, _ = _onboarded_member_with_history(sign_in, outbound, db_session)
+    outbound.stub(f"/v1/users/{QU_USER}", method="DELETE", status_code=500, json={"errors": []})
     client = sign_in(QU_USER)
 
     failed = client.delete("/members/me")
@@ -777,9 +794,9 @@ def test_a_clerk_failure_leaves_a_retry_path(sign_in, outbound, db_session):
     assert failed.json()["code"] == "clerk_unavailable"
     db_session.expire_all()
     row = db_session.get(Members, member.id)
-    assert row is not None and row.deleted_at is not None, "the data is gone before Clerk is asked"
+    assert row is not None and row.deleted_at is not None, "the data is gone before the sign-in is deleted"
 
-    outbound.stub(f"/v1/users/{QU_USER}", json={"object": "user", "id": QU_USER, "deleted": True})
+    outbound.stub(f"/v1/users/{QU_USER}", method="DELETE", json={"object": "user", "id": QU_USER, "deleted": True})
     retried = client.delete("/members/me")
 
     assert retried.status_code == 200, retried.text
@@ -787,16 +804,35 @@ def test_a_clerk_failure_leaves_a_retry_path(sign_in, outbound, db_session):
     assert [call.method for call in outbound.to(f"/v1/users/{QU_USER}")].count("DELETE") == 2
 
 
+def test_a_sign_in_deleted_in_clerk_meanwhile_still_counts_as_deleted(sign_in, outbound, db_session):
+    member, _ = _onboarded_member_with_history(sign_in, outbound, db_session)
+    outbound.stub(f"/v1/users/{QU_USER}", method="DELETE", status_code=404, json={"errors": []})
+
+    response = sign_in(QU_USER).delete("/members/me")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"deleted": True, "member_anonymized": True}
+    db_session.expire_all()
+    row = db_session.get(Members, member.id)
+    assert row is not None and row.deleted_at is not None
+
+
 def test_a_sign_in_without_a_member_record_is_deleted_too(sign_in, outbound):
+    outbound.stub("/v1/users/user_never_onboarded", json=clerk_user("user_never_onboarded"))
+
     response = sign_in("user_never_onboarded").delete("/members/me")
 
     assert response.status_code == 200, response.text
     assert response.json() == {"deleted": True, "member_anonymized": False}
-    assert outbound.one("/v1/users/user_never_onboarded").method == "DELETE"
+    assert [call.method for call in outbound.to("/v1/users/user_never_onboarded")] == ["GET", "DELETE"]
 
 
 def test_deleting_touches_only_the_record_linked_to_the_sign_in(sign_in, outbound, db_session, seed_refs):
     """Ahmed's record has a university ID and an email, but no sign-in links to it."""
+    outbound.stub(
+        "/v1/users/user_someone_else", json=clerk_user("user_someone_else", ("ahmed@example.com", "email_code"))
+    )
+
     response = sign_in("user_someone_else").delete("/members/me")
 
     assert response.status_code == 200, response.text
@@ -809,7 +845,6 @@ def test_staff_must_leave_their_role_first(sign_in, outbound, db_session):
     member, _ = _onboarded_member_with_history(sign_in, outbound, db_session)
     db_session.add(SuperAdmins(member_id=member.id))
     db_session.commit()
-    calls_before = len(outbound.calls)
 
     response = sign_in(QU_USER).delete("/members/me")
 
@@ -818,7 +853,9 @@ def test_staff_must_leave_their_role_first(sign_in, outbound, db_session):
     db_session.expire_all()
     row = db_session.get(Members, member.id)
     assert row is not None and row.deleted_at is None and row.clerk_user_id == QU_USER
-    assert len(outbound.calls) == calls_before, "Clerk is not asked to delete a staff sign-in"
+    assert "DELETE" not in [call.method for call in outbound.to(f"/v1/users/{QU_USER}")], (
+        "Clerk is not asked to delete a staff sign-in"
+    )
 
 
 def test_a_member_who_deleted_their_account_leaves_past_rosters(sign_in, outbound, db_session, club):

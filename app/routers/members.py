@@ -73,7 +73,7 @@ def update_current_member(updates: MemberUpdateModel, member: CurrentMember, ses
     responses={
         401: {"model": CodedErrorResponse, "description": "No session token, or one that does not verify"},
         409: {"model": CodedErrorResponse, "description": "member_is_staff: has a club role this semester"},
-        502: {"model": CodedErrorResponse, "description": "clerk_unavailable: retry; the data is already removed"},
+        502: {"model": CodedErrorResponse, "description": "clerk_unavailable: retry; repeating the call is safe"},
         503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
     },
 )
@@ -85,7 +85,8 @@ def delete_my_account(clerk_user_id: SignedInClerkUserId, session: DB):
     profile, and registrations with their form answers are removed, and the
     record leaves every leaderboard, history and member list. Points and
     attendance stay in event counts, under no name. Then the Clerk sign-in is
-    deleted. Repeating the call is safe, and is how a 502 is recovered from.
+    deleted. Repeating the call is safe, and is how a 502 is recovered from;
+    once the sign-in is gone, a repeat answers 401.
     """
     member_anonymized = member_accounts.delete_account(session, clerk_user_id)
     return {"deleted": True, "member_anonymized": member_anonymized}

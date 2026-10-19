@@ -102,6 +102,8 @@ class OutboundRecorder:
 
     calls: list[RecordedRequest] = field(default_factory=list)
     _stubs: dict[str, _Stub] = field(default_factory=dict)
+    # (method, path) -> stub, for a path that answers several methods differently.
+    _method_stubs: dict[tuple[str, str], _Stub] = field(default_factory=dict)
 
     # ---------- inspection ----------
 
@@ -132,6 +134,7 @@ class OutboundRecorder:
         self,
         path: str,
         *,
+        method: str | None = None,
         status_code: int = 200,
         json: Any = None,
         content: bytes | None = None,
@@ -139,10 +142,16 @@ class OutboundRecorder:
     ) -> None:
         """Answer ``path`` with something other than the default.
 
-        ``exc`` raises instead of responding, for the connection-failure paths
-        ``email_gateway`` maps onto ``ServiceUnavailable``.
+        ``method`` limits the stub to one HTTP method, for a path that serves
+        several (Clerk's ``/v1/users/<id>`` is read and deleted), and wins over
+        a stub for every method. ``exc`` raises instead of responding, for the
+        connection-failure paths ``email_gateway`` maps onto ``ServiceUnavailable``.
         """
-        self._stubs[path] = _Stub(status_code=status_code, json_body=json, content=content, exc=exc)
+        stub = _Stub(status_code=status_code, json_body=json, content=content, exc=exc)
+        if method is None:
+            self._stubs[path] = stub
+        else:
+            self._method_stubs[(method.upper(), path)] = stub
 
     # ---------- transport ----------
 
@@ -151,7 +160,7 @@ class OutboundRecorder:
             RecordedRequest(method=request.method, url=request.url, headers=request.headers, content=request.content)
         )
 
-        stub = self._stubs.get(request.url.path)
+        stub = self._method_stubs.get((request.method, request.url.path)) or self._stubs.get(request.url.path)
         if stub is None:
             return _default_response(request)
         if stub.exc is not None:

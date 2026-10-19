@@ -92,11 +92,6 @@ def _secret_key() -> str:
         raise ClerkNotConfigured() from exc
 
 
-def ensure_configured() -> None:
-    """Raise ``ClerkNotConfigured`` now, before a route changes anything it could not finish."""
-    _secret_key()
-
-
 def _user_path(user_id: str) -> str:
     return f"/users/{quote(user_id, safe='')}"
 

@@ -200,14 +200,17 @@ def onboard(session: Session, clerk_user_id: str, answers: MemberOnboardingReque
 def delete_account(session: Session, clerk_user_id: str) -> bool:
     """Delete the caller's account: anonymize their member record, then delete their sign-in.
 
-    In that order, so a Clerk failure (502) leaves a record that is already
-    anonymized and a sign-in that still works: the member retries, the
-    database step finds nothing left to do, and Clerk is asked again. The other
-    order could leave the personal data behind a sign-in that no longer exists.
+    Clerk is asked for the sign-in first, so an outage or a key for the wrong
+    Clerk instance fails the call (502, or 401 for a sign-in Clerk does not
+    have) before anything is removed. Then the record is anonymized and
+    committed, and only then is the sign-in deleted: if that last call fails
+    (502), the data is already gone, the sign-in still works, and repeating the
+    call finishes the job. The other order could leave the personal data behind
+    a sign-in that no longer exists.
 
     Only the record linked to this sign-in is touched. Returns whether there was one.
     """
-    clerk_api.ensure_configured()
+    clerk_api.get_user(clerk_user_id)
     member = member_queries.get_member_by_clerk_user_id_or_none(session, clerk_user_id)
     if member is not None:
         identify_actor(member)
