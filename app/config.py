@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     DATABASE_URL: Optional[str] = None
     CLERK_JWKS_URL: Optional[str] = None
     # The Clerk Backend API (app/services/clerk_api.py): the member app's
-    # onboarding. The scripts in scripts/ read it too.
+    # onboarding and account deletion. The scripts in scripts/ read it too.
     CLERK_SECRET_KEY: Optional[str] = None
     JWT_SECRET: Optional[str] = None
 

@@ -142,6 +142,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /health/print-status": None,
     "GET /members/": "members.view",
     "GET /members/me": "authenticated_guard",
+    "DELETE /members/me": "signed_in_guard",
     "GET /members/paginated": "members.view",
     "GET /members/stats": "members.view",
     "GET /members/uni-id/{uni_id}": "members.view",

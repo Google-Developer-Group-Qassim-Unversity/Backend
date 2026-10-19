@@ -1,4 +1,4 @@
-"""Bodies of the member app's account routes: POST /members/onboarding."""
+"""Bodies of the member app's account routes: POST /members/onboarding and DELETE /members/me."""
 
 import re
 import unicodedata
@@ -119,6 +119,12 @@ class MemberOnboardingRequest(BaseModel):
             if getattr(self, field) is not None and field not in allowed:
                 raise ValueError(f"{field} does not apply to status {self.status}")
         return self
+
+
+class DeletedAccountResponse(BaseModel):
+    deleted: bool
+    # False when the sign-in had no member record, so only the sign-in went.
+    member_anonymized: bool
 
 
 class CodedErrorResponse(BaseModel):

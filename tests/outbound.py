@@ -241,14 +241,16 @@ def _default_response(request: httpx.Request) -> httpx.Response:
 
 
 def _clerk_response(request: httpx.Request) -> httpx.Response:
-    """Clerk's answer to a metadata merge. Reading a user has no default: a test
-    stubs ``/v1/users/<id>`` with the user it is about."""
+    """Clerk's answers to a metadata merge and a user delete. Reading a user has no
+    default: a test stubs ``/v1/users/<id>`` with the user it is about."""
     path = request.url.path
     parts = path.split("/")  # ["", "v1", "users", "<id>", ...]
     if request.method == "PATCH" and len(parts) == 5 and parts[2] == "users" and parts[4] == "metadata":
         return httpx.Response(
             200, json={"object": "user", "id": parts[3], "public_metadata": _body(request).get("public_metadata", {})}
         )
+    if request.method == "DELETE" and len(parts) == 4 and parts[2] == "users":
+        return httpx.Response(200, json={"object": "user", "id": parts[3], "deleted": True})
     raise AssertionError(f"Unstubbed Clerk call: {request.method} {request.url} - stub it with outbound.stub(...)")
 
 

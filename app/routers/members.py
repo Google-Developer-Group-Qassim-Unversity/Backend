@@ -17,7 +17,7 @@ from app.routers.models import (
     BatchCreateMembersRequest,
     BatchCreateMembersResponse,
 )
-from app.routers.member_account_models import CodedErrorResponse, MemberOnboardingRequest
+from app.routers.member_account_models import CodedErrorResponse, DeletedAccountResponse, MemberOnboardingRequest
 from app.services import member_accounts
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import CurrentMember, SignedInClerkUserId, authenticated_guard, credentials_to_member_model
@@ -64,6 +64,31 @@ def update_current_member(updates: MemberUpdateModel, member: CurrentMember, ses
     if public_name_changed:
         refresh_member_names_cache()
     return updated_member
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_200_OK,
+    response_model=DeletedAccountResponse,
+    responses={
+        401: {"model": CodedErrorResponse, "description": "No session token, or one that does not verify"},
+        409: {"model": CodedErrorResponse, "description": "member_is_staff: has a club role this semester"},
+        502: {"model": CodedErrorResponse, "description": "clerk_unavailable: retry; the data is already removed"},
+        503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
+    },
+)
+def delete_my_account(clerk_user_id: SignedInClerkUserId, session: DB):
+    """Delete the caller's account (App Store 5.1.1(v), Google Play account deletion).
+
+    The member record linked to this sign-in is anonymized: names, emails,
+    phone, university ID, Clerk link, academic details, card and public
+    profile, and registrations with their form answers are removed, and the
+    record leaves every leaderboard, history and member list. Points and
+    attendance stay in event counts, under no name. Then the Clerk sign-in is
+    deleted. Repeating the call is safe, and is how a 502 is recovered from.
+    """
+    member_anonymized = member_accounts.delete_account(session, clerk_user_id)
+    return {"deleted": True, "member_anonymized": member_anonymized}
 
 
 @router.get(

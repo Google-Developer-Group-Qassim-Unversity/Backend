@@ -1,8 +1,8 @@
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select, func, or_, asc, desc, case
-from app.DB.schema import Members, MembersLogs
+from sqlalchemy import select, func, or_, asc, desc, case, delete, null, update
+from app.DB.schema import EmailLogs, MemberProfiles, Members, MembersLogs, Submissions
 from app.exceptions import MemberNotFound
 from app.routers.models import Member_model
 from datetime import datetime
@@ -62,8 +62,10 @@ def get_members(session: Session):
         .group_by(MembersLogs.member_id)
         .subquery()
     )
-    statement = select(Members, last_activity_subq.c.last_activity).outerjoin(
-        last_activity_subq, last_activity_subq.c.member_id == Members.id
+    statement = (
+        select(Members, last_activity_subq.c.last_activity)
+        .outerjoin(last_activity_subq, last_activity_subq.c.member_id == Members.id)
+        .where(Members.deleted_at.is_(None))
     )
     members = []
     for member, last_activity in session.execute(statement).all():
@@ -94,7 +96,7 @@ def _member_search_filter(search: str | None):
 
 
 def count_members(session: Session, search: str | None = None) -> int:
-    stmt = select(func.count()).select_from(Members)
+    stmt = select(func.count()).select_from(Members).where(Members.deleted_at.is_(None))
     search_filter = _member_search_filter(search)
     if search_filter is not None:
         stmt = stmt.where(search_filter)
@@ -111,8 +113,10 @@ def get_members_paginated(
         .group_by(MembersLogs.member_id)
         .subquery()
     )
-    statement = select(Members, last_activity_subq.c.last_activity).outerjoin(
-        last_activity_subq, last_activity_subq.c.member_id == Members.id
+    statement = (
+        select(Members, last_activity_subq.c.last_activity)
+        .outerjoin(last_activity_subq, last_activity_subq.c.member_id == Members.id)
+        .where(Members.deleted_at.is_(None))
     )
     search_filter = _member_search_filter(search)
     if search_filter is not None:
@@ -134,7 +138,8 @@ def get_members_paginated(
 
 
 def get_member_by_id(session: Session, member_id: int):
-    statement = select(Members).where(Members.id == member_id)
+    """A member by id. A deleted account is not found: nothing should act on it any more."""
+    statement = select(Members).where(Members.id == member_id, Members.deleted_at.is_(None))
     member = session.scalars(statement).first()
     if not member:
         raise MemberNotFound(member_id)
@@ -183,7 +188,9 @@ def get_unlinked_member_by_email_or_none(session: Session, email: str) -> Member
     signed in before Clerk ids were stored (``is_authenticated`` set, no
     ``clerk_user_id``): they still belong to no sign-in."""
     statement = select(Members).where(
-        func.lower(Members.email) == email.strip().lower(), Members.clerk_user_id.is_(None)
+        func.lower(Members.email) == email.strip().lower(),
+        Members.clerk_user_id.is_(None),
+        Members.deleted_at.is_(None),
     )
     return session.scalars(statement).first()
 
@@ -293,7 +300,7 @@ def get_member_stats(session: Session) -> dict:
             func.coalesce(func.sum(case((Members.is_authenticated == 1, 1), else_=0)), 0).label("authenticated"),
             func.coalesce(func.sum(case((Members.gender == "Male", 1), else_=0)), 0).label("male"),
             func.coalesce(func.sum(case((Members.gender == "Female", 1), else_=0)), 0).label("female"),
-        )
+        ).where(Members.deleted_at.is_(None))
     ).one()
     total = int(row.total)
     authenticated = int(row.authenticated)
@@ -304,3 +311,35 @@ def get_member_stats(session: Session) -> dict:
         "male": int(row.male),
         "female": int(row.female),
     }
+
+
+DELETED_MEMBER_NAME = "Deleted member"
+
+
+def anonymize_member(session: Session, member: Members) -> None:
+    """Strip a member's personal data and mark the account deleted.
+
+    The row stays: attendance and points, roster history, the events pipeline
+    and email logs point at it, and an event's attendance count still includes
+    it. What is left is an id and a gender. Removed: both names, the email,
+    phone and university ID, the Clerk link, the academic details, the card and
+    public profile (``member_profiles``), and the registrations with their form
+    answers (``submissions``). Emails sent to the member stay logged for the
+    senders' daily quota, without who they went to or what they said.
+    """
+    now = datetime.now()
+    session.execute(delete(MemberProfiles).where(MemberProfiles.member_id == member.id))
+    session.execute(delete(Submissions).where(Submissions.member_id == member.id))
+    session.execute(update(EmailLogs).where(EmailLogs.member_id == member.id).values(member_id=None, data=null()))
+    member.name = DELETED_MEMBER_NAME
+    member.public_name = DELETED_MEMBER_NAME
+    member.email = None
+    member.phone_number = None
+    member.uni_id = None
+    member.clerk_user_id = None
+    member.uni_level = None
+    member.uni_college = None
+    member.updated_at = now
+    member.deleted_at = now
+    session.flush()
+    logger.info("Anonymized member %s", member.id)

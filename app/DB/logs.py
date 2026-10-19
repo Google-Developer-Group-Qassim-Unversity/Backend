@@ -119,7 +119,8 @@ def get_event_attendance(
         .join(Logs, Logs.event_id == Events.id)
         .join(MembersLogs, MembersLogs.log_id == Logs.id)
         .join(Members, Members.id == MembersLogs.member_id)
-        .where(Events.id == event_id)
+        # A deleted account's attendance still counts, but it is nobody's to list or email.
+        .where(Events.id == event_id, Members.deleted_at.is_(None))
     )
 
     if isinstance(day, int):

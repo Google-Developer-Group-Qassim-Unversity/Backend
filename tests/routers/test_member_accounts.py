@@ -1,9 +1,11 @@
-"""The member app's account routes: POST /members/onboarding.
+"""The member app's account routes: POST /members/onboarding and DELETE /members/me.
 
 Clerk is faked at the HTTP transport (``outbound``): each test stubs the Clerk
 user it signs in as, so what the routes read from Clerk, and what they write
 back, is exactly what crossed the wire.
 """
+
+from datetime import datetime
 
 import httpx
 import pytest
@@ -11,10 +13,31 @@ from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from sqlalchemy import func, select
 
 from app.config import config, reload_settings
-from app.DB.schema import MemberProfiles, Members, MembersGender
+from app.DB import logs as log_queries
+from app.DB import members as member_queries
+from app.DB.schema import (
+    Actions,
+    ActionsActionType,
+    EmailLogs,
+    EmailLogsEmailType,
+    Events,
+    EventsLocationType,
+    EventsStatus,
+    Forms,
+    FormType,
+    Logs,
+    MemberProfiles,
+    Members,
+    MembersGender,
+    MembersLogs,
+    Submissions,
+    SubmissionsSubmissionType,
+    SuperAdmins,
+)
+from app.exceptions import MemberNotFound
 from app.main import app
 from app.services.clerk_api import parse_user
-from tests.utils import assert_conflict, assert_unprocessable
+from tests.utils import assert_2xx, assert_conflict, assert_unprocessable, semester_id_on
 
 QU_USER = "user_qu_444111222"
 GOOGLE_USER = "user_google_fatima"
@@ -107,7 +130,7 @@ def card(db_session, member_id: int) -> MemberProfiles | None:
 # ---------- who may call ----------
 
 
-@pytest.mark.parametrize("method, path", [("POST", "/members/onboarding")])
+@pytest.mark.parametrize("method, path", [("POST", "/members/onboarding"), ("DELETE", "/members/me")])
 def test_account_routes_answer_401_without_a_session(client, outbound, method, path):
     for headers in ({}, {"Authorization": "Bearer not-a-jwt"}):
         response = client.request(method, path, json=answers() if method == "POST" else None, headers=headers)
@@ -557,12 +580,216 @@ def test_without_a_clerk_secret_nothing_happens(sign_in, outbound, monkeypatch, 
     monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
     reload_settings()
 
-    response = sign_in(QU_USER).post("/members/onboarding", json=answers())
+    onboarding = sign_in(QU_USER).post("/members/onboarding", json=answers())
+    deletion = sign_in(QU_USER).delete("/members/me")
 
-    assert response.status_code == 503, response.text
-    assert response.json()["code"] == "clerk_not_configured"
+    for response in (onboarding, deletion):
+        assert response.status_code == 503, response.text
+        assert response.json()["code"] == "clerk_not_configured"
     assert outbound.calls == []
     assert member_row(db_session, QU_USER) is None
+
+
+# ---------- deleting an account ----------
+
+
+def _onboarded_member_with_history(sign_in, outbound, db_session) -> tuple[Members, int]:
+    """A member with points this semester, a registration with form answers, a card and an email sent to
+    them. Returns the member and the event."""
+    stub_qu_account(outbound)
+    response = sign_in(QU_USER).post("/members/onboarding", json=answers())
+    assert response.status_code == 201, response.text
+    member = member_row(db_session, QU_USER)
+    assert member is not None
+
+    event = Events(
+        name="ورشة الذكاء الاصطناعي",
+        location_type=EventsLocationType.ON_SITE,
+        location="Hall",
+        start_datetime=datetime(2026, 7, 1, 10),
+        end_datetime=datetime(2026, 7, 1, 12),
+        status=EventsStatus.CLOSED,
+        semester_id=semester_id_on(db_session, "2026-07-01"),
+    )
+    db_session.add(event)
+    db_session.flush()
+    action_id = db_session.scalar(select(Actions.id).where(Actions.action_type == ActionsActionType.MEMBER))
+    log = Logs(action_id=action_id, event_id=event.id)
+    db_session.add(log)
+    db_session.flush()
+    db_session.add(MembersLogs(member_id=member.id, log_id=log.id, date=datetime(2026, 7, 1, 11)))
+    form = Forms(event_id=event.id, form_type=FormType.GOOGLE)
+    db_session.add(form)
+    db_session.flush()
+    db_session.add(
+        Submissions(
+            form_id=form.id,
+            member_id=member.id,
+            submission_type=SubmissionsSubmissionType.GOOGLE,
+            google_submission_value={"phone": "0551234567"},
+        )
+    )
+    db_session.add(
+        EmailLogs(
+            member_id=member.id,
+            event_id=event.id,
+            from_address="gdg.qu1@gmail.com",
+            sent_by=member.id,
+            recipient_count=1,
+            email_type=EmailLogsEmailType.EVENT_CERTIFICATE,
+            data={"member": {"name": member.name, "email": member.email}},
+        )
+    )
+    db_session.commit()
+    return member, event.id
+
+
+def _leaderboard_ids(client) -> set[int]:
+    response = client.get("/points/members/total")
+    assert_2xx(response)
+    return {row["member_id"] for row in response.json()}
+
+
+def test_deleting_an_account_anonymizes_the_member_and_deletes_the_sign_in(sign_in, outbound, db_session):
+    member, event_id = _onboarded_member_with_history(sign_in, outbound, db_session)
+    member_id = member.id
+    profile = card(db_session, member_id)
+    assert profile is not None
+    profile_uuid = profile.uuid
+    client = sign_in(QU_USER)
+    assert member_id in _leaderboard_ids(client)
+
+    response = client.delete("/members/me")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"deleted": True, "member_anonymized": True}
+    assert [call.method for call in outbound.to(f"/v1/users/{QU_USER}")] == ["GET", "DELETE"]
+
+    db_session.expire_all()
+    row = db_session.get(Members, member_id)
+    assert row is not None, "the row stays for the records that point at it"
+    assert row.deleted_at is not None
+    assert (row.name, row.public_name) == ("Deleted member", "Deleted member")
+    assert (row.email, row.phone_number, row.uni_id, row.clerk_user_id) == (None, None, None, None)
+    assert (row.uni_level, row.uni_college) == (None, None)
+    assert card(db_session, member_id) is None
+    assert (
+        db_session.scalar(select(func.count()).select_from(Submissions).where(Submissions.member_id == member_id)) == 0
+    )
+    log = db_session.scalar(select(EmailLogs).where(EmailLogs.event_id == event_id))
+    assert log is not None and (log.member_id, log.data) == (None, None)
+    points = db_session.scalar(select(func.count()).select_from(MembersLogs).where(MembersLogs.member_id == member_id))
+    assert points == 1, "attendance stays in the event's counts, under no name"
+
+    # Nowhere to be found: leaderboard, history, public card, admin lists and search, attendance lists.
+    assert member_id not in _leaderboard_ids(client)
+    assert client.get(f"/points/members/{member_id}").status_code == 404
+    assert client.get(f"/wallet/{profile_uuid}").status_code == 404
+    assert member_id not in {m.id for m in member_queries.get_members(db_session)}
+    assert member_queries.count_members(db_session, "Deleted member") == 0
+    assert member_queries.get_members_paginated(db_session, 50, 0, "Deleted") == []
+    assert member_id not in {r.Member.id for r in log_queries.get_event_attendance(db_session, event_id)}
+    with pytest.raises(MemberNotFound):
+        member_queries.get_member_by_id(db_session, member_id)
+    assert client.get("/members/me").status_code == 404
+
+
+def test_deleting_again_only_asks_clerk_again(sign_in, outbound, db_session):
+    _onboarded_member_with_history(sign_in, outbound, db_session)
+    client = sign_in(QU_USER)
+    assert client.delete("/members/me").status_code == 200
+
+    outbound.stub(f"/v1/users/{QU_USER}", status_code=404, json={"errors": [{"code": "resource_not_found"}]})
+    again = client.delete("/members/me")
+
+    assert again.status_code == 200, again.text
+    assert again.json() == {"deleted": True, "member_anonymized": False}
+
+
+def test_a_clerk_failure_leaves_a_retry_path(sign_in, outbound, db_session):
+    member, _ = _onboarded_member_with_history(sign_in, outbound, db_session)
+    outbound.stub(f"/v1/users/{QU_USER}", status_code=500, json={"errors": []})
+    client = sign_in(QU_USER)
+
+    failed = client.delete("/members/me")
+
+    assert failed.status_code == 502, failed.text
+    assert failed.json()["code"] == "clerk_unavailable"
+    db_session.expire_all()
+    row = db_session.get(Members, member.id)
+    assert row is not None and row.deleted_at is not None, "the data is gone before Clerk is asked"
+
+    outbound.stub(f"/v1/users/{QU_USER}", json={"object": "user", "id": QU_USER, "deleted": True})
+    retried = client.delete("/members/me")
+
+    assert retried.status_code == 200, retried.text
+    assert retried.json() == {"deleted": True, "member_anonymized": False}
+    assert [call.method for call in outbound.to(f"/v1/users/{QU_USER}")].count("DELETE") == 2
+
+
+def test_a_sign_in_without_a_member_record_is_deleted_too(sign_in, outbound):
+    response = sign_in("user_never_onboarded").delete("/members/me")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"deleted": True, "member_anonymized": False}
+    assert outbound.one("/v1/users/user_never_onboarded").method == "DELETE"
+
+
+def test_deleting_touches_only_the_record_linked_to_the_sign_in(sign_in, outbound, db_session, seed_refs):
+    """Ahmed's record has a university ID and an email, but no sign-in links to it."""
+    response = sign_in("user_someone_else").delete("/members/me")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["member_anonymized"] is False
+    db_session.refresh(seed_refs.ahmed)
+    assert seed_refs.ahmed.deleted_at is None and seed_refs.ahmed.email == "ahmed@example.com"
+
+
+def test_staff_must_leave_their_role_first(sign_in, outbound, db_session):
+    member, _ = _onboarded_member_with_history(sign_in, outbound, db_session)
+    db_session.add(SuperAdmins(member_id=member.id))
+    db_session.commit()
+    calls_before = len(outbound.calls)
+
+    response = sign_in(QU_USER).delete("/members/me")
+
+    assert_conflict(response)
+    assert response.json()["code"] == "member_is_staff"
+    db_session.expire_all()
+    row = db_session.get(Members, member.id)
+    assert row is not None and row.deleted_at is None and row.clerk_user_id == QU_USER
+    assert len(outbound.calls) == calls_before, "Clerk is not asked to delete a staff sign-in"
+
+
+def test_a_member_who_deleted_their_account_leaves_past_rosters(sign_in, outbound, db_session, club):
+    """Only this semester's roster blocks a deletion; an earlier semester's keeps the seat, under no name."""
+    member, _ = _onboarded_member_with_history(sign_in, outbound, db_session)
+    department = club.department("Media")
+    club.join(member, department, semester=club.previous)
+    db_session.commit()
+    client = sign_in(QU_USER)
+
+    def roster_names() -> list[str]:
+        response = client.get("/club-structure/public", params={"semester": club.previous.hijri_code})
+        assert_2xx(response)
+        listed = next(d for d in response.json()["departments"] if d["id"] == department.id)
+        return listed["members"]
+
+    assert roster_names() == ["عبدالله الأحمد"]
+    assert client.delete("/members/me").status_code == 200
+    assert roster_names() == []
+
+
+def test_a_deleted_record_is_never_linked_again(sign_in, outbound, db_session):
+    member, _ = _onboarded_member_with_history(sign_in, outbound, db_session)
+    assert sign_in(QU_USER).delete("/members/me").status_code == 200
+
+    # The same student signs up again: a new Clerk user, the same university mailbox and personal email.
+    stub_qu_account(outbound, user_id="user_qu_again")
+    response = sign_in("user_qu_again").post("/members/onboarding", json=answers())
+
+    assert response.status_code == 201, response.text
+    assert response.json()["member"]["id"] != member.id
 
 
 # ---------- reading Clerk's user ----------

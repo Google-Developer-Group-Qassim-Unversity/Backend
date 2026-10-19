@@ -370,6 +370,21 @@ class InvalidPersonalEmail(KnownHttpException):
         self.code = code
 
 
+class StaffAccountDeletion(KnownHttpException):
+    """A member on this semester's club roster, or a super admin, asked to delete their account.
+
+    Their seat and permissions are the club's to change: an admin removes them
+    from the roster (or the super admins) first, then the account can go.
+    """
+
+    code = "member_is_staff"
+
+    def __init__(self, member_id: int):
+        super().__init__(
+            status_code=409, detail=f"Member {member_id} has a club role this semester; an admin has to remove it first"
+        )
+
+
 class ClerkUnavailable(KnownHttpException):
     """A call to the Clerk Backend API failed. Nothing about it is permanent: retry."""
 

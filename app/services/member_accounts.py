@@ -1,8 +1,9 @@
-"""The member app's account flows, starting with onboarding.
+"""The member app's account flows: onboarding, and deleting an account.
 
 The Website onboards in two steps - its server writes the answers into Clerk
-publicMetadata, then ``POST /members/`` reads them back. A native app cannot
-write publicMetadata, so ``POST /members/onboarding`` does the whole job here,
+publicMetadata, then ``POST /members/`` reads them back - and offers account
+deletion through Clerk's own account page. A native app has neither, so
+``POST /members/onboarding`` and ``DELETE /members/me`` do the whole job here,
 with the Clerk Backend API (``app/services/clerk_api.py``).
 
 Who the caller is never comes from the request: the Clerk user id is the
@@ -21,13 +22,14 @@ from sqlalchemy.orm import Session
 from app.DB import members as member_queries
 from app.DB.schema import MemberProfiles, Members, MembersGender
 from app.DB.wallet import update_member_profile
-from app.exceptions import InvalidPersonalEmail, MemberEmailInUse, MemberLinkedToAnotherLogin
+from app.exceptions import InvalidPersonalEmail, MemberEmailInUse, MemberLinkedToAnotherLogin, StaffAccountDeletion
 from app.helpers import identify_actor
 from app.leaderboard_cache import refresh_member_names_cache
 from app.routers.member_account_models import MemberOnboardingRequest
 from app.routers.models import Member_model
 from app.services import clerk_api
 from app.services.clerk_api import ClerkUser
+from app.services.permissions.access import resolve_access
 
 logger = logging.getLogger(__name__)
 
@@ -193,3 +195,29 @@ def onboard(session: Session, clerk_user_id: str, answers: MemberOnboardingReque
         refresh_member_names_cache()
     clerk_api.update_public_metadata(user.id, _public_metadata(user, answers, personal_email))
     return member, already_existed
+
+
+def delete_account(session: Session, clerk_user_id: str) -> bool:
+    """Delete the caller's account: anonymize their member record, then delete their sign-in.
+
+    In that order, so a Clerk failure (502) leaves a record that is already
+    anonymized and a sign-in that still works: the member retries, the
+    database step finds nothing left to do, and Clerk is asked again. The other
+    order could leave the personal data behind a sign-in that no longer exists.
+
+    Only the record linked to this sign-in is touched. Returns whether there was one.
+    """
+    clerk_api.ensure_configured()
+    member = member_queries.get_member_by_clerk_user_id_or_none(session, clerk_user_id)
+    if member is not None:
+        identify_actor(member)
+        if resolve_access(session, member).is_staff:
+            raise StaffAccountDeletion(member.id)
+        member_queries.anonymize_member(session, member)
+        session.commit()
+        logger.info("Member %s deleted their account", member.id)
+        refresh_member_names_cache()
+
+    if not clerk_api.delete_user(clerk_user_id):
+        logger.info("Clerk user %s was already deleted", clerk_user_id)
+    return member is not None

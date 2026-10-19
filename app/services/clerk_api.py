@@ -1,9 +1,9 @@
 """Clerk's Backend API, for what a session token cannot do on its own.
 
 The session token says who the caller is. Reading which email addresses they
-proved and writing the publicMetadata the Website reads need the instance's
-secret key (``CLERK_SECRET_KEY``), so the member app's account routes do those
-through here.
+proved, writing the publicMetadata the Website reads, and deleting their
+sign-in need the instance's secret key (``CLERK_SECRET_KEY``), so the member
+app's account routes do those through here.
 https://clerk.com/docs/reference/backend-api
 
 A fresh ``httpx.Client`` per call, like ``app/leaderboard_cache.py``: these run
@@ -92,6 +92,11 @@ def _secret_key() -> str:
         raise ClerkNotConfigured() from exc
 
 
+def ensure_configured() -> None:
+    """Raise ``ClerkNotConfigured`` now, before a route changes anything it could not finish."""
+    _secret_key()
+
+
 def _user_path(user_id: str) -> str:
     return f"/users/{quote(user_id, safe='')}"
 
@@ -127,3 +132,12 @@ def update_public_metadata(user_id: str, metadata: dict[str, Any]) -> None:
     """Merge ``metadata`` into the user's publicMetadata. A key set to ``None`` is removed."""
     response = _request("PATCH", f"{_user_path(user_id)}/metadata", json={"public_metadata": metadata})
     _raise_for_status(response, "update publicMetadata", user_id)
+
+
+def delete_user(user_id: str) -> bool:
+    """Delete the sign-in. ``False`` when Clerk no longer has it, which is the state a retry is after."""
+    response = _request("DELETE", _user_path(user_id))
+    if response.status_code == 404:
+        return False
+    _raise_for_status(response, "delete the user", user_id)
+    return True
