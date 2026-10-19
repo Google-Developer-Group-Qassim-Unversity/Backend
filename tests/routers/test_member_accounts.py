@@ -10,7 +10,7 @@ from datetime import datetime
 import httpx
 import pytest
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.config import config, reload_settings
 from app.DB import logs as log_queries
@@ -636,6 +636,39 @@ def test_a_failed_metadata_write_is_finished_by_a_retry(sign_in, outbound, db_se
     assert outbound.to(f"/v1/users/{QU_USER}/metadata")[-1].json["public_metadata"]["onboardingComplete"] is True
 
 
+def test_a_sign_in_deleted_while_onboarding_leaves_no_record_behind(sign_in, outbound, db_session):
+    """Clerk had the user when the call began and no longer has it when the call marks onboarding complete."""
+    stub_qu_account(outbound)
+    outbound.stub(f"/v1/users/{QU_USER}/metadata", status_code=404, json={"errors": [{"code": "resource_not_found"}]})
+    newest_before = db_session.scalar(select(func.max(Members.id)))
+
+    response = sign_in(QU_USER).post("/members/onboarding", json=answers())
+
+    assert response.status_code == 401, response.text
+    assert response.json()["code"] == "not_authenticated"
+    assert member_row(db_session, QU_USER) is None
+    created = db_session.scalars(select(Members).where(Members.id > newest_before)).all()
+    assert len(created) == 1
+    row = created[0]
+    assert row.deleted_at is not None
+    assert (row.name, row.email, row.phone_number, row.uni_id) == ("Deleted member", None, None, None)
+    assert card(db_session, row.id) is None
+
+
+def test_a_sign_in_deleted_while_onboarding_leaves_an_existing_record_as_it_was_linked(sign_in, outbound, db_session):
+    """Only a record this call created goes with it: an older one is the club's to sort out."""
+    stub_qu_account(outbound)
+    client = sign_in(QU_USER)
+    assert client.post("/members/onboarding", json=answers()).status_code == 201
+    outbound.stub(f"/v1/users/{QU_USER}/metadata", status_code=404, json={"errors": [{"code": "resource_not_found"}]})
+
+    response = client.post("/members/onboarding", json=answers(uni_level=5))
+
+    assert response.status_code == 401, response.text
+    row = member_row(db_session, QU_USER)
+    assert row is not None and row.deleted_at is None and row.uni_level == 5
+
+
 def test_without_a_clerk_secret_nothing_happens(sign_in, outbound, monkeypatch, db_session):
     monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
     reload_settings()
@@ -796,12 +829,50 @@ def test_a_failed_sign_in_delete_leaves_a_retry_path(sign_in, outbound, db_sessi
     row = db_session.get(Members, member.id)
     assert row is not None and row.deleted_at is not None, "the data is gone before the sign-in is deleted"
 
+    assert len(outbound.to("/api/revalidate")) == 1, "the data is gone, so the Website's cache is refreshed anyway"
+
     outbound.stub(f"/v1/users/{QU_USER}", method="DELETE", json={"object": "user", "id": QU_USER, "deleted": True})
     retried = client.delete("/members/me")
 
     assert retried.status_code == 200, retried.text
     assert retried.json() == {"deleted": True, "member_anonymized": False}
     assert [call.method for call in outbound.to(f"/v1/users/{QU_USER}")].count("DELETE") == 2
+    assert len(outbound.to("/api/revalidate")) == 1
+
+
+def test_the_sign_in_is_deleted_before_the_websites_cache_is_refreshed(sign_in, outbound, db_session):
+    _onboarded_member_with_history(sign_in, outbound, db_session)
+    outbound.calls.clear()
+
+    assert sign_in(QU_USER).delete("/members/me").status_code == 200
+
+    assert [(call.method, call.url.path) for call in outbound.calls] == [
+        ("GET", f"/v1/users/{QU_USER}"),
+        ("DELETE", f"/v1/users/{QU_USER}"),
+        ("POST", "/api/revalidate"),
+    ]
+
+
+def test_anonymizing_writes_every_field_whatever_the_session_last_read(db_session, seed_refs):
+    """A phone number saved after this session read the row must not survive because the session thought it empty."""
+    member = db_session.get(Members, seed_refs.ahmed.id)
+    assert member is not None
+    db_session.execute(update(Members).where(Members.id == member.id).values(phone_number=None))
+    db_session.expire(member, ["phone_number"])
+    assert member.phone_number is None
+    db_session.execute(
+        update(Members)
+        .where(Members.id == member.id)
+        .values(phone_number="0559998877")
+        .execution_options(synchronize_session=False)
+    )
+
+    member_queries.anonymize_member(db_session, member)
+
+    db_session.expire_all()
+    row = db_session.get(Members, seed_refs.ahmed.id)
+    assert row is not None
+    assert (row.phone_number, row.email, row.uni_id, row.name) == (None, None, None, "Deleted member")
 
 
 def test_a_sign_in_deleted_in_clerk_meanwhile_still_counts_as_deleted(sign_in, outbound, db_session):

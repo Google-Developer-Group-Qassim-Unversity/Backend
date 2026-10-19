@@ -22,7 +22,13 @@ from sqlalchemy.orm import Session
 from app.DB import members as member_queries
 from app.DB.schema import MemberProfiles, Members, MembersGender
 from app.DB.wallet import update_member_profile
-from app.exceptions import InvalidPersonalEmail, MemberEmailInUse, MemberLinkedToAnotherLogin, StaffAccountDeletion
+from app.exceptions import (
+    InvalidPersonalEmail,
+    MemberEmailInUse,
+    MemberLinkedToAnotherLogin,
+    NotSignedIn,
+    StaffAccountDeletion,
+)
 from app.helpers import identify_actor
 from app.leaderboard_cache import refresh_member_names_cache
 from app.routers.member_account_models import MemberOnboardingRequest
@@ -62,6 +68,25 @@ def find_member_for(session: Session, user: ClerkUser) -> Members | None:
         if member is not None and not (user.uni_id and member.uni_id and member.uni_id != user.uni_id):
             return member
     return None
+
+
+def _lock_for(session: Session, member: Members, user: ClerkUser) -> Members:
+    """Lock the record this call is about to write, and check it is still this sign-in's to write.
+
+    ``find_member_for`` reads without locks, so another request may have
+    linked the record to a different sign-in since, or this account may have
+    been deleted. Rereading the row under a lock settles it: until this
+    transaction ends, no other request can change it.
+    """
+    linked_to_caller = member.clerk_user_id == user.id
+    locked = member_queries.lock_member(session, member.id)
+    if locked is None or locked.deleted_at is not None:
+        if linked_to_caller:
+            raise NotSignedIn("This account was deleted")
+        raise MemberLinkedToAnotherLogin(member.id)
+    if locked.clerk_user_id not in (None, user.id):
+        raise MemberLinkedToAnotherLogin(locked.id)
+    return locked
 
 
 def _personal_email(user: ClerkUser, answers: MemberOnboardingRequest) -> str:
@@ -145,11 +170,16 @@ def onboard(session: Session, clerk_user_id: str, answers: MemberOnboardingReque
     The record is committed before Clerk's publicMetadata is written - the
     Website's order too: onboarding is only marked complete once the record
     exists. When that write fails the call answers 502 and a retry finishes it.
+    When Clerk no longer has the user by then (the account was deleted while
+    this call ran), a record this call created is anonymized and the call
+    answers 401.
     """
     user = clerk_api.get_user(clerk_user_id)
     personal_email = _personal_email(user, answers)
 
     member = find_member_for(session, user)
+    if member is not None:
+        member = _lock_for(session, member, user)
     holder = member_queries.get_member_by_email_or_none(session, personal_email)
     if holder is not None and (member is None or holder.id != member.id):
         raise MemberEmailInUse()
@@ -174,7 +204,7 @@ def onboard(session: Session, clerk_user_id: str, answers: MemberOnboardingReque
         if member is None:
             # A concurrent call for the same sign-in got there first, or the email was just taken.
             # A locking read, so the row the other call committed is visible to this transaction.
-            member = session.scalar(select(Members).where(Members.clerk_user_id == user.id).with_for_update())
+            member = member_queries.lock_member_by_clerk_user_id_or_none(session, user.id)
             if member is None:
                 raise MemberEmailInUse()
             already_existed = True
@@ -191,9 +221,17 @@ def onboard(session: Session, clerk_user_id: str, answers: MemberOnboardingReque
     session.commit()
     logger.info("Member %s onboarded from the app (%s)", member.id, "linked" if already_existed else "created")
 
-    if public_name_changed and already_existed:
-        refresh_member_names_cache()
-    clerk_api.update_public_metadata(user.id, _public_metadata(user, answers, personal_email))
+    try:
+        still_signed_in = clerk_api.update_public_metadata(user.id, _public_metadata(user, answers, personal_email))
+    finally:
+        if public_name_changed and already_existed:
+            refresh_member_names_cache()
+    if not still_signed_in:
+        if not already_existed:
+            member_queries.anonymize_member(session, member)
+            session.commit()
+            logger.info("Member %s was created for a sign-in deleted meanwhile; anonymized", member.id)
+        raise NotSignedIn("This sign-in no longer exists")
     return member, already_existed
 
 
@@ -206,21 +244,31 @@ def delete_account(session: Session, clerk_user_id: str) -> bool:
     committed, and only then is the sign-in deleted: if that last call fails
     (502), the data is already gone, the sign-in still works, and repeating the
     call finishes the job. The other order could leave the personal data behind
-    a sign-in that no longer exists.
+    a sign-in that no longer exists. The Website's leaderboard cache is
+    refreshed last, so the sign-in does not outlast the data any longer than
+    the delete itself takes.
 
-    Only the record linked to this sign-in is touched. Returns whether there was one.
+    Only the record linked to this sign-in is touched, and it is locked until
+    the commit: an onboarding running at the same time for this sign-in waits,
+    then finds the account deleted instead of writing its answers back.
+    Returns whether there was a record.
     """
     clerk_api.get_user(clerk_user_id)
-    member = member_queries.get_member_by_clerk_user_id_or_none(session, clerk_user_id)
+    member = member_queries.lock_member_by_clerk_user_id_or_none(session, clerk_user_id)
     if member is not None:
         identify_actor(member)
         if resolve_access(session, member).is_staff:
             raise StaffAccountDeletion(member.id)
         member_queries.anonymize_member(session, member)
-        session.commit()
+    # Also when there was no record: it ends the transaction, and the lock, before Clerk is called.
+    session.commit()
+    if member is not None:
         logger.info("Member %s deleted their account", member.id)
-        refresh_member_names_cache()
 
-    if not clerk_api.delete_user(clerk_user_id):
-        logger.info("Clerk user %s was already deleted", clerk_user_id)
+    try:
+        if not clerk_api.delete_user(clerk_user_id):
+            logger.info("Clerk user %s was already deleted", clerk_user_id)
+    finally:
+        if member is not None:
+            refresh_member_names_cache()
     return member is not None

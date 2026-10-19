@@ -123,10 +123,16 @@ def get_user(user_id: str) -> ClerkUser:
     return parse_user(response.json())
 
 
-def update_public_metadata(user_id: str, metadata: dict[str, Any]) -> None:
-    """Merge ``metadata`` into the user's publicMetadata. A key set to ``None`` is removed."""
+def update_public_metadata(user_id: str, metadata: dict[str, Any]) -> bool:
+    """Merge ``metadata`` into the user's publicMetadata. A key set to ``None`` is removed.
+
+    ``False`` when Clerk no longer has the user: the sign-in was deleted since it was read.
+    """
     response = _request("PATCH", f"{_user_path(user_id)}/metadata", json={"public_metadata": metadata})
+    if response.status_code == 404:
+        return False
     _raise_for_status(response, "update publicMetadata", user_id)
+    return True
 
 
 def delete_user(user_id: str) -> bool:

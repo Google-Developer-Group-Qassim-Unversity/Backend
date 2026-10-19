@@ -207,6 +207,33 @@ def get_member_by_clerk_user_id_or_none(session: Session, clerk_user_id: str) ->
     return session.scalars(statement).first()
 
 
+def lock_member(session: Session, member_id: int) -> Members | None:
+    """A member row read as it is now and locked until the transaction ends.
+
+    A plain read can be older than that: under MySQL's repeatable read it shows
+    the row as of the transaction's first read. This one reads the latest
+    committed row and holds a lock on it, so no other request changes it before
+    this one commits or rolls back. ``populate_existing`` refreshes an instance
+    the session already holds instead of keeping its older values.
+    """
+    statement = (
+        select(Members).where(Members.id == member_id).with_for_update().execution_options(populate_existing=True)
+    )
+    return session.scalars(statement).first()
+
+
+def lock_member_by_clerk_user_id_or_none(session: Session, clerk_user_id: str) -> Members | None:
+    """Like ``lock_member``, by the Clerk id. When no row has it, the lock still keeps another
+    transaction from inserting one with that id until this one ends."""
+    statement = (
+        select(Members)
+        .where(Members.clerk_user_id == clerk_user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return session.scalars(statement).first()
+
+
 def update_member(session: Session, member: Member_model, is_authenticated: bool):
     if member.id is None:
         # update_member always identifies its target by id; the one caller
@@ -326,20 +353,30 @@ def anonymize_member(session: Session, member: Members) -> None:
     public profile (``member_profiles``), and the registrations with their form
     answers (``submissions``). Emails sent to the member stay logged for the
     senders' daily quota, without who they went to or what they said.
+
+    Every field is written by one UPDATE, whatever ``member`` holds in memory:
+    setting attributes would only send the ones that differ from the values the
+    session loaded, and those can be older than the row.
     """
     now = datetime.now()
     session.execute(delete(MemberProfiles).where(MemberProfiles.member_id == member.id))
     session.execute(delete(Submissions).where(Submissions.member_id == member.id))
     session.execute(update(EmailLogs).where(EmailLogs.member_id == member.id).values(member_id=None, data=null()))
-    member.name = DELETED_MEMBER_NAME
-    member.public_name = DELETED_MEMBER_NAME
-    member.email = None
-    member.phone_number = None
-    member.uni_id = None
-    member.clerk_user_id = None
-    member.uni_level = None
-    member.uni_college = None
-    member.updated_at = now
-    member.deleted_at = now
+    session.execute(
+        update(Members)
+        .where(Members.id == member.id)
+        .values(
+            name=DELETED_MEMBER_NAME,
+            public_name=DELETED_MEMBER_NAME,
+            email=None,
+            phone_number=None,
+            uni_id=None,
+            clerk_user_id=None,
+            uni_level=None,
+            uni_college=None,
+            updated_at=now,
+            deleted_at=now,
+        )
+    )
     session.flush()
     logger.info("Anonymized member %s", member.id)

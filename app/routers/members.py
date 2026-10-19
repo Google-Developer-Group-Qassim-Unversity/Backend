@@ -83,10 +83,10 @@ def delete_my_account(clerk_user_id: SignedInClerkUserId, session: DB):
     The member record linked to this sign-in is anonymized: names, emails,
     phone, university ID, Clerk link, academic details, card and public
     profile, and registrations with their form answers are removed, and the
-    record leaves every leaderboard, history and member list. Points and
-    attendance stay in event counts, under no name. Then the Clerk sign-in is
-    deleted. Repeating the call is safe, and is how a 502 is recovered from;
-    once the sign-in is gone, a repeat answers 401.
+    record leaves every leaderboard, history and member list. Its points and
+    attendance rows stay, under no name. Then the Clerk sign-in is deleted.
+    Repeating the call is safe, and is how a 502 is recovered from; once the
+    sign-in is gone, a repeat answers 401.
     """
     member_anonymized = member_accounts.delete_account(session, clerk_user_id)
     return {"deleted": True, "member_anonymized": member_anonymized}
@@ -270,7 +270,10 @@ def get_member_by_id(member_id: int, session: DB):
     response_model=CreatedMemberModel,
     responses={
         200: {"model": CreatedMemberModel, "description": "An existing member record was linked or updated"},
-        401: {"model": CodedErrorResponse, "description": "No session token, or one that does not verify"},
+        401: {
+            "model": CodedErrorResponse,
+            "description": "No session token, one that does not verify, or a sign-in deleted meanwhile",
+        },
         409: {"model": CodedErrorResponse, "description": "member_claimed or email_in_use"},
         502: {"model": CodedErrorResponse, "description": "clerk_unavailable: retry"},
         503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
