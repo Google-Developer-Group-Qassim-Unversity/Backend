@@ -1663,6 +1663,173 @@ class EventContentLinks(Base):
 
 
 # =============================================================================
+# Member app push notifications (app/services/push/, docs/PUSH.md)
+# =============================================================================
+
+
+class PushPlatform(str, enum.Enum):
+    IOS = "ios"
+
+
+class PushEnvironment(str, enum.Enum):
+    """The APNs environment a build's tokens belong to: TestFlight and App Store builds are ``production``."""
+
+    PRODUCTION = "production"
+    DEVELOPMENT = "development"
+
+
+class PushLocale(str, enum.Enum):
+    AR = "ar"
+    EN = "en"
+
+
+class PushKind(str, enum.Enum):
+    REMINDER = "reminder"
+    ACCEPTED = "accepted"
+    POINTS = "points"
+    NEW_EVENT = "new_event"
+    BROADCAST = "broadcast"
+
+
+class PushStatus(str, enum.Enum):
+    PENDING = "pending"
+    SENT = "sent"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+class MemberDevices(Base):
+    """A phone that gets the member's push notifications: one row per APNs device token.
+
+    A token belongs to one member at a time: registering it again, signed in as
+    someone else, moves the row. ``last_seen_at`` is set on every registration;
+    the sweep drops rows unseen for 180 days.
+    """
+
+    __tablename__ = "member_devices"
+    __table_args__ = (
+        ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_member_devices_member", ondelete="CASCADE"),
+        Index("uq_member_devices_token", "token", unique=True),
+        Index("ix_member_devices_member", "member_id", "last_seen_at"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    # Lowercase hex. Never logged: the device row's id stands for it everywhere.
+    token: Mapped[str] = mapped_column(VARCHAR(200, charset="ascii", collation="ascii_bin"), nullable=False)
+    platform: Mapped[PushPlatform] = mapped_column(_enum(PushPlatform), nullable=False)
+    environment: Mapped[PushEnvironment] = mapped_column(_enum(PushEnvironment), nullable=False)
+    app_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    app_build: Mapped[str] = mapped_column(String(20), nullable=False)
+    # The app's language, which picks the language of what is sent to this phone.
+    locale: Mapped[PushLocale] = mapped_column(_enum(PushLocale), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    last_seen_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
+class MemberNotificationPrefs(Base):
+    """A member's four notification switches (the app's Settings). No row = the defaults: on, on, on, off."""
+
+    __tablename__ = "member_notification_prefs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["member_id"], ["members.id"], name="fk_member_notification_prefs_member", ondelete="CASCADE"
+        ),
+        Index("uq_member_notification_prefs_member", "member_id", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    remind: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    accept: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    points: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    news: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
+class PushBroadcasts(Base):
+    """An announcement an organizer sent to members' phones (``POST /notifications/broadcast``)."""
+
+    __tablename__ = "push_broadcasts"
+    __table_args__ = (
+        ForeignKeyConstraint(["sent_by"], ["members.id"], name="fk_push_broadcasts_sent_by", ondelete="SET NULL"),
+        Index("fk_push_broadcasts_sent_by", "sent_by"),
+        Index("ix_push_broadcasts_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    sent_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    title_ar: Mapped[str] = mapped_column(
+        VARCHAR(60, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
+    )
+    body_ar: Mapped[str] = mapped_column(
+        VARCHAR(180, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False
+    )
+    # NULL: English phones get the Arabic text.
+    title_en: Mapped[Optional[str]] = mapped_column(VARCHAR(60, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    body_en: Mapped[Optional[str]] = mapped_column(VARCHAR(180, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    url: Mapped[Optional[str]] = mapped_column(String(200))
+    # {"type": "all"} or {"type": "event", "event_id": 435}
+    audience: Mapped[dict] = mapped_column(JSON, nullable=False)
+    recipient_count: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
+class PushNotifications(Base):
+    """The push outbox, and the log of what was sent: one row per notification per member.
+
+    Written in the same transaction as the change that causes it; ``dedupe_key``
+    is unique, so a trigger that runs twice (four workers, retries, the sweep)
+    adds nothing the second time. ``payload`` holds the text in both languages,
+    rendered when the row is written; the phone's language picks one. Delivery
+    claims due rows with ``FOR UPDATE SKIP LOCKED`` and a lease on
+    ``not_before``. The sweep deletes rows older than 90 days.
+    """
+
+    __tablename__ = "push_notifications"
+    __table_args__ = (
+        ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_push_notifications_member", ondelete="CASCADE"),
+        ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_push_notifications_event", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["broadcast_id"], ["push_broadcasts.id"], name="fk_push_notifications_broadcast", ondelete="CASCADE"
+        ),
+        Index("uq_push_notifications_dedupe_key", "dedupe_key", unique=True),
+        Index("ix_push_notifications_member", "member_id", "created_at"),
+        Index("ix_push_notifications_status", "status", "not_before"),
+        Index("fk_push_notifications_event", "event_id"),
+        Index("fk_push_notifications_broadcast", "broadcast_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    kind: Mapped[PushKind] = mapped_column(_enum(PushKind), nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(VARCHAR(191, charset="ascii", collation="ascii_bin"), nullable=False)
+    event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    broadcast_id: Mapped[Optional[str]] = mapped_column(UUID_CHAR)
+    # {"ar": {"title", "body"}, "en": {"title", "body"}, "url", "thread_id", "cause": {...}}
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[PushStatus] = mapped_column(_enum(PushStatus), nullable=False, server_default=text("'pending'"))
+    attempts: Mapped[int] = mapped_column(SMALLINT(unsigned=True), nullable=False, server_default=text("'0'"))
+    # Quiet hours, retry backoff and the delivery lease.
+    not_before: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    sent_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    # Apple's reason, or why it was skipped; never a token.
+    last_error: Mapped[Optional[str]] = mapped_column(String(100))
+
+
+# =============================================================================
 # Views (read-only, defined in DB migrations)
 # =============================================================================
 

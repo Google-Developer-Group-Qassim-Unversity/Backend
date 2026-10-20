@@ -1,6 +1,6 @@
 import logging
 from typing import List
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status, Depends
 
 from app.DB import (
     events as events_queries,
@@ -21,6 +21,8 @@ from app.exceptions import DataIntegrityError
 from app.routers.responses import CustomPointsCreatedResponse, MessageResponse
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.guards import Require
+from app.services.push import delivery as push_delivery
+from app.services.push import triggers as push_triggers
 
 
 logger = logging.getLogger(__name__)
@@ -305,7 +307,9 @@ def update_department_custom_points(log_id: int, body: DepartmentPointDetails, s
 
 
 @router.post("/members", status_code=status.HTTP_201_CREATED, response_model=CustomPointsCreatedResponse)
-def give_member_custom_points(body: CustomMemberPointsRequest, session: DB, member: CurrentMember):
+def give_member_custom_points(
+    body: CustomMemberPointsRequest, session: DB, member: CurrentMember, background_tasks: BackgroundTasks
+):
     try:
         logger.info("Custom Member Points")
         if body.event_id:
@@ -376,8 +380,10 @@ def give_member_custom_points(body: CustomMemberPointsRequest, session: DB, memb
             for member_id in point_detail.member_ids:
                 logger.info(f"Giving points to member with id {member_id}")
                 log_queries.create_member_log(session, member_id, new_log.id)
+            push_triggers.custom_points_given(session, event, new_log.id, point_detail.member_ids)
 
         session.commit()
+        background_tasks.add_task(push_delivery.kick)
         logger.info("Successfully given custom points to members")
         return {"event_id": event.id, "message": "Successfully given custom points to members"}
 
@@ -478,7 +484,7 @@ def delete_member_custom_points(log_id: int, session: DB):
 
 
 @router.put("/members/{log_id}", response_model=MessageResponse)
-def update_member_custom_points(log_id: int, body: MemberPointDetails, session: DB):
+def update_member_custom_points(log_id: int, body: MemberPointDetails, session: DB, background_tasks: BackgroundTasks):
     logger.info(f"Update Custom Member Points for Log {log_id}")
 
     logger.info(f"Validating log with id {log_id}")
@@ -535,7 +541,11 @@ def update_member_custom_points(log_id: int, body: MemberPointDetails, session: 
     for mem_id in body.member_ids:
         log_queries.create_member_log(session, mem_id, log_id)
         logger.info(f"Associated member {mem_id} with log {log_id}")
+    if existing_log.event is not None:
+        # Only members the edit adds are told: the others already were (docs/PUSH.md).
+        push_triggers.custom_points_given(session, existing_log.event, log_id, body.member_ids)
 
     session.commit()
+    background_tasks.add_task(push_delivery.kick)
     logger.info("Successfully updated custom member points")
     return {"message": "Successfully updated custom member points"}

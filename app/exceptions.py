@@ -452,3 +452,26 @@ class ClerkNotConfigured(KnownHttpException):
 
     def __init__(self):
         super().__init__(status_code=503, detail="Account changes are not available on this server yet")
+
+
+class PushNotConfigured(KnownHttpException):
+    """This server has no APNs key (``APNS_KEY_ID``/``APNS_PRIVATE_KEY``), so it cannot send app notifications."""
+
+    code = "push_not_configured"
+
+    def __init__(self):
+        super().__init__(status_code=503, detail="App notifications are not set up on this server yet")
+
+
+class BroadcastLimitReached(KnownHttpException):
+    code = "broadcast_limit"
+
+    def __init__(self, limit: int):
+        super().__init__(status_code=429, detail=f"At most {limit} app announcements a day; try again tomorrow")
+
+
+class PushUrlNotAllowed(KnownHttpException):
+    code = "url_not_allowed"
+
+    def __init__(self):
+        super().__init__(status_code=422, detail="The link must be one of the app's own links (see docs/PUSH.md)")

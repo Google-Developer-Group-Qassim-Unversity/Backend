@@ -165,6 +165,18 @@ class Settings(BaseSettings):
     GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL: str = ""
     GOOGLE_WALLET_PRIVATE_KEY: str = ""
 
+    # ------------------------------------------------------------------
+    # Member app push notifications (app/services/push/, docs/PUSH.md).
+    # Sent straight to Apple's APNs with a token-based (.p8) auth key; the
+    # team id is APPLE_TEAM_ID above. Key id and key unset: push is off -
+    # devices and switches are still stored, nothing is queued or sent.
+    # ------------------------------------------------------------------
+    APNS_KEY_ID: Optional[str] = None
+    APNS_PRIVATE_KEY: Optional[str] = None
+    APNS_PRIVATE_KEY_PATH: Optional[str] = None
+    APNS_TOPIC: str = "com.gdgq.app"
+    APNS_ENVIRONMENT: str = "production"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -476,6 +488,44 @@ class Config:
     @property
     def GOOGLE_WALLET_PRIVATE_KEY(self) -> str:
         return get_settings().GOOGLE_WALLET_PRIVATE_KEY
+
+    # ---- push notifications ----
+
+    @property
+    def APNS_KEY_ID(self) -> Optional[str]:
+        return get_settings().APNS_KEY_ID or None
+
+    @property
+    def APNS_TOPIC(self) -> str:
+        return get_settings().APNS_TOPIC or "com.gdgq.app"
+
+    @property
+    def APNS_ENVIRONMENT(self) -> str:
+        """``production`` (api.push.apple.com) or ``sandbox``; anything else counts as production."""
+        return "sandbox" if (get_settings().APNS_ENVIRONMENT or "").strip().lower() == "sandbox" else "production"
+
+    @property
+    def APNS_PRIVATE_KEY(self) -> Optional[str]:
+        """The .p8 key's PEM text, from ``APNS_PRIVATE_KEY`` or the file at ``APNS_PRIVATE_KEY_PATH``.
+
+        Never logged. A value pasted with literal ``\\n`` for newlines (one-line
+        secret stores) is read as if it had real ones.
+        """
+        settings = get_settings()
+        if settings.APNS_PRIVATE_KEY:
+            return settings.APNS_PRIVATE_KEY.replace("\\n", "\n").strip()
+        if settings.APNS_PRIVATE_KEY_PATH:
+            try:
+                return Path(settings.APNS_PRIVATE_KEY_PATH).expanduser().read_text().strip() or None
+            except OSError:
+                return None
+        return None
+
+    @property
+    def push_enabled(self) -> bool:
+        """Push notifications are queued and sent only when the APNs key id and key are both set."""
+        settings = get_settings()
+        return bool(settings.APNS_KEY_ID and (settings.APNS_PRIVATE_KEY or settings.APNS_PRIVATE_KEY_PATH))
 
 
 def env_or_except(key: str, default: Optional[str] = None) -> str:
