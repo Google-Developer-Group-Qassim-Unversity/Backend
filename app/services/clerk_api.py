@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 CLERK_API_URL = "https://api.clerk.com/v1"
 TIMEOUT_SECONDS = 10.0
 
+# The Backend API names an external account's provider ``oauth_<provider>``.
+APPLE_PROVIDERS = frozenset({"oauth_apple", "apple"})
+
 # Verification strategies that prove the user receives mail at the address.
 PROVEN_STRATEGIES = frozenset({"email_code", "reset_password_email_code", "email_link"})
 PROVEN_STRATEGY_PREFIX = "from_oauth_"
@@ -34,6 +37,8 @@ class ClerkUser:
     proven_emails: tuple[str, ...]
     # From the primary email, when it is a proven <uni_id>@qu.edu.sa.
     uni_id: str | None
+    # The Apple account's user id (Apple's ``sub``), when the user signed in with Apple.
+    apple_user_id: str | None = None
 
     @property
     def is_university_id_account(self) -> bool:
@@ -71,8 +76,22 @@ def parse_user(data: dict[str, Any]) -> ClerkUser:
 
     match = UNIVERSITY_EMAIL.fullmatch(primary) if primary and primary in proven else None
     return ClerkUser(
-        id=str(data["id"]), primary_email=primary, proven_emails=tuple(proven), uni_id=match.group(1) if match else None
+        id=str(data["id"]),
+        primary_email=primary,
+        proven_emails=tuple(proven),
+        uni_id=match.group(1) if match else None,
+        apple_user_id=_apple_user_id(data),
     )
+
+
+def _apple_user_id(data: dict[str, Any]) -> str | None:
+    for account in data.get("external_accounts") or []:
+        if not isinstance(account, dict) or account.get("provider") not in APPLE_PROVIDERS:
+            continue
+        provider_user_id = str(account.get("provider_user_id") or "").strip()
+        if provider_user_id:
+            return provider_user_id
+    return None
 
 
 def _secret_key() -> str:

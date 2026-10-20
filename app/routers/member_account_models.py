@@ -124,10 +124,27 @@ class MemberOnboardingRequest(BaseModel):
         return self
 
 
+class DeleteAccountRequest(BaseModel):
+    """DELETE /members/me's optional body. No body deletes the account the same way."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    apple_authorization_code: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=1000,
+        description="A fresh authorization code from the app's Sign in with Apple sheet (valid 5 minutes, single "
+        "use). After the deletion the backend trades it for Apple's tokens and revokes them",
+    )
+
+
 class DeletedAccountResponse(BaseModel):
     deleted: bool
     # False when the sign-in had no member record, so only the sign-in went.
     member_anonymized: bool
+    # Whether Apple confirmed it revoked the app's tokens; None when no code was sent.
+    # False never undoes the deletion: the app shows Apple's manual steps instead.
+    apple_token_revoked: bool | None = None
 
 
 class CodedErrorResponse(BaseModel):
