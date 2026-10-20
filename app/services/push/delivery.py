@@ -54,7 +54,8 @@ CONFIG_REASONS = {"InvalidProviderToken", "TopicDisallowed", "BadTopic", "BadCer
 @dataclass(frozen=True)
 class Device:
     id: str
-    token: str
+    # Out of the repr, so a Job or Device in a traceback's locals (Sentry) never shows it.
+    token: str = field(repr=False)
     locale: str
     last_seen_at: datetime
 
@@ -204,16 +205,16 @@ def collapse_id(dedupe_key: str) -> str:
 
 
 async def _send_one(job: Job, device: Device) -> apns.ApnsResponse:
-    text = job.payload.get(device.locale) or job.payload.get("ar") or {}
-    body = apns.device_payload(
-        title=text.get("title", ""),
-        body=text.get("body", ""),
-        url=job.payload.get("url") or "gdgq://notifications",
-        kind=job.kind.value,
-        notification_id=job.id,
-        thread_id=job.payload.get("thread_id") or "news",
-    )
     try:
+        text = job.payload.get(device.locale) or job.payload.get("ar") or {}
+        body = apns.device_payload(
+            title=text.get("title", ""),
+            body=text.get("body", ""),
+            url=job.payload.get("url") or "gdgq://notifications",
+            kind=job.kind.value,
+            notification_id=job.id,
+            thread_id=job.payload.get("thread_id") or "news",
+        )
         return await apns.send(
             device.token,
             body,
@@ -223,6 +224,12 @@ async def _send_one(job: Job, device: Device) -> apns.ApnsResponse:
         )
     except apns.ApnsNotConfigured as exc:
         return apns.ApnsResponse(-1, str(exc)[:100])
+    except Exception as exc:
+        # One request failing in a way nobody planned for must not take the batch's other
+        # answers with it: those rows would stay leased unrecorded and be sent again. Only the
+        # type is logged; the traceback's locals hold the token. Retried like a timeout.
+        logger.warning("Push %s: device %s request failed (%s)", job.id, device.id, type(exc).__name__)
+        return apns.ApnsResponse(0, type(exc).__name__[:100])
 
 
 async def send(jobs: list[Job]) -> dict[str, list[tuple[Device, apns.ApnsResponse]]]:

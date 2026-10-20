@@ -4,6 +4,13 @@ A device token is the last segment of the APNs request path
 (``/3/device/<token>``). httpx logs every request's URL at INFO, and Sentry's
 httpx integration puts URLs into breadcrumbs and trace spans. Both are
 rewritten here to ``/3/device/[token]``.
+
+Two more places a token could reach: hpack's DEBUG lines print every HTTP/2
+header (the path and the encoded ``authorization`` with the provider token),
+so that logger stays at INFO even when ``LOG_LEVEL=DEBUG``; and a Sentry
+event's stack frames carry each frame's local variables, so any local whose
+name has ``token`` in it is filtered (Sentry's own list only matches the
+exact name ``token``).
 """
 
 import logging
@@ -12,6 +19,7 @@ from typing import Any
 
 _DEVICE_PATH = re.compile(r"/3/device/[0-9A-Fa-f]+")
 _REPLACEMENT = "/3/device/[token]"
+_FILTERED = "[Filtered]"
 
 
 def scrub(value: Any) -> Any:
@@ -46,6 +54,24 @@ def install_log_filter() -> None:
     target = logging.getLogger("httpx")
     if not any(isinstance(existing, HideDeviceTokens) for existing in target.filters):
         target.addFilter(HideDeviceTokens())
+    hpack = logging.getLogger("hpack")
+    if hpack.level < logging.INFO:  # NOTSET or DEBUG: it would follow LOG_LEVEL=DEBUG
+        hpack.setLevel(logging.INFO)
+
+
+def _filter_frame_vars(value: Any) -> Any:
+    """Every stack frame's ``vars`` with token-named locals filtered, wherever frames sit in the event."""
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if key == "vars" and isinstance(item, dict):
+                out[key] = {name: _FILTERED if "token" in str(name).lower() else var for name, var in item.items()}
+            else:
+                out[key] = _filter_frame_vars(item)
+        return out
+    if isinstance(value, list):
+        return [_filter_frame_vars(item) for item in value]
+    return value
 
 
 def before_breadcrumb(crumb: Any, hint: Any = None) -> Any:
@@ -57,4 +83,4 @@ def before_send_transaction(event: Any, hint: Any = None) -> Any:
 
 
 def before_send(event: Any, hint: Any = None) -> Any:
-    return scrub(event)
+    return scrub(_filter_frame_vars(event))

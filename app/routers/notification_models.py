@@ -22,7 +22,8 @@ class DeviceRegistrationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    token: Annotated[str, Field(pattern=r"^[0-9A-Fa-f]{64,200}$", description="APNs device token, hex")]
+    # repr=False: a request body in a traceback's locals never shows the token.
+    token: Annotated[str, Field(pattern=r"^[0-9A-Fa-f]{64,200}$", description="APNs device token, hex", repr=False)]
     platform: Literal["ios"]
     environment: Literal["production", "development"] = Field(
         description="The build's APNs environment: TestFlight and App Store builds are production"

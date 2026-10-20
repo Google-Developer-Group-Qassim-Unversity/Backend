@@ -111,10 +111,10 @@ a push (`BackgroundTasks`) and on every worker after each sweep:
 | 200 | `sent` (when at least one phone took it) |
 | 410 `Unregistered` | that phone's row is deleted, unless it registered again after Apple's `timestamp` |
 | 400 `BadDeviceToken`, `DeviceTokenNotForTopic` | that phone's row is deleted |
-| 403 `ExpiredProviderToken` | a new provider token, and that phone is tried once more |
+| 403 `ExpiredProviderToken` | a new provider token (one per refused token, however many requests were refused at once), and that phone is tried once more |
 | other 403s, `BadTopic`, `TopicDisallowed`, no key | an ERROR once per batch; the row stays queued |
 | 429 | retried after 5 minutes (`TooManyProviderTokenUpdates`) or 1 minute |
-| 5xx, timeouts | retried after 2^attempts minutes; `failed` after 5 attempts |
+| 5xx, timeouts, a request that fails in any other way | retried after 2^attempts minutes; `failed` after 5 attempts. The rest of the batch is recorded as usual |
 | 413, other 400s | `failed` with Apple's reason |
 
 The provider token is an ES256 JWT (`kid` = `APNS_KEY_ID`, `iss` =
@@ -124,7 +124,9 @@ and at most every 20 minutes, as Apple asks, and the same in every worker.
 Logs name the outbox row and the device row, never a token, the JWT or the
 key. The token is in the APNs URL, so the `httpx` log line and Sentry's
 breadcrumbs and spans are rewritten to `/3/device/[token]`
-(`app/services/push/redact.py`).
+(`app/services/push/redact.py`). Sentry events also lose every stack-frame
+local whose name contains `token`, and the `hpack` logger stays at INFO even
+with `LOG_LEVEL=DEBUG` (its DEBUG lines print the HTTP/2 headers).
 
 The payload carries the app's keys twice, under `body` (which expo-notifications
 exposes as `content.data`) and at the top level:

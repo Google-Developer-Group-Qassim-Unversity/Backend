@@ -22,6 +22,8 @@ from dataclasses import dataclass
 
 import httpx
 import jwt
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 from app.config import config
@@ -100,23 +102,38 @@ def _signing_key() -> str:
     if not key:
         raise ApnsNotConfigured("APNS_PRIVATE_KEY (or APNS_PRIVATE_KEY_PATH) is not set or cannot be read")
     try:
-        load_pem_private_key(key.encode(), password=None)
-    except (ValueError, TypeError):
+        loaded = load_pem_private_key(key.encode(), password=None)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
         # cryptography's message says nothing about the key's contents, but stay generic anyway.
         raise ApnsNotConfigured("the APNs private key is not a readable .p8 (PEM) key") from None
+    # A readable key of another kind (an RSA key, the wrong file) would only fail inside jwt.encode,
+    # on every request of every batch; say what is wrong here instead.
+    if not isinstance(loaded, ec.EllipticCurvePrivateKey) or not isinstance(loaded.curve, ec.SECP256R1):
+        raise ApnsNotConfigured("the APNs private key is not a P-256 (ES256) .p8 key")
     return key
 
 
-def provider_token(*, now: float | None = None, force: bool = False) -> str:
-    """The cached JWT for the current 50-minute boundary. ``force``: sign a new one now (Apple said it expired)."""
+def provider_token(*, now: float | None = None, force: bool = False, rejected: str | None = None) -> str:
+    """The cached JWT for the current 50-minute boundary.
+
+    ``force``: sign a new one now. ``rejected``: Apple answered
+    ExpiredProviderToken to this token; sign a new one now, unless another
+    request already replaced it. Up to 20 requests are in flight at once, and
+    they all get that answer together: re-signing once per answer would update
+    the token many times a second, which Apple refuses with
+    TooManyProviderTokenUpdates.
+    """
     global _token_cache
     now = time.time() if now is None else now
     boundary = int(now // TOKEN_BOUNDARY_SECONDS) * TOKEN_BOUNDARY_SECONDS
     key_id = config.APNS_KEY_ID or ""
     cached = _token_cache
-    if not force and cached is not None and cached[0] == boundary and cached[1] == key_id:
-        return cached[2]
-    issued_at = int(now) if force else boundary
+    if cached is not None and cached[0] == boundary and cached[1] == key_id:
+        if not force and rejected is None:
+            return cached[2]
+        if not force and cached[2] != rejected:
+            return cached[2]
+    issued_at = int(now) if force or rejected is not None else boundary
     token = jwt.encode(
         {"iss": config.APPLE_TEAM_ID, "iat": issued_at}, _signing_key(), algorithm="ES256", headers={"kid": key_id}
     )
@@ -158,9 +175,11 @@ async def send(
         return ApnsResponse(413, "PayloadTooLarge")
     client = client or get_client()
     url = f"{HOSTS[config.APNS_ENVIRONMENT]}/3/device/{device_token}"
-    answer = await _post(client, url, payload, priority, expiration, collapse_id, push_type, force=False)
+    bearer = provider_token()
+    answer = await _post(client, url, payload, priority, expiration, collapse_id, push_type, bearer=bearer)
     if answer.status == 403 and answer.reason == "ExpiredProviderToken":
-        answer = await _post(client, url, payload, priority, expiration, collapse_id, push_type, force=True)
+        bearer = provider_token(rejected=bearer)
+        answer = await _post(client, url, payload, priority, expiration, collapse_id, push_type, bearer=bearer)
     return answer
 
 
@@ -173,10 +192,10 @@ async def _post(
     collapse_id: str,
     push_type: str,
     *,
-    force: bool,
+    bearer: str,
 ) -> ApnsResponse:
     headers = {
-        "authorization": f"bearer {provider_token(force=force)}",
+        "authorization": f"bearer {bearer}",
         "apns-topic": config.APNS_TOPIC,
         "apns-push-type": push_type,
         "apns-priority": str(priority),

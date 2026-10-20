@@ -8,6 +8,8 @@ from datetime import datetime
 import httpx
 import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 from app.config import config, reload_settings
@@ -126,6 +128,34 @@ def test_provider_token_is_reused_within_its_50_minute_boundary(push_on):
 def test_a_forced_token_is_signed_now(push_on):
     token = apns.provider_token(now=1_800_000_123, force=True)
     assert jwt.decode(token, options={"verify_signature": False})["iat"] == 1_800_000_123
+
+
+def test_a_burst_of_expired_answers_re_signs_the_token_once(push_on):
+    # Every request in flight gets ExpiredProviderToken together; one new token serves them all.
+    old = apns.provider_token(now=1_800_000_123)
+    new = apns.provider_token(now=1_800_000_124, rejected=old)
+    assert new != old
+    assert jwt.decode(new, options={"verify_signature": False})["iat"] == 1_800_000_124
+    assert apns.provider_token(now=1_800_000_125, rejected=old) == new
+    assert apns.provider_token(now=1_800_000_126) == new
+    # Apple refusing the new one too signs again.
+    assert apns.provider_token(now=1_800_000_127, rejected=new) != new
+
+
+def test_a_readable_key_that_is_not_p256_is_refused_by_name(monkeypatch):
+    rsa_key = (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        .decode()
+    )
+    monkeypatch.setenv("APNS_KEY_ID", KEY_ID)
+    monkeypatch.setenv("APNS_PRIVATE_KEY", rsa_key)
+    reload_settings()
+    apns.reset_provider_token()
+    with pytest.raises(apns.ApnsNotConfigured, match="P-256") as caught:
+        apns.provider_token()
+    assert "PRIVATE KEY" not in str(caught.value)
+    apns.reset_provider_token()
 
 
 def test_a_missing_or_broken_key_names_the_setting_and_never_the_key(monkeypatch):
@@ -287,3 +317,24 @@ def test_sentry_breadcrumbs_and_spans_lose_the_token():
     assert TOKEN not in json.dumps(redact.before_breadcrumb(crumb))
     event = {"spans": [{"description": f"POST https://api.push.apple.com/3/device/{TOKEN}"}]}
     assert TOKEN not in json.dumps(redact.before_send_transaction(event))
+
+
+def test_sentry_events_lose_token_named_locals_in_every_frame():
+    frame = {
+        "function": "send",
+        "vars": {"device_token": TOKEN, "bearer_token": "eyJ.x.y", "attempt": 2, "url": f"/3/device/{TOKEN}"},
+    }
+    event = {"exception": {"values": [{"stacktrace": {"frames": [frame]}}]}, "threads": {"values": []}}
+    cleaned = redact.before_send(event)
+    variables = cleaned["exception"]["values"][0]["stacktrace"]["frames"][0]["vars"]
+    assert variables["device_token"] == variables["bearer_token"] == "[Filtered]"
+    assert variables["attempt"] == 2 and variables["url"] == "/3/device/[token]"
+    assert TOKEN not in json.dumps(cleaned)
+
+
+def test_hpack_never_logs_http2_headers_even_at_debug(monkeypatch):
+    hpack = logging.getLogger("hpack")
+    monkeypatch.setattr(hpack, "level", logging.NOTSET)
+    redact.install_log_filter()
+    assert hpack.level == logging.INFO
+    assert not hpack.isEnabledFor(logging.DEBUG)

@@ -196,6 +196,36 @@ def test_a_timeout_is_retried(db_session, reader, push_on, apns_mock, frozen):
     assert (row.status, row.last_error) == (PushStatus.PENDING, "ReadTimeout")
 
 
+def test_one_request_failing_unexpectedly_never_loses_the_batchs_other_answers(
+    db_session, reader, push_on, apns_mock, frozen, caplog
+):
+    # Before: the exception escaped asyncio.gather, nothing was recorded, and the rows that did
+    # reach Apple stayed leased and went out a second time five minutes later.
+    other = make_member(db_session)
+    set_prefs(db_session, other, news=True)
+    broken, fine = add_device(db_session, reader), add_device(db_session, other)
+    apns_mock.answer(broken.token, RuntimeError(f"connection state for {broken.token}"))
+    apns_mock.answer(fine.token, (200, None))
+    failing, sent = queue(db_session, reader, key="k-broken"), queue(db_session, other, key="k-fine")
+
+    with caplog.at_level(logging.DEBUG):
+        result = deliver()
+
+    assert (result.sent, result.retried) == (1, 1)
+    assert reload(db_session, sent).status == PushStatus.SENT
+    failing = reload(db_session, failing)
+    assert (failing.status, failing.attempts, failing.last_error) == (PushStatus.PENDING, 1, "RuntimeError")
+    assert failing.not_before == frozen.now + timedelta(minutes=2)
+    assert broken.token not in caplog.text
+
+
+def test_a_device_never_shows_its_token_in_a_repr():
+    device = delivery.Device("dev-1", "ab" * 32, "ar", datetime(2026, 7, 1))
+    assert "ab" * 32 not in repr(device)
+    job = delivery.Job("row-1", 1, PushKind.BROADCAST, "k", {}, datetime(2026, 7, 2), 1, [device])
+    assert "ab" * 32 not in repr(job)
+
+
 def test_a_payload_apple_refuses_fails_at_once(db_session, reader, push_on, apns_mock):
     device = add_device(db_session, reader)
     apns_mock.answer(device.token, (400, {"reason": "BadExpirationDate"}))
