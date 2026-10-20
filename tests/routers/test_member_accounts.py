@@ -327,7 +327,7 @@ def test_deleting_an_account_anonymizes_the_member_and_deletes_the_sign_in(sign_
     response = client.delete("/members/me")
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"deleted": True, "member_anonymized": True}
+    assert response.json() == {"deleted": True, "member_anonymized": True, "apple_token_revoked": None}
     # onboarding read the user; deleting reads it again, then deletes it
     assert [call.method for call in outbound.to(f"/v1/users/{QU_USER}")] == ["GET", "GET", "DELETE"]
 

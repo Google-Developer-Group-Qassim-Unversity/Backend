@@ -1,6 +1,6 @@
 import logging
 from app.leaderboard_cache import refresh_member_names_cache
-from fastapi import APIRouter, HTTPException, Response, status, Depends, Query
+from fastapi import APIRouter, Body, HTTPException, Response, status, Depends, Query
 from app.DB import members as member_queries
 from app.DB.schema import Members
 
@@ -17,7 +17,12 @@ from app.routers.models import (
     BatchCreateMembersRequest,
     BatchCreateMembersResponse,
 )
-from app.routers.member_account_models import CodedErrorResponse, DeletedAccountResponse, MemberOnboardingRequest
+from app.routers.member_account_models import (
+    CodedErrorResponse,
+    DeleteAccountRequest,
+    DeletedAccountResponse,
+    MemberOnboardingRequest,
+)
 from app.services import member_accounts
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import CurrentMember, SignedInClerkUserId, authenticated_guard, credentials_to_member_model
@@ -77,10 +82,17 @@ def update_current_member(updates: MemberUpdateModel, member: CurrentMember, ses
         503: {"model": CodedErrorResponse, "description": "clerk_not_configured"},
     },
 )
-def delete_my_account(clerk_user_id: SignedInClerkUserId, session: DB):
-    """Delete the caller's account (App Store 5.1.1(v), Google Play account deletion)."""
-    member_anonymized = member_accounts.delete_account(session, clerk_user_id)
-    return {"deleted": True, "member_anonymized": member_anonymized}
+def delete_my_account(
+    clerk_user_id: SignedInClerkUserId, session: DB, body: Annotated[DeleteAccountRequest | None, Body()] = None
+):
+    """Delete the caller's account (App Store 5.1.1(v), Google Play account deletion).
+
+    An Apple user's app sends a fresh Sign in with Apple authorization code;
+    once the account is deleted, the app's Apple tokens are revoked with it.
+    """
+    code = body.apple_authorization_code if body is not None else None
+    member_anonymized, apple_token_revoked = member_accounts.delete_account(session, clerk_user_id, code)
+    return {"deleted": True, "member_anonymized": member_anonymized, "apple_token_revoked": apple_token_revoked}
 
 
 @router.get(

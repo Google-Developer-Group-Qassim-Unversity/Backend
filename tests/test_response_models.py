@@ -88,11 +88,11 @@ def test_response_model_declares_every_key_the_handler_returns(route):
 def test_every_route_declares_a_response_shape():
     """New routes must say what they return.
 
-    The three exemptions return a null body today and are consumed by the member
-    app, so changing their shape is a separate, deliberate decision. Routes kept
-    out of the schema (the `/` redirect) are not part of the contract.
+    The two exemptions return a null body today, so changing their shape is a
+    separate, deliberate decision. Routes kept out of the schema (the `/`
+    redirect) are not part of the contract.
     """
-    exempt = {"mark_attendance", "print_pool_status", "manual_run_google_form_submissions"}
+    exempt = {"print_pool_status", "manual_run_google_form_submissions"}
     undeclared = sorted(
         f"{sorted(r.methods)[0]} {r.path}"
         for r in app.routes

@@ -22,7 +22,7 @@ from app.helpers import identify_actor
 from app.leaderboard_cache import refresh_member_names_cache
 from app.routers.member_account_models import MAX_EMAIL_LENGTH, MemberOnboardingRequest
 from app.routers.models import Member_model
-from app.services import clerk_api
+from app.services import apple_signin, clerk_api
 from app.services.clerk_api import ClerkUser
 from app.services.permissions.access import resolve_access
 
@@ -193,8 +193,15 @@ def _carries_proven_identity(user: ClerkUser, member: Members) -> bool:
     return member.email is not None and user.owns_email(member.email)
 
 
-def delete_account(session: Session, clerk_user_id: str) -> bool:
-    """Delete the caller's account: anonymize their member record, then delete their sign-in."""
+def delete_account(
+    session: Session, clerk_user_id: str, apple_authorization_code: str | None = None
+) -> tuple[bool, bool | None]:
+    """Delete the caller's account: anonymize their member record, delete their sign-in, then revoke Apple's tokens.
+
+    Returns whether a member record was anonymized, and whether Apple's tokens
+    were revoked (None when no Apple code was sent). Apple is called last, with
+    no row lock held, and only once the deletion went through.
+    """
     user = clerk_api.get_user(clerk_user_id)
     member = member_queries.lock_member_by_clerk_user_id_or_none(session, clerk_user_id)
     if member is not None:
@@ -215,4 +222,10 @@ def delete_account(session: Session, clerk_user_id: str) -> bool:
     finally:
         if member is not None:
             refresh_member_names_cache()
-    return member is not None
+
+    apple_token_revoked = None
+    if apple_authorization_code is not None:
+        apple_token_revoked = apple_signin.revoke_tokens(
+            apple_authorization_code, user.apple_user_id, f"Clerk user {clerk_user_id}"
+        )
+    return member is not None, apple_token_revoked

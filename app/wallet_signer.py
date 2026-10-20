@@ -29,6 +29,9 @@ TRANSPARENT_PNG = (
 )
 
 DEFAULT_THEME = "gdg-blue"
+# The QR on a pass is the member's card QR (``qrValue``, app/services/card_qr.py),
+# which only member passes carry; a guest pass points at the home page.
+HOME_PAGE = "https://gdg-q.com"
 THEMES_CONFIG = {
     "gdg-blue": {
         "bg_rgb": "rgb(47, 123, 246)",
@@ -79,7 +82,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
 
     uuid = card_data.get("uuid")
     serial_number = f"GDGQ-{uuid[:8].upper()}" if uuid else f"GDGQ-{str(int(time.time()))[-6:]}"
-    qr_target_url = f"https://gdg-q.com/p/{uuid}" if uuid else "https://gdg-q.com"
+    qr_target_url = card_data.get("qrValue") or HOME_PAGE
 
     full_name = card_data.get("fullName") or "عضو GDG"
     uni_college = card_data.get("uniCollege") or card_data.get("institution") or "جامعة القصيم"
@@ -251,7 +254,7 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
     theme = THEMES_CONFIG.get(theme_id, THEMES_CONFIG[DEFAULT_THEME])
     uuid = card_data.get("uuid")
     card_id = f"{issuer_id}.{uuid.replace('-', '_')}" if uuid else f"{issuer_id}.card_{int(time.time())}"
-    qr_target_url = f"https://gdg-q.com/p/{uuid}" if uuid else "https://gdg-q.com"
+    qr_target_url = card_data.get("qrValue") or HOME_PAGE
 
     full_name = card_data.get("fullName") or "عضو GDG"
     email = card_data.get("email", "")

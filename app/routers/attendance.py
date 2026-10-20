@@ -13,7 +13,9 @@ from app.DB import (
 
 from app.DB.schema import Events, Logs
 from app.DB.wallet import get_public_profile_by_uuid
+from app.routers.member_account_models import CodedErrorResponse
 from app.routers.models import (
+    CheckInResponse,
     EventAttendanceResponse,
     ManualAttendanceRequest,
     ScanAttendanceRequest,
@@ -22,9 +24,21 @@ from app.routers.models import (
     BackfillAttendanceResponse,
 )
 from app.config import config
-from app.exceptions import AttendanceTokenAbsent, AttendanceTokenError, DataIntegrityError, MemberNotFound
+from app.exceptions import (
+    AlreadyCheckedIn,
+    AttendanceTokenAbsent,
+    AttendanceTokenError,
+    CardSignatureInvalid,
+    CardSignatureRequired,
+    CheckInNotAccepted,
+    CheckInNotRegistered,
+    CheckInOutsideEventDates,
+    DataIntegrityError,
+    MemberNotFound,
+)
 from app.DB.schema import EventHistoryAction
 from app.services import event_history
+from app.services.card_qr import verify_card_signature
 from app.helpers import (
     CurrentMember,
     validate_attendance_token,
@@ -80,7 +94,19 @@ def get_target_date_for_day(event: Events, day: int | None) -> datetime:
     return event.start_datetime + timedelta(days=day - 1)
 
 
-@router.post("/{event_id:int}", status_code=status.HTTP_200_OK)
+@router.post(
+    "/{event_id:int}",
+    status_code=status.HTTP_200_OK,
+    response_model=CheckInResponse,
+    responses={
+        400: {
+            "model": CodedErrorResponse,
+            "description": "token_absent, token_malformed, token_event_mismatch, token_bad_algorithm, "
+            "token_missing_claim, token_invalid, outside_event_dates, already_checked_in, not_registered, not_accepted",
+        },
+        401: {"model": CodedErrorResponse, "description": "token_expired, token_not_yet_valid, token_bad_signature"},
+    },
+)
 def mark_attendance(
     event_id: int,
     member: CurrentMember,
@@ -117,16 +143,19 @@ def mark_attendance(
     logger.info(f"Attendace for event [{event.name}] for member [{member.name}]")
     logger.info(f"Attendable log found for event [{event_log.id}]")
 
+    now = datetime.now()
+    effective_now = get_effective_date(now, config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
+    total_days = get_event_days(event)
+    day_number = (effective_now - event.start_datetime.date()).days + 1
     if require_time_window:
-        effective_now = get_effective_date(datetime.now(), config.ATTENDANCE_EARLY_HOURS_THRESHOLD)
         event_start = event.start_datetime.date()
         event_end = event.end_datetime.date()
         if effective_now < event_start or effective_now > event_end:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="لا يمكنك تسجيل الحضور خارج فترة الحدث")
+            raise CheckInOutsideEventDates()
 
-    if prevent_duplicate_daily and is_member_marked_for_day(session, member.id, event_log.id, datetime.now()):
+    if prevent_duplicate_daily and is_member_marked_for_day(session, member.id, event_log.id, now):
         logger.info(f"Member [{member.id}] has already marked attendance for today")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="!انت سجلت حضورك لهذا الحدث اليوم")
+        raise AlreadyCheckedIn()
 
     # 3. get form registration type
     form = form_queries.get_form_by_event_id(session, event_id)
@@ -151,10 +180,10 @@ def mark_attendance(
             submissions = submission_queries.get_submission_by_form_and_member(session, form.id, member.id)
             if not submissions:
                 logger.warning(f"Member has not submitted the form [{form.id}] for event [{event_id}]")
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما عبيت فورم الحدث")
+                raise CheckInNotRegistered()
             if submissions.is_accepted == 0:
                 logger.warning(f"Member has not been accepted to the event [{event.name}]")
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ما انقبلت في الحدث")
+                raise CheckInNotAccepted()
 
         logger.info(
             f"Member [{member.id}] has submitted the form and been accepted to the event [{event.name}], marking attendance..."
@@ -162,8 +191,15 @@ def mark_attendance(
         log_queries.create_member_log(session, member.id, event_log.id)
         logger.info(f"Member marked attendance for today the [{datetime.now().date().day}]th for event [{event.name}]")
 
+    points = log_queries.get_log_points(session, event_log.id)
     session.commit()
-    return
+    return CheckInResponse(
+        status="marked",
+        event_id=event.id,
+        day=day_number if 1 <= day_number <= total_days else None,
+        total_days=total_days,
+        points=points,
+    )
 
 
 @router.post(
@@ -357,17 +393,38 @@ def mark_attendance_manual(
     return {"success": success_count, "failed": failed_count}
 
 
+def _check_card_signature(request: ScanAttendanceRequest) -> None:
+    if request.sig is not None:
+        if verify_card_signature(request.uuid, request.sig) == "invalid":
+            logger.warning(f"Scan attendance: card signature does not match uuid [{request.uuid}]")
+            raise CardSignatureInvalid()
+        return
+    if config.ATTENDANCE_REQUIRE_CARD_SIGNATURE:
+        if not config.CARD_QR_SECRET:
+            # Cards cannot be signed without the secret; refusing every scan would close the door instead.
+            logger.warning("ATTENDANCE_REQUIRE_CARD_SIGNATURE is on but CARD_QR_SECRET is not set; not enforced")
+            return
+        logger.info(f"Scan attendance: unsigned card QR for uuid [{request.uuid}] refused")
+        raise CardSignatureRequired()
+
+
 @router.post(
     "/{event_id}/scan",
     status_code=status.HTTP_200_OK,
     dependencies=[Depends(Require(Perm.ATTENDANCE_TAKE, event_departments))],
     response_model=ScanAttendanceResponse,
+    responses={403: {"model": CodedErrorResponse, "description": "card_signature_invalid, card_signature_required"}},
 )
 def scan_attendance(
     event_id: int, request: ScanAttendanceRequest, session: DB, actor: CurrentMember, background_tasks: BackgroundTasks
 ):
-    """Marks attendance from a member's wallet-card QR (`/p/{uuid}`), scanned by an admin."""
+    """Marks attendance from a member's wallet-card QR (`/p/{uuid}?s={sig}`), scanned by an admin.
+
+    A ``sig`` is checked when one is sent (app/services/card_qr.py); a card
+    without one passes until ATTENDANCE_REQUIRE_CARD_SIGNATURE is turned on.
+    """
     logger.info(f"Scan attendance for event [{event_id}], uuid [{request.uuid}]")
+    _check_card_signature(request)
 
     result = get_public_profile_by_uuid(session, request.uuid)
     if not result:
