@@ -75,3 +75,14 @@ Steps 1–3 can happen in any order. Only step 5 breaks anything.
 Changing `CARD_QR_SECRET` later invalidates every issued card at once (with
 enforcement on, nobody's pass scans until it is re-added), so treat it like a
 signing key: set it once per environment.
+
+## The member's own check-in
+
+`POST /attendance/{event_id}?token=` (the event's QR, scanned by the member)
+now answers `200 {"status": "marked", "event_id", "day", "total_days",
+"points"}`: `day` is the 1-based day of the event the check-in counts for
+(`null` only when the token allows checking in outside the event's dates) and
+`points` what one day's attendance is worth (the action's points plus the
+log's bonus or discount). Its four refusals carry codes next to their
+unchanged Arabic `detail`: `outside_event_dates`, `already_checked_in`,
+`not_registered`, `not_accepted`.

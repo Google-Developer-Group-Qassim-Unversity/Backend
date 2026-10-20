@@ -299,6 +299,39 @@ class AttendanceTokenInvalid(AttendanceTokenError):
         super().__init__(400, "token_invalid", f"Invalid attendance token ({reason})")
 
 
+class CheckInRefused(KnownHttpException):
+    """A valid attendance token, but this member cannot check in with it now.
+
+    The Arabic ``detail`` is what the Website showed before these had codes,
+    and still matches on, so it stays word for word. The member app switches
+    on ``code``.
+    """
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(status_code=400, detail=detail)
+        self.code = code
+
+
+class CheckInOutsideEventDates(CheckInRefused):
+    def __init__(self):
+        super().__init__("outside_event_dates", "لا يمكنك تسجيل الحضور خارج فترة الحدث")
+
+
+class AlreadyCheckedIn(CheckInRefused):
+    def __init__(self):
+        super().__init__("already_checked_in", "!انت سجلت حضورك لهذا الحدث اليوم")
+
+
+class CheckInNotRegistered(CheckInRefused):
+    def __init__(self):
+        super().__init__("not_registered", "ما عبيت فورم الحدث")
+
+
+class CheckInNotAccepted(CheckInRefused):
+    def __init__(self):
+        super().__init__("not_accepted", "ما انقبلت في الحدث")
+
+
 class CardSignatureInvalid(KnownHttpException):
     """A staff scan sent a member card QR signature that this server did not make (app/services/card_qr.py)."""
 

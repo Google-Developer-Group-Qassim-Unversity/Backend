@@ -643,6 +643,19 @@ class ScanAttendanceRequest(BaseModel):
     sig: str | None = Field(default=None, max_length=64)
 
 
+class CheckInResponse(BaseClassModel):
+    """A member's own check-in with the event's QR (POST /attendance/{event_id})."""
+
+    status: Literal["marked"]
+    event_id: int
+    # The day of the event it counts for, 1-based. None only when the token
+    # lets a member check in outside the event's dates.
+    day: int | None = None
+    total_days: int
+    # What one day's attendance is worth: the action's points plus the log's bonus or discount.
+    points: int
+
+
 class ScanAttendanceResponse(BaseClassModel):
     status: Literal["marked", "already_marked"]
     member_id: int
