@@ -34,6 +34,28 @@ def get_member_logs(session: Session, member_id: int, log_id: int):
     return member_logs
 
 
+def get_log_points(session: Session, log_id: int) -> int:
+    """What one member's row on this log is worth: the action's points plus the log's bonus or discount.
+
+    The same rule as the points queries in app/DB/points.py.
+    """
+    base = session.scalar(select(Actions.points).join(Logs, Logs.action_id == Actions.id).where(Logs.id == log_id))
+    modifier = session.scalar(
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (Modifications.type == ModificationsType.DISCOUNT, -func.abs(Modifications.value)),
+                        else_=func.abs(Modifications.value),
+                    )
+                ),
+                0,
+            )
+        ).where(Modifications.log_id == log_id)
+    )
+    return int(base or 0) + int(modifier or 0)
+
+
 def create_log(session: Session, event_id: int, action_id: int):
     action = select(Actions).where(Actions.id == action_id)
     if not session.scalar(action):
@@ -119,7 +141,9 @@ def get_event_attendance(
         .join(Logs, Logs.event_id == Events.id)
         .join(MembersLogs, MembersLogs.log_id == Logs.id)
         .join(Members, Members.id == MembersLogs.member_id)
-        .where(Events.id == event_id)
+        # A deleted account is nobody's to list, count here or send a certificate to. Its
+        # attendance rows stay, so the events list's attendance_count still includes it.
+        .where(Events.id == event_id, Members.deleted_at.is_(None))
     )
 
     if isinstance(day, int):

@@ -16,6 +16,7 @@ from app.error_handlers import register_exception_handlers
 from app.logging_config import configure_logging
 from app.middleware import RequestContextMiddleware
 from app.services import pipeline_sweep
+from app.services.push import apns, redact as push_redact
 from app.routers import (
     attendance,
     emails,
@@ -38,6 +39,7 @@ from app.routers import (
     permissions,
     pipeline,
     pipeline_requests,
+    notifications,
 )
 
 # `event_level=ERROR` is the sentry-sdk default, stated here because it is the
@@ -53,6 +55,10 @@ sentry_sdk.init(
     environment=config.ENV,
     traces_sample_rate=0.2,
     integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+    # APNs device tokens are part of the request URL; keep them out of breadcrumbs and traces.
+    before_breadcrumb=push_redact.before_breadcrumb,
+    before_send=push_redact.before_send,
+    before_send_transaction=push_redact.before_send_transaction,
 )
 install_delivery_watcher()
 
@@ -69,6 +75,7 @@ async def lifespan(app: FastAPI):
     config.DATABASE_URL
     config.CLERK_GUARD
     await open_http_client()
+    await apns.open_client()
     # The events pipeline's timer (app/services/pipeline_sweep.py). Not under
     # the test suite, which runs the sweep by hand with a frozen clock.
     sweeper = None
@@ -81,6 +88,7 @@ async def lifespan(app: FastAPI):
     if sweeper is not None:
         sweeper.cancel()
     await close_http_client()
+    await apns.close_client()
 
     # get_engine is lru_cached; calling it here when nothing ever built an
     # engine would create one purely to throw it away.
@@ -126,3 +134,4 @@ app.include_router(access.router)
 app.include_router(permissions.router)
 app.include_router(pipeline.router)
 app.include_router(pipeline_requests.router)
+app.include_router(notifications.router)

@@ -114,3 +114,20 @@ def test_an_unknown_theme_gets_the_default_card(signing_certs) -> None:
     files = _unpack(generate_apple_pkpass({**CARD, "themeId": "not-a-theme"}))
 
     assert files["background@3x.png"] == default["background@3x.png"]
+
+
+def test_the_qr_is_the_cards_qr_value(signing_certs) -> None:
+    qr_value = f"https://gdg-q.com/p/{CARD['uuid']}?s=AbCdEfGhIjKlMnOp"
+    pass_json = json.loads(_unpack(generate_apple_pkpass({**CARD, "qrValue": qr_value}))["pass.json"])
+
+    assert pass_json["barcodes"][0]["message"] == qr_value
+    assert pass_json["barcode"]["message"] == qr_value, "the legacy key, for iOS versions before barcodes"
+
+
+def test_a_card_without_a_qr_value_points_at_the_home_page(signing_certs) -> None:
+    """Guest passes: their uuid is random and must never read as a member's /p/ link."""
+    pass_json = json.loads(_unpack(generate_apple_pkpass(CARD))["pass.json"])
+
+    assert pass_json["barcodes"][0]["message"] == "https://gdg-q.com"
+    assert pass_json["barcode"]["message"] == "https://gdg-q.com"
+    assert pass_json["serialNumber"] == f"GDGQ-{CARD['uuid'][:8].upper()}"

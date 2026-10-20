@@ -15,6 +15,7 @@ from app.DB.wallet import (
     update_member_profile,
 )
 from app.helpers import MemberOrGuest, authenticated_guard
+from app.services.card_qr import card_qr_value
 from app.wallet_signer import generate_apple_pkpass, generate_google_wallet_pass_url
 from app.dependencies import DB
 from app.services.permissions.access import resolve_access
@@ -60,6 +61,9 @@ class WalletMeResponse(BaseModel):
     uni_college: str | None = None
     is_admin: bool
     roles: list[str] = []
+    # What the member's card QR encodes (app/services/card_qr.py): the /p/ link,
+    # signed when the server has a CARD_QR_SECRET. None until they are a member.
+    qr_value: str | None = None
     profile: WalletProfile
 
 
@@ -193,17 +197,21 @@ def _member_card_data(session: Session, member: Members, card_data: Dict[str, An
         "themeId": _permitted_theme(profile.theme_id or card_data.get("themeId"), is_admin),
         "nameLanguage": "ar",
         "isAdmin": is_admin,
+        "qrValue": card_qr_value(profile.uuid),
     }
 
 
 def _guest_card_data(card_data: Dict[str, Any]) -> Dict[str, Any]:
-    """A pass for someone with no member row: everything comes from the payload.
+    """A pass for someone with no member row: everything shown comes from the payload.
 
-    The uuid is generated per request rather than persisted - a guest card is
-    not tied to a profile, so it has nothing stable to point at.
+    The uuid is generated per request and never taken from the payload: it is
+    the pass's serial and Google object id, and a caller-chosen one let a guest
+    print a pass for a member's profile (the QR used to be built from it).
+    There is no ``qrValue``, so the signer puts the home page in the QR and a
+    guest pass never scans as a member's card.
     """
     return {
-        "uuid": card_data.get("uuid") or uuid_lib.uuid4().hex,
+        "uuid": uuid_lib.uuid4().hex,
         "fullName": card_data.get("fullName") or "عضو GDG",
         "uniId": card_data.get("uniId", ""),
         "email": card_data.get("email", ""),
@@ -240,6 +248,7 @@ def _unregistered_wallet_me(credentials) -> Dict[str, Any]:
         "uni_college": None,
         "is_admin": False,
         "roles": [],
+        "qr_value": None,
         "profile": {
             "uuid": None,
             "custom_name": None,
@@ -319,6 +328,7 @@ def get_wallet_me(session: DB, member: MemberOrGuest, credentials=Depends(authen
         "uni_college": member.uni_college,
         "is_admin": is_admin,
         "roles": role_names,
+        "qr_value": card_qr_value(profile.uuid),
         "profile": {
             "uuid": profile.uuid,
             "custom_name": profile.custom_name,

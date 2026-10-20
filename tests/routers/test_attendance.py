@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.DB.schema import Events, MembersLogs, Members, MembersGender, Logs, Submissions
 from app.DB import logs as log_queries
+from app.helpers import get_effective_date
 from tests.factories import make_create_event_payload
 from tests.utils import assert_2xx, assert_forbidden, assert_not_found, assert_bad_request
 
@@ -417,6 +418,7 @@ def test_mark_attendance_already_marked_today(
     token = make_attendance_token(event_id)
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_bad_request(response)
+    assert response.json() == {"detail": "!انت سجلت حضورك لهذا الحدث اليوم", "code": "already_checked_in"}
 
 
 def test_mark_attendance_duplicate_guard_disabled_allows_second_mark(
@@ -452,6 +454,7 @@ def test_mark_form_registration_not_submitted(clerk_client: TestClient, admin_cl
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_bad_request(response)
     assert "ما عبيت فورم الحدث" in response.json()["detail"]
+    assert response.json()["code"] == "not_registered"
 
 
 def test_mark_form_registration_guard_disabled_allows_unsubmitted(
@@ -473,6 +476,7 @@ def test_mark_form_registration_not_accepted(clerk_client: TestClient, admin_cli
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_bad_request(response)
     assert "ما انقبلت في الحدث" in response.json()["detail"]
+    assert response.json()["code"] == "not_accepted"
 
 
 def test_mark_form_registration_accepted(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
@@ -495,6 +499,7 @@ def test_mark_form_google_not_submitted(clerk_client: TestClient, admin_client: 
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_bad_request(response)
     assert "ما عبيت فورم الحدث" in response.json()["detail"]
+    assert response.json()["code"] == "not_registered"
 
 
 def test_mark_form_google_not_accepted(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
@@ -506,6 +511,7 @@ def test_mark_form_google_not_accepted(clerk_client: TestClient, admin_client: T
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_bad_request(response)
     assert "ما انقبلت في الحدث" in response.json()["detail"]
+    assert response.json()["code"] == "not_accepted"
 
 
 def test_mark_form_google_accepted(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
@@ -545,7 +551,7 @@ def test_mark_attendance_event_ended_yesterday(clerk_client: TestClient, admin_c
     token = make_attendance_token(event_id)
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_bad_request(response)
-    assert "خارج فترة الحدث" in response.json()["detail"]
+    assert response.json() == {"detail": "لا يمكنك تسجيل الحضور خارج فترة الحدث", "code": "outside_event_dates"}
 
 
 def test_mark_attendance_time_window_guard_disabled_allows_ended_event(
@@ -569,7 +575,7 @@ def test_mark_attendance_event_starts_tomorrow(clerk_client: TestClient, admin_c
     token = make_attendance_token(event_id)
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_bad_request(response)
-    assert "خارج فترة الحدث" in response.json()["detail"]
+    assert response.json() == {"detail": "لا يمكنك تسجيل الحضور خارج فترة الحدث", "code": "outside_event_dates"}
 
 
 def test_mark_attendance_early_hours_last_day(clerk_client: TestClient, admin_client: TestClient, db_session: Session):
@@ -623,3 +629,172 @@ def test_attendance_an_admin_takes_or_removes_is_in_the_event_history(admin_clie
         ("attendance_marked", {"days": [1], "members": [ahmed]}),
         ("attendance_removed", {"day": 1, "members": [ahmed]}),
     ]
+
+
+# === the check-in's answer (the member app shows it) ===
+
+
+def test_a_check_in_answers_with_the_day_and_the_points(clerk_client: TestClient, admin_client: TestClient, db_session):
+    event_id = create_ongoing_event(admin_client, form_type="none", days=3)
+    create_test_member(db_session)
+
+    response = clerk_client.post(f"/attendance/{event_id}?token={make_attendance_token(event_id)}")
+
+    assert_2xx(response)
+    # The event started yesterday and runs three more days: today is day 2 of 5
+    # (day 1 before 06:00, which still counts as yesterday). The seeded member
+    # action is worth 5 points.
+    yesterday = (datetime.now() - timedelta(days=1)).date()
+    day = (get_effective_date(datetime.now(), 6) - yesterday).days + 1
+    assert response.json() == {"status": "marked", "event_id": event_id, "day": day, "total_days": 5, "points": 5}
+
+
+def test_a_check_in_counts_the_logs_bonus_and_discount(
+    clerk_client: TestClient, admin_client: TestClient, db_session, seed_refs
+):
+    event_id = create_ongoing_event(admin_client, form_type="none")
+    create_test_member(db_session)
+    log_id = get_member_log_id(db_session, event_id, seed_refs.member_action.id)
+    assert log_id is not None
+    log_queries.create_modification(db_session, log_id, "bonus", 3)
+    log_queries.create_modification(db_session, log_id, "discount", 1)
+    db_session.commit()
+
+    response = clerk_client.post(f"/attendance/{event_id}?token={make_attendance_token(event_id)}")
+
+    assert_2xx(response)
+    assert response.json()["points"] == 5 + 3 - 1
+
+
+def test_a_check_in_outside_the_dates_allowed_by_the_token_has_no_day(
+    clerk_client: TestClient, admin_client: TestClient, db_session
+):
+    event_id = create_attendance_ready_event(
+        admin_client, form_type="none", start_datetime="2025-09-01T00:00:00", end_datetime="2025-09-02T23:59:59"
+    )
+    create_test_member(db_session)
+    token = make_attendance_token(event_id, requireAttendanceTimeWindow=False)
+
+    response = clerk_client.post(f"/attendance/{event_id}?token={token}")
+
+    assert_2xx(response)
+    assert (response.json()["day"], response.json()["total_days"]) == (None, 2)
+
+
+def test_a_check_in_at_2am_counts_for_the_day_before(clerk_client: TestClient, admin_client: TestClient, db_session):
+    now = datetime.now()
+    event_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
+    event_end = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    event_id = create_attendance_ready_event(
+        admin_client, form_type="none", start_datetime=event_start.isoformat(), end_datetime=event_end.isoformat()
+    )
+    create_test_member(db_session)
+    with patch("app.routers.attendance.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(now.year, now.month, now.day, 2, 0, 0)
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        response = clerk_client.post(f"/attendance/{event_id}?token={make_attendance_token(event_id)}")
+
+    assert_2xx(response)
+    assert (response.json()["day"], response.json()["total_days"]) == (2, 3)
+
+
+def test_token_refusals_keep_their_codes(clerk_client: TestClient, admin_client: TestClient, db_session):
+    """401 token codes are not session errors: the app must not sign the member out on them."""
+    event_id = create_ongoing_event(admin_client, form_type="none")
+    create_test_member(db_session)
+
+    expired = clerk_client.post(f"/attendance/{event_id}?token={make_attendance_token(event_id, expires_in_hours=-1)}")
+    absent = clerk_client.post(f"/attendance/{event_id}")
+
+    assert (expired.status_code, expired.json()["code"]) == (401, "token_expired")
+    assert (absent.status_code, absent.json()["code"]) == (400, "token_absent")
+
+
+# === staff card scans and the card QR's signature ===
+
+CARD_QR_SECRET = "test-card-qr-secret-0123456789abcdef"
+
+
+def scannable_member(db_session: Session) -> str:
+    """A member with a card; returns the card's uuid."""
+    from app.DB.wallet import get_or_create_member_profile
+
+    member = create_test_member(db_session)
+    profile = get_or_create_member_profile(db_session, member.id)
+    db_session.commit()
+    return profile.uuid
+
+
+def scan(client: TestClient, event_id: int, uuid: str, **body):
+    return client.post(f"/attendance/{event_id}/scan", json={"uuid": uuid, "day": 1, **body})
+
+
+def test_a_signed_card_scans(admin_client: TestClient, db_session, monkeypatch):
+    from app.services.card_qr import card_signature
+
+    monkeypatch.setenv("CARD_QR_SECRET", CARD_QR_SECRET)
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    response = scan(admin_client, event_id, uuid, sig=card_signature(uuid))
+
+    assert_2xx(response)
+    assert response.json()["status"] == "marked"
+
+
+def test_a_wrong_signature_is_refused_even_while_signatures_are_optional(
+    admin_client: TestClient, db_session, monkeypatch
+):
+    """A QR made from someone's public /p/ link with a made-up s= never passes."""
+    monkeypatch.setenv("CARD_QR_SECRET", CARD_QR_SECRET)
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    response = scan(admin_client, event_id, uuid, sig="AAAAAAAAAAAAAAAA")
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "card_signature_invalid"
+    attendance = admin_client.get(f"/attendance/{event_id}?type=count").json()
+    assert attendance["attendance_count"] == 0
+
+
+def test_an_unsigned_card_scans_until_signatures_are_required(admin_client: TestClient, db_session, monkeypatch):
+    monkeypatch.setenv("CARD_QR_SECRET", CARD_QR_SECRET)
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    assert_2xx(scan(admin_client, event_id, uuid))
+
+
+def test_an_unsigned_card_is_refused_once_signatures_are_required(admin_client: TestClient, db_session, monkeypatch):
+    monkeypatch.setenv("CARD_QR_SECRET", CARD_QR_SECRET)
+    monkeypatch.setenv("ATTENDANCE_REQUIRE_CARD_SIGNATURE", "true")
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    response = scan(admin_client, event_id, uuid)
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "card_signature_required"
+
+
+def test_without_a_secret_signatures_are_not_checked(admin_client: TestClient, db_session, monkeypatch):
+    """No secret: nothing can be verified, so the scan behaves as before - even if enforcement was switched on."""
+    monkeypatch.delenv("CARD_QR_SECRET", raising=False)
+    monkeypatch.setenv("ATTENDANCE_REQUIRE_CARD_SIGNATURE", "true")
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    assert_2xx(scan(admin_client, event_id, uuid, sig="AAAAAAAAAAAAAAAA"))
+    assert scan(admin_client, event_id, uuid).json()["status"] == "already_marked"
+
+
+def test_an_old_scanner_without_sig_still_works(admin_client: TestClient, db_session, monkeypatch):
+    monkeypatch.delenv("CARD_QR_SECRET", raising=False)
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    response = admin_client.post(f"/attendance/{event_id}/scan", json={"uuid": uuid, "day": 1})
+
+    assert_2xx(response)
+    assert response.json()["status"] == "marked"

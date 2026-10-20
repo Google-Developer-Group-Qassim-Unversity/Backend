@@ -116,7 +116,8 @@ def _department(session: Session, department_id: int) -> Departments:
 
 
 def _member(session: Session, member_id: int) -> None:
-    if session.scalar(select(Members.id).where(Members.id == member_id)) is None:
+    """Someone who can be given a seat: a member whose account was deleted cannot."""
+    if session.scalar(select(Members.id).where(Members.id == member_id, Members.deleted_at.is_(None))) is None:
         raise MemberNotFound(member_id)
 
 

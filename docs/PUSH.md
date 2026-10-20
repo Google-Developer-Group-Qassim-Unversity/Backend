@@ -1,0 +1,157 @@
+# Push notifications (member app)
+
+The GDG Qassim iPhone app gets its notifications straight from this backend,
+over Apple's APNs. No Expo push service, no Firebase. Code:
+`app/services/push/`, `app/routers/notifications.py`, `app/DB/push.py`.
+
+```
+trigger (route or sweep) ──insert──► push_notifications (outbox, unique dedupe_key, not_before)
+                                          │
+              after commit: BackgroundTasks ┤  every 5 min: after the pipeline sweep
+                                          ▼
+                     deliver_pending() ─► APNs HTTP/2 (api.push.apple.com) ─► phone
+                                          │
+                     410 / BadDeviceToken ┴─► delete the member_devices row
+```
+
+## Off until configured
+
+With no `APNS_KEY_ID` / `APNS_PRIVATE_KEY`, `config.push_enabled` is false:
+the app's routes still store phones and switches, triggers queue nothing and
+nothing is sent. Turning push on is only setting the variables
+([ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md)) and restarting.
+
+## Tables
+
+| Table | One row is |
+|---|---|
+| `member_devices` | a phone: its APNs token (unique: a token belongs to one member at a time), `environment` (`production` for TestFlight / App Store builds, `development` for dev builds), app version and build, the app's language. At most 5 per member; unseen for 180 days → deleted by the sweep |
+| `member_notification_prefs` | a member's four switches `remind`, `accept`, `points`, `news`. No row = `1, 1, 1, 0` |
+| `push_notifications` | the outbox and the sent log: one notification for one member, its text in both languages, `status` `pending` / `sent` / `skipped` / `failed`, `not_before`, `expires_at`. Deleted after 90 days |
+| `push_broadcasts` | an organizer's announcement (`POST /notifications/broadcast`) |
+
+Deleting an account (`DELETE /members/me`, `anonymize_member`) deletes the
+member's phones, switches and every `push_notifications` row, sent ones too.
+
+## Routes
+
+All under `/notifications`. Member routes take the member from the session
+(`CurrentMember`); a signed-in user without a member row gets the usual 404.
+
+| Route | Who | What |
+|---|---|---|
+| `POST /devices` | member | `{token, platform:"ios", environment, app_version, app_build, locale}` → `{id, registered}`. Upsert by token; re-registering refreshes `last_seen_at` and moves a token signed in elsewhere. 422 for a token that is not 64-200 hex characters |
+| `DELETE /devices/{device_id}` | member | `{deleted}`. The `id` from `POST /devices`, never the token (paths are logged). Only the caller's own phone |
+| `GET /preferences` | member | `{remind, accept, points, news, updated_at}`; `updated_at: null` = never saved |
+| `PATCH /preferences` | member | any of the four booleans → the full object |
+| `GET /me?lang=ar\|en&limit=1..100` | member | `[{id, kind, title, body, url, event_id, created_at}]`: what was sent in the last 60 days, newest first; `created_at` is when it was sent (UTC, `Z`) |
+| `POST /broadcast` | `notifications.broadcast` | `{title_ar, body_ar, title_en?, body_en?, url?, audience, dry_run?}` → `{broadcast_id, recipients}` |
+
+Broadcasts: titles ≤ 60 characters, bodies ≤ 180, trimmed, no control
+characters; English is optional (English phones get the Arabic). `audience` is
+`{"type":"all"}` (members with club news on) or `{"type":"event","event_id":N}`
+(that event's accepted, not cancelled registrations with reminders on).
+`recipients` counts only members a push reaches: the switch on and the app on
+a phone in this server's APNs environment. `dry_run: true` returns that count
+and sends nothing (it works with push off too). Refusals: 422
+`url_not_allowed`, 429 `broadcast_limit` (3 a Riyadh day, club-wide), 503
+`push_not_configured`.
+
+`notifications.broadcast` is held by the Media team's leaders and VPs
+(`TEAM_PERMISSIONS`, next to `emails.blast`) and by super admins; anyone else
+gets it through the grant screens. No migration seeds it.
+
+### App links
+
+A push opens one of these, and nothing else (`app/services/push/links.py`; the
+app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
+`gdgq://notifications`, `gdgq://profile/my-events`, `gdgq://wallet/card`.
+
+## What sends a push
+
+| Kind | When | To | Switch | Timing |
+|---|---|---|---|---|
+| `reminder` | 60 minutes before each event day starts (open or active, online or on-site events) | accepted, not cancelled registrations not yet checked in that day | `remind` | not held for quiet hours; expires when the day starts |
+| `accepted` | organizers press **Send acceptance** (`POST /emails/acceptance/blasts/{id}`) | each registration that blast claims | `accept` | quiet hours; 7 days |
+| `points` | staff record attendance (card scan, manual, import) or custom points | the member | `points` | quiet hours; 3 days. Not the member's own QR check-in. A deduction sends nothing |
+| `new_event` | an online or on-site event that became open in the last 48 hours and has not started | members with club news on | `news` | quiet hours; at most 2 a member a Riyadh day; expires at the start |
+| `broadcast` | `POST /notifications/broadcast` | the audience | `news` or `remind` | quiet hours; 2 days |
+
+**Quiet hours** are 22:00-08:00 Riyadh: a push queued then waits until 08:00.
+
+**One push per `dedupe_key`**, ever: `reminder:{event}:{Riyadh date}:{member}`,
+`accepted:{submission}:{submitted_at epoch}`, `points:{log}:{member}:{day}`,
+`points:custom:{log}:{member}`, `new_event:{event}:{member}`,
+`broadcast:{broadcast}:{member}`. Triggers can run twice (four workers,
+retries, the sweep) and add nothing the second time.
+
+**Checked again at delivery**, since a row can wait until 08:00: the switch, a
+phone still registered, and the cause - the registration still accepted and the
+day still on the calendar, the attendance row still there, the event still
+open. Otherwise the row is `skipped` with the reason in `last_error`.
+
+Times: event `start_datetime` / `end_datetime` are Riyadh wall clock; the new
+columns are UTC. Attendance rows (`members_logs.date`) use the process clock and
+are read through `get_effective_date`, the way attendance itself reads them.
+
+## Delivery
+
+`deliver_pending()` (`app/services/push/delivery.py`) runs after a route queues
+a push (`BackgroundTasks`) and on every worker after each sweep:
+
+1. Claim up to 200 due rows with `SELECT ... FOR UPDATE SKIP LOCKED`, lease them
+   (`not_before` + 5 min, `attempts` + 1) and commit. No two workers take the
+   same row; rows of a worker that died come back when the lease ends.
+2. Send to each of the member's phones in this environment, 20 at a time, over
+   one shared HTTP/2 client per worker, in the phone's language.
+3. Record the outcome in a new transaction.
+
+| APNs answer | What happens |
+|---|---|
+| 200 | `sent` (when at least one phone took it) |
+| 410 `Unregistered` | that phone's row is deleted, unless it registered again after Apple's `timestamp` |
+| 400 `BadDeviceToken`, `DeviceTokenNotForTopic` | that phone's row is deleted |
+| 403 `ExpiredProviderToken` | a new provider token (one per refused token, however many requests were refused at once), and that phone is tried once more |
+| other 403s, `BadTopic`, `TopicDisallowed`, no key | an ERROR once per batch; the row stays queued |
+| 429 | retried after 5 minutes (`TooManyProviderTokenUpdates`) or 1 minute |
+| 5xx, timeouts, a request that fails in any other way | retried after 2^attempts minutes; `failed` after 5 attempts. The rest of the batch is recorded as usual |
+| 413, other 400s | `failed` with Apple's reason |
+
+The provider token is an ES256 JWT (`kid` = `APNS_KEY_ID`, `iss` =
+`APPLE_TEAM_ID`), with `iat` on a 50-minute boundary: refreshed at least hourly
+and at most every 20 minutes, as Apple asks, and the same in every worker.
+
+Logs name the outbox row and the device row, never a token, the JWT or the
+key. The token is in the APNs URL, so the `httpx` log line and Sentry's
+breadcrumbs and spans are rewritten to `/3/device/[token]`
+(`app/services/push/redact.py`). Sentry events also lose every stack-frame
+local whose name contains `token`, and the `hpack` logger stays at INFO even
+with `LOG_LEVEL=DEBUG` (its DEBUG lines print the HTTP/2 headers).
+
+The payload carries the app's keys twice, under `body` (which expo-notifications
+exposes as `content.data`) and at the top level:
+
+```json
+{"aps": {"alert": {"title": "…", "body": "…"}, "sound": "default", "thread-id": "event-435"},
+ "url": "gdgq://events/435", "kind": "reminder", "id": "0192…",
+ "body": {"url": "gdgq://events/435", "kind": "reminder", "id": "0192…"}}
+```
+
+## Sending a test push
+
+From a laptop, with the dev environment's secrets (it reads the same settings
+and the database the app does, and prints only Apple's answer per phone):
+
+```bash
+infisical run --env=dev --path=/admin-backend -- uv run python -m app.services.push.cli test --member-id <id>
+```
+
+The key is production-only: only TestFlight and App Store builds' phones
+(`environment: production`) can receive it. Development builds register with
+`environment: development` and are never sent to unless `APNS_ENVIRONMENT=sandbox`.
+
+## Tests
+
+`tests/routers/test_notifications.py` (the routes) and `tests/test_push_*.py`
+(messages, outbox, triggers with a frozen clock, delivery against
+`httpx.MockTransport`). No test calls Apple.

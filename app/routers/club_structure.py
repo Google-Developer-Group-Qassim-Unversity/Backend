@@ -118,7 +118,10 @@ def _by_department(memberships) -> dict[int, list[ClubMemberships]]:
 def get_public_club_structure(session: DB, access: CurrentAccess, semester: int | None = None):
     """Display-only roster for a semester (default: the current public one). No admin or audit fields."""
     resolved = resolve_semester_for_caller(session, semester, access.is_super_admin)
-    rosters = _by_department(queries.get_memberships(session, resolved.id))
+    # A member who deleted their account is left out of every roster they were on.
+    rosters = _by_department(
+        row for row in queries.get_memberships(session, resolved.id) if row.member.deleted_at is None
+    )
 
     presidents: list[str] = []
     departments = []

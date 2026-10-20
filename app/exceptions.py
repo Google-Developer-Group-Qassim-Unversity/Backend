@@ -299,6 +299,59 @@ class AttendanceTokenInvalid(AttendanceTokenError):
         super().__init__(400, "token_invalid", f"Invalid attendance token ({reason})")
 
 
+class CheckInRefused(KnownHttpException):
+    """A valid attendance token, but this member cannot check in with it now.
+
+    The Arabic ``detail`` is what the Website showed before these had codes,
+    and still matches on, so it stays word for word. The member app switches
+    on ``code``.
+    """
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(status_code=400, detail=detail)
+        self.code = code
+
+
+class CheckInOutsideEventDates(CheckInRefused):
+    def __init__(self):
+        super().__init__("outside_event_dates", "لا يمكنك تسجيل الحضور خارج فترة الحدث")
+
+
+class AlreadyCheckedIn(CheckInRefused):
+    def __init__(self):
+        super().__init__("already_checked_in", "!انت سجلت حضورك لهذا الحدث اليوم")
+
+
+class CheckInNotRegistered(CheckInRefused):
+    def __init__(self):
+        super().__init__("not_registered", "ما عبيت فورم الحدث")
+
+
+class CheckInNotAccepted(CheckInRefused):
+    def __init__(self):
+        super().__init__("not_accepted", "ما انقبلت في الحدث")
+
+
+class CardSignatureInvalid(KnownHttpException):
+    """A staff scan sent a member card QR signature that this server did not make (app/services/card_qr.py)."""
+
+    code = "card_signature_invalid"
+
+    def __init__(self):
+        super().__init__(status_code=403, detail="This card's QR signature is not valid; ask for the member's card")
+
+
+class CardSignatureRequired(KnownHttpException):
+    """``ATTENDANCE_REQUIRE_CARD_SIGNATURE`` is on and the scanned QR had no signature (an old pass or a copied link)."""
+
+    code = "card_signature_required"
+
+    def __init__(self):
+        super().__init__(
+            status_code=403, detail="This card's QR has no signature; the member has to show the card from the app"
+        )
+
+
 class DriveIntegrationNotConfigured(KnownHttpException):
     """The Google Drive / Workspace integration credentials are missing or expired."""
 
@@ -315,3 +368,110 @@ class DrivePolicyBlocked(KnownHttpException):
 
     def __init__(self, detail: str = "The workspace policy blocked public sharing — contact the board"):
         super().__init__(status_code=403, detail=detail)
+
+
+# ---------- the member app's own account routes (app/services/member_accounts.py) ----------
+
+
+class NotSignedIn(KnownHttpException):
+    """No session token, or one that Clerk's keys do not verify."""
+
+    code = "not_authenticated"
+
+    def __init__(self, detail: str = "Sign in again: the session token is missing or could not be verified"):
+        super().__init__(status_code=401, detail=detail, headers={"WWW-Authenticate": "Bearer"})
+
+
+class MemberLinkedToAnotherLogin(KnownHttpException):
+    """The caller's university ID belongs to a member record that a different sign-in uses."""
+
+    code = "member_claimed"
+
+    def __init__(self, member_id: int):
+        super().__init__(status_code=409, detail=f"Member {member_id} is already linked to a different sign-in")
+
+
+class MemberEmailInUse(KnownHttpException):
+    """The personal email is already on another member's record."""
+
+    code = "email_in_use"
+
+    def __init__(self):
+        super().__init__(
+            status_code=409,
+            detail="This email is already on another member's record. If it is yours, verify it on your "
+            "account first; otherwise use a different email.",
+        )
+
+
+class InvalidPersonalEmail(KnownHttpException):
+    """The personal email breaks a rule that depends on how the caller signed up."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(status_code=422, detail=[{"loc": ["body", "personal_email"], "msg": message, "type": code}])
+        self.code = code
+
+
+class StaffAccountDeletion(KnownHttpException):
+    """A member on this semester's club roster, or a super admin, asked to delete their account."""
+
+    code = "member_is_staff"
+
+    def __init__(self, member_id: int):
+        super().__init__(
+            status_code=409, detail=f"Member {member_id} has a club role this semester; an admin has to remove it first"
+        )
+
+
+class AccountRecordNotProven(KnownHttpException):
+    """The member record linked to this sign-in does not match what the sign-in proved to Clerk."""
+
+    code = "member_not_verified"
+
+    def __init__(self, member_id: int):
+        super().__init__(
+            status_code=409,
+            detail=f"Member {member_id} does not match the university ID or email this sign-in proved; an admin "
+            "has to check it",
+        )
+
+
+class ClerkUnavailable(KnownHttpException):
+    """A call to the Clerk Backend API failed. Nothing about it is permanent: retry."""
+
+    code = "clerk_unavailable"
+
+    def __init__(self, detail: str = "Clerk could not be reached. Try again."):
+        super().__init__(status_code=502, detail=detail)
+
+
+class ClerkNotConfigured(KnownHttpException):
+    """``CLERK_SECRET_KEY`` is not set for this deployment, or Clerk refuses it."""
+
+    code = "clerk_not_configured"
+
+    def __init__(self):
+        super().__init__(status_code=503, detail="Account changes are not available on this server yet")
+
+
+class PushNotConfigured(KnownHttpException):
+    """This server has no APNs key (``APNS_KEY_ID``/``APNS_PRIVATE_KEY``), so it cannot send app notifications."""
+
+    code = "push_not_configured"
+
+    def __init__(self):
+        super().__init__(status_code=503, detail="App notifications are not set up on this server yet")
+
+
+class BroadcastLimitReached(KnownHttpException):
+    code = "broadcast_limit"
+
+    def __init__(self, limit: int):
+        super().__init__(status_code=429, detail=f"At most {limit} app announcements a day; try again tomorrow")
+
+
+class PushUrlNotAllowed(KnownHttpException):
+    code = "url_not_allowed"
+
+    def __init__(self):
+        super().__init__(status_code=422, detail="The link must be one of the app's own links (see docs/PUSH.md)")
