@@ -41,6 +41,7 @@ class Perm(StrEnum):
     EMAILS_DIRECT = "emails.direct"
     EMAILS_BLAST = "emails.blast"
     EMAILS_LOGS = "emails.logs"
+    NOTIFICATIONS_BROADCAST = "notifications.broadcast"
     CERTIFICATES_MANUAL = "certificates.manual"
     # Points
     POINTS_CATALOGUE = "points.catalogue"
@@ -89,6 +90,9 @@ CATALOGUE: dict[Perm, PermInfo] = {
     Perm.EMAILS_DIRECT: PermInfo("club", "Email specific people", "مراسلة أشخاص محددين"),
     Perm.EMAILS_BLAST: PermInfo("club", "Send the club-wide email", "إرسال البريد لجميع الأعضاء"),
     Perm.EMAILS_LOGS: PermInfo("club", "See email logs", "عرض سجل الرسائل"),
+    Perm.NOTIFICATIONS_BROADCAST: PermInfo(
+        "club", "Send app notifications to members", "إرسال إشعارات التطبيق للأعضاء"
+    ),
     Perm.CERTIFICATES_MANUAL: PermInfo("club", "Issue a certificate by hand", "إصدار شهادة يدويًا"),
     Perm.POINTS_CATALOGUE: PermInfo("club", "Manage point actions", "إدارة بنود النقاط"),
     Perm.POINTS_CUSTOM: PermInfo("club", "Award custom points", "منح نقاط مخصصة"),
@@ -124,7 +128,9 @@ OFFICER_ROLES: frozenset[str] = frozenset({"leader", "vp"})
 TEAM_PERMISSIONS: dict[PipelineTeam, frozenset[Perm]] = {
     PipelineTeam.DESIGN: frozenset({Perm.PIPELINE_DESIGN}),
     PipelineTeam.LOGISTICS: frozenset({Perm.PIPELINE_LOGISTICS, Perm.PIPELINE_BANS}),
-    PipelineTeam.MEDIA: frozenset({Perm.PIPELINE_MEDIA, Perm.EMAILS_DIRECT, Perm.EMAILS_BLAST, Perm.EMAILS_LOGS}),
+    PipelineTeam.MEDIA: frozenset(
+        {Perm.PIPELINE_MEDIA, Perm.EMAILS_DIRECT, Perm.EMAILS_BLAST, Perm.EMAILS_LOGS, Perm.NOTIFICATIONS_BROADCAST}
+    ),
 }
 
 

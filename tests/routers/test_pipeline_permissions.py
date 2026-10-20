@@ -92,7 +92,16 @@ def test_two_departments_with_the_name_leave_the_team_unset(pipeline, dept):
     [
         ("Design", {Perm.PIPELINE_DESIGN}),
         ("Logistics", {Perm.PIPELINE_LOGISTICS, Perm.PIPELINE_BANS}),
-        ("Media", {Perm.PIPELINE_MEDIA, Perm.EMAILS_DIRECT, Perm.EMAILS_BLAST, Perm.EMAILS_LOGS}),
+        (
+            "Media",
+            {
+                Perm.PIPELINE_MEDIA,
+                Perm.EMAILS_DIRECT,
+                Perm.EMAILS_BLAST,
+                Perm.EMAILS_LOGS,
+                Perm.NOTIFICATIONS_BROADCAST,
+            },
+        ),
     ],
 )
 def test_a_team_departments_leader_gets_the_teams_permissions(pipeline, name, expected):

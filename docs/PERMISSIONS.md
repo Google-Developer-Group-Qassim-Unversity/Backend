@@ -80,6 +80,13 @@ section it shows under on `/permissions`) in `Admin/lib/access.ts`.
 Nobody holds it until a super admin assigns it on `/permissions` (or a
 migration seeds it).
 
+**Team permissions.** What each pipeline team's leaders and VPs get on top is
+`TEAM_PERMISSIONS` in the catalogue, in code: no migration seeds it. Media's
+leaders and VPs hold `emails.direct`, `emails.blast`, `emails.logs` and
+`notifications.broadcast` (announcements to the member app,
+`POST /notifications/broadcast`) that way; anyone else gets
+`notifications.broadcast` through the usual grant screens.
+
 **Make someone a super admin on a fresh database.**
 `uv run python scripts/add_super_admin.py --uni-id <id> --apply`. After that,
 super admins add each other on `/permissions`.

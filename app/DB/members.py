@@ -2,6 +2,7 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, func, or_, asc, desc, case, delete, null, update
+from app.DB import push as push_queries
 from app.DB.schema import EmailLogs, MemberProfiles, Members, MembersLogs, Submissions
 from app.exceptions import MemberNotFound
 from app.routers.models import Member_model
@@ -337,6 +338,7 @@ def anonymize_member(session: Session, member: Members) -> None:
     session.execute(delete(MemberProfiles).where(MemberProfiles.member_id == member.id))
     session.execute(delete(Submissions).where(Submissions.member_id == member.id))
     session.execute(update(EmailLogs).where(EmailLogs.member_id == member.id).values(member_id=None, data=null()))
+    push_queries.delete_member_push_data(session, member.id)
     session.execute(
         update(Members)
         .where(Members.id == member.id)

@@ -110,6 +110,22 @@ content/event edit or the local Website's cache never refreshes.
 | `GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL` | when the feature runs | empty |  |
 | `GOOGLE_WALLET_PRIVATE_KEY` | when the feature runs | empty |  |
 
+### Member app push notifications
+
+The iPhone app's notifications go straight to Apple's APNs (`app/services/push/`,
+[PUSH.md](PUSH.md)). With `APNS_KEY_ID` or the key unset, push is off: phones and
+switches are still stored, nothing is queued or sent, and
+`POST /notifications/broadcast` answers 503 `push_not_configured`. The team id is
+`APPLE_TEAM_ID` above.
+
+| Variable | Needed | Default | Notes |
+|---|---|---|---|
+| `APNS_KEY_ID` | to send pushes | - | Key ID of the APNs auth key (Apple Developer → Keys). Sent as the provider token's `kid` |
+| `APNS_PRIVATE_KEY` | to send pushes (or the path below) | - | contents of that key's `.p8` file (PEM). Newlines may be written as `\n`. Never logged |
+| `APNS_PRIVATE_KEY_PATH` | alternative to `APNS_PRIVATE_KEY` | - | path to the `.p8` file instead, for local development |
+| `APNS_TOPIC` | optional | `com.gdgq.app` | the app's bundle ID |
+| `APNS_ENVIRONMENT` | optional | `production` | `production` (`api.push.apple.com`: TestFlight and App Store builds) or `sandbox` (development builds). Only phones registered from builds of the same environment are sent to |
+
 ### A note on the Wallet defaults
 
 `APPLE_TEAM_ID`, `APPLE_PASS_TYPE_ID` and `GOOGLE_WALLET_ISSUER_ID` fall back to
