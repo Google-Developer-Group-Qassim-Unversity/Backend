@@ -133,6 +133,8 @@ class DeleteAccountRequest(BaseModel):
         default=None,
         min_length=1,
         max_length=1000,
+        # Out of the repr, so the body in a traceback's locals (Sentry) never shows it.
+        repr=False,
         description="A fresh authorization code from the app's Sign in with Apple sheet (valid 5 minutes, single "
         "use). After the deletion the backend trades it for Apple's tokens and revokes them",
     )

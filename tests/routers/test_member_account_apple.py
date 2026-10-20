@@ -5,6 +5,8 @@ form posts to appleid.apple.com are asserted as they would leave the process.
 The Sign in with Apple key is generated for each run; no test reaches Apple.
 """
 
+import logging
+
 import httpx
 import jwt
 import pytest
@@ -289,6 +291,32 @@ def test_a_key_that_does_not_load_still_deletes(signed_in, outbound, apple_key, 
 
     assert response.json() == {"deleted": True, "member_anonymized": False, "apple_token_revoked": False}
     assert apple_paths(outbound) == []
+
+
+def test_an_unexpected_failure_still_deletes_and_logs_no_traceback(signed_in, outbound, apple_key, monkeypatch, caplog):
+    # The traceback's frames would carry the code and Apple's tokens to Sentry as local variables.
+    from app.services import apple_signin
+
+    def explode(code, *_):
+        raise RuntimeError(f"broke while holding {code}")
+
+    monkeypatch.setattr(apple_signin, "_revoke_tokens", explode)
+    outbound.stub(f"/v1/users/{APPLE_USER}", method="GET", json=clerk_apple_user())
+
+    with caplog.at_level(logging.INFO, logger="app.services.apple_signin"):
+        response = delete(signed_in, {"apple_authorization_code": CODE})
+
+    assert response.json() == {"deleted": True, "member_anonymized": False, "apple_token_revoked": False}
+    errors = [record for record in caplog.records if record.name == "app.services.apple_signin"]
+    assert [(record.levelno, record.exc_info) for record in errors] == [(logging.ERROR, None)]
+    assert "RuntimeError" in errors[0].getMessage()
+    assert CODE not in caplog.text
+
+
+def test_the_code_is_kept_out_of_the_bodys_repr():
+    from app.routers.member_account_models import DeleteAccountRequest
+
+    assert CODE not in repr(DeleteAccountRequest(apple_authorization_code=CODE))
 
 
 def test_not_configured_skips_revocation(signed_in, outbound, apple_key, monkeypatch):

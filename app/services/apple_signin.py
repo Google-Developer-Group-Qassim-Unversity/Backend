@@ -102,8 +102,11 @@ def revoke_tokens(authorization_code: str, apple_user_id: str | None, member_ref
     """
     try:
         return _revoke_tokens(authorization_code, apple_user_id, member_ref)
-    except Exception:
-        logger.exception("Apple token revocation failed unexpectedly for %s", member_ref)
+    except Exception as exc:
+        # ERROR (Sentry hears of it) but without the traceback: its frames' locals hold the
+        # authorization code and Apple's refresh and access tokens, under names Sentry's
+        # scrubber does not match.
+        logger.error("Apple token revocation failed unexpectedly for %s: %s", member_ref, type(exc).__name__)
         return False
 
 
