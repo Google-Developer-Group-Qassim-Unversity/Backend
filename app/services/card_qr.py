@@ -54,4 +54,7 @@ def verify_card_signature(uuid: str, signature: str) -> SignatureCheck:
     expected = card_signature(uuid)
     if expected is None:
         return "unknown"
+    if not signature.isascii():
+        # Never one of ours, and a lone surrogate (valid in a JSON body) cannot be encoded.
+        return "invalid"
     return "valid" if hmac.compare_digest(expected.encode(), signature.encode()) else "invalid"

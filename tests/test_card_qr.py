@@ -65,3 +65,8 @@ def test_another_secret_makes_another_signature(secret, monkeypatch):
 
 def test_sharing_a_profile_stays_unsigned(secret):
     assert profile_url(UUID) == f"https://gdg-q.com/p/{UUID}"
+
+
+@pytest.mark.parametrize("signature", ["\ud800" * 16, "é" * 16])
+def test_a_non_ascii_signature_is_invalid_rather_than_an_error(secret, signature):
+    assert verify_card_signature(UUID, signature) == "invalid"
