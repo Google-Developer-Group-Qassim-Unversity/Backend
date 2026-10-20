@@ -69,10 +69,27 @@ def _escape_drive_query(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def _resolve_drive_credentials() -> tuple[str, str, str] | None:
+    """Resolve credentials for Google Drive.
+
+    Prefers GOOGLE_MEET_* (the permanent Google Workspace credentials shared with
+    the meetings bot), falling back to GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN.
+
+    NOTE: Reads directly from get_settings() (Pydantic BaseSettings, which evaluates
+    to Optional[str] = None when unset), NOT config.GOOGLE_MEET_* properties (which
+    call env_or_except and raise MissingSettingError if unset).
+    """
+    settings = get_settings()
+    if settings.GOOGLE_MEET_CLIENT_ID and settings.GOOGLE_MEET_CLIENT_SECRET and settings.GOOGLE_MEET_REFRESH_TOKEN:
+        return (settings.GOOGLE_MEET_CLIENT_ID, settings.GOOGLE_MEET_CLIENT_SECRET, settings.GOOGLE_MEET_REFRESH_TOKEN)
+    if settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET and settings.GOOGLE_REFRESH_TOKEN:
+        return (settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET, settings.GOOGLE_REFRESH_TOKEN)
+    return None
+
+
 def is_drive_configured() -> bool:
     """Return True if the required Google credentials are set in configuration."""
-    settings = get_settings()
-    return bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET and settings.GOOGLE_REFRESH_TOKEN)
+    return _resolve_drive_credentials() is not None
 
 
 _credentials_cache: dict[tuple[str, str, str], Credentials] = {}
@@ -91,11 +108,12 @@ def get_drive_credentials() -> Credentials:
     Caches valid credentials in memory under a lock to prevent duplicate refreshes.
     Raises DriveIntegrationNotConfigured if credentials are not configured or invalid.
     """
-    settings = get_settings()
-    if not (settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET and settings.GOOGLE_REFRESH_TOKEN):
+    creds_tuple = _resolve_drive_credentials()
+    if creds_tuple is None:
         raise DriveIntegrationNotConfigured()
 
-    key = (settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET, settings.GOOGLE_REFRESH_TOKEN)
+    client_id, client_secret, refresh_token = creds_tuple
+    key = (client_id, client_secret, refresh_token)
     with _credentials_lock:
         creds = _credentials_cache.get(key)
         if creds is not None and creds.valid:
@@ -104,10 +122,10 @@ def get_drive_credentials() -> Credentials:
         try:
             credentials = Credentials(
                 None,
-                refresh_token=settings.GOOGLE_REFRESH_TOKEN,
+                refresh_token=refresh_token,
                 token_uri="https://oauth2.googleapis.com/token",
-                client_id=settings.GOOGLE_CLIENT_ID,
-                client_secret=settings.GOOGLE_CLIENT_SECRET,
+                client_id=client_id,
+                client_secret=client_secret,
             )
             if not credentials.valid:
                 # HARD RULE: NEVER pass scope= or scopes= when refreshing

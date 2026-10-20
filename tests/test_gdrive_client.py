@@ -94,6 +94,41 @@ class TestGDriveConfig:
         reload_settings()
         assert config.APP_TIMEZONE == "Asia/Riyadh"
 
+    def test_is_configured_true_when_meet_credentials_set(self, monkeypatch):
+        monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+        monkeypatch.delenv("GOOGLE_REFRESH_TOKEN", raising=False)
+        monkeypatch.setenv("GOOGLE_MEET_CLIENT_ID", "mock_meet_id")
+        monkeypatch.setenv("GOOGLE_MEET_CLIENT_SECRET", "mock_meet_secret")
+        monkeypatch.setenv("GOOGLE_MEET_REFRESH_TOKEN", "mock_meet_refresh")
+        reload_settings()
+
+        assert is_drive_configured() is True
+        client = GDriveClient()
+        assert client.is_configured() is True
+
+    def test_meet_credentials_take_priority_over_client_credentials(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "fallback_id")
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "fallback_secret")
+        monkeypatch.setenv("GOOGLE_REFRESH_TOKEN", "fallback_refresh")
+        monkeypatch.setenv("GOOGLE_MEET_CLIENT_ID", "meet_id")
+        monkeypatch.setenv("GOOGLE_MEET_CLIENT_SECRET", "meet_secret")
+        monkeypatch.setenv("GOOGLE_MEET_REFRESH_TOKEN", "meet_refresh")
+        reload_settings()
+
+        with patch("app.services.gdrive_client.Credentials") as mock_cls:
+            mock_cred = MagicMock()
+            mock_cred.valid = True
+            mock_cls.return_value = mock_cred
+            get_drive_credentials()
+            mock_cls.assert_called_once_with(
+                None,
+                refresh_token="meet_refresh",
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id="meet_id",
+                client_secret="meet_secret",
+            )
+
 
 class TestGDriveUnconfiguredDegradation:
     @pytest.fixture(autouse=True)
@@ -101,6 +136,9 @@ class TestGDriveUnconfiguredDegradation:
         monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
         monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
         monkeypatch.delenv("GOOGLE_REFRESH_TOKEN", raising=False)
+        monkeypatch.delenv("GOOGLE_MEET_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GOOGLE_MEET_CLIENT_SECRET", raising=False)
+        monkeypatch.delenv("GOOGLE_MEET_REFRESH_TOKEN", raising=False)
         reload_settings()
 
     def test_get_drive_credentials_raises_503(self):
@@ -378,6 +416,9 @@ class TestGDriveClientOperations:
         monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
         monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
         monkeypatch.delenv("GOOGLE_REFRESH_TOKEN", raising=False)
+        monkeypatch.delenv("GOOGLE_MEET_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GOOGLE_MEET_CLIENT_SECRET", raising=False)
+        monkeypatch.delenv("GOOGLE_MEET_REFRESH_TOKEN", raising=False)
         reload_settings()
         unconfigured_client = GDriveClient()
         with pytest.raises(DriveIntegrationNotConfigured):
