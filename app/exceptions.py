@@ -299,6 +299,26 @@ class AttendanceTokenInvalid(AttendanceTokenError):
         super().__init__(400, "token_invalid", f"Invalid attendance token ({reason})")
 
 
+class CardSignatureInvalid(KnownHttpException):
+    """A staff scan sent a member card QR signature that this server did not make (app/services/card_qr.py)."""
+
+    code = "card_signature_invalid"
+
+    def __init__(self):
+        super().__init__(status_code=403, detail="This card's QR signature is not valid; ask for the member's card")
+
+
+class CardSignatureRequired(KnownHttpException):
+    """``ATTENDANCE_REQUIRE_CARD_SIGNATURE`` is on and the scanned QR had no signature (an old pass or a copied link)."""
+
+    code = "card_signature_required"
+
+    def __init__(self):
+        super().__init__(
+            status_code=403, detail="This card's QR has no signature; the member has to show the card from the app"
+        )
+
+
 class DriveIntegrationNotConfigured(KnownHttpException):
     """The Google Drive / Workspace integration credentials are missing or expired."""
 

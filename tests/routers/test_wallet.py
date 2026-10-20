@@ -351,3 +351,109 @@ def test_a_members_pass_reuses_their_profile_uuid(clerk_client: TestClient, db_s
 
     assert signed_card["uuid"] == first
     assert clerk_client.get(f"/wallet/{first}").status_code == 200
+
+
+# ====================== the card QR (app/services/card_qr.py) ======================
+
+CARD_QR_SECRET = "test-card-qr-secret-0123456789abcdef"
+
+
+@pytest.fixture
+def card_qr_secret(monkeypatch):
+    monkeypatch.setenv("CARD_QR_SECRET", CARD_QR_SECRET)
+
+
+@pytest.fixture
+def apple_card(monkeypatch):
+    """Capture the card data the Apple pass route hands to the signer."""
+    captured: dict = {}
+
+    def fake_apple(card_data):
+        captured.update(card_data)
+        return b"fake pkpass"
+
+    from app.routers import wallet
+
+    monkeypatch.setattr(wallet, "generate_apple_pkpass", fake_apple)
+    return captured
+
+
+def test_wallet_me_carries_the_signed_card_qr(clerk_client: TestClient, db_session, card_qr_secret):
+    from app.services.card_qr import card_signature
+
+    make_member(db_session, clerk_user_id=CLERK_SUB)
+
+    body = clerk_client.get("/wallet/me").json()
+
+    uuid = body["profile"]["uuid"]
+    assert body["qr_value"] == f"https://gdg-q.com/p/{uuid}?s={card_signature(uuid)}"
+
+
+def test_wallet_me_carries_the_unsigned_link_without_a_secret(clerk_client: TestClient, db_session, monkeypatch):
+    monkeypatch.delenv("CARD_QR_SECRET", raising=False)
+    make_member(db_session, clerk_user_id=CLERK_SUB)
+
+    body = clerk_client.get("/wallet/me").json()
+
+    assert body["qr_value"] == f"https://gdg-q.com/p/{body['profile']['uuid']}"
+
+
+def test_wallet_me_has_no_qr_before_onboarding(clerk_client: TestClient, card_qr_secret):
+    body = clerk_client.get("/wallet/me").json()
+
+    assert body["member_id"] is None
+    assert body["qr_value"] is None
+
+
+def test_a_members_passes_carry_the_same_qr_as_wallet_me(
+    clerk_client: TestClient, db_session, card_qr_secret, signed_card, apple_card
+):
+    make_member(db_session, clerk_user_id=CLERK_SUB)
+    qr_value = clerk_client.get("/wallet/me").json()["qr_value"]
+
+    assert_2xx(clerk_client.post("/wallet/google-pass", json={}))
+    assert_2xx(clerk_client.post("/wallet/apple-pass", json={}))
+
+    assert "?s=" in qr_value
+    assert signed_card["qrValue"] == qr_value
+    assert apple_card["qrValue"] == qr_value
+
+
+@pytest.mark.parametrize("route", ["/wallet/google-pass", "/wallet/apple-pass"])
+def test_a_guest_pass_never_takes_a_uuid_from_the_body(
+    client: TestClient, db_session, card_qr_secret, signed_card, apple_card, route
+):
+    """A guest used to get a pass for whatever uuid they sent - a member's, read off their public /p/ link."""
+    make_member(db_session, clerk_user_id=CLERK_SUB)
+    member_uuid = profile_uuid_of_the_member(db_session)
+
+    response = client.post(route, json={"uuid": member_uuid, "fullName": "زائر"})
+
+    assert_2xx(response)
+    card = signed_card if route == "/wallet/google-pass" else apple_card
+    assert card["uuid"] != member_uuid
+    assert len(card["uuid"]) == 32
+    assert "qrValue" not in card, "a guest pass's QR is the home page, never a member's card"
+    assert card["fullName"] == "زائر"
+
+
+def test_two_guest_passes_get_two_uuids(client: TestClient, signed_card):
+    client.post("/wallet/google-pass", json={})
+    first = signed_card["uuid"]
+    client.post("/wallet/google-pass", json={})
+
+    assert signed_card["uuid"] != first
+
+
+def profile_uuid_of_the_member(db_session) -> str:
+    from sqlalchemy import select
+
+    from app.DB.schema import MemberProfiles
+    from app.DB.wallet import get_or_create_member_profile
+
+    member = db_session.scalar(select(Members).where(Members.clerk_user_id == CLERK_SUB))
+    assert member is not None
+    profile = get_or_create_member_profile(db_session, member.id)
+    db_session.commit()
+    assert isinstance(profile, MemberProfiles)
+    return profile.uuid

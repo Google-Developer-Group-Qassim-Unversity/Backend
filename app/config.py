@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     # onboarding and account deletion. The scripts in scripts/ read it too.
     CLERK_SECRET_KEY: Optional[str] = None
     JWT_SECRET: Optional[str] = None
+    # The member card QR's signature (app/services/card_qr.py). Unset: cards
+    # carry the unsigned /p/ link and staff scans are not checked.
+    CARD_QR_SECRET: Optional[str] = None
+    # Staff card scans refuse a QR without a valid signature. Turn on only once
+    # members have re-added their Wallet passes (docs/CARD_QR.md).
+    ATTENDANCE_REQUIRE_CARD_SIGNATURE: bool = False
 
     GOOGLE_CLIENT_ID: Optional[str] = None
     GOOGLE_CLIENT_SECRET: Optional[str] = None
@@ -204,6 +210,14 @@ class Config:
     @property
     def CLERK_SECRET_KEY(self) -> str:
         return env_or_except("CLERK_SECRET_KEY")
+
+    @property
+    def CARD_QR_SECRET(self) -> Optional[str]:
+        return get_settings().CARD_QR_SECRET or None
+
+    @property
+    def ATTENDANCE_REQUIRE_CARD_SIGNATURE(self) -> bool:
+        return get_settings().ATTENDANCE_REQUIRE_CARD_SIGNATURE
 
     @property
     def CLERK_GUARD(self):

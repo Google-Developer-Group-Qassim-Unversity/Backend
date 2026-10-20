@@ -623,3 +623,93 @@ def test_attendance_an_admin_takes_or_removes_is_in_the_event_history(admin_clie
         ("attendance_marked", {"days": [1], "members": [ahmed]}),
         ("attendance_removed", {"day": 1, "members": [ahmed]}),
     ]
+
+
+# === staff card scans and the card QR's signature ===
+
+CARD_QR_SECRET = "test-card-qr-secret-0123456789abcdef"
+
+
+def scannable_member(db_session: Session) -> str:
+    """A member with a card; returns the card's uuid."""
+    from app.DB.wallet import get_or_create_member_profile
+
+    member = create_test_member(db_session)
+    profile = get_or_create_member_profile(db_session, member.id)
+    db_session.commit()
+    return profile.uuid
+
+
+def scan(client: TestClient, event_id: int, uuid: str, **body):
+    return client.post(f"/attendance/{event_id}/scan", json={"uuid": uuid, "day": 1, **body})
+
+
+def test_a_signed_card_scans(admin_client: TestClient, db_session, monkeypatch):
+    from app.services.card_qr import card_signature
+
+    monkeypatch.setenv("CARD_QR_SECRET", CARD_QR_SECRET)
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    response = scan(admin_client, event_id, uuid, sig=card_signature(uuid))
+
+    assert_2xx(response)
+    assert response.json()["status"] == "marked"
+
+
+def test_a_wrong_signature_is_refused_even_while_signatures_are_optional(
+    admin_client: TestClient, db_session, monkeypatch
+):
+    """A QR made from someone's public /p/ link with a made-up s= never passes."""
+    monkeypatch.setenv("CARD_QR_SECRET", CARD_QR_SECRET)
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    response = scan(admin_client, event_id, uuid, sig="AAAAAAAAAAAAAAAA")
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "card_signature_invalid"
+    attendance = admin_client.get(f"/attendance/{event_id}?type=count").json()
+    assert attendance["attendance_count"] == 0
+
+
+def test_an_unsigned_card_scans_until_signatures_are_required(admin_client: TestClient, db_session, monkeypatch):
+    monkeypatch.setenv("CARD_QR_SECRET", CARD_QR_SECRET)
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    assert_2xx(scan(admin_client, event_id, uuid))
+
+
+def test_an_unsigned_card_is_refused_once_signatures_are_required(admin_client: TestClient, db_session, monkeypatch):
+    monkeypatch.setenv("CARD_QR_SECRET", CARD_QR_SECRET)
+    monkeypatch.setenv("ATTENDANCE_REQUIRE_CARD_SIGNATURE", "true")
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    response = scan(admin_client, event_id, uuid)
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "card_signature_required"
+
+
+def test_without_a_secret_signatures_are_not_checked(admin_client: TestClient, db_session, monkeypatch):
+    """No secret: nothing can be verified, so the scan behaves as before - even if enforcement was switched on."""
+    monkeypatch.delenv("CARD_QR_SECRET", raising=False)
+    monkeypatch.setenv("ATTENDANCE_REQUIRE_CARD_SIGNATURE", "true")
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    assert_2xx(scan(admin_client, event_id, uuid, sig="AAAAAAAAAAAAAAAA"))
+    assert scan(admin_client, event_id, uuid).json()["status"] == "already_marked"
+
+
+def test_an_old_scanner_without_sig_still_works(admin_client: TestClient, db_session, monkeypatch):
+    monkeypatch.delenv("CARD_QR_SECRET", raising=False)
+    event_id = create_attendance_ready_event(admin_client)
+    uuid = scannable_member(db_session)
+
+    response = admin_client.post(f"/attendance/{event_id}/scan", json={"uuid": uuid, "day": 1})
+
+    assert_2xx(response)
+    assert response.json()["status"] == "marked"

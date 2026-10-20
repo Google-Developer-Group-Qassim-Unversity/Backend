@@ -72,3 +72,18 @@ def test_google_wallet_rejects_missing_private_key(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(ValueError, match="PRIVATE_KEY is not configured"):
         generate_google_wallet_pass_url({"uuid": "test-card"})
+
+
+def _barcode(card: dict) -> dict:
+    token = generate_google_wallet_pass_url(card).rsplit("/", 1)[-1]
+    claims = jwt.decode(token, options={"verify_signature": False})
+    return claims["payload"]["genericObjects"][0]["barcode"]
+
+
+def test_google_wallet_qr_is_the_cards_qr_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    _configure_google_wallet(monkeypatch)
+    uuid = "0f8c2a9d4b6e4c1a9e3f5d7b2c4a6e8f"
+    qr_value = f"https://gdg-q.com/p/{uuid}?s=AbCdEfGhIjKlMnOp"
+
+    assert _barcode({"uuid": uuid, "qrValue": qr_value})["value"] == qr_value
+    assert _barcode({"uuid": uuid})["value"] == "https://gdg-q.com", "a guest pass points at the home page"

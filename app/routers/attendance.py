@@ -13,6 +13,7 @@ from app.DB import (
 
 from app.DB.schema import Events, Logs
 from app.DB.wallet import get_public_profile_by_uuid
+from app.routers.member_account_models import CodedErrorResponse
 from app.routers.models import (
     EventAttendanceResponse,
     ManualAttendanceRequest,
@@ -22,9 +23,17 @@ from app.routers.models import (
     BackfillAttendanceResponse,
 )
 from app.config import config
-from app.exceptions import AttendanceTokenAbsent, AttendanceTokenError, DataIntegrityError, MemberNotFound
+from app.exceptions import (
+    AttendanceTokenAbsent,
+    AttendanceTokenError,
+    CardSignatureInvalid,
+    CardSignatureRequired,
+    DataIntegrityError,
+    MemberNotFound,
+)
 from app.DB.schema import EventHistoryAction
 from app.services import event_history
+from app.services.card_qr import verify_card_signature
 from app.helpers import (
     CurrentMember,
     validate_attendance_token,
@@ -339,15 +348,36 @@ def mark_attendance_manual(event_id: int, request: ManualAttendanceRequest, sess
     return {"success": success_count, "failed": failed_count}
 
 
+def _check_card_signature(request: ScanAttendanceRequest) -> None:
+    if request.sig is not None:
+        if verify_card_signature(request.uuid, request.sig) == "invalid":
+            logger.warning(f"Scan attendance: card signature does not match uuid [{request.uuid}]")
+            raise CardSignatureInvalid()
+        return
+    if config.ATTENDANCE_REQUIRE_CARD_SIGNATURE:
+        if not config.CARD_QR_SECRET:
+            # Cards cannot be signed without the secret; refusing every scan would close the door instead.
+            logger.warning("ATTENDANCE_REQUIRE_CARD_SIGNATURE is on but CARD_QR_SECRET is not set; not enforced")
+            return
+        logger.info(f"Scan attendance: unsigned card QR for uuid [{request.uuid}] refused")
+        raise CardSignatureRequired()
+
+
 @router.post(
     "/{event_id}/scan",
     status_code=status.HTTP_200_OK,
     dependencies=[Depends(Require(Perm.ATTENDANCE_TAKE, event_departments))],
     response_model=ScanAttendanceResponse,
+    responses={403: {"model": CodedErrorResponse, "description": "card_signature_invalid, card_signature_required"}},
 )
 def scan_attendance(event_id: int, request: ScanAttendanceRequest, session: DB, actor: CurrentMember):
-    """Marks attendance from a member's wallet-card QR (`/p/{uuid}`), scanned by an admin."""
+    """Marks attendance from a member's wallet-card QR (`/p/{uuid}?s={sig}`), scanned by an admin.
+
+    A ``sig`` is checked when one is sent (app/services/card_qr.py); a card
+    without one passes until ATTENDANCE_REQUIRE_CARD_SIGNATURE is turned on.
+    """
     logger.info(f"Scan attendance for event [{event_id}], uuid [{request.uuid}]")
+    _check_card_signature(request)
 
     result = get_public_profile_by_uuid(session, request.uuid)
     if not result:

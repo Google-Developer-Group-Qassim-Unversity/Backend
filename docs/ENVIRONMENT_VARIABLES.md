@@ -26,6 +26,8 @@ the boot rather than the first request.
 | `CLERK_JWKS_URL` | **at startup** | - | the app refuses to start without it |
 | `CLERK_SECRET_KEY` | for the member app's account routes | - | the same Clerk instance's secret key (`sk_live_...` in prod; the development instance's `sk_test_...` on staging and local dev). `POST /members/onboarding` and `DELETE /members/me` read the caller's verified emails, write their publicMetadata and delete their sign-in with it (`app/services/clerk_api.py`); unset, or refused by Clerk, both answer 503 `clerk_not_configured`. The scripts in `scripts/` read it too |
 | `JWT_SECRET` | when the feature runs | - | signs attendance QR tokens |
+| `CARD_QR_SECRET` | for signed card QRs | - | at least 32 random bytes, a different value per environment (`openssl rand -base64 48`). Signs the member card QR: `/wallet/me`'s `qr_value` and the Wallet passes carry `https://gdg-q.com/p/{uuid}?s={sig}` (`app/services/card_qr.py`, [CARD_QR.md](CARD_QR.md)). Unset: the unsigned link, as before. Changing it invalidates every card already issued |
+| `ATTENDANCE_REQUIRE_CARD_SIGNATURE` | optional | `false` | `true`: staff card scans (`POST /attendance/{id}/scan`) refuse a QR without a valid signature (403 `card_signature_required`). Breaks every older pass and screenshot at the door: turn on only after the rollout in [CARD_QR.md](CARD_QR.md). Ignored while `CARD_QR_SECRET` is unset |
 
 ### Google Forms sync
 

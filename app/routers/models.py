@@ -1,6 +1,6 @@
 import re
 
-from pydantic import BaseModel, HttpUrl, EmailStr, field_validator, conlist, ConfigDict
+from pydantic import BaseModel, HttpUrl, EmailStr, Field, field_validator, conlist, ConfigDict
 from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
@@ -639,6 +639,8 @@ class ManualAttendanceRequest(BaseModel):
 class ScanAttendanceRequest(BaseModel):
     uuid: str
     day: int | None = None
+    # The card QR's ``s`` (app/services/card_qr.py). Old cards and old scanners send none.
+    sig: str | None = Field(default=None, max_length=64)
 
 
 class ScanAttendanceResponse(BaseClassModel):
