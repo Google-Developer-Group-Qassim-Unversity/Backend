@@ -242,6 +242,49 @@ def test_a_record_another_sign_in_uses_is_a_conflict(sign_in, outbound, db_sessi
     assert (owned.clerk_user_id, owned.name, owned.email) == ("user_owner", "Owner", "owner@example.com")
 
 
+def test_a_second_sign_up_with_a_members_phone_number_is_refused(sign_in, outbound, db_session):
+    """She is on the roster under her university-ID account, then signs up again with Google.
+
+    Nothing proven links the two, so before this she got a second, empty record and lost the admin app.
+    """
+    first = Members(
+        name="منار",
+        email="first@icloud.com",
+        phone_number="+966 55 123 4567",
+        uni_id="441203284",
+        clerk_user_id="user_first_account",
+        gender=MembersGender.FEMALE,
+        is_authenticated=1,
+    )
+    db_session.add(first)
+    db_session.commit()
+    stub_google_account(outbound)
+
+    response = sign_in(GOOGLE_USER).post(
+        "/members/onboarding", json=answers("other_university", university_name="KSU", personal_email=None)
+    )
+
+    assert_conflict(response)
+    assert response.json()["code"] == "member_exists"
+    assert member_row(db_session, GOOGLE_USER) is None
+    db_session.refresh(first)
+    assert (first.clerk_user_id, first.email) == ("user_first_account", "first@icloud.com")
+
+
+def test_a_proven_match_links_even_when_the_phone_number_is_on_it(sign_in, outbound, db_session):
+    existing = Members(
+        name="عبدالله", phone_number="0551234567", uni_id="444111222", gender=MembersGender.MALE, is_authenticated=0
+    )
+    db_session.add(existing)
+    db_session.commit()
+    stub_qu_account(outbound)
+
+    response = sign_in(QU_USER).post("/members/onboarding", json=answers())
+
+    assert response.status_code == 200, response.text
+    assert response.json()["member"]["id"] == existing.id
+
+
 # ---------- when Clerk fails ----------
 
 
