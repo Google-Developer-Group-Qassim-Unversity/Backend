@@ -74,6 +74,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /club-structure/roles": "club_structure.view",
     "GET /club-structure/departments/{department_id:int}": "club_structure.view",
     "GET /club-structure/departments/{department_id:int}/roster": "club_structure.view",
+    "GET /club-structure/members/{member_id:int}": "club_structure.view",
     "GET /club-structure/history": "club_structure.view",
     "POST /club-structure/departments": "club_structure.manage",
     "PUT /club-structure/departments/{department_id:int}": "club_structure.manage",

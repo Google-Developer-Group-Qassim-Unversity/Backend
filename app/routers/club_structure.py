@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.DB import club_structure as queries
 from app.DB import departments as department_queries
 from app.DB import semesters as semesters_queries
+from app.DB.wallet import card_visibility
 from app.DB.schema import ClubMemberships, Departments, Members, Semesters
 from app.dependencies import DB
 from app.exceptions import MemberNotFound, NoSemestersDefined, NotFound, SemesterNotFound
@@ -42,6 +43,13 @@ from app.routers.club_structure_models import (
     RemovedResponse,
     RoleSeatsResponse,
     RosterEntryResponse,
+    StaffMemberContact,
+    StaffMemberDepartment,
+    StaffMemberInfo,
+    StaffMemberProfile,
+    StaffMemberResponse,
+    StaffMemberSemester,
+    StaffMemberSocialLink,
     UpdateDepartmentRequest,
 )
 from app.semesters import current_semester, resolve_semester_for_caller
@@ -247,6 +255,81 @@ def get_club_department_roster(department_id: DatabaseId, session: DB, semester_
         if row.role.key == service.MEMBER_ROLE:
             entry.added_at = row.created_at
     return list(entries.values())
+
+
+@router.get(
+    "/members/{member_id:int}",
+    response_model=StaffMemberResponse,
+    dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_VIEW))],
+)
+def get_club_member(member_id: DatabaseId, session: DB):
+    """One member as the app's staff screens show them: their roles this semester and what their card makes visible.
+
+    Each private part follows the member's own card switches, exactly as the
+    public card (``GET /wallet/{uuid}``) does, a switch never set reading as its
+    default there: e-mail only with ``showEmail``, phone only with
+    ``showPhone``, major, institution, level and college only with
+    ``showAcademic``, the bio only with ``showBio``; otherwise null. Social
+    links are always sent, as on the public card. A member who deleted their
+    account is a 404, like an unknown id.
+    """
+    member = session.get(Members, member_id)
+    if member is None or member.deleted_at is not None:
+        raise MemberNotFound(member_id)
+    profile = member.profile
+    visible = card_visibility(profile)
+    academic = visible["showAcademic"]
+    semester = current_semester(session)
+    departments = queries.get_member_departments(session, semester.id, member.id) if semester else []
+
+    return StaffMemberResponse(
+        member=StaffMemberInfo(
+            id=member.id,
+            name=member.name,
+            public_name=member.public_name,
+            gender=member.gender.value,
+            uni_level=member.uni_level if academic else None,
+            uni_college=(member.uni_college or None) if academic else None,
+        ),
+        contact=StaffMemberContact(
+            email=(member.email or None) if visible["showEmail"] else None,
+            phone_number=(member.phone_number or None) if visible["showPhone"] else None,
+        ),
+        profile=StaffMemberProfile(
+            uuid=profile.uuid if profile else None,
+            major=(profile.major or None) if profile and academic else None,
+            institution=(profile.institution or None) if profile and academic else None,
+            bio=(profile.bio or None) if profile and visible["showBio"] else None,
+            social_links=_social_links(profile.social_links if profile else None),
+        ),
+        semester=StaffMemberSemester(id=semester.id, name=semester.name) if semester else None,
+        roles=[
+            StaffMemberDepartment(
+                department_id=scope.department_id,
+                name=scope.name or scope.department.name,
+                ar_name=scope.ar_name or scope.department.ar_name,
+                roles=keys,
+            )
+            for scope, keys in departments
+        ],
+    )
+
+
+def _social_links(stored) -> list[StaffMemberSocialLink]:
+    """The card's links as the wallet routes saved them; anything without a platform and a URL is left out."""
+    links = []
+    for index, link in enumerate(stored if isinstance(stored, list) else []):
+        if not isinstance(link, dict) or not link.get("platform") or not link.get("url"):
+            continue
+        links.append(
+            StaffMemberSocialLink(
+                id=str(link.get("id") or index),
+                platform=str(link["platform"]),
+                url=str(link["url"]),
+                label=str(link["label"]) if link.get("label") else None,
+            )
+        )
+    return links
 
 
 @router.get("/history", response_model=ClubChangesResponse, dependencies=[Depends(Require(Perm.CLUB_STRUCTURE_VIEW))])
