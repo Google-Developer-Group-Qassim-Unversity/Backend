@@ -18,7 +18,6 @@ from app.DB.schema import (
     EventsContentLinkKind,
     EventsLocationType,
     EventsStatus,
-    Forms,
     FormType,
     MembersLogs,
     PushKind,
@@ -100,267 +99,139 @@ def attended(session, event: Events, *members, day: datetime | None = None):
 
 # ---------------------------------------------------------------- event_updated
 
+TWO_MINUTES = timedelta(minutes=2)
 
-def test_a_new_time_tells_the_accepted_registrants(db_session, push_on, frozen):
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+
+def test_a_change_tells_the_accepted_registrants_two_minutes_later(db_session, push_on, apns_mock, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
     accepted, pending, cancelled = app_user(db_session), app_user(db_session), app_user(db_session)
     app_user(db_session)  # not registered
     register(db_session, event, accepted)
     register(db_session, event, pending, accepted=False)
     register(db_session, event, cancelled).cancelled_at = datetime(2026, 7, 10)
 
-    assert (
-        change(
-            db_session, event, start_datetime=datetime(2026, 7, 29, 17, 30), end_datetime=datetime(2026, 7, 29, 19, 30)
-        )
-        == 1
-    )
-
+    moved = {"start_datetime": datetime(2026, 7, 29, 17, 30), "end_datetime": datetime(2026, 7, 29, 19, 30)}
+    assert change(db_session, event, **moved) == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert row.member_id == accepted.id
     recorded = db_session.scalars(select(EventHistory).where(EventHistory.event_id == event.id)).one()
-    assert row.dedupe_key == f"event_updated:{event.id}:{accepted.id}:{recorded.id}"
-    assert row.payload["en"] == {"title": f"Updated: {NAME}", "body": "New time: Jul 29 · 5:30 PM"}
-    assert row.payload["ar"] == {"title": f"تحديث: {NAME}", "body": "الموعد الجديد: 29 يوليو · 5:30 م"}
-    assert row.payload["url"] == f"gdgq://events/{event.id}"
-    assert row.not_before == frozen.now
+    assert (row.member_id, row.dedupe_key) == (accepted.id, f"event_updated:{event.id}:{accepted.id}:{recorded.id}")
+    assert row.not_before == frozen.now + TWO_MINUTES
     assert row.expires_at == datetime(2026, 7, 29, 16, 30)  # the end, 19:30 Riyadh
+    assert row.payload["url"] == f"gdgq://events/{event.id}"
+    db_session.commit()
+
+    assert deliver().sent == 0  # not before the debounce
+    frozen.advance(minutes=2)
+    assert deliver().sent == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    # The event as it is, not what changed.
+    assert row.payload["en"] == {"title": f"Updated: {NAME}", "body": "Jul 29 · 5:30 PM · \u2068Hall 60\u2069"}
+    assert row.payload["ar"] == {"title": f"تحديث: {NAME}", "body": "29 يوليو · 5:30 م · \u2068Hall 60\u2069"}
 
 
-def test_the_same_change_twice_is_one_push_and_another_change_is_another(db_session, push_on, frozen):
+def test_an_online_event_says_online(db_session, push_on, frozen):
+    event = make_event(
+        db_session, start=datetime(2026, 7, 28, 16, 0), location_type=EventsLocationType.ONLINE, location="Google Meet"
+    )
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, meeting_url="https://meet.google.com/abc-defg-hij") == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.payload["en"]["body"] == "Jul 28 · 4:00 PM · Online"
+    assert row.payload["ar"]["body"] == "28 يوليو · 4:00 م · عن بُعد"
+
+
+def test_the_same_change_run_twice_is_one_row(db_session, push_on, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     register(db_session, event, app_user(db_session))
     before = cases.event_state(event)
     event.location = "Hall 61"
     recorded = event_history.record(db_session, event, EventHistoryAction.EDITED, None, {"location": ["", ""]})
     assert cases.event_changed(db_session, event, before, recorded.id) == 1
-    assert cases.event_changed(db_session, event, before, recorded.id) == 0  # the same change run twice
+    assert cases.event_changed(db_session, event, before, recorded.id) == 0
     assert cases.event_changed(db_session, event, before, None) == 0  # a route that recorded no change
-    [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert row.status == PushStatus.PENDING
-    assert row.dedupe_key == f"event_updated:{event.id}:{row.member_id}:{recorded.id}"
+    assert len(rows(db_session, PushKind.EVENT_UPDATED)) == 1
 
 
-def test_a_double_submitted_status_change_pushes_once(admin_client, db_session, outbound, push_on, frozen, kicks):
-    """The status route locks the event: the second request finds it closed already and records nothing."""
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
-    register(db_session, event, app_user(db_session))
-    db_session.commit()
-    for _ in range(2):
-        assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "closed"}))
-    assert len(rows(db_session, PushKind.EVENT_CANCELLED)) == 1
-
-
-def test_the_status_route_locks_the_event_only_after_google_answers(
-    admin_client, db_session, outbound, push_on, frozen, kicks, monkeypatch
-):
-    from app.DB import events as events_queries
-    from app.routers import events as events_router
-
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), form_type=FormType.GOOGLE)
-    form = db_session.scalars(select(Forms).where(Forms.event_id == event.id)).one()
-    form.google_form_id = "google-form-1"
-    db_session.commit()
-    calls: list[str] = []
-    lock = events_queries.lock_event
-    monkeypatch.setattr(events_router, "set_form_publish_state", lambda *a, **k: calls.append("google"))
-    monkeypatch.setattr(events_queries, "lock_event", lambda *a: calls.append("lock") or lock(*a))
-    assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "closed"}))
-    assert calls == ["google", "lock"]
-
-
-def test_the_edit_form_takes_no_event_lock(admin_client, db_session, seed_refs, outbound, push_on, kicks, monkeypatch):
-    """Its log writes would take locks in the opposite order to attendance's (deadlock), so it does not lock."""
-    from app.DB import events as events_queries
-
-    created = admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs))
-    assert_2xx(created)
-    event_id = created.json()["id"]
-    monkeypatch.setattr(events_queries, "lock_event", lambda *a: pytest.fail("the edit form locked the event"))
-    actions = admin_client.get(f"/events/{event_id}/details").json()["actions"]
-    assert_2xx(admin_client.put(f"/events/{event_id}", json={"event": event_body(name="Renamed"), "actions": actions}))
-
-
-def test_waiting_updates_are_found_with_one_locking_read(db_session, push_on, frozen):
-    """A plain read would answer from the transaction's first snapshot and miss what a concurrent edit queued."""
-    from sqlalchemy import event as sa_event
-
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
-    member = app_user(db_session)
-    register(db_session, event, member)
-    assert change(db_session, event, location="Hall 61") == 1
-    statements: list[str] = []
-
-    def record(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    engine = db_session.get_bind().engine
-    sa_event.listen(engine, "before_cursor_execute", record)
-    try:
-        found = cases._waiting(db_session, PushKind.EVENT_UPDATED, event.id, [member.id], unsent_only=True)
-    finally:
-        sa_event.remove(engine, "before_cursor_execute", record)
-    assert [row.member_id for row in found[member.id]] == [member.id]
-    reads = [s for s in statements if "push_notifications" in s]
-    assert len(reads) == 1 and "FOR UPDATE SKIP LOCKED" in reads[0]
-
-
-def test_a_double_submitted_edit_whose_twin_went_out_is_skipped(db_session, push_on, apns_mock, frozen):
+def test_two_quick_edits_end_as_one_push_saying_the_newest(db_session, push_on, apns_mock, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
     register(db_session, event, app_user(db_session))
-    stale = cases.event_state(event)
-    assert change(db_session, event, location="Hall 61") == 1
+    assert change(db_session, event, location="Hal 61") == 1
+    frozen.advance(seconds=30)
+    assert change(db_session, event, location="Hall 61") == 1  # the typo fixed
     db_session.commit()
-    assert deliver().sent == 1
-    # The second request read the event before the first committed, and saves the same change.
-    recorded = event_history.record(db_session, event, EventHistoryAction.EDITED, None, {"location": []})
-    assert cases.event_changed(db_session, event, stale, recorded.id) == 1
-    db_session.commit()
+
+    frozen.advance(minutes=1, seconds=40)  # the first is due, the second not yet
+    deliver()
+    frozen.advance(minutes=1)
     deliver()
     first, second = rows(db_session, PushKind.EVENT_UPDATED)
-    assert first.status == PushStatus.SENT
-    assert (second.status, second.last_error) == (PushStatus.SKIPPED, "already_told")
+    assert (first.status, first.last_error) == (PushStatus.SKIPPED, "superseded")
+    assert second.status == PushStatus.SENT
+    assert second.payload["en"]["body"] == "Jul 28 · 4:00 PM · \u2068Hall 61\u2069"
     assert len(apns_mock.requests) == 1
 
 
-def test_a_waiting_update_is_said_as_the_event_is_at_delivery(db_session, push_on, apns_mock, frozen):
-    frozen.set(ELEVEN_PM)
+def test_a_double_submit_pushes_once(db_session, push_on, apns_mock, frozen):
+    """Two requests that read the event before either saved: two history rows, two rows, one push."""
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    register(db_session, event, app_user(db_session))
+    stale = cases.event_state(event)
+    event.start_datetime = datetime(2026, 7, 28, 17, 0)
+    db_session.flush()
+    for _ in range(2):
+        recorded = event_history.record(db_session, event, EventHistoryAction.EDITED, None, {"start": []})
+        assert cases.event_changed(db_session, event, stale, recorded.id) == 1
+    db_session.commit()
+    frozen.advance(minutes=2)
+    assert deliver().sent == 1
+    assert sorted(row.status.value for row in rows(db_session, PushKind.EVENT_UPDATED)) == ["sent", "skipped"]
+    assert len(apns_mock.requests) == 1
+
+
+def test_an_older_update_retried_after_a_newer_one_went_out_is_skipped(db_session, push_on, apns_mock, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, location="Hall 61") == 1
+    frozen.advance(minutes=3)
+    assert change(db_session, event, location="Hall 62") == 1
+    older, newer = rows(db_session, PushKind.EVENT_UPDATED)
+    newer.status, newer.sent_at = PushStatus.SENT, frozen.now
+    db_session.commit()
+    deliver()
+    assert (rows(db_session, PushKind.EVENT_UPDATED)[0].last_error) == "superseded"
+    assert apns_mock.requests == []
+
+
+def test_the_text_is_the_event_as_it_is_at_delivery(db_session, push_on, apns_mock, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, location="Hall 61") == 1
     event.location = "Hall 63"  # changed again by something that queues no push
     db_session.commit()
-    frozen.set(EIGHT_AM_TOMORROW)
+    frozen.advance(minutes=2)
     assert deliver().sent == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert row.payload["en"]["body"] == "New place: \u2068Hall 63\u2069"
-    assert apns_mock.payloads()[0]["aps"]["alert"]["body"] == "المكان الجديد: \u2068Hall 63\u2069"  # an Arabic phone
+    assert row.payload["en"]["body"] == "Jul 28 · 4:00 PM · \u2068Hall 63\u2069"
+    assert apns_mock.payloads()[0]["aps"]["alert"]["body"] == "28 يوليو · 4:00 م · \u2068Hall 63\u2069"
 
 
-def test_a_waiting_update_whose_change_was_undone_is_skipped(db_session, push_on, apns_mock, frozen):
-    frozen.set(ELEVEN_PM)
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
-    register(db_session, event, app_user(db_session))
-    assert change(db_session, event, location="Hall 61") == 1
-    event.location = "Hall 60"
-    db_session.commit()
-    frozen.set(EIGHT_AM_TOMORROW)
-    deliver()
-    [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert (row.status, row.last_error) == (PushStatus.SKIPPED, "unchanged")
-    assert apns_mock.requests == []
-
-
-def test_folding_uses_the_event_as_it_is_not_the_waiting_rows_values(db_session, push_on, frozen):
-    frozen.set(ELEVEN_PM)
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
-    register(db_session, event, app_user(db_session))
-    assert change(db_session, event, location="Hall 61") == 1
-    event.location = "Hall 63"  # the waiting row still says Hall 61
-    db_session.flush()
-    assert change(db_session, event, start_datetime=datetime(2026, 7, 28, 17, 0)) == 1
-    _, merged = rows(db_session, PushKind.EVENT_UPDATED)
-    assert merged.payload["en"]["body"] == "New time: Jul 28 · 5:00 PM · New place: \u2068Hall 63\u2069"
-
-
-def test_folding_leaves_other_kinds_and_finished_rows_alone(db_session, push_on, frozen):
+def test_cancel_reregister_then_a_move_is_told(db_session, push_on, apns_mock, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     member = app_user(db_session)
-    register(db_session, event, member)
-    assert change(db_session, event, location="Hall 61") == 1
-    first = rows(db_session, PushKind.EVENT_UPDATED)[0]
-    first.status, first.sent_at = PushStatus.SENT, frozen.now
-    _queue(db_session, PushKind.EVENT_LIVE, member, f"event_live:{event.id}:x:{member.id}", event_id=event.id)
-    db_session.flush()
-    assert change(db_session, event, location="Hall 62") == 1
-    assert rows(db_session, PushKind.EVENT_UPDATED)[0].status == PushStatus.SENT
-    assert rows(db_session, PushKind.EVENT_LIVE)[0].status == PushStatus.PENDING
-
-
-def test_changing_back_to_an_earlier_value_is_told_again(db_session, push_on, apns_mock, frozen):
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
-    register(db_session, event, app_user(db_session))
-    for hour in (18, 16, 18):
-        frozen.advance(minutes=10)
-        assert change(db_session, event, start_datetime=datetime(2026, 7, 28, hour, 0)) == 1
-        db_session.commit()
-        assert deliver().sent == 1
-    sent = rows(db_session, PushKind.EVENT_UPDATED)
-    assert [row.payload["en"]["body"] for row in sent] == [
-        "New time: Jul 28 · 6:00 PM",
-        "New time: Jul 28 · 4:00 PM",
-        "New time: Jul 28 · 6:00 PM",
-    ]
-    assert len({row.dedupe_key for row in sent}) == 3
-
-
-def test_a_waiting_update_is_folded_into_the_next_one(db_session, push_on, apns_mock, frozen):
-    """23:00 the time and place move; 23:05 a typo in the place is fixed. 08:00: one push says both."""
-    frozen.set(ELEVEN_PM)
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
-    register(db_session, event, app_user(db_session))
-    moved = {"start_datetime": datetime(2026, 7, 29, 17, 0), "end_datetime": datetime(2026, 7, 29, 19, 0)}
-    assert change(db_session, event, **moved, location="Hal 61") == 1
-    frozen.advance(minutes=5)
-    assert change(db_session, event, location="Hall 61") == 1
-    db_session.commit()
-
-    first, second = rows(db_session, PushKind.EVENT_UPDATED)
-    assert (first.status, first.last_error) == (PushStatus.SKIPPED, "superseded")
-    assert second.payload["cause"]["from"] == {
-        "start_datetime": "2026-07-28T16:00:00",
-        "end_datetime": "2026-07-28T18:00:00",
-        "location": "Hall 60",
-    }
-    assert second.payload["en"]["body"] == "New time: Jul 29 · 5:00 PM · New place: \u2068Hall 61\u2069"
-    assert second.not_before == EIGHT_AM_TOMORROW
-
-    frozen.set(EIGHT_AM_TOMORROW)
-    assert deliver().sent == 1
-    assert rows(db_session, PushKind.EVENT_UPDATED)[1].status == PushStatus.SENT
-
-
-def test_a_waiting_update_undone_before_it_goes_sends_nothing(db_session, push_on, frozen):
-    frozen.set(ELEVEN_PM)
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
-    register(db_session, event, app_user(db_session))
-    assert change(db_session, event, location="Hall 61") == 1
-    frozen.advance(minutes=5)
-    assert change(db_session, event, location="Hall 60") == 0
-    [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert (row.status, row.last_error) == (PushStatus.SKIPPED, "superseded")
-
-
-def test_an_update_already_out_for_delivery_is_not_folded(db_session, push_on, frozen):
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
-    register(db_session, event, app_user(db_session))
-    assert change(db_session, event, location="Hall 61") == 1
-    claimed = rows(db_session, PushKind.EVENT_UPDATED)[0]
-    claimed.attempts, claimed.not_before = 1, frozen.now + timedelta(minutes=5)  # leased by a worker
-    db_session.flush()
-    frozen.advance(minutes=1)
+    submission = register(db_session, event, member)
     assert change(db_session, event, start_datetime=datetime(2026, 7, 28, 17, 0)) == 1
-    first, second = rows(db_session, PushKind.EVENT_UPDATED)
-    assert first.status == PushStatus.PENDING
-    assert second.payload["cause"]["changed"] == {"start_datetime": "2026-07-28T17:00:00"}
-
-
-def test_a_new_place_or_link_is_what_the_text_says(db_session, push_on, frozen):
-    event = make_event(
-        db_session, start=datetime(2026, 7, 28, 16, 0), location_type=EventsLocationType.ONLINE, location="Online"
-    )
-    register(db_session, event, app_user(db_session))
-    assert change(db_session, event, meeting_url="https://meet.google.com/abc-defg-hij") == 1
-    assert (
-        change(db_session, event, location_type=EventsLocationType.ON_SITE, location="Hall 60", meeting_url=None) == 1
-    )
-    link, place = rows(db_session, PushKind.EVENT_UPDATED)
-    # The link one had not gone out yet: the second says what is left of both (the link went again).
-    assert (link.status, link.last_error) == (PushStatus.SKIPPED, "superseded")
-    assert link.payload["en"]["body"] == "New link to join"
-    assert link.payload["ar"]["body"] == "رابط جديد للانضمام"
-    assert place.payload["en"]["body"] == "New place: \u2068Hall 60\u2069"
-    assert place.payload["ar"]["body"] == "المكان الجديد: \u2068Hall 60\u2069"
+    db_session.commit()
+    frozen.advance(minutes=2)
+    assert deliver().sent == 1
+    submission.cancelled_at = frozen.now  # the member cancels...
+    db_session.flush()
+    submission.cancelled_at, submission.is_accepted = None, 1  # ...registers again and is accepted
+    frozen.advance(minutes=10)
+    assert change(db_session, event, start_datetime=datetime(2026, 7, 28, 16, 0)) == 1
+    db_session.commit()
+    frozen.advance(minutes=2)
+    assert deliver().sent == 1
+    assert [row.status for row in rows(db_session, PushKind.EVENT_UPDATED)] == [PushStatus.SENT, PushStatus.SENT]
 
 
 def test_no_update_push_for_a_draft_a_finished_event_or_a_removed_link(db_session, push_on, frozen):
@@ -377,27 +248,26 @@ def test_no_update_push_for_a_draft_a_finished_event_or_a_removed_link(db_sessio
     assert rows(db_session) == []
 
 
-def test_an_update_at_night_waits_for_8am_and_a_later_change_replaces_it(db_session, push_on, apns_mock, frozen):
+def test_an_update_at_night_waits_for_8am(db_session, push_on, frozen):
     frozen.set(ELEVEN_PM)
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, location="Hall 61") == 1
     assert rows(db_session, PushKind.EVENT_UPDATED)[0].not_before == EIGHT_AM_TOMORROW
-    assert change(db_session, event, location="Hall 62") == 1
+
+
+def test_an_update_whose_event_closed_before_delivery_is_skipped(db_session, push_on, apns_mock, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, location="Hall 61") == 1
+    event.status = EventsStatus.DRAFT
     db_session.commit()
-
-    frozen.set(EIGHT_AM_TOMORROW)
+    frozen.advance(minutes=2)
     deliver()
-    first, second = rows(db_session, PushKind.EVENT_UPDATED)
-    assert (first.status, first.last_error) == (PushStatus.SKIPPED, "superseded")
-    assert second.status == PushStatus.SENT
-    assert second.payload["en"]["body"] == "New place: \u2068Hall 62\u2069"
-    assert len(apns_mock.requests) == 1
+    assert rows(db_session, PushKind.EVENT_UPDATED)[0].last_error == "event_closed"
 
 
-def test_the_meeting_url_route_pushes_and_delivers(
-    admin_client, db_session, outbound, push_on, apns_mock, frozen, kicks
-):
+def test_the_meeting_url_route_pushes(admin_client, db_session, outbound, push_on, apns_mock, frozen, kicks):
     event = make_event(
         db_session, start=datetime(2026, 7, 28, 16, 0), location_type=EventsLocationType.ONLINE, location="Online"
     )
@@ -407,10 +277,10 @@ def test_the_meeting_url_route_pushes_and_delivers(
     response = admin_client.put(f"/events/{event.id}/meeting-url", json={"meeting_url": "https://meet.google.com/abc"})
     assert_2xx(response)
     assert kicks == [1]
+    frozen.advance(minutes=2)
     assert deliver().sent == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert row.member_id == member.id
-    assert row.status == PushStatus.SENT and len(apns_mock.requests) == 1
+    assert row.member_id == member.id and len(apns_mock.requests) == 1
 
 
 def test_the_edit_form_pushes_a_new_time(admin_client, db_session, seed_refs, outbound, push_on, frozen, kicks):
@@ -436,7 +306,7 @@ def test_the_edit_form_pushes_a_new_time(admin_client, db_session, seed_refs, ou
 
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
     assert row.member_id == member.id
-    assert row.payload["en"]["body"] == "New time: Jul 28 · 5:00 PM"
+    assert row.payload["en"]["body"] == "Jul 28 · 5:00 PM · \u2068Hall 60\u2069"
     assert kicks == [1]
 
 
@@ -455,7 +325,9 @@ def test_closing_an_event_before_it_starts_tells_its_registrants_even_at_night(
 
     assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "closed"}))
     assert kicks == [1]
-    assert rows(db_session, PushKind.EVENT_CANCELLED)[0].not_before == ELEVEN_PM  # not held until 08:00
+    # Not held until 08:00, only debounced.
+    assert rows(db_session, PushKind.EVENT_CANCELLED)[0].not_before == ELEVEN_PM + TWO_MINUTES
+    frozen.advance(minutes=2)
     deliver()
 
     [row] = rows(db_session, PushKind.EVENT_CANCELLED)
@@ -467,6 +339,16 @@ def test_closing_an_event_before_it_starts_tells_its_registrants_even_at_night(
     assert rows(db_session, PushKind.EVENT_UPDATED) == []
 
 
+def test_a_double_submitted_status_change_pushes_once(admin_client, db_session, outbound, push_on, frozen, kicks):
+    """The second request finds the event closed already: no change, no history, no push."""
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    register(db_session, event, app_user(db_session))
+    db_session.commit()
+    for _ in range(2):
+        assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "closed"}))
+    assert len(rows(db_session, PushKind.EVENT_CANCELLED)) == 1
+
+
 @pytest.mark.parametrize(
     "before,after", [(EventsStatus.OPEN, EventsStatus.DRAFT), (EventsStatus.ACTIVE, EventsStatus.CLOSED)]
 )
@@ -474,7 +356,7 @@ def test_back_to_draft_or_closing_an_active_event_is_a_cancellation(db_session, 
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), status=before)
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, status=after) == 1
-    assert change(db_session, event, status=after) == 0  # one per member, ever
+    assert change(db_session, event, status=after) == 0  # not public any more: nothing to cancel
 
 
 def test_closing_a_started_or_never_public_event_is_not_a_cancellation(db_session, push_on, frozen):
@@ -486,44 +368,27 @@ def test_closing_a_started_or_never_public_event_is_not_a_cancellation(db_sessio
     assert rows(db_session) == []
 
 
-def test_a_cancellation_undone_before_delivery_is_skipped(db_session, push_on, apns_mock, frozen):
+def test_a_cancel_then_reopen_within_two_minutes_sends_nothing(db_session, push_on, apns_mock, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, status=EventsStatus.CLOSED) == 1
-    event.status = EventsStatus.OPEN
+    frozen.advance(seconds=40)
+    assert change(db_session, event, status=EventsStatus.OPEN) == 0  # reopening queues nothing
     db_session.commit()
+    frozen.advance(minutes=2)
     deliver()
     [row] = rows(db_session, PushKind.EVENT_CANCELLED)
     assert (row.status, row.last_error) == (PushStatus.SKIPPED, "event_reopened")
     assert apns_mock.requests == []
 
-    # A real cancellation later still goes out: each cancellation has its own key.
-    frozen.advance(hours=2)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
-    db_session.commit()
-    assert deliver().sent == 1
-    assert [row.status for row in rows(db_session, PushKind.EVENT_CANCELLED)] == [PushStatus.SKIPPED, PushStatus.SENT]
 
-
-def test_a_cancellation_run_again_keeps_its_row(db_session, push_on, frozen):
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
-    register(db_session, event, app_user(db_session))
-    before = cases.event_state(event)
-    event.status = EventsStatus.CLOSED
-    recorded = event_history.record(db_session, event, EventHistoryAction.STATUS_CHANGED, None, {"status": []})
-    assert cases.event_changed(db_session, event, before, recorded.id) == 1
-    assert cases.event_changed(db_session, event, before, recorded.id) == 0
-    [row] = rows(db_session, PushKind.EVENT_CANCELLED)
-    assert row.status == PushStatus.PENDING
-
-
-def test_a_cancellation_waiting_on_a_retry_is_superseded_by_the_next_one(db_session, push_on, apns_mock, frozen):
-    """Cancel (Apple answers 5xx, the row waits to retry), reopen, cancel again: one push, not two."""
+def test_cancel_reopen_cancel_is_one_push(db_session, push_on, apns_mock, frozen):
+    """The first cancellation waits to retry (Apple answered 5xx); the second, newer one is the one that goes."""
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, status=EventsStatus.CLOSED) == 1
     first = rows(db_session, PushKind.EVENT_CANCELLED)[0]
-    first.attempts, first.not_before = 1, frozen.now + timedelta(minutes=2)
+    first.attempts, first.not_before = 1, frozen.now + timedelta(minutes=4)
     frozen.advance(seconds=30)
     change(db_session, event, status=EventsStatus.OPEN)
     frozen.advance(seconds=30)
@@ -534,20 +399,6 @@ def test_a_cancellation_waiting_on_a_retry_is_superseded_by_the_next_one(db_sess
     first, second = rows(db_session, PushKind.EVENT_CANCELLED)
     assert (first.status, first.last_error) == (PushStatus.SKIPPED, "superseded")
     assert second.status == PushStatus.SENT
-
-
-def test_an_older_cancellation_retried_after_a_newer_one_went_out_is_skipped(db_session, push_on, apns_mock, frozen):
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), status=EventsStatus.CLOSED)
-    member = app_user(db_session)
-    cause = {"submission_id": register(db_session, event, member).id, "status": "closed"}
-    for key in ("older", "newer"):
-        _queue(db_session, PushKind.EVENT_CANCELLED, member, f"event_cancelled:{key}", cause=cause, event_id=event.id)
-    older, newer = rows(db_session, PushKind.EVENT_CANCELLED)
-    newer.status, newer.sent_at = PushStatus.SENT, frozen.now
-    db_session.commit()
-    deliver()
-    assert (rows(db_session, PushKind.EVENT_CANCELLED)[0].last_error) == "superseded"
-    assert apns_mock.requests == []
 
 
 # ---------------------------------------------------------------- event_live
@@ -1053,7 +904,8 @@ def test_three_capped_pushes_a_day_but_live_and_cancelled_always_go(db_session, 
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), status=EventsStatus.CLOSED)
     submission = register(db_session, event, member)
     cause = {"submission_id": submission.id, "status": "closed"}
-    _queue(db_session, PushKind.EVENT_CANCELLED, member, f"event_cancelled:{event.id}:{member.id}", cause=cause)
+    key = f"event_cancelled:{event.id}:{member.id}"
+    _queue(db_session, PushKind.EVENT_CANCELLED, member, key, cause=cause, event_id=event.id)
     db_session.commit()
 
     deliver()

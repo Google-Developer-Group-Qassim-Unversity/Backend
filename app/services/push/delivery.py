@@ -125,11 +125,13 @@ def claim(now: datetime, limit: int = BATCH_SIZE) -> tuple[list[Job], int]:
         if not rows:
             session.rollback()
             return [], 0
-        # The daily cap is counted under a lock on each member's row, so two workers claiming at the same
-        # moment cannot both pass it. A member another worker holds: their capped rows wait for the next round.
-        capped = {row.member_id for row in rows if row.kind in cases.CAPPED}
-        held = lock_members(session, capped) if capped else set()
-        rows = [row for row in rows if row.kind not in cases.CAPPED or row.member_id in held]
+        # The daily cap, and which of a member's event_updated / event_cancelled rows is the newest, are
+        # decided under a lock on each member's row, so two workers claiming at once cannot both pass.
+        # A member another worker holds: those rows wait for the next round.
+        guarded = cases.CAPPED | cases.NEWEST_ONLY
+        members = {row.member_id for row in rows if row.kind in guarded}
+        held = lock_members(session, members) if members else set()
+        rows = [row for row in rows if row.kind not in guarded or row.member_id in held]
         if not rows:
             session.rollback()
             return [], 0

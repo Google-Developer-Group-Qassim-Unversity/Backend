@@ -14,7 +14,7 @@ workers, a retried request, the sweep - adds nothing the second time.
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -78,6 +78,7 @@ def enqueue(
     quiet_hours: bool = True,
     now: datetime | None = None,
     reachable_ids: set[int] | None = None,
+    delay: timedelta = timedelta(0),
 ) -> int:
     """Write the reachable ones; returns how many rows were added (keys already there add nothing)."""
     if not config.push_enabled:
@@ -94,7 +95,8 @@ def enqueue(
     fresh = [push for key, push in wanted.items() if key not in existing]
     if not fresh:
         return 0
-    not_before = clock.after_quiet_hours(now) if quiet_hours else now
+    # ``delay`` holds the row back first (a debounce); quiet hours then apply to that moment.
+    not_before = clock.after_quiet_hours(now + delay) if quiet_hours else now + delay
     rows = []
     for push in fresh:
         payload: dict[str, Any] = dict(text(push) if callable(text) else text)

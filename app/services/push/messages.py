@@ -134,33 +134,14 @@ def broadcast(title_ar: str, body_ar: str, title_en: str | None, body_en: str | 
 # ---------------------------------------------------------------- app 1.0.3 (app/services/push/cases.py)
 
 
-def event_updated(
-    name: str | None,
-    *,
-    starts: datetime | None = None,
-    ends: datetime | None = None,
-    location: str | None = None,
-    new_link: bool = False,
-) -> Text:
-    """What changed, each part only when it did: the new start (or the new end alone), the new place, a new link."""
-    ar_parts: list[str] = []
-    en_parts: list[str] = []
-    if starts is not None:
-        ar_parts.append(f"الموعد الجديد: {date_time_text(starts, 'ar')}")
-        en_parts.append(f"New time: {date_time_text(starts, 'en')}")
-    elif ends is not None:
-        ar_parts.append(f"ينتهي الآن {date_time_text(ends, 'ar')}")
-        en_parts.append(f"Now ends {date_time_text(ends, 'en')}")
-    if location is not None and (place := isolate(place_label(location))):
-        ar_parts.append(f"المكان الجديد: {place}")
-        en_parts.append(f"New place: {place}")
-    if new_link:
-        ar_parts.append("رابط جديد للانضمام")
-        en_parts.append("New link to join")
+def event_updated(name: str | None, starts: datetime, location: str | None, *, online: bool) -> Text:
+    """The event as it is now (its time and place), not what changed: an older push is corrected by a newer one."""
     title = event_name(name)
+    ar_place = "عن بُعد" if online else isolate(place_label(location))
+    en_place = "Online" if online else isolate(place_label(location))
     return {
-        "ar": {"title": f"تحديث: {title}", "body": _join(*ar_parts) or "تغيّرت تفاصيل الفعالية"},
-        "en": {"title": f"Updated: {title}", "body": _join(*en_parts) or "The event's details changed"},
+        "ar": {"title": f"تحديث: {title}", "body": _join(date_time_text(starts, "ar"), ar_place)},
+        "en": {"title": f"Updated: {title}", "body": _join(date_time_text(starts, "en"), en_place)},
     }
 
 

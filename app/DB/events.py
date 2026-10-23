@@ -177,23 +177,6 @@ def get_event_by_id(session: Session, event_id: int):
     return event
 
 
-def lock_event(session: Session, event_id: int) -> Events:
-    """The event row, locked until the transaction ends: a second status or link change waits for the first.
-
-    A locking read sees the latest committed row, so a double submit finds the
-    first one's change already made. ``populate_existing`` refreshes an object
-    an earlier read already loaded. Used by ``PUT /events/{id}/status`` (after
-    its Google Forms call) and ``/meeting-url``; not by the edit form, whose log
-    writes would then take their locks in the opposite order to attendance's.
-    """
-    event = session.scalars(
-        select(Events).where(Events.id == event_id).with_for_update().execution_options(populate_existing=True)
-    ).first()
-    if not event:
-        raise EventNotFound(event_id)
-    return event
-
-
 # ---------- event content links ----------
 
 

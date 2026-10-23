@@ -77,8 +77,8 @@ app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
 | `points` | staff record attendance (card scan, manual, import) or custom points | the member | `points` | quiet hours; 3 days. Not the member's own QR check-in. A deduction sends nothing |
 | `new_event` | an online or on-site event that became open in the last 48 hours and has not started | members with club news on | `news` | quiet hours; at most 2 a member a Riyadh day; expires at the start |
 | `broadcast` | `POST /notifications/broadcast` | the audience | `news` or `remind` | quiet hours; 2 days |
-| `event_updated` | an open or active event that has not ended gets a new start, end, place (`location`, `location_type`) or join link (`PUT /events/{id}`, `…/status`, `…/meeting-url`). Only the link removed, or other fields: nothing | accepted, not cancelled registrations | `remind` | quiet hours; capped; expires at the event's end |
-| `event_cancelled` | an `open` or `active` event that has not started is set to `closed` or back to `draft` (same routes) | accepted, not cancelled registrations | `remind` | **not** held for quiet hours, not capped; expires at the planned start |
+| `event_updated` | an open or active event that has not ended gets a new start, end, place (`location`, `location_type`) or join link (`PUT /events/{id}`, `…/status`, `…/meeting-url`). Only the link removed, or other fields: nothing. Says the event as it is at delivery ("Updated: … · Jul 28 · 4:00 PM · Hall 60", or Online), not what changed | accepted, not cancelled registrations | `remind` | 2 minutes' debounce, then quiet hours; capped; newest only; expires at the event's end |
+| `event_cancelled` | an `open` or `active` event that has not started is set to `closed` or back to `draft` (same routes) | accepted, not cancelled registrations | `remind` | 2 minutes' debounce, **not** held for quiet hours, not capped; newest only; expires at the planned start |
 | `event_live` | an online day of an open or active event started in the last 15 minutes (sweep): every day of an online event, and the online days of a pipeline event that mixes on-site and online days (it is published on-site with the Meet link). Those come from what Logistics confirmed, the event's own source, counted by day number from the confirmed start, and go only while the event still has its Meet link (checked again at delivery: `no_link`). Saving the edit form clears the link of an event that is not online, so after an edit a mixed event sends no live push | accepted, not cancelled registrations not checked in that day | `remind` | **not** held for quiet hours, not capped; expires at that day's end |
 | `registration_closing` | 24 hours before an `open` online or on-site event with a `registration` or `google` form starts, if it was already open then; sent within 6 hours of that mark or not at all (sweep) | members with club news on and no submission on the event (a cancelled or partial one counts as one) | `news` | quiet hours; capped; expires at the start |
 | `certificate` | each certificate e-mail sent for an event (`POST /emails/{event_id}`, and `POST /emails/manual-certificate` for a member of an event) | that member | `points` | quiet hours; capped; 7 days |
@@ -98,30 +98,17 @@ the same moment cannot both pass it: a member another claim holds keeps their
 capped rows for the next round. `event_live` and `event_cancelled` are
 time-critical and always go. The 1.0.2 kinds keep their own rules.
 
-**`event_updated` says everything not yet told.** A registrant's earlier
-`event_updated` for the same event that has not gone out yet (held for quiet
-hours, never handed to Apple) is folded into the new one and `skipped` as
-`superseded`. What the registrant last heard of each field is the oldest
-`from` among them; the push says each field that differs from it, at its value
-now (all back as they were: no push). Delivery says it again from the event as
-it is then, and skips it as `unchanged` when nothing differs any more. The
-waiting rows are found with one locking read (`FOR UPDATE SKIP LOCKED`): it
-sees what a concurrent edit committed, never waits (so no deadlock with
-delivery), and leaves a row delivery holds to go on its own.
-
-**`event_cancelled` once per cancellation.** A cancellation supersedes the
-registrant's earlier one still waiting (a retry after a 5xx, say), and delivery
-skips an older one when a newer one already went out (`superseded`).
-
-**Double submits.** `PUT /events/{id}/status` (after its Google Forms call, so
-nothing waits on Google) and `/meeting-url` lock the event row, so a second
-request finds the change made, records no history and queues nothing. The
-edit form (`PUT /events/{id}`) does not lock: its log writes would take locks
-in the opposite order to attendance's. A double-submitted edit records its
-history twice, as it always has (it can also write `departments_logs` twice;
-that predates the app and is not handled here); its second push merges the
-first while that one waits, or is skipped at delivery as `already_told` when
-the first went out already.
+**`event_updated` and `event_cancelled`: debounced, newest only, said as it is.**
+Each change writes one row per registrant, keyed by the `event_history` row the
+route recorded for it and held back 2 minutes. At delivery (under the member-row
+lock the claim already takes) only a registrant's newest row of that kind for
+the event goes; an older one is `skipped` as `superseded` when a newer one is
+waiting or went out. The text is written at delivery from the event as it is
+then: its time and place (or that it will not take place), never a diff, so a
+member who got an older push still ends with the truth. So quick edits, a
+double submit, or a cancel and reopen inside the 2 minutes end as one push
+(or none: a reopened event skips the cancellation, `event_reopened`). The
+routes take no extra locks for this.
 
 **One push per `dedupe_key`**, ever: `reminder:{event}:{Riyadh date}:{member}`,
 `accepted:{submission}:{submitted_at epoch}`, `points:{log}:{member}:{day}`,
@@ -138,12 +125,10 @@ run twice (four workers, retries, the sweep) and add nothing the second time.
 **Checked again at delivery**, since a row can wait until 08:00: the switch, a
 phone still registered, and the cause - the registration still accepted and the
 day still on the calendar, the attendance row still there, the event still
-open. For the 1.0.3 kinds: `event_updated` - still accepted, the event still
-open or active, something still different from what the registrant last heard
-(`unchanged`), not exactly what their last sent update said (`already_told`),
-and the text rewritten from the event as it is now;
-`event_cancelled` - still accepted, the event not reopened (`event_reopened`),
-no newer cancellation sent already (`superseded`); `event_live` - still accepted, the day
+open. For the 1.0.3 kinds: `event_updated` - the newest row (`superseded`),
+still accepted, the event still there and open or active (`event_closed`), the
+text rewritten from the event as it is now; `event_cancelled` - the newest row,
+still accepted, the event still closed or a draft (`event_reopened`); `event_live` - still accepted, the day
 still on the calendar, not checked in since (`checked_in`), a mixed event still
 with its link (`no_link`);
 `registration_closing` - the event still open at the same start, still no
