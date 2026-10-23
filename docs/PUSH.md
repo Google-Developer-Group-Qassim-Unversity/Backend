@@ -26,7 +26,7 @@ nothing is sent. Turning push on is only setting the variables
 | Table | One row is |
 |---|---|
 | `member_devices` | a phone: its APNs token (unique: a token belongs to one member at a time), `environment` (`production` for TestFlight / App Store builds, `development` for dev builds), app version and build, the app's language. At most 5 per member; unseen for 180 days → deleted by the sweep |
-| `member_notification_prefs` | a member's four switches `remind`, `accept`, `points`, `news`. No row = `1, 1, 1, 0` |
+| `member_notification_prefs` | a member's four switches `remind`, `accept`, `points`, `news`. No row = all four on (`news` too since revision `bfc96a1c1507`, which also switched `news` on in every row saved before it) |
 | `push_notifications` | the outbox and the sent log: one notification for one member, its text in both languages, `status` `pending` / `sent` / `skipped` / `failed`, `not_before`, `expires_at`. Deleted after 90 days |
 | `push_broadcasts` | an organizer's announcement (`POST /notifications/broadcast`) |
 
@@ -42,7 +42,7 @@ All under `/notifications`. Member routes take the member from the session
 |---|---|---|
 | `POST /devices` | member | `{token, platform:"ios", environment, app_version, app_build, locale}` → `{id, registered}`. Upsert by token; re-registering refreshes `last_seen_at` and moves a token signed in elsewhere. 422 for a token that is not 64-200 hex characters |
 | `DELETE /devices/{device_id}` | member | `{deleted}`. The `id` from `POST /devices`, never the token (paths are logged). Only the caller's own phone |
-| `GET /preferences` | member | `{remind, accept, points, news, updated_at}`; `updated_at: null` = never saved |
+| `GET /preferences` | member | `{remind, accept, points, news, updated_at}`; `updated_at: null` = never saved (then all four are `true`) |
 | `PATCH /preferences` | member | any of the four booleans → the full object |
 | `GET /me?lang=ar\|en&limit=1..100` | member | `[{id, kind, title, body, url, event_id, created_at}]`: what was sent in the last 60 days, newest first; `created_at` is when it was sent (UTC, `Z`) |
 | `POST /broadcast` | `notifications.broadcast` | `{title_ar, body_ar, title_en?, body_en?, url?, audience, dry_run?}` → `{broadcast_id, recipients}` |

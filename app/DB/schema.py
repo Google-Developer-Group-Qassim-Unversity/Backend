@@ -1732,7 +1732,7 @@ class MemberDevices(Base):
 
 
 class MemberNotificationPrefs(Base):
-    """A member's four notification switches (the app's Settings). No row = the defaults: on, on, on, off."""
+    """A member's four notification switches (the app's Settings). No row = the defaults: all four on."""
 
     __tablename__ = "member_notification_prefs"
     __table_args__ = (
@@ -1747,7 +1747,7 @@ class MemberNotificationPrefs(Base):
     remind: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
     accept: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
     points: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
-    news: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    news: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )

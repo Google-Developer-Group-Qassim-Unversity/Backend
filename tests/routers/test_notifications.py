@@ -5,10 +5,17 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.DB.schema import MemberDevices, PushBroadcasts, PushKind, PushNotifications, PushStatus
+from app.DB.schema import (
+    MemberDevices,
+    MemberNotificationPrefs,
+    PushBroadcasts,
+    PushKind,
+    PushNotifications,
+    PushStatus,
+)
 from app.services.push import outbox
 from app.services.push.outbox import Push
-from tests.push_support import add_device, make_event, make_token, register, set_prefs
+from tests.push_support import add_device, make_event, make_member, make_token, register, set_prefs
 
 TOKEN = "AB" * 32
 
@@ -132,25 +139,41 @@ def test_nobody_removes_someone_elses_phone(club, member, db_session):
 # ---------------------------------------------------------------- preferences
 
 
-def test_preferences_start_as_the_boards_defaults(club, member):
+def test_preferences_start_with_every_switch_on(club, member):
     assert club.client.get("/notifications/preferences").json() == {
         "remind": True,
         "accept": True,
         "points": True,
-        "news": False,
+        "news": True,
         "updated_at": None,
     }
 
 
 def test_patching_one_switch_keeps_the_others(club, member, frozen):
-    response = club.client.patch("/notifications/preferences", json={"news": True, "points": False})
+    response = club.client.patch("/notifications/preferences", json={"news": False, "points": False})
     assert response.status_code == 200
     body = response.json()
-    assert (body["remind"], body["accept"], body["points"], body["news"]) == (True, True, False, True)
+    assert (body["remind"], body["accept"], body["points"], body["news"]) == (True, True, False, False)
     assert body["updated_at"] == "2026-07-20T09:00:00Z"
     again = club.client.patch("/notifications/preferences", json={"points": True}).json()
-    assert (again["points"], again["news"]) == (True, True)
+    assert (again["points"], again["news"]) == (True, False)
     assert club.client.get("/notifications/preferences").json() == again
+
+
+def test_a_first_save_of_another_switch_leaves_club_news_on(club, member, db_session):
+    body = club.client.patch("/notifications/preferences", json={"remind": False}).json()
+    assert (body["remind"], body["news"]) == (False, True)
+    db_session.expire_all()
+    [row] = db_session.scalars(select(MemberNotificationPrefs).where(MemberNotificationPrefs.member_id == member.id))
+    assert (row.remind, row.accept, row.points, row.news) == (0, 1, 1, 1)
+
+
+def test_members_without_a_saved_row_hear_club_news(db_session, push_on):
+    never_saved, opted_out = make_member(db_session), make_member(db_session)
+    for person in (never_saved, opted_out):
+        add_device(db_session, person)
+    set_prefs(db_session, opted_out, news=False)
+    assert outbox.reachable(db_session, "news", {never_saved.id, opted_out.id}) == {never_saved.id}
 
 
 @pytest.mark.parametrize("body", [{"sound": True}, {"news": "maybe"}, {"member_id": 3, "news": True}])
