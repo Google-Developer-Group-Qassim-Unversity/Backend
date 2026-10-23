@@ -442,7 +442,8 @@ def test_a_multi_day_event_says_its_next_day_and_hours(db_session, push_on, froz
     assert row.payload["ar"]["body"] == "اليوم 2 من 3 · 20 يوليو · 4:00 م إلى 8:00 م · \u2068Hall 60\u2069"
 
 
-def test_an_edit_undone_inside_the_window_sends_nothing(db_session, push_on, apns_mock, frozen):
+def test_an_edit_undone_inside_the_window_still_says_the_event_as_it_is(db_session, push_on, apns_mock, frozen):
+    """No comparing with what was said before: the push is accurate, which is enough."""
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, location="Hall 61") == 1
@@ -450,10 +451,10 @@ def test_an_edit_undone_inside_the_window_sends_nothing(db_session, push_on, apn
     assert change(db_session, event, location="Hall 60") == 1
     db_session.commit()
     frozen.advance(minutes=2, seconds=30)  # both due
-    deliver()
+    assert deliver().sent == 1
     first, second = rows(db_session, PushKind.EVENT_UPDATED)
-    assert (first.last_error, second.last_error) == ("superseded", "reverted")
-    assert apns_mock.requests == []
+    assert first.last_error == "superseded"
+    assert second.payload["en"]["body"] == "Jul 28 · 4:00 PM – 6:00 PM · \u2068Hall 60\u2069"
 
 
 def test_an_update_for_an_event_that_ended_meanwhile_is_skipped(db_session, push_on, apns_mock, frozen):
@@ -505,9 +506,8 @@ def test_reopening_tells_the_registrants_who_were_told_it_was_cancelled(db_sessi
     moved = {"start_datetime": datetime(2026, 7, 29, 16, 0), "end_datetime": datetime(2026, 7, 29, 18, 0)}
     assert change(db_session, event, status=EventsStatus.OPEN, **moved) == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert row.member_id == told.id
+    assert (row.member_id, row.not_before) == (told.id, frozen.now)  # due at once, like the cancellation
     db_session.commit()
-    frozen.advance(minutes=2)
     assert deliver().sent == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
     assert row.payload["en"] == {
@@ -515,6 +515,80 @@ def test_reopening_tells_the_registrants_who_were_told_it_was_cancelled(db_sessi
         "body": "Jul 29 · 4:00 PM – 6:00 PM · \u2068Hall 60\u2069",
     }
     assert row.payload["ar"]["title"] == f"عادت: {NAME}"
+
+
+def _fill_the_cap(session, member, now):
+    for n in range(cases.DAILY_CAP):
+        session.add(
+            PushNotifications(
+                member_id=member.id,
+                kind=PushKind.WEEKLY_SUMMARY,
+                dedupe_key=f"weekly_summary:full-{n}:{member.id}",
+                payload={},
+                status=PushStatus.SENT,
+                not_before=now,
+                expires_at=now + timedelta(days=1),
+                created_at=now,
+                sent_at=now,
+            )
+        )
+    session.flush()
+
+
+def test_back_on_is_urgent_at_night_and_over_the_cap(db_session, push_on, apns_mock, frozen):
+    frozen.set(ELEVEN_PM)
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    member = app_user(db_session)
+    register(db_session, event, member)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    _fill_the_cap(db_session, member, frozen.now)
+    frozen.advance(minutes=5)
+    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.not_before == frozen.now  # not held until 08:00
+    db_session.commit()
+    assert deliver().sent == 1
+    assert rows(db_session, PushKind.EVENT_UPDATED)[0].status == PushStatus.SENT
+
+
+def test_an_edit_right_after_a_reopen_still_goes_as_back_on(db_session, push_on, apns_mock, frozen):
+    """The Back on row waits to retry (Apple answered 5xx) when an edit comes: the edit's row supersedes it,
+    and inherits "Back on" and its urgency (the cap is full)."""
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
+    member = app_user(db_session)
+    register(db_session, event, member)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    _fill_the_cap(db_session, member, frozen.now)
+    frozen.advance(minutes=5)
+    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    back_on = rows(db_session, PushKind.EVENT_UPDATED)[0]
+    back_on.attempts, back_on.not_before = 1, frozen.now + timedelta(minutes=2)
+    frozen.advance(seconds=20)
+    assert change(db_session, event, location="Hall 61") == 1
+    db_session.commit()
+    frozen.advance(minutes=2, seconds=10)  # both due; the edit's within 2 minutes of the retry
+    assert deliver().sent == 1
+    back_on, edit = rows(db_session, PushKind.EVENT_UPDATED)
+    assert back_on.last_error == "superseded"
+    assert edit.status == PushStatus.SENT
+    assert edit.payload["en"]["title"] == f"Back on: {NAME}"
+    assert edit.payload["en"]["body"] == "Jul 28 · 4:00 PM – 6:00 PM · \u2068Hall 61\u2069"
+
+
+def test_back_on_also_reaches_a_member_whose_cancellation_is_still_going_out(db_session, push_on, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    member = app_user(db_session)
+    register(db_session, event, member)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    cancellation = rows(db_session, PushKind.EVENT_CANCELLED)[0]
+    cancellation.attempts = 1  # claimed, not recorded yet
+    db_session.flush()
+    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    assert [row.member_id for row in rows(db_session, PushKind.EVENT_UPDATED)] == [member.id]
 
 
 def test_reopening_after_the_start_sends_nothing(db_session, push_on, frozen):

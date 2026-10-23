@@ -27,7 +27,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -153,7 +153,7 @@ def claim(now: datetime, limit: int = BATCH_SIZE) -> tuple[list[Job], int]:
                 continue
             if row.kind == PushKind.NEW_EVENT:
                 sent_today[row.member_id] = sent_today.get(row.member_id, 0) + 1
-            if row.kind in cases.CAPPED:
+            if cases.counts_toward_cap(row.kind, row.payload):
                 capped_today[row.member_id] = capped_today.get(row.member_id, 0) + 1
             row.not_before = now + LEASE
             row.attempts += 1
@@ -192,24 +192,34 @@ def lock_members(session: Session, member_ids: set[int]) -> set[int]:
 def _capped_today(session: Session, member_ids: set[int], batch: set[str], now: datetime) -> dict[int, int]:
     """Capped pushes each member was sent this Riyadh day, plus the ones out for delivery (claimed, not recorded).
 
-    The batch's own rows are left out: the loop counts them as it claims them.
+    The batch's own rows are left out: the loop counts them as it claims them. A
+    "Back on" is not capped and does not count (``cases.counts_toward_cap``).
     """
-    counts = _sent_today(session, member_ids, cases.CAPPED, now)
     if not member_ids:
-        return counts
-    out = session.execute(
-        select(PushNotifications.member_id, func.count())
-        .where(
+        return {}
+    start, end = clock.riyadh_day_bounds(now)
+    rows = session.execute(
+        select(PushNotifications.member_id, PushNotifications.kind, PushNotifications.payload).where(
             PushNotifications.member_id.in_(member_ids),
             PushNotifications.kind.in_(cases.CAPPED),
-            PushNotifications.status == PushStatus.PENDING,
-            PushNotifications.attempts > 0,
-            PushNotifications.id.notin_(batch),
+            or_(
+                and_(
+                    PushNotifications.status == PushStatus.SENT,
+                    PushNotifications.sent_at >= start,
+                    PushNotifications.sent_at < end,
+                ),
+                and_(
+                    PushNotifications.status == PushStatus.PENDING,
+                    PushNotifications.attempts > 0,
+                    PushNotifications.id.notin_(batch),
+                ),
+            ),
         )
-        .group_by(PushNotifications.member_id)
     ).all()
-    for member_id, count in out:
-        counts[member_id] = counts.get(member_id, 0) + int(count)
+    counts: dict[int, int] = {}
+    for member_id, kind, payload in rows:
+        if cases.counts_toward_cap(kind, payload):
+            counts[member_id] = counts.get(member_id, 0) + 1
     return counts
 
 
@@ -251,7 +261,8 @@ def _skip_reason(
         return gone
     if row.kind == PushKind.NEW_EVENT and sent_today.get(row.member_id, 0) >= NEW_EVENT_DAILY_CAP:
         return "daily_cap"
-    if row.kind in cases.CAPPED and capped_today.get(row.member_id, 0) >= cases.DAILY_CAP:
+    # After cause_gone: a row standing for a "Back on" was marked so there, and is not capped.
+    if cases.counts_toward_cap(row.kind, row.payload) and capped_today.get(row.member_id, 0) >= cases.DAILY_CAP:
         return "daily_cap"
     if not devices.get(row.member_id):
         return "no_device"

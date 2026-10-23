@@ -176,7 +176,8 @@ def event_changed(session: Session, event: Events, before: dict, change_id: str 
     - Public (open, active) and not started -> closed or draft: ``event_cancelled``,
       due at once.
     - Closed or draft -> public, not started: ``event_updated`` "Back on" to the
-      registrants who were sent its cancellation.
+      registrants who were sent (or are being sent) its cancellation; urgent like
+      a cancellation: due at once, not held for quiet hours, not capped.
     - Public, not ended, a watched field changed: ``event_updated``, held back
       ``DEBOUNCE``.
 
@@ -200,29 +201,32 @@ def event_changed(session: Session, event: Events, before: dict, change_id: str 
     if not was_public:
         if event.start_datetime <= local_now:
             return 0
-        return _updated(session, event, change_id, before, fields, now, back_on=True)
+        return _updated(session, event, change_id, fields, now, back_on=True)
     if not fields or (fields == ["meeting_url"] and not after["meeting_url"]):
         return 0  # nothing watched changed, or only the link was taken away
-    return _updated(session, event, change_id, before, fields, now, back_on=False)
+    return _updated(session, event, change_id, fields, now, back_on=False)
 
 
 def _updated(
-    session: Session, event: Events, change_id: str, before: dict, fields: list[str], now: datetime, *, back_on: bool
+    session: Session, event: Events, change_id: str, fields: list[str], now: datetime, *, back_on: bool
 ) -> int:
     registrations = _accepted(session, event.id)
     if back_on:
-        # Only the ones told it was cancelled need to hear it is on again.
+        # Only the ones told it was cancelled (or being told: claimed, not recorded yet) hear it is on again.
         told = set(
             session.scalars(
                 select(PushNotifications.member_id).where(
                     PushNotifications.kind == PushKind.EVENT_CANCELLED,
                     PushNotifications.event_id == event.id,
-                    PushNotifications.status == PushStatus.SENT,
+                    or_(
+                        PushNotifications.status == PushStatus.SENT,
+                        and_(PushNotifications.status == PushStatus.PENDING, PushNotifications.attempts > 0),
+                    ),
                 )
             ).all()
         )
         registrations = [(s, m) for s, m in registrations if m in told]
-    cause = {"before": before, "fields": fields, "back_on": back_on}
+    cause = {"fields": fields, "back_on": back_on}
     pushes = [
         Push(
             member_id=member_id,
@@ -241,8 +245,44 @@ def _updated(
         event_id=event.id,
         expires_at=clock.to_utc(event.end_datetime),
         now=now,
-        delay=DEBOUNCE,
+        # "Back on" is urgent, like the cancellation it corrects: due at once, at night too.
+        quiet_hours=not back_on,
+        delay=timedelta(0) if back_on else DEBOUNCE,
     )
+
+
+def is_back_on(row: PushNotifications) -> bool:
+    return row.kind == PushKind.EVENT_UPDATED and bool((row.payload.get("cause") or {}).get("back_on"))
+
+
+def counts_toward_cap(kind: PushKind, payload: dict | None) -> bool:
+    """The capped kinds, except "Back on" (urgent, like a cancellation)."""
+    if kind not in CAPPED:
+        return False
+    return not (kind == PushKind.EVENT_UPDATED and bool(((payload or {}).get("cause") or {}).get("back_on")))
+
+
+def _folds_back_on(session: Session, row: PushNotifications) -> bool:
+    """An older row this one stands for (superseded, or about to be, since the last one sent) was a "Back on"."""
+    same = (
+        PushNotifications.kind == row.kind,
+        PushNotifications.event_id == row.event_id,
+        PushNotifications.member_id == row.member_id,
+    )
+    last_sent = session.scalar(
+        select(func.max(PushNotifications.id)).where(*same, PushNotifications.status == PushStatus.SENT)
+    )
+    older = select(PushNotifications).where(
+        *same,
+        PushNotifications.id < row.id,
+        or_(
+            PushNotifications.status == PushStatus.PENDING,
+            and_(PushNotifications.status == PushStatus.SKIPPED, PushNotifications.last_error == "superseded"),
+        ),
+    )
+    if last_sent is not None:
+        older = older.where(PushNotifications.id > last_sent)
+    return any(is_back_on(other) for other in session.scalars(older).all())
 
 
 def _cancelled(session: Session, event: Events, change_id: str, planned: datetime, now: datetime) -> int:
@@ -361,36 +401,6 @@ def _superseded(session: Session, row: PushNotifications) -> bool:
         .limit(1)
     )
     return newer is not None
-
-
-def _reverted(session: Session, row: PushNotifications, event: Events) -> bool:
-    """The event is back exactly as it was before the oldest change this row (with the ones it superseded) is about.
-
-    Only rows since the last update sent to the member count: nothing is
-    compared with what an earlier push said.
-    """
-    same = (
-        PushNotifications.kind == row.kind,
-        PushNotifications.event_id == row.event_id,
-        PushNotifications.member_id == row.member_id,
-    )
-    last_sent = session.scalar(
-        select(func.max(PushNotifications.id)).where(*same, PushNotifications.status == PushStatus.SENT)
-    )
-    chain = select(PushNotifications).where(
-        *same,
-        PushNotifications.id <= row.id,
-        or_(
-            PushNotifications.status == PushStatus.PENDING,
-            and_(PushNotifications.status == PushStatus.SKIPPED, PushNotifications.last_error == "superseded"),
-        ),
-    )
-    if last_sent is not None:
-        chain = chain.where(PushNotifications.id > last_sent)
-    oldest = session.scalars(chain.order_by(PushNotifications.id).limit(1)).first()
-    before = ((oldest.payload.get("cause") or {}).get("before") if oldest is not None else None) or {}
-    now = event_state(event)
-    return bool(before) and all(now[field] == before.get(field) for field in now)
 
 
 @never_blocks
@@ -775,9 +785,9 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
         local_now = clock.to_riyadh(clock.now())
         if event.end_datetime <= local_now:
             return "event_over"
-        if not cause.get("back_on") and _reverted(session, row, event):
-            return "reverted"
-        row.payload = {**row.payload, **_update_text(event, cause, local_now)}
+        if not cause.get("back_on") and _folds_back_on(session, row):
+            cause = {**cause, "back_on": True}  # it stands for a "Back on": says so, and is urgent too
+        row.payload = {**row.payload, **_update_text(event, cause, local_now), "cause": cause}
         return None
     if row.kind == PushKind.EVENT_CANCELLED:
         if _superseded(session, row):
