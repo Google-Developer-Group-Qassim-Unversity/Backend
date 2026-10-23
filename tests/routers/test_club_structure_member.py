@@ -144,7 +144,7 @@ def test_one_switch_on_shows_only_its_part(club, staff, switch, shown):
         body["member"]["uni_level"],
         body["member"]["uni_college"],
     ]
-    assert sum(value is not None for value in visible) == (3 if switch == "showAcademic" else 1)
+    assert sum(value is not None for value in visible) == (4 if switch == "showAcademic" else 1)
 
 
 def test_switches_never_saved_read_as_the_public_cards_defaults(club, staff):
