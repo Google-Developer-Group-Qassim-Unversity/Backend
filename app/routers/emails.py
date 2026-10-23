@@ -181,6 +181,8 @@ def send_certificates(event_id: int, requesting_member: CurrentMember, backgroun
     background_tasks.add_task(
         send_certificates_by_event_id, event, attendance, date_str, requesting_member.id, event_id, job.id
     )
+    # After the job: background tasks run in order. It queues a push per certificate it sends.
+    background_tasks.add_task(push_delivery.kick)
 
     return {
         "message": f"Certificate generation initiated for event [{event.name}] with [{len(attendance)}] attendees.",
@@ -203,6 +205,7 @@ def send_manual_certificate(
         session, EmailJobsType.MANUAL_CERTIFICATE, requesting_member.id, total=len(request.members)
     )
     background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id, job.id)
+    background_tasks.add_task(push_delivery.kick)
 
     return {
         "message": f"Manual certificate generation initiated for [{len(request.members)}] recipient(s).",

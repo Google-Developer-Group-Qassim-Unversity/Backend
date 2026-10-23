@@ -34,6 +34,14 @@ SWITCH_FOR: dict[PushKind, str] = {
     PushKind.ACCEPTED: "accept",
     PushKind.POINTS: "points",
     PushKind.NEW_EVENT: "news",
+    PushKind.EVENT_UPDATED: "remind",
+    PushKind.EVENT_CANCELLED: "remind",
+    PushKind.EVENT_LIVE: "remind",
+    PushKind.REGISTRATION_CLOSING: "news",
+    PushKind.CERTIFICATE: "points",
+    PushKind.EVENT_CONTENT: "remind",
+    PushKind.WEEKLY_SUMMARY: "points",
+    PushKind.WELCOME: "news",
 }
 
 

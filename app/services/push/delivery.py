@@ -35,7 +35,7 @@ from app.config import config
 from app.DB import push as push_queries
 from app.DB.main import db_session
 from app.DB.schema import MemberNotificationPrefs, PushKind, PushNotifications, PushStatus
-from app.services.push import apns, clock, outbox, triggers
+from app.services.push import apns, cases, clock, outbox, triggers
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,16 @@ LEASE = timedelta(minutes=5)
 CONCURRENCY = 20
 MAX_ATTEMPTS = 5
 NEW_EVENT_DAILY_CAP = 2
-LOW_PRIORITY = {PushKind.NEW_EVENT, PushKind.BROADCAST}
+# apns-priority 5 (power-considerate) for what is not about to happen; 10 for the rest.
+LOW_PRIORITY = {
+    PushKind.NEW_EVENT,
+    PushKind.BROADCAST,
+    PushKind.REGISTRATION_CLOSING,
+    PushKind.CERTIFICATE,
+    PushKind.EVENT_CONTENT,
+    PushKind.WEEKLY_SUMMARY,
+    PushKind.WELCOME,
+}
 
 GONE_REASONS = {"BadDeviceToken", "DeviceTokenNotForTopic"}
 CONFIG_REASONS = {"InvalidProviderToken", "TopicDisallowed", "BadTopic", "BadCertificateEnvironment", "BadCertificate"}
@@ -119,11 +128,14 @@ def claim(now: datetime, limit: int = BATCH_SIZE) -> tuple[list[Job], int]:
         member_ids = {row.member_id for row in rows}
         devices = push_queries.devices_for(session, member_ids, outbox.device_environment())
         switches = _switches(session, member_ids)
-        sent_today = _new_events_sent_today(session, {r.member_id for r in rows if r.kind == PushKind.NEW_EVENT}, now)
+        sent_today = _sent_today(
+            session, {r.member_id for r in rows if r.kind == PushKind.NEW_EVENT}, {PushKind.NEW_EVENT}, now
+        )
+        capped_today = _sent_today(session, {r.member_id for r in rows if r.kind in cases.CAPPED}, cases.CAPPED, now)
         jobs: list[Job] = []
         skipped = 0
         for row in rows:
-            reason = _skip_reason(session, row, now, devices, switches, sent_today)
+            reason = _skip_reason(session, row, now, devices, switches, sent_today, capped_today)
             if reason is not None:
                 row.status = PushStatus.SKIPPED
                 row.last_error = reason
@@ -131,6 +143,8 @@ def claim(now: datetime, limit: int = BATCH_SIZE) -> tuple[list[Job], int]:
                 continue
             if row.kind == PushKind.NEW_EVENT:
                 sent_today[row.member_id] = sent_today.get(row.member_id, 0) + 1
+            if row.kind in cases.CAPPED:
+                capped_today[row.member_id] = capped_today.get(row.member_id, 0) + 1
             row.not_before = now + LEASE
             row.attempts += 1
             jobs.append(
@@ -156,7 +170,8 @@ def _switches(session: Session, member_ids: set[int]) -> dict[int, dict[str, boo
     return {prefs.member_id: push_queries.prefs_as_dict(prefs) for prefs in rows}
 
 
-def _new_events_sent_today(session: Session, member_ids: set[int], now: datetime) -> dict[int, int]:
+def _sent_today(session: Session, member_ids: set[int], kinds, now: datetime) -> dict[int, int]:
+    """How many pushes of ``kinds`` each member was sent this Riyadh day."""
     if not member_ids:
         return {}
     start, end = clock.riyadh_day_bounds(now)
@@ -164,7 +179,7 @@ def _new_events_sent_today(session: Session, member_ids: set[int], now: datetime
         select(PushNotifications.member_id, func.count())
         .where(
             PushNotifications.member_id.in_(member_ids),
-            PushNotifications.kind == PushKind.NEW_EVENT,
+            PushNotifications.kind.in_(kinds),
             PushNotifications.status == PushStatus.SENT,
             PushNotifications.sent_at >= start,
             PushNotifications.sent_at < end,
@@ -181,16 +196,19 @@ def _skip_reason(
     devices: dict,
     switches: dict[int, dict[str, bool]],
     sent_today: dict[int, int],
+    capped_today: dict[int, int],
 ) -> str | None:
     if row.expires_at <= now:
         return "expired"
     switch = row.payload.get("switch") or outbox.SWITCH_FOR.get(row.kind)
     if switch and not switches.get(row.member_id, push_queries.DEFAULT_PREFS).get(switch, False):
         return "switch_off"
-    gone = triggers.cause_gone(session, row)
+    gone = cases.cause_gone(session, row) if row.kind in cases.KINDS else triggers.cause_gone(session, row)
     if gone is not None:
         return gone
     if row.kind == PushKind.NEW_EVENT and sent_today.get(row.member_id, 0) >= NEW_EVENT_DAILY_CAP:
+        return "daily_cap"
+    if row.kind in cases.CAPPED and capped_today.get(row.member_id, 0) >= cases.DAILY_CAP:
         return "daily_cap"
     if not devices.get(row.member_id):
         return "no_device"

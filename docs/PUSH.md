@@ -27,7 +27,7 @@ nothing is sent. Turning push on is only setting the variables
 |---|---|
 | `member_devices` | a phone: its APNs token (unique: a token belongs to one member at a time), `environment` (`production` for TestFlight / App Store builds, `development` for dev builds), app version and build, the app's language. At most 5 per member; unseen for 180 days → deleted by the sweep |
 | `member_notification_prefs` | a member's four switches `remind`, `accept`, `points`, `news`. No row = all four on (`news` too since revision `bfc96a1c1507`, which also switched `news` on in every row saved before it) |
-| `push_notifications` | the outbox and the sent log: one notification for one member, its text in both languages, `status` `pending` / `sent` / `skipped` / `failed`, `not_before`, `expires_at`. Deleted after 90 days |
+| `push_notifications` | the outbox and the sent log: one notification for one member, its text in both languages, `status` `pending` / `sent` / `skipped` / `failed`, `not_before`, `expires_at`. Deleted after 90 days. `kind` gained the 1.0.3 kinds in revision `80d73cc07c1a` |
 | `push_broadcasts` | an organizer's announcement (`POST /notifications/broadcast`) |
 
 Deleting an account (`DELETE /members/me`, `anonymize_member`) deletes the
@@ -65,7 +65,8 @@ gets it through the grant screens. No migration seeds it.
 
 A push opens one of these, and nothing else (`app/services/push/links.py`; the
 app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
-`gdgq://notifications`, `gdgq://profile/my-events`, `gdgq://wallet/card`.
+`gdgq://notifications`, `gdgq://profile/my-events`, `gdgq://wallet/card`,
+`gdgq://profile/certificates` (app 1.0.3; 1.0.2 opens Notifications for it).
 
 ## What sends a push
 
@@ -76,19 +77,70 @@ app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
 | `points` | staff record attendance (card scan, manual, import) or custom points | the member | `points` | quiet hours; 3 days. Not the member's own QR check-in. A deduction sends nothing |
 | `new_event` | an online or on-site event that became open in the last 48 hours and has not started | members with club news on | `news` | quiet hours; at most 2 a member a Riyadh day; expires at the start |
 | `broadcast` | `POST /notifications/broadcast` | the audience | `news` or `remind` | quiet hours; 2 days |
+| `event_updated` | an open or active event that has not ended gets a new start, end, place (`location`, `location_type`) or join link (`PUT /events/{id}`, `…/status`, `…/meeting-url`). Only the link removed, or other fields: nothing | accepted, not cancelled registrations | `remind` | quiet hours; capped; expires at the event's end |
+| `event_cancelled` | an `open` or `active` event that has not started is set to `closed` or back to `draft` (same routes) | accepted, not cancelled registrations | `remind` | **not** held for quiet hours, not capped; expires at the planned start |
+| `event_live` | an online, open or active event's day started in the last 15 minutes (sweep) | accepted, not cancelled registrations not checked in that day | `remind` | **not** held for quiet hours, not capped; expires at that day's end |
+| `registration_closing` | 24 hours before an `open` online or on-site event with a `registration` or `google` form starts, if it was already open then; sent within 6 hours of that mark or not at all (sweep) | members with club news on and no submission on the event (a cancelled or partial one counts as one) | `news` | quiet hours; capped; expires at the start |
+| `certificate` | each certificate e-mail sent for an event (`POST /emails/{event_id}`, and `POST /emails/manual-certificate` for a member of an event) | that member | `points` | quiet hours; capped; 7 days |
+| `event_content` | slides or a recording published on an event (`POST /events/{id}/content-links`, a draft link published with `PUT`, `POST /upload/drive-slides/`); `other` links send nothing | members with attendance on the event | `remind` | quiet hours; capped; 7 days |
+| `weekly_summary` | Thursday 20:00-22:00 Riyadh while a semester runs (today between its start and end dates) (sweep) | members with points this semester: "+N this week · M this semester" | `points` | capped; 12 hours |
+| `welcome` | a member's first phone registers (`POST /notifications/devices`) within 7 days of their member record's creation | that member | `news` | quiet hours; capped; 3 days |
 
 **Quiet hours** are 22:00-08:00 Riyadh: a push queued then waits until 08:00.
+
+**Capped**: at most 3 pushes of the capped 1.0.3 kinds (`event_updated`,
+`registration_closing`, `certificate`, `event_content`, `weekly_summary`,
+`welcome`) reach a member in a Riyadh day; more are `skipped` with
+`daily_cap`. `event_live` and `event_cancelled` are time-critical and always go.
+The 1.0.2 kinds keep their own rules.
 
 **One push per `dedupe_key`**, ever: `reminder:{event}:{Riyadh date}:{member}`,
 `accepted:{submission}:{submitted_at epoch}`, `points:{log}:{member}:{day}`,
 `points:custom:{log}:{member}`, `new_event:{event}:{member}`,
-`broadcast:{broadcast}:{member}`. Triggers can run twice (four workers,
-retries, the sweep) and add nothing the second time.
+`broadcast:{broadcast}:{member}`, `event_updated:{event}:{member}:{hash}` (the
+first 16 hex of the SHA-256 of the changed fields' new values),
+`event_cancelled:{event}:{member}`, `event_live:{event}:{Riyadh date}:{member}`,
+`registration_closing:{event}:{member}`, `certificate:{event}:{member}`,
+`event_content:{event}:{content link id}:{member}`,
+`weekly_summary:{ISO week, 2026-W30}:{member}`, `welcome:{member}`. Triggers can
+run twice (four workers, retries, the sweep) and add nothing the second time.
 
 **Checked again at delivery**, since a row can wait until 08:00: the switch, a
 phone still registered, and the cause - the registration still accepted and the
 day still on the calendar, the attendance row still there, the event still
-open. Otherwise the row is `skipped` with the reason in `last_error`.
+open. For the 1.0.3 kinds: `event_updated` - still accepted, the event still
+open or active and the changed fields still as the push says (a later change
+sends its own push, `event_changed`); `event_cancelled` - still accepted, the
+event not reopened (`event_reopened`); `event_live` - still accepted, the day
+still on the calendar, not checked in since (`checked_in`);
+`registration_closing` - the event still open at the same start, still no
+submission (`registered`); `certificate` - its e-mail log still there;
+`event_content` - the link still there and published (`content_removed`).
+Otherwise the row is `skipped` with the reason in `last_error`.
+
+### What the 1.0.3 kinds mean here
+
+- **Registration "closes"** at the event's start: the database has no
+  registration deadline. A `registration` or `google` form takes registrations
+  while its event is `open` (the app reads leaving the open view as
+  "registration closed"), and organizers move it on when it starts. So the push
+  goes 24 hours before the start and names the start, not "in 24 hours".
+- **"Cancelled"**: there is no cancelled status. An event that was public
+  (`open`, `active`) and has not started, set to `closed` or back to `draft`, is
+  what cancelling looks like (only a draft can be deleted). Closing an event
+  after it started is its normal end and sends nothing.
+- **Joining**, for `welcome`, is the member record's creation
+  (`members.created_at`). A member who linked an older record at onboarding
+  (registered on the website, or added by staff) is not new and gets none.
+
+### The 1.0.2 app and the new kinds
+
+The 1.0.2 app (build 4) reads a `kind` it does not know as none: iOS still
+shows the alert, a tap opens the push's `url` through its allow-list (an event,
+the points history, Notifications for `gdgq://profile/certificates`), and the
+foreground refresh only refreshes the feed. It never calls
+`GET /notifications/me` (its feed is built on the phone). So the new kinds go to
+every phone, whatever its `app_build`, and the feed lists them for everyone.
 
 Times: event `start_datetime` / `end_datetime` are Riyadh wall clock; the new
 columns are UTC. Attendance rows (`members_logs.date`) use the process clock and

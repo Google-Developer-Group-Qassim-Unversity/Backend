@@ -5,7 +5,7 @@ import uuid
 from typing import Annotated, Any
 
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +26,8 @@ from app.routers.models import (
 )
 from app.routers.responses import AttachmentUploadResponse, UploadResponse
 from app.services import event_history
+from app.services.push import cases as push_cases
+from app.services.push import delivery as push_delivery
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.departments import event_departments
 from app.services.permissions.guards import Require, Staff
@@ -168,6 +170,7 @@ def upload_drive_slides(
     session: DB,
     member: CurrentMember,
     gdrive: GDrive,
+    background_tasks: BackgroundTasks,
 ):
     """Stream multipart upload into My-Drive 'GDG Website/{event name} (event #{id})/'."""
     if not gdrive.is_configured():
@@ -229,6 +232,7 @@ def upload_drive_slides(
             member,
             {"content_link": [None, _content_link_snapshot(link)]},
         )
+        pushed = push_cases.content_added(session, link)
         session.commit()
         session.refresh(link)
     except IntegrityError as exc:
@@ -250,6 +254,8 @@ def upload_drive_slides(
             pass
         raise
 
+    if pushed:
+        background_tasks.add_task(push_delivery.kick)
     event_queries.set_download_url(link)
     logger.info(f"Event [{event.id}] drive slide uploaded: link [{link.id}], file [{drive_file_id}]")
     reset_leaderboard_cache_best_effort()

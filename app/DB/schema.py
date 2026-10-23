@@ -1689,6 +1689,15 @@ class PushKind(str, enum.Enum):
     POINTS = "points"
     NEW_EVENT = "new_event"
     BROADCAST = "broadcast"
+    # App 1.0.3 (app/services/push/cases.py).
+    EVENT_UPDATED = "event_updated"
+    EVENT_CANCELLED = "event_cancelled"
+    EVENT_LIVE = "event_live"
+    REGISTRATION_CLOSING = "registration_closing"
+    CERTIFICATE = "certificate"
+    EVENT_CONTENT = "event_content"
+    WEEKLY_SUMMARY = "weekly_summary"
+    WELCOME = "welcome"
 
 
 class PushStatus(str, enum.Enum):
