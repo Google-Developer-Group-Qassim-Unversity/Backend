@@ -79,7 +79,7 @@ app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
 | `broadcast` | `POST /notifications/broadcast` | the audience | `news` or `remind` | quiet hours; 2 days |
 | `event_updated` | an open or active event that has not ended gets a new start, end, place (`location`, `location_type`) or join link (`PUT /events/{id}`, `…/status`, `…/meeting-url`). Only the link removed, or other fields: nothing | accepted, not cancelled registrations | `remind` | quiet hours; capped; expires at the event's end |
 | `event_cancelled` | an `open` or `active` event that has not started is set to `closed` or back to `draft` (same routes) | accepted, not cancelled registrations | `remind` | **not** held for quiet hours, not capped; expires at the planned start |
-| `event_live` | an online day of an open or active event started in the last 15 minutes (sweep): every day of an online event, and the online days of a pipeline event that mixes on-site and online days (it is published on-site with the Meet link). Those come from what Logistics confirmed, the event's own source, counted by day number from the confirmed start, so an edit that moves the event keeps them; the edit form also keeps an on-site event's Meet link now (it used to clear it) | accepted, not cancelled registrations not checked in that day | `remind` | **not** held for quiet hours, not capped; expires at that day's end |
+| `event_live` | an online day of an open or active event started in the last 15 minutes (sweep): every day of an online event, and the online days of a pipeline event that mixes on-site and online days (it is published on-site with the Meet link). Those come from what Logistics confirmed, the event's own source, counted by day number from the confirmed start, and go only while the event still has its Meet link (checked again at delivery: `no_link`). Saving the edit form clears the link of an event that is not online, so after an edit a mixed event sends no live push | accepted, not cancelled registrations not checked in that day | `remind` | **not** held for quiet hours, not capped; expires at that day's end |
 | `registration_closing` | 24 hours before an `open` online or on-site event with a `registration` or `google` form starts, if it was already open then; sent within 6 hours of that mark or not at all (sweep) | members with club news on and no submission on the event (a cancelled or partial one counts as one) | `news` | quiet hours; capped; expires at the start |
 | `certificate` | each certificate e-mail sent for an event (`POST /emails/{event_id}`, and `POST /emails/manual-certificate` for a member of an event) | that member | `points` | quiet hours; capped; 7 days |
 | `event_content` | slides or a recording published on an event (`POST /events/{id}/content-links`, a draft link published with `PUT`, `POST /upload/drive-slides/`); `other` links send nothing. Attendance staff record later (scan, manual, import) brings the content published in the last 7 days (`published_at`) to those members, looked up once per request | members with attendance on the event | `remind` | quiet hours; capped; 7 days |
@@ -105,17 +105,23 @@ hours, never handed to Apple) is folded into the new one and `skipped` as
 `from` among them; the push says each field that differs from it, at its value
 now (all back as they were: no push). Delivery says it again from the event as
 it is then, and skips it as `unchanged` when nothing differs any more. The
-waiting rows are found with a plain read and locked by id with `FOR UPDATE SKIP
-LOCKED`: only those rows, and a row delivery holds is left to go on its own, so
-an edit never waits on delivery.
+waiting rows are found with one locking read (`FOR UPDATE SKIP LOCKED`): it
+sees what a concurrent edit committed, never waits (so no deadlock with
+delivery), and leaves a row delivery holds to go on its own.
 
 **`event_cancelled` once per cancellation.** A cancellation supersedes the
 registrant's earlier one still waiting (a retry after a 5xx, say), and delivery
 skips an older one when a newer one already went out (`superseded`).
 
-**Event edits are serialized.** `PUT /events/{id}`, `/status` and
-`/meeting-url` lock the event row first, so a double submit finds the change
-made, records no history and queues nothing.
+**Double submits.** `PUT /events/{id}/status` (after its Google Forms call, so
+nothing waits on Google) and `/meeting-url` lock the event row, so a second
+request finds the change made, records no history and queues nothing. The
+edit form (`PUT /events/{id}`) does not lock: its log writes would take locks
+in the opposite order to attendance's. A double-submitted edit records its
+history twice, as it always has (it can also write `departments_logs` twice;
+that predates the app and is not handled here); its second push merges the
+first while that one waits, or is skipped at delivery as `already_told` when
+the first went out already.
 
 **One push per `dedupe_key`**, ever: `reminder:{event}:{Riyadh date}:{member}`,
 `accepted:{submission}:{submitted_at epoch}`, `points:{log}:{member}:{day}`,
@@ -134,10 +140,12 @@ phone still registered, and the cause - the registration still accepted and the
 day still on the calendar, the attendance row still there, the event still
 open. For the 1.0.3 kinds: `event_updated` - still accepted, the event still
 open or active, something still different from what the registrant last heard
-(`unchanged`), and the text rewritten from the event as it is now;
+(`unchanged`), not exactly what their last sent update said (`already_told`),
+and the text rewritten from the event as it is now;
 `event_cancelled` - still accepted, the event not reopened (`event_reopened`),
 no newer cancellation sent already (`superseded`); `event_live` - still accepted, the day
-still on the calendar, not checked in since (`checked_in`);
+still on the calendar, not checked in since (`checked_in`), a mixed event still
+with its link (`no_link`);
 `registration_closing` - the event still open at the same start, still no
 submission (`registered`); `certificate` - its e-mail log still there;
 `event_content` - the link still there and published (`content_removed`).

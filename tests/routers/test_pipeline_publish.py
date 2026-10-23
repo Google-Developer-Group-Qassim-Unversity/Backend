@@ -266,14 +266,18 @@ def test_publish_needs_a_points_tier(pipeline, world):
 # ---------------------------------------------------------------- the member app's live push
 
 
-def test_a_mixed_events_online_day_goes_live_even_after_an_edit_moves_it(pipeline, world, push_on, apns_mock):
-    """Published from Logistics' confirmation: 07-20 on-site, 07-21 online, 10:00-12:00, with the Meet link.
+def _no_delivery(monkeypatch):
+    """Routes kick delivery after their commit; here nothing is sent (tests/test_push_cases.py ``kicks``)."""
+    from app.services.push import delivery
 
-    The live push follows that confirmation by day number, so moving the event a
-    week with the edit form keeps day 2 online, and the edit keeps the link.
-    """
-    from app.services.pipeline_sweep import run_sweep
-    from app.DB.schema import PushKind, PushNotifications
+    async def kick() -> None:
+        return None
+
+    monkeypatch.setattr(delivery, "kick", kick)
+
+
+def _published_mixed_event(pipeline, world):
+    """Published from Logistics' confirmation: 07-20 on-site, 07-21 online, 10:00-12:00, with the Meet link."""
     from tests.push_support import add_device, make_member, register
 
     finish_all(pipeline, world)
@@ -282,18 +286,32 @@ def test_a_mixed_events_online_day_goes_live_even_after_an_edit_moves_it(pipelin
     add_device(pipeline.session, member)
     register(pipeline.session, event, member)
     pipeline.session.commit()
+    return event, member
 
-    def live(now):
-        run_sweep(pipeline.session, now)
-        pipeline.session.commit()
-        pipeline.session.expire_all()
-        return pipeline.session.scalars(
-            select(PushNotifications.dedupe_key).where(PushNotifications.kind == PushKind.EVENT_LIVE)
-        ).all()
 
-    assert live(datetime(2026, 7, 20, 7, 5)) == []  # day 1, on-site (10:05 Riyadh)
-    assert live(datetime(2026, 7, 21, 7, 5)) == [f"event_live:{event.id}:2026-07-21:{member.id}"]
+def _live_keys(pipeline, now):
+    from app.DB.schema import PushKind, PushNotifications
+    from app.services.pipeline_sweep import run_sweep
 
+    run_sweep(pipeline.session, now)
+    pipeline.session.commit()
+    pipeline.session.expire_all()
+    return pipeline.session.scalars(
+        select(PushNotifications.dedupe_key).where(PushNotifications.kind == PushKind.EVENT_LIVE)
+    ).all()
+
+
+def test_a_mixed_events_online_day_goes_live_while_it_has_its_link(pipeline, world, push_on, monkeypatch):
+    _no_delivery(monkeypatch)
+    event, member = _published_mixed_event(pipeline, world)
+    assert _live_keys(pipeline, datetime(2026, 7, 20, 7, 5)) == []  # day 1, on-site (10:05 Riyadh)
+    assert _live_keys(pipeline, datetime(2026, 7, 21, 7, 5)) == [f"event_live:{event.id}:2026-07-21:{member.id}"]
+
+
+def test_an_edit_clears_a_mixed_events_link_and_with_it_the_live_push(pipeline, world, push_on, monkeypatch):
+    """The edit form clears the link of an event that is not online (unchanged by this PR): no link, no live push."""
+    _no_delivery(monkeypatch)
+    event, member = _published_mixed_event(pipeline, world)
     pipeline.sign_in(world["admin"], super_admin=True)
     details = pipeline.client.get(f"/events/{event.id}/details").json()
     moved = {
@@ -310,7 +328,25 @@ def test_a_mixed_events_online_day_goes_live_even_after_an_edit_moves_it(pipelin
     edited = pipeline.client.put(f"/events/{event.id}", json={"event": moved, "actions": details["actions"]})
     assert edited.status_code == 200, edited.text
     pipeline.session.expire_all()
-    assert pipeline.session.get(Events, event.id).meeting_url == MEET_LINK
+    assert pipeline.session.get(Events, event.id).meeting_url is None
+    assert _live_keys(pipeline, datetime(2026, 7, 28, 7, 5)) == []
 
-    assert live(datetime(2026, 7, 27, 7, 5)) == [f"event_live:{event.id}:2026-07-21:{member.id}"]  # day 1: on-site
-    assert live(datetime(2026, 7, 28, 7, 5))[-1] == f"event_live:{event.id}:2026-07-28:{member.id}"
+
+def test_a_mixed_events_link_removed_before_delivery_skips_the_live_push(
+    pipeline, world, push_on, apns_mock, monkeypatch
+):
+    from app.DB.schema import PushKind, PushNotifications, PushStatus
+    from tests.push_support import deliver
+
+    _no_delivery(monkeypatch)
+    event, member = _published_mixed_event(pipeline, world)
+    assert _live_keys(pipeline, datetime(2026, 7, 21, 7, 5))
+    pipeline.sign_in(world["admin"], super_admin=True)
+    cleared = pipeline.client.put(f"/events/{event.id}/meeting-url", json={"meeting_url": None})
+    assert cleared.status_code == 200, cleared.text
+    pipeline.freeze(datetime(2026, 7, 21, 7, 6))
+    deliver()
+    pipeline.session.expire_all()
+    row = pipeline.session.scalars(select(PushNotifications).where(PushNotifications.kind == PushKind.EVENT_LIVE)).one()
+    assert (row.status, row.last_error) == (PushStatus.SKIPPED, "no_link")
+    assert apns_mock.requests == []

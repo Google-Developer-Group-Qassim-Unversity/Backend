@@ -125,7 +125,7 @@ def test_no_welcome_for_a_member_who_joined_over_a_week_ago(club, member, db_ses
     assert _welcomes(db_session) == []
 
 
-def test_no_welcome_for_a_member_who_already_had_a_phone(club, member, db_session, push_on, frozen):
+def test_no_welcome_for_a_member_who_already_had_a_phone(club, member, db_session, push_on, apns_mock, frozen):
     member.created_at = frozen.now - timedelta(days=1)
     add_device(db_session, member, token=make_token())
     db_session.commit()

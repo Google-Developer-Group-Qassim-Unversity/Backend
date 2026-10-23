@@ -178,11 +178,13 @@ def get_event_by_id(session: Session, event_id: int):
 
 
 def lock_event(session: Session, event_id: int) -> Events:
-    """The event row, locked until the transaction ends: two edits of one event run one after the other.
+    """The event row, locked until the transaction ends: a second status or link change waits for the first.
 
     A locking read sees the latest committed row, so a double submit finds the
     first one's change already made. ``populate_existing`` refreshes an object
-    an earlier read already loaded.
+    an earlier read already loaded. Used by ``PUT /events/{id}/status`` (after
+    its Google Forms call) and ``/meeting-url``; not by the edit form, whose log
+    writes would then take their locks in the opposite order to attendance's.
     """
     event = session.scalars(
         select(Events).where(Events.id == event_id).with_for_update().execution_options(populate_existing=True)
@@ -461,7 +463,6 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event = session.scalar(select(Events).where(Events.id == event_id))
     if not existing_event:
         return None
-    was_online = existing_event.location_type == EventsLocationType.ONLINE
     try:
         # An explicit semester wins. Otherwise a new end date re-derives it, and
         # an unchanged one keeps whatever the event is already filed under.
@@ -476,11 +477,9 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         existing_event.status = EventsStatus(event_data.status)
         existing_event.image_url = event_data.image_url
         # meeting_url is owned by update_event_meeting_url, and the edit form does not
-        # carry it, so it otherwise survives untouched here. Except: once an online event
-        # stops being online, a leftover link must not silently reappear if it goes online
-        # again. An on-site event that has a link (a pipeline event mixing on-site and
-        # online days, published with its Meet link) keeps it.
-        if was_online and event_data.location_type != EventsLocationType.ONLINE:
+        # carry it, so it otherwise survives untouched here. Except: once the event stops
+        # being online, a leftover link must not silently reappear if it goes online again.
+        if event_data.location_type != EventsLocationType.ONLINE:
             existing_event.meeting_url = None
         session.flush()
         return existing_event

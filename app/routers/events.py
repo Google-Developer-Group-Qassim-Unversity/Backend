@@ -259,8 +259,7 @@ def update_event(
 ):
     try:
         logger.info(f"Updating Event [{event_id}]")
-        # Locked: a double submit waits, then finds the change made and records (and pushes) nothing.
-        existing = events_queries.lock_event(session, event_id)
+        existing = events_queries.get_event_by_id(session, event_id)
         before = event_history.snapshot(existing) if existing else {}
         push_before = push_cases.event_state(existing) if existing else {}
         points_before: dict = {}
@@ -459,9 +458,10 @@ def update_event_status(
     member: CurrentMember,
     background_tasks: BackgroundTasks,
 ):
-    event = events_queries.lock_event(session, event_id)
+    event = events_queries.get_event_by_id(session, event_id)
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     old_status = event.status
-    push_before = push_cases.event_state(event)
 
     # Publishing/unpublishing the event also publishes/unpublishes its Google
     # Form, if it has one - a copied form does not inherit the template's
@@ -484,6 +484,11 @@ def update_event_status(
                     event_id,
                 )
 
+    # Locked only now, after Google answered, so nothing waits on that call. A double
+    # submit waits here, then finds the status already set: no history, no push.
+    event = events_queries.lock_event(session, event_id)
+    old_status = event.status
+    push_before = push_cases.event_state(event)
     event.status = EventsStatus(status_data.status)
     recorded = None
     if event.status != old_status:

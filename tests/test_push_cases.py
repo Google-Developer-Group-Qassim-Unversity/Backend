@@ -18,6 +18,7 @@ from app.DB.schema import (
     EventsContentLinkKind,
     EventsLocationType,
     EventsStatus,
+    Forms,
     FormType,
     MembersLogs,
     PushKind,
@@ -141,13 +142,85 @@ def test_the_same_change_twice_is_one_push_and_another_change_is_another(db_sess
 
 
 def test_a_double_submitted_status_change_pushes_once(admin_client, db_session, outbound, push_on, frozen, kicks):
-    """The routes lock the event: the second request finds it closed already and records nothing."""
+    """The status route locks the event: the second request finds it closed already and records nothing."""
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     register(db_session, event, app_user(db_session))
     db_session.commit()
     for _ in range(2):
         assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "closed"}))
     assert len(rows(db_session, PushKind.EVENT_CANCELLED)) == 1
+
+
+def test_the_status_route_locks_the_event_only_after_google_answers(
+    admin_client, db_session, outbound, push_on, frozen, kicks, monkeypatch
+):
+    from app.DB import events as events_queries
+    from app.routers import events as events_router
+
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), form_type=FormType.GOOGLE)
+    form = db_session.scalars(select(Forms).where(Forms.event_id == event.id)).one()
+    form.google_form_id = "google-form-1"
+    db_session.commit()
+    calls: list[str] = []
+    lock = events_queries.lock_event
+    monkeypatch.setattr(events_router, "set_form_publish_state", lambda *a, **k: calls.append("google"))
+    monkeypatch.setattr(events_queries, "lock_event", lambda *a: calls.append("lock") or lock(*a))
+    assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "closed"}))
+    assert calls == ["google", "lock"]
+
+
+def test_the_edit_form_takes_no_event_lock(admin_client, db_session, seed_refs, outbound, push_on, kicks, monkeypatch):
+    """Its log writes would take locks in the opposite order to attendance's (deadlock), so it does not lock."""
+    from app.DB import events as events_queries
+
+    created = admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs))
+    assert_2xx(created)
+    event_id = created.json()["id"]
+    monkeypatch.setattr(events_queries, "lock_event", lambda *a: pytest.fail("the edit form locked the event"))
+    actions = admin_client.get(f"/events/{event_id}/details").json()["actions"]
+    assert_2xx(admin_client.put(f"/events/{event_id}", json={"event": event_body(name="Renamed"), "actions": actions}))
+
+
+def test_waiting_updates_are_found_with_one_locking_read(db_session, push_on, frozen):
+    """A plain read would answer from the transaction's first snapshot and miss what a concurrent edit queued."""
+    from sqlalchemy import event as sa_event
+
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    member = app_user(db_session)
+    register(db_session, event, member)
+    assert change(db_session, event, location="Hall 61") == 1
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    engine = db_session.get_bind().engine
+    sa_event.listen(engine, "before_cursor_execute", record)
+    try:
+        found = cases._waiting(db_session, PushKind.EVENT_UPDATED, event.id, [member.id], unsent_only=True)
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", record)
+    assert [row.member_id for row in found[member.id]] == [member.id]
+    reads = [s for s in statements if "push_notifications" in s]
+    assert len(reads) == 1 and "FOR UPDATE SKIP LOCKED" in reads[0]
+
+
+def test_a_double_submitted_edit_whose_twin_went_out_is_skipped(db_session, push_on, apns_mock, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
+    register(db_session, event, app_user(db_session))
+    stale = cases.event_state(event)
+    assert change(db_session, event, location="Hall 61") == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    # The second request read the event before the first committed, and saves the same change.
+    recorded = event_history.record(db_session, event, EventHistoryAction.EDITED, None, {"location": []})
+    assert cases.event_changed(db_session, event, stale, recorded.id) == 1
+    db_session.commit()
+    deliver()
+    first, second = rows(db_session, PushKind.EVENT_UPDATED)
+    assert first.status == PushStatus.SENT
+    assert (second.status, second.last_error) == (PushStatus.SKIPPED, "already_told")
+    assert len(apns_mock.requests) == 1
 
 
 def test_a_waiting_update_is_said_as_the_event_is_at_delivery(db_session, push_on, apns_mock, frozen):

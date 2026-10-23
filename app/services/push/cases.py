@@ -170,8 +170,11 @@ def event_changed(session: Session, event: Events, before: dict, change_id: str 
 
     ``change_id`` is the ``event_history`` row the route recorded for the change
     (None: nothing changed). It keys the pushes: one per real change, and the
-    same one for a replay. The routes lock the event row first, so a double
-    submit finds the change already made and records nothing.
+    same one for a replay. The status and meeting-url routes lock the event
+    row first, so a double submit there finds the change made and records
+    nothing. A double-submitted edit form records twice (as it always did): the
+    second push merges the first's while it waits, or is skipped at delivery as
+    ``already_told`` when the first went out already.
     """
     if not config.push_enabled or change_id is None or before.get("status") not in PUBLIC_VALUES:
         return 0
@@ -192,8 +195,9 @@ def event_changed(session: Session, event: Events, before: dict, change_id: str 
 def _waiting(session: Session, kind: PushKind, event_id: int, member_ids, *, unsent_only: bool):
     """The members' still-pending pushes of ``kind`` for the event, locked; ones another transaction holds are left.
 
-    Found with a plain read, then locked by primary key with ``SKIP LOCKED``: only
-    these rows are locked, and nothing waits on delivery, so no deadlock. A row
+    One locking read (``FOR UPDATE SKIP LOCKED``): it sees the latest committed
+    rows, so an edit that waited for another one (on the event row) merges what
+    that one queued, and it never waits, so no deadlock with delivery. A row
     delivery is handling right now is skipped and goes out on its own.
     """
     conditions = [
@@ -204,14 +208,12 @@ def _waiting(session: Session, kind: PushKind, event_id: int, member_ids, *, uns
     ]
     if unsent_only:
         conditions.append(PushNotifications.attempts == 0)
-    ids = session.scalars(select(PushNotifications.id).where(*conditions)).all()
-    if not ids:
-        return {}
     rows = session.scalars(
         select(PushNotifications)
-        .where(PushNotifications.id.in_(ids), *conditions)
+        .where(*conditions)
         .order_by(PushNotifications.created_at, PushNotifications.id)
         .with_for_update(skip_locked=True)
+        .execution_options(populate_existing=True)
     ).all()
     found: dict[int, list[PushNotifications]] = {}
     for row in rows:
@@ -439,7 +441,8 @@ def enqueue_event_live(session: Session, now: datetime, result) -> None:
     """An online day started in the last 15 minutes: accepted registrants not checked in that day.
 
     Online days are every day of an online event, and the online days of a
-    pipeline event that mixes the two (``online_days``).
+    pipeline event that mixes the two (``online_days``) while it still has its
+    Meet link.
     """
     if not config.push_enabled:
         return
@@ -457,7 +460,10 @@ def enqueue_event_live(session: Session, now: datetime, result) -> None:
         total = event_days(event)
         for day in range(1, total + 1):
             starts = day_start(event, day)
-            online = event.location_type == EventsLocationType.ONLINE or day in mixed.get(event.id, ())
+            # A mixed event's online day needs its Meet link: an edit clears it (update_event).
+            online = event.location_type == EventsLocationType.ONLINE or (
+                day in mixed.get(event.id, ()) and bool(event.meeting_url)
+            )
             if online and local_now - LIVE_WINDOW < starts <= local_now:
                 result.push_event_live += _live(session, event, day, total, starts, now)
 
@@ -679,6 +685,23 @@ SWEEP_RULES = [
 # ---------------------------------------------------------------- at delivery
 
 
+def _last_told(session: Session, row: PushNotifications) -> dict | None:
+    """What the newest ``event_updated`` sent to this member about this event said (``changed``), if any."""
+    sent = session.scalar(
+        select(PushNotifications)
+        .where(
+            PushNotifications.kind == PushKind.EVENT_UPDATED,
+            PushNotifications.event_id == row.event_id,
+            PushNotifications.member_id == row.member_id,
+            PushNotifications.status == PushStatus.SENT,
+            PushNotifications.id != row.id,
+        )
+        .order_by(PushNotifications.sent_at.desc(), PushNotifications.id.desc())
+        .limit(1)
+    )
+    return (sent.payload.get("cause") or {}).get("changed") if sent is not None else None
+
+
 def cause_gone(session: Session, row: PushNotifications) -> str | None:
     """Why this push should no longer go out, or None when its cause still holds.
 
@@ -697,11 +720,15 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
             net = what_is_new(event, cause.get("from") or {})
             if not net:
                 return "unchanged"
+            if _last_told(session, row) == net:
+                return "already_told"  # a double-submitted edit whose twin went out first
             row.payload = {**row.payload, **_update_text(event, net), "cause": {**cause, "changed": net}}
             return None
         starts = [day_start(event, day).isoformat() for day in range(1, event_days(event) + 1)]
         if cause.get("starts") not in starts:
             return "event_changed"
+        if event.location_type != EventsLocationType.ONLINE and not event.meeting_url:
+            return "no_link"  # a mixed event whose Meet link was removed: nothing to join
         day = datetime.fromisoformat(cause["starts"]).date()
         return "checked_in" if row.member_id in _checked_in(session, event.id, day) else None
     if row.kind == PushKind.EVENT_CANCELLED:
