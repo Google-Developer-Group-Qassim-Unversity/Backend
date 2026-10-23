@@ -411,7 +411,7 @@ def test_cancel_reopen_cancel_is_one_push(db_session, push_on, apns_mock, frozen
 def test_a_newer_update_held_by_quiet_hours_does_not_stop_one_due_now(db_session, push_on, apns_mock, frozen):
     """21:56 the place moves; 21:58:30 it is fixed, and that row would wait until 08:00: the 21:58 one goes."""
     frozen.set(datetime(2026, 7, 20, 18, 56))  # 21:56 Riyadh
-    event = make_event(db_session, start=datetime(2026, 7, 21, 7, 0), end=datetime(2026, 7, 21, 9, 0))
+    event = make_event(db_session, start=datetime(2026, 7, 21, 10, 0), end=datetime(2026, 7, 21, 12, 0))
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, location="Hall B") == 1
     frozen.advance(minutes=2, seconds=30)
@@ -422,16 +422,35 @@ def test_a_newer_update_held_by_quiet_hours_does_not_stop_one_due_now(db_session
     assert deliver().sent == 1
     first, second = rows(db_session, PushKind.EVENT_UPDATED)
     assert first.status == PushStatus.SENT
-    assert first.payload["en"]["body"] == "Jul 21 · 7:00 AM – 9:00 AM · \u2068Hall B2\u2069"
+    assert first.payload["en"]["body"] == "Jul 21 · 10:00 AM – 12:00 PM · \u2068Hall B2\u2069"
     assert second.status == PushStatus.PENDING
 
 
 def test_no_row_is_written_that_would_expire_before_it_is_due(db_session, push_on, frozen):
-    frozen.set(datetime(2026, 7, 20, 18, 58))  # 21:58 Riyadh: due after 22:00, so at 08:00
-    event = make_event(db_session, start=datetime(2026, 7, 20, 21, 0), end=datetime(2026, 7, 20, 23, 0))
-    register(db_session, event, app_user(db_session))
-    assert change(db_session, event, location="Hall B") == 0  # it ends at 23:00, long before 08:00
+    member = app_user(db_session)
+    frozen.set(ELEVEN_PM)  # held until 08:00, but it expires at 01:00
+    assert _queue(db_session, PushKind.WELCOME, member, "welcome:late", expires_at=datetime(2026, 7, 20, 22, 0)) == 0
     assert rows(db_session) == []
+
+
+@pytest.mark.parametrize(
+    "now,start,end,due",
+    [
+        # 22:05, a Ramadan event 22:30-00:00 moves hall: told now, not at 08:00 (after it).
+        (datetime(2026, 7, 20, 19, 5), datetime(2026, 7, 20, 22, 30), datetime(2026, 7, 21, 0, 0), "now"),
+        # 23:00, an event at 07:00 tomorrow: told now.
+        (ELEVEN_PM, datetime(2026, 7, 21, 7, 0), datetime(2026, 7, 21, 9, 0), "now"),
+        # 23:00, an event at 10:00 tomorrow: can wait for 08:00.
+        (ELEVEN_PM, datetime(2026, 7, 21, 10, 0), datetime(2026, 7, 21, 12, 0), "08:00"),
+    ],
+)
+def test_quiet_hours_hold_an_update_only_when_the_event_can_wait(db_session, push_on, frozen, now, start, end, due):
+    frozen.set(now)
+    event = make_event(db_session, start=start, end=end)
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, location="Hall 12") == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.not_before == (now + TWO_MINUTES if due == "now" else EIGHT_AM_TOMORROW)
 
 
 def test_a_multi_day_event_says_its_next_day_and_hours(db_session, push_on, frozen):
@@ -591,6 +610,41 @@ def test_back_on_also_reaches_a_member_whose_cancellation_has_not_gone_yet(db_se
     db_session.flush()
     assert change(db_session, event, status=EventsStatus.OPEN) == 1
     assert [row.member_id for row in rows(db_session, PushKind.EVENT_UPDATED)] == [member.id]
+
+
+def test_reopening_tells_the_others_what_moved_while_it_was_closed(db_session, push_on, apns_mock, frozen):
+    """Told members get Back on; one whose cancellation never went (no phone then) gets an ordinary update."""
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
+    told = app_user(db_session)
+    register(db_session, event, told)
+    phoneless = make_member(db_session)
+    register(db_session, event, phoneless)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    add_device(db_session, phoneless)
+    frozen.advance(minutes=5)
+    moved = {"start_datetime": datetime(2026, 7, 29, 16, 0), "end_datetime": datetime(2026, 7, 29, 18, 0)}
+    assert change(db_session, event, **moved) == 0  # closed: no push
+    frozen.advance(minutes=5)
+    assert change(db_session, event, status=EventsStatus.OPEN) == 2
+    db_session.commit()
+    frozen.advance(minutes=2)
+    assert deliver().sent == 2
+    found = {row.member_id: row.payload["en"]["title"] for row in rows(db_session, PushKind.EVENT_UPDATED)}
+    assert found == {told.id: f"Back on: {NAME}", phoneless.id: f"Updated: {NAME}"}
+
+
+def test_reopening_with_nothing_moved_tells_only_the_told(db_session, push_on, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    told = app_user(db_session)
+    register(db_session, event, told)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    rows(db_session, PushKind.EVENT_CANCELLED)[0].status = PushStatus.SENT
+    register(db_session, event, app_user(db_session))  # accepted while it was closed
+    db_session.flush()
+    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    assert [row.member_id for row in rows(db_session, PushKind.EVENT_UPDATED)] == [told.id]
 
 
 def test_reopening_after_the_start_tells_only_those_told_it_was_cancelled(db_session, push_on, apns_mock, frozen):

@@ -116,6 +116,8 @@ PUBLIC_VALUES = frozenset(status.value for status in PUBLIC)
 WATCHED = ("start_datetime", "end_datetime", "location_type", "location", "meeting_url")
 # event_updated and event_cancelled wait this long, so quick edits (and a double submit) end as one push.
 DEBOUNCE = timedelta(minutes=2)
+# An ordinary update waits out quiet hours only for an event that starts this long after they end (09:00).
+QUIET_MARGIN = timedelta(hours=1)
 
 LIVE_WINDOW = timedelta(minutes=15)
 CLOSING_LEAD = timedelta(hours=24)
@@ -214,25 +216,45 @@ def _updated(
     session: Session, event: Events, change_id: str, fields: list[str], now: datetime, *, back_on: bool
 ) -> int:
     registrations = _accepted(session, event.id)
-    if back_on:
-        # The ones told it was cancelled, or about to be (a cancellation skipped as event_reopened just
-        # means one extra, truthful Back on), hear it is on again.
-        cancellations = session.scalars(
-            select(PushNotifications)
-            .where(
-                PushNotifications.kind == PushKind.EVENT_CANCELLED,
-                PushNotifications.event_id == event.id,
-                PushNotifications.status.in_([PushStatus.SENT, PushStatus.PENDING]),
-            )
-            .order_by(PushNotifications.id)
-        ).all()
-        told = {row.member_id for row in cancellations}
-        registrations = [(s, m) for s, m in registrations if m in told]
-        # What changed while it was closed (a new link, say) counts too: against the event as it was cancelled.
-        if cancellations:
-            as_cancelled = (cancellations[-1].payload.get("cause") or {}).get("state") or {}
-            after = event_state(event)
-            fields = sorted(set(fields) | {f for f in WATCHED if f in as_cancelled and as_cancelled[f] != after[f]})
+    if not back_on:
+        return _queue_updates(session, event, change_id, registrations, fields, now, back_on=False)
+    # The ones told it was cancelled, or about to be (a cancellation skipped as event_reopened just
+    # means one extra, truthful Back on), hear it is on again.
+    cancellations = session.scalars(
+        select(PushNotifications)
+        .where(
+            PushNotifications.kind == PushKind.EVENT_CANCELLED,
+            PushNotifications.event_id == event.id,
+            PushNotifications.status.in_([PushStatus.SENT, PushStatus.PENDING]),
+        )
+        .order_by(PushNotifications.id)
+    ).all()
+    told = {row.member_id for row in cancellations}
+    # What changed while it was closed (a new link, a new time) counts too: against the event as it was cancelled.
+    if cancellations:
+        as_cancelled = (cancellations[-1].payload.get("cause") or {}).get("state") or {}
+        after = event_state(event)
+        fields = sorted(set(fields) | {f for f in WATCHED if f in as_cancelled and as_cancelled[f] != after[f]})
+    queued = _queue_updates(
+        session, event, change_id, [(s, m) for s, m in registrations if m in told], fields, now, back_on=True
+    )
+    # The others never heard it was cancelled; what moved while it was closed is an ordinary update to them.
+    if fields and not (fields == ["meeting_url"] and not event.meeting_url):
+        others = [(s, m) for s, m in registrations if m not in told]
+        queued += _queue_updates(session, event, change_id, others, fields, now, back_on=False)
+    return queued
+
+
+def _queue_updates(
+    session: Session,
+    event: Events,
+    change_id: str,
+    registrations: list[tuple[int, int]],
+    fields: list[str],
+    now: datetime,
+    *,
+    back_on: bool,
+) -> int:
     cause = {"fields": fields, "back_on": back_on}
     pushes = [
         Push(
@@ -242,18 +264,26 @@ def _updated(
         )
         for submission_id, member_id in registrations
     ]
+    if not pushes:
+        return 0
+    local_now = clock.to_riyadh(now)
+    _, _, starts, _ = _next_day(event, local_now)
+    # Quiet hours hold an ordinary update only when it can wait: its next day starts at 09:00 or later
+    # after the quiet hours end. An event tonight, under way, or early tomorrow is told now.
+    release = clock.after_quiet_hours(now + DEBOUNCE)
+    can_wait = clock.to_utc(starts) >= release + QUIET_MARGIN
     return outbox.enqueue(
         session,
         PushKind.EVENT_UPDATED,
         pushes,
-        text=_update_text(event, cause, clock.to_riyadh(now)),
+        text=_update_text(event, cause, local_now),
         url=links.event_url(event.id),
         thread_id=f"event-{event.id}",
         event_id=event.id,
         expires_at=clock.to_utc(event.end_datetime),
         now=now,
         # "Back on" is urgent, like the cancellation it corrects: due at once, at night too.
-        quiet_hours=not back_on,
+        quiet_hours=not back_on and can_wait,
         delay=timedelta(0) if back_on else DEBOUNCE,
     )
 
