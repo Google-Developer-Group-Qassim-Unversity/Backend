@@ -259,7 +259,8 @@ def update_event(
 ):
     try:
         logger.info(f"Updating Event [{event_id}]")
-        existing = events_queries.get_event_by_id(session, event_id)
+        # Locked: a double submit waits, then finds the change made and records (and pushes) nothing.
+        existing = events_queries.lock_event(session, event_id)
         before = event_history.snapshot(existing) if existing else {}
         push_before = push_cases.event_state(existing) if existing else {}
         points_before: dict = {}
@@ -381,9 +382,12 @@ def update_event(
                 "department_id": event_data.actions[0].department_id or points_before["department_id"],
             }
             changed |= event_history.changes(points_before, points_after)
-        if changed:
+        recorded = (
             event_history.record(session, updated_event, EventHistoryAction.EDITED, member, changed)
-        pushed = push_cases.event_changed(session, updated_event, push_before)
+            if changed
+            else None
+        )
+        pushed = push_cases.event_changed(session, updated_event, push_before, recorded.id if recorded else None)
         calendar_request = pipeline_calendar.mark_event(session, event_id)
         session.commit()
         pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
@@ -455,9 +459,7 @@ def update_event_status(
     member: CurrentMember,
     background_tasks: BackgroundTasks,
 ):
-    event = events_queries.get_event_by_id(session, event_id)
-    if not event:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    event = events_queries.lock_event(session, event_id)
     old_status = event.status
     push_before = push_cases.event_state(event)
 
@@ -483,15 +485,16 @@ def update_event_status(
                 )
 
     event.status = EventsStatus(status_data.status)
+    recorded = None
     if event.status != old_status:
-        event_history.record(
+        recorded = event_history.record(
             session,
             event,
             EventHistoryAction.STATUS_CHANGED,
             member,
             {"status": [old_status.value, event.status.value]},
         )
-    pushed = push_cases.event_changed(session, event, push_before)
+    pushed = push_cases.event_changed(session, event, push_before, recorded.id if recorded else None)
     session.commit()
     if pushed:
         background_tasks.add_task(push_delivery.kick)
@@ -520,9 +523,7 @@ def update_event_meeting_url(
     background_tasks: BackgroundTasks,
 ):
     """Set or clear the join link shown to members on a remote event."""
-    existing_event = events_queries.get_event_by_id(session, event_id)
-    if existing_event is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    existing_event = events_queries.lock_event(session, event_id)
     if meeting_url_data.meeting_url and existing_event.location_type != EventsLocationType.ONLINE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="meeting_url can only be set on an online event"
@@ -531,15 +532,16 @@ def update_event_meeting_url(
     push_before = push_cases.event_state(existing_event)
     events_queries.update_event_meeting_url(session, event_id, meeting_url_data.meeting_url)
     event = existing_event
+    recorded = None
     if old_url != event.meeting_url:
-        event_history.record(
+        recorded = event_history.record(
             session,
             event,
             EventHistoryAction.MEETING_URL_CHANGED,
             member,
             {"meeting_url": [old_url, event.meeting_url]},
         )
-    pushed = push_cases.event_changed(session, event, push_before)
+    pushed = push_cases.event_changed(session, event, push_before, recorded.id if recorded else None)
     calendar_request = pipeline_calendar.mark_event(session, event_id)
     session.commit()
     pipeline_calendar.sync_after_commit(background_tasks, calendar_request)

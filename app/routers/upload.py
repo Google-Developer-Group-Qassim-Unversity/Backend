@@ -25,7 +25,7 @@ from app.routers.models import (
     NotFoundResponse,
 )
 from app.routers.responses import AttachmentUploadResponse, UploadResponse
-from app.services import event_history
+from app.services import event_history, event_pipeline_clock
 from app.services.push import cases as push_cases
 from app.services.push import delivery as push_delivery
 from app.services.permissions.catalogue import Perm
@@ -222,6 +222,7 @@ def upload_drive_slides(
             kind=EventsContentLinkKind.SLIDES,
             drive_file_id=drive_file_id,
             published=1,
+            published_at=event_pipeline_clock.now(),
             created_by=member.id,
         )
         session.add(link)

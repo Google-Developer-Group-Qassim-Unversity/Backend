@@ -334,6 +334,28 @@ def get_custom_member_points_by_event(session: Session, event_id: int):
     ]
 
 
+def set_member_logs(session: Session, log_id: int, member_ids) -> list[int]:
+    """Make ``member_ids`` the members of a custom-points log; returns the ones added.
+
+    Rows of members no longer on it go; a new member gets a row dated now.
+    Members who stay keep their rows, and with them the day the points were
+    given (the app's weekly summary counts points by it).
+    """
+    wanted = list(dict.fromkeys(member_ids))
+    rows = session.scalars(select(MembersLogs).where(MembersLogs.log_id == log_id)).all()
+    kept = set()
+    for row in rows:
+        if row.member_id in wanted:
+            kept.add(row.member_id)
+        else:
+            session.delete(row)
+    session.flush()
+    added = [member_id for member_id in wanted if member_id not in kept]
+    for member_id in added:
+        create_member_log(session, member_id, log_id)
+    return added
+
+
 def delete_member_logs_by_log_id(session: Session, log_id: int):
     stmt = select(MembersLogs).where(MembersLogs.log_id == log_id)
     member_logs = session.scalars(stmt).all()

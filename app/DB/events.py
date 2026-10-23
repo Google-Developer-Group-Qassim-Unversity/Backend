@@ -24,6 +24,7 @@ from app.routers.models import Events_model
 from app.config import config
 from app.helpers import get_effective_date
 from app.semesters import semester_for_event
+from app.services import event_pipeline_clock
 from datetime import datetime, timedelta
 
 if TYPE_CHECKING:
@@ -171,6 +172,21 @@ def get_event_by_id(session: Session, event_id: int):
     route layer (see attach_published_content_links_of_event)."""
     statement = select(Events).where(Events.id == event_id)
     event = session.scalars(statement).first()
+    if not event:
+        raise EventNotFound(event_id)
+    return event
+
+
+def lock_event(session: Session, event_id: int) -> Events:
+    """The event row, locked until the transaction ends: two edits of one event run one after the other.
+
+    A locking read sees the latest committed row, so a double submit finds the
+    first one's change already made. ``populate_existing`` refreshes an object
+    an earlier read already loaded.
+    """
+    event = session.scalars(
+        select(Events).where(Events.id == event_id).with_for_update().execution_options(populate_existing=True)
+    ).first()
     if not event:
         raise EventNotFound(event_id)
     return event
@@ -335,6 +351,7 @@ def create_event_content_link(
         url=link_data.url,
         kind=link_data.kind,
         published=link_data.published,
+        published_at=event_pipeline_clock.now() if link_data.published else None,
         drive_file_id=getattr(link_data, "drive_file_id", None),
         created_by=created_by,
     )
@@ -377,6 +394,10 @@ def update_event_content_link(session: Session, existing: EventContentLinks, lin
     if link_data.kind is not None:
         existing.kind = link_data.kind
     if link_data.published is not None:
+        if link_data.published and not existing.published:
+            existing.published_at = event_pipeline_clock.now()
+        elif not link_data.published:
+            existing.published_at = None
         existing.published = link_data.published
     session.flush()
     return existing
@@ -440,6 +461,7 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
     existing_event = session.scalar(select(Events).where(Events.id == event_id))
     if not existing_event:
         return None
+    was_online = existing_event.location_type == EventsLocationType.ONLINE
     try:
         # An explicit semester wins. Otherwise a new end date re-derives it, and
         # an unchanged one keeps whatever the event is already filed under.
@@ -454,9 +476,11 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         existing_event.status = EventsStatus(event_data.status)
         existing_event.image_url = event_data.image_url
         # meeting_url is owned by update_event_meeting_url, and the edit form does not
-        # carry it, so it otherwise survives untouched here. Except: once the event stops
-        # being online, a leftover link must not silently reappear if it goes online again.
-        if event_data.location_type != EventsLocationType.ONLINE:
+        # carry it, so it otherwise survives untouched here. Except: once an online event
+        # stops being online, a leftover link must not silently reappear if it goes online
+        # again. An on-site event that has a link (a pipeline event mixing on-site and
+        # online days, published with its Meet link) keeps it.
+        if was_online and event_data.location_type != EventsLocationType.ONLINE:
             existing_event.meeting_url = None
         session.flush()
         return existing_event

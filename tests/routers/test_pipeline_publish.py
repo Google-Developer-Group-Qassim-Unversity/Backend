@@ -261,3 +261,56 @@ def test_publish_needs_a_points_tier(pipeline, world):
     response = publish(pipeline, world)
     assert response.status_code == 409
     assert response.json()["code"] == "no_points_tier"
+
+
+# ---------------------------------------------------------------- the member app's live push
+
+
+def test_a_mixed_events_online_day_goes_live_even_after_an_edit_moves_it(pipeline, world, push_on, apns_mock):
+    """Published from Logistics' confirmation: 07-20 on-site, 07-21 online, 10:00-12:00, with the Meet link.
+
+    The live push follows that confirmation by day number, so moving the event a
+    week with the edit form keeps day 2 online, and the edit keeps the link.
+    """
+    from app.services.pipeline_sweep import run_sweep
+    from app.DB.schema import PushKind, PushNotifications
+    from tests.push_support import add_device, make_member, register
+
+    finish_all(pipeline, world)
+    event = pipeline.session.get(Events, publish(pipeline, world).json()["event_id"])
+    member = make_member(pipeline.session)
+    add_device(pipeline.session, member)
+    register(pipeline.session, event, member)
+    pipeline.session.commit()
+
+    def live(now):
+        run_sweep(pipeline.session, now)
+        pipeline.session.commit()
+        pipeline.session.expire_all()
+        return pipeline.session.scalars(
+            select(PushNotifications.dedupe_key).where(PushNotifications.kind == PushKind.EVENT_LIVE)
+        ).all()
+
+    assert live(datetime(2026, 7, 20, 7, 5)) == []  # day 1, on-site (10:05 Riyadh)
+    assert live(datetime(2026, 7, 21, 7, 5)) == [f"event_live:{event.id}:2026-07-21:{member.id}"]
+
+    pipeline.sign_in(world["admin"], super_admin=True)
+    details = pipeline.client.get(f"/events/{event.id}/details").json()
+    moved = {
+        "name": event.name,
+        "description": event.description,
+        "location_type": "on-site",
+        "location": event.location,
+        "start_datetime": "2026-07-27T10:00:00",
+        "end_datetime": "2026-07-28T12:00:00",
+        "status": "open",
+        "image_url": event.image_url,
+        "is_official": event.is_official,
+    }
+    edited = pipeline.client.put(f"/events/{event.id}", json={"event": moved, "actions": details["actions"]})
+    assert edited.status_code == 200, edited.text
+    pipeline.session.expire_all()
+    assert pipeline.session.get(Events, event.id).meeting_url == MEET_LINK
+
+    assert live(datetime(2026, 7, 27, 7, 5)) == [f"event_live:{event.id}:2026-07-21:{member.id}"]  # day 1: on-site
+    assert live(datetime(2026, 7, 28, 7, 5))[-1] == f"event_live:{event.id}:2026-07-28:{member.id}"

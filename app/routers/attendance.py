@@ -258,7 +258,6 @@ def backfill_attendance(
 
         member_log = log_queries.create_member_log(session, member.id, event_log.id, target_date)
         push_triggers.attendance_recorded(session, event, event_log, member_log)
-        push_cases.attendance_added(session, event, member_log.member_id)
         marked.append({"member_id": member.id, "name": member.name})
         logger.info(f"Backfilled attendance for member [{member.name}] on day [{request.day}]")
 
@@ -270,6 +269,7 @@ def backfill_attendance(
             actor,
             {"day": request.day, "members": marked, "new_members": created_count},
         )
+        push_cases.attendance_added(session, event, [row["member_id"] for row in marked])
     session.commit()
     background_tasks.add_task(push_delivery.kick)
     marked_count = (created_count + existing_count) - already_attended_count
@@ -377,7 +377,6 @@ def mark_attendance_manual(
 
             member_log = log_queries.create_member_log(session, member.id, event_log.id, target_date)
             push_triggers.attendance_recorded(session, event, event_log, member_log)
-            push_cases.attendance_added(session, event, member_log.member_id)
             member_success = True
             logger.info(f"Manual attendance marked for member [{member.name}] on day [{day or 'today'}]")
 
@@ -391,6 +390,7 @@ def mark_attendance_manual(
         event_history.record(
             session, event, EventHistoryAction.ATTENDANCE_MARKED, actor, {"days": days_to_mark, "members": marked}
         )
+        push_cases.attendance_added(session, event, [row["member_id"] for row in marked])
     session.commit()
     background_tasks.add_task(push_delivery.kick)
     return {"success": success_count, "failed": failed_count}
@@ -454,7 +454,7 @@ def scan_attendance(
 
     member_log = log_queries.create_member_log(session, member.id, event_log.id, target_date)
     push_triggers.attendance_recorded(session, event, event_log, member_log)
-    push_cases.attendance_added(session, event, member_log.member_id)
+    push_cases.attendance_added(session, event, [member_log.member_id])
     event_history.record(
         session,
         event,

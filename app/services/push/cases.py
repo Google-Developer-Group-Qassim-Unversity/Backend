@@ -39,10 +39,10 @@ ever, quiet hours except ``event_live`` and ``event_cancelled``, and at most
 import hashlib
 import json
 import logging
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 
-from sqlalchemy import and_, case, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import case, func, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import config
 from app.DB.schema import (
@@ -61,6 +61,7 @@ from app.DB.schema import (
     MembersLogs,
     Modifications,
     ModificationsType,
+    PipelineTeam,
     PushKind,
     PushNotifications,
     PushStatus,
@@ -68,7 +69,7 @@ from app.DB.schema import (
     SubmissionsSubmissionType,
 )
 from app.DB.semesters import get_semester_started_by
-from app.services import event_history
+from app.services import event_deliverables, event_history
 from app.services.push import clock, links, messages, outbox
 from app.services.push.outbox import Push
 from app.services.push.triggers import (
@@ -104,6 +105,7 @@ CAPPED = KINDS - URGENT
 DAILY_CAP = 3
 
 PUBLIC = (EventsStatus.OPEN, EventsStatus.ACTIVE)
+PUBLIC_VALUES = frozenset(status.value for status in PUBLIC)
 # What a registrant is told about when it changes. The edit form also sends the status.
 WATCHED = ("start_datetime", "end_datetime", "location_type", "location", "meeting_url")
 
@@ -163,105 +165,130 @@ def _riyadh(value: str | None) -> datetime | None:
 
 
 @never_blocks
-def event_changed(session: Session, event: Events, before: dict) -> int:
+def event_changed(session: Session, event: Events, before: dict, change_id: str | None) -> int:
     """An organizer changed an event; ``before`` is ``event_state`` from before the change.
 
-    Returns how many pushes were queued. A request retried with nothing left to
-    change finds no change and queues nothing.
+    ``change_id`` is the ``event_history`` row the route recorded for the change
+    (None: nothing changed). It keys the pushes: one per real change, and the
+    same one for a replay. The routes lock the event row first, so a double
+    submit finds the change already made and records nothing.
     """
-    if not config.push_enabled or before.get("status") not in {status.value for status in PUBLIC}:
+    if not config.push_enabled or change_id is None or before.get("status") not in PUBLIC_VALUES:
         return 0
     after = event_state(event)
     now = clock.now()
     local_now = clock.to_riyadh(now)
-    if after["status"] not in {status.value for status in PUBLIC}:
+    if after["status"] not in PUBLIC_VALUES:
         planned = _riyadh(before["start_datetime"])
         if planned is None or planned <= local_now:
             return 0  # it has started (or ended): closing it now is not a cancellation
-        return _cancelled(session, event, planned, after["status"], now)
-    changed = {field: after[field] for field in WATCHED if before[field] != after[field]}
+        return _cancelled(session, event, planned, after["status"], change_id, now)
+    changed = {field for field in WATCHED if before[field] != after[field]}
     if not changed or event.end_datetime <= local_now:
         return 0
-    original = {field: before[field] for field in changed}
-    return _updated(session, event, original, changed, now)
+    return _updated(session, event, before, after, changed, change_id, now)
 
 
-def _updated(session: Session, event: Events, original: dict, changed: dict, now: datetime) -> int:
-    """One push per registrant that says everything not yet told: this change merged with their waiting ones.
+def _waiting(session: Session, kind: PushKind, event_id: int, member_ids, *, unsent_only: bool):
+    """The members' still-pending pushes of ``kind`` for the event, locked; ones another transaction holds are left.
 
-    A registrant's earlier ``event_updated`` that has not gone out yet (held for
-    quiet hours, never handed to Apple) is folded into this one and skipped as
-    ``superseded``: the newest value of each field wins, and a field back at the
-    value the registrant last heard of drops out (all of them back: no push).
-    Each change has its own key (the fields' values before and after, and when),
-    so a later change back to an earlier value is told again.
+    Found with a plain read, then locked by primary key with ``SKIP LOCKED``: only
+    these rows are locked, and nothing waits on delivery, so no deadlock. A row
+    delivery is handling right now is skipped and goes out on its own.
     """
-    registrations = _accepted(session, event.id)
-    if not registrations:
-        return 0
-    waiting: dict[int, list[PushNotifications]] = {}
-    for row in session.scalars(
+    conditions = [
+        PushNotifications.kind == kind,
+        PushNotifications.event_id == event_id,
+        PushNotifications.status == PushStatus.PENDING,
+        PushNotifications.member_id.in_(set(member_ids)),
+    ]
+    if unsent_only:
+        conditions.append(PushNotifications.attempts == 0)
+    ids = session.scalars(select(PushNotifications.id).where(*conditions)).all()
+    if not ids:
+        return {}
+    rows = session.scalars(
         select(PushNotifications)
-        .where(
-            PushNotifications.kind == PushKind.EVENT_UPDATED,
-            PushNotifications.event_id == event.id,
-            PushNotifications.status == PushStatus.PENDING,
-            PushNotifications.attempts == 0,
-            PushNotifications.member_id.in_({member_id for _, member_id in registrations}),
-        )
+        .where(PushNotifications.id.in_(ids), *conditions)
         .order_by(PushNotifications.created_at, PushNotifications.id)
-        .with_for_update()
-    ).all():
-        waiting.setdefault(row.member_id, []).append(row)
+        .with_for_update(skip_locked=True)
+    ).all()
+    found: dict[int, list[PushNotifications]] = {}
+    for row in rows:
+        found.setdefault(row.member_id, []).append(row)
+    return found
 
-    pushes: list[Push] = []
-    superseded: list[PushNotifications] = []
-    for submission_id, member_id in registrations:
-        told, news = {}, {}
-        for row in waiting.get(member_id, []):
-            cause = row.payload.get("cause") or {}
-            for field, value in (cause.get("from") or {}).items():
-                told.setdefault(field, value)
-            news.update(cause.get("changed") or {})
-        for field, value in original.items():
-            told.setdefault(field, value)
-        news.update(changed)
-        net = {field: value for field, value in news.items() if told.get(field) != value}
-        if set(net) == {"meeting_url"} and not net["meeting_url"]:
-            net = {}  # only the link was taken away: nothing to tell
-        key = None
-        if net:
-            told = {field: told.get(field) for field in net}
-            key = f"event_updated:{event.id}:{member_id}:{_digest({'from': told, 'to': net, 'at': clock.epoch(now)})}"
-            pushes.append(
-                Push(
-                    member_id=member_id,
-                    dedupe_key=key,
-                    cause={"submission_id": submission_id, "from": told, "changed": net},
-                )
-            )
-        superseded += [row for row in waiting.get(member_id, []) if row.dedupe_key != key]
-    for row in superseded:
+
+def _supersede(session: Session, rows) -> None:
+    for row in rows:
         row.status = PushStatus.SKIPPED
         row.last_error = "superseded"
     session.flush()
 
-    def text(push: Push) -> messages.Text:
-        net = (push.cause or {})["changed"]
-        starts = "start_datetime" in net
-        return messages.event_updated(
-            event.name,
-            starts=event.start_datetime if starts else None,
-            ends=event.end_datetime if "end_datetime" in net and not starts else None,
-            location=event.location if {"location", "location_type"} & set(net) else None,
-            new_link=bool(net.get("meeting_url")),
-        )
 
+def what_is_new(event: Events, told: dict) -> dict:
+    """The watched fields whose value now differs from ``told`` (what the member last heard), at their value now."""
+    now = event_state(event)
+    net = {field: now[field] for field, value in told.items() if now.get(field) != value}
+    if set(net) == {"meeting_url"} and not net["meeting_url"]:
+        return {}  # only the link was taken away: nothing to tell
+    return net
+
+
+def _update_text(event: Events, net: dict) -> messages.Text:
+    starts = "start_datetime" in net
+    return messages.event_updated(
+        event.name,
+        starts=event.start_datetime if starts else None,
+        ends=event.end_datetime if "end_datetime" in net and not starts else None,
+        location=event.location if {"location", "location_type"} & set(net) else None,
+        new_link=bool(net.get("meeting_url")),
+    )
+
+
+def _updated(
+    session: Session, event: Events, before: dict, after: dict, changed: set[str], change_id: str, now: datetime
+) -> int:
+    """One push per registrant that says everything not yet told: this change and their waiting ones.
+
+    A registrant's earlier ``event_updated`` that was never handed to Apple
+    (held for quiet hours, say) is folded into this one and skipped as
+    ``superseded``. What the registrant last heard of each field is the oldest
+    ``from`` among them; the text says each field that differs from it now, at
+    its value now. All back as they were: no push.
+    """
+    registrations = _accepted(session, event.id)
+    if not registrations:
+        return 0
+    waiting = _waiting(session, PushKind.EVENT_UPDATED, event.id, [m for _, m in registrations], unsent_only=True)
+    pushes: list[Push] = []
+    superseded: list[PushNotifications] = []
+    for submission_id, member_id in registrations:
+        key = f"event_updated:{event.id}:{member_id}:{change_id}"
+        told: dict = {}
+        for row in waiting.get(member_id, []):
+            if row.dedupe_key == key:
+                continue  # this very change, run again: its row stays as it is
+            for field, value in ((row.payload.get("cause") or {}).get("from") or {}).items():
+                told.setdefault(field, value)
+            superseded.append(row)
+        for field in changed:
+            told.setdefault(field, before[field])
+        net = what_is_new(event, told)
+        if net:
+            pushes.append(
+                Push(
+                    member_id=member_id,
+                    dedupe_key=key,
+                    cause={"submission_id": submission_id, "from": {f: told[f] for f in net}, "changed": net},
+                )
+            )
+    _supersede(session, superseded)
     return outbox.enqueue(
         session,
         PushKind.EVENT_UPDATED,
         pushes,
-        text=text,
+        text=lambda push: _update_text(event, (push.cause or {})["changed"]),
         url=links.event_url(event.id),
         thread_id=f"event-{event.id}",
         event_id=event.id,
@@ -270,15 +297,17 @@ def _updated(session: Session, event: Events, original: dict, changed: dict, now
     )
 
 
-def _cancelled(session: Session, event: Events, planned: datetime, status: str, now: datetime) -> int:
-    """Keyed by the moment of the cancellation: one undone before delivery leaves the next one free to go."""
+def _cancelled(session: Session, event: Events, planned: datetime, status: str, change_id: str, now: datetime) -> int:
+    """Keyed by the change; a registrant's earlier cancellation still waiting (a retry, say) is superseded."""
+    registrations = _accepted(session, event.id)
+    if not registrations:
+        return 0
+    waiting = _waiting(session, PushKind.EVENT_CANCELLED, event.id, [m for _, m in registrations], unsent_only=False)
+    keys = {member_id: f"event_cancelled:{event.id}:{member_id}:{change_id}" for _, member_id in registrations}
+    _supersede(session, [row for rows in waiting.values() for row in rows if row.dedupe_key != keys[row.member_id]])
     pushes = [
-        Push(
-            member_id=member_id,
-            dedupe_key=f"event_cancelled:{event.id}:{member_id}:{clock.epoch(now)}",
-            cause={"submission_id": submission_id, "status": status},
-        )
-        for submission_id, member_id in _accepted(session, event.id)
+        Push(member_id=member_id, dedupe_key=keys[member_id], cause={"submission_id": submission_id, "status": status})
+        for submission_id, member_id in registrations
     ]
     return outbox.enqueue(
         session,
@@ -332,27 +361,29 @@ def content_added(session: Session, link: EventContentLinks) -> int:
 
 
 @never_blocks
-def attendance_added(session: Session, event: Events, member_id: int) -> int:
-    """Staff recorded a member's attendance after slides or a recording went up: they hear of them too.
+def attendance_added(session: Session, event: Events, member_ids) -> int:
+    """Staff recorded attendance after slides or a recording went up: those members hear of them too.
 
-    Called next to ``triggers.attendance_recorded`` (scan, manual, import). Only
-    content added in the last 7 days: a member added to an old event's
-    attendance is not told about its slides weeks later. The keys are
-    ``content_added``'s, so nobody hears of one link twice.
+    Called once per request, after ``triggers.attendance_recorded`` (scan,
+    manual, import). Only content published in the last 7 days
+    (``published_at``): a member added to an old event's attendance is not
+    told about its slides weeks later. The keys are ``content_added``'s, so
+    nobody hears of one link twice.
     """
-    if not config.push_enabled:
+    member_ids = list(dict.fromkeys(member_ids))
+    if not config.push_enabled or not member_ids:
         return 0
-    added = session.scalars(
+    published = session.scalars(
         select(EventContentLinks)
         .where(
             EventContentLinks.event_id == event.id,
             EventContentLinks.published == 1,
             EventContentLinks.kind.in_(CONTENT_KINDS),
-            EventContentLinks.created_at >= clock.now() - CONTENT_TTL,
+            EventContentLinks.published_at >= clock.now() - CONTENT_TTL,
         )
-        .order_by(EventContentLinks.created_at, EventContentLinks.id)
+        .order_by(EventContentLinks.published_at, EventContentLinks.id)
     ).all()
-    return sum(_content(session, event, link, [member_id]) for link in added)
+    return sum(_content(session, event, link, member_ids) for link in published)
 
 
 def _content(session: Session, event: Events, link: EventContentLinks, member_ids) -> int:
@@ -408,37 +439,57 @@ def enqueue_event_live(session: Session, now: datetime, result) -> None:
     """An online day started in the last 15 minutes: accepted registrants not checked in that day.
 
     Online days are every day of an online event, and the online days of a
-    pipeline event that mixes the two: it is published on-site with the Meet
-    link, and its request's ``day_modes`` says which days are online.
+    pipeline event that mixes the two (``online_days``).
     """
     if not config.push_enabled:
         return
     local_now = clock.to_riyadh(now)
-    rows = session.execute(
-        select(Events, EventRequests.day_modes)
-        .outerjoin(EventRequests, EventRequests.event_id == Events.id)
-        .where(
+    events = session.scalars(
+        select(Events).where(
             Events.status.in_(PUBLIC),
-            or_(
-                Events.location_type == EventsLocationType.ONLINE,
-                and_(Events.location_type == EventsLocationType.ON_SITE, Events.meeting_url.is_not(None)),
-            ),
+            Events.location_type.in_(ATTENDED_LOCATIONS),
             Events.start_datetime <= local_now,
             Events.end_datetime >= local_now - timedelta(days=1),
         )
     ).all()
-    for event, day_modes in rows:
+    mixed = online_days(session, [e for e in events if e.location_type == EventsLocationType.ON_SITE])
+    for event in events:
         total = event_days(event)
         for day in range(1, total + 1):
             starts = day_start(event, day)
-            if local_now - LIVE_WINDOW < starts <= local_now and _online_on(event, day_modes, starts):
+            online = event.location_type == EventsLocationType.ONLINE or day in mixed.get(event.id, ())
+            if online and local_now - LIVE_WINDOW < starts <= local_now:
                 result.push_event_live += _live(session, event, day, total, starts, now)
 
 
-def _online_on(event: Events, day_modes: dict | None, starts: datetime) -> bool:
-    if event.location_type == EventsLocationType.ONLINE:
-        return True
-    return isinstance(day_modes, dict) and day_modes.get(starts.date().isoformat()) == "online"
+def online_days(session: Session, events) -> dict[int, set[int]]:
+    """{event: its online day numbers (1-based)} for on-site events a pipeline request published with online days.
+
+    The pipeline publishes a mix of on-site and online days as one on-site event
+    with the Meet link (``event_pipeline``); which days are online is in what
+    Logistics confirmed, the same source the event was published from. Days are
+    counted from the confirmed start, so moving the event's dates afterwards
+    (``PUT /events/{id}``) keeps them; a day the confirmation never had is
+    on-site.
+    """
+    ids = [event.id for event in events]
+    if not ids:
+        return {}
+    found: dict[int, set[int]] = {}
+    requests = session.scalars(
+        select(EventRequests).where(EventRequests.event_id.in_(ids)).options(selectinload(EventRequests.tasks))
+    ).all()
+    for request in requests:
+        task = next((task for task in request.tasks if task.team == PipelineTeam.LOGISTICS), None)
+        confirmed = event_deliverables.logistics_confirmation(request, task)
+        if confirmed is None or not confirmed.day_modes or request.event_id is None:
+            continue
+        modes = confirmed.day_modes
+        first = confirmed.start_date or min(modes)
+        days = {(day - first).days + 1 for day, mode in modes.items() if getattr(mode, "value", mode) == "online"}
+        if days:
+            found[request.event_id] = days
+    return found
 
 
 def _day_end(event: Events, starts: datetime) -> datetime:
@@ -570,7 +621,12 @@ def semester_points(
 
     The semester total is the leaderboard's (``app/DB/points.py``): the
     action's points plus the log's bonuses and discounts, on events of the
-    semester that are not drafts. When points were earned is ``earned_on``.
+    semester that are not drafts. Points count for the day their
+    ``members_logs`` row was written, read as attendance reads it: attendance on
+    the day it records, custom points when they were given. Editing a
+    custom-points entry keeps the rows of the members who stay on it
+    (``app/DB/logs.py`` ``set_member_logs``), so an edit never moves points into
+    this week.
     """
     if not member_ids:
         return {}
@@ -595,7 +651,6 @@ def semester_points(
         select(
             MembersLogs.member_id,
             MembersLogs.date,
-            Events.end_datetime,
             func.coalesce(Actions.points, 0) + func.coalesce(modifiers.c.value, 0),
         )
         .join(Logs, Logs.id == MembersLogs.log_id)
@@ -609,22 +664,11 @@ def semester_points(
         )
     ).all()
     found: dict[int, tuple[int, int]] = {}
-    for member_id, logged, event_ends, value in rows:
+    for member_id, logged, value in rows:
         total, week = found.get(member_id, (0, 0))
         value = int(value or 0)
-        found[member_id] = (total + value, week + (value if earned_on(logged, event_ends) >= week_from else 0))
+        found[member_id] = (total + value, week + (value if _effective_day(logged) >= week_from else 0))
     return found
-
-
-def earned_on(logged: datetime, event_ends: datetime) -> date:
-    """The day points were earned: the attendance row's effective day, never after its event's last day.
-
-    An attendance row is written on the day it records. A custom-points row is
-    rewritten whenever staff edit the entry (``PUT /custom/members/{log_id}``
-    deletes and recreates them), so its own date can be much later than the
-    event the points are for; the event's last day bounds it.
-    """
-    return min(_effective_day(logged), event_ends.date())
 
 
 SWEEP_RULES = [
@@ -636,7 +680,11 @@ SWEEP_RULES = [
 
 
 def cause_gone(session: Session, row: PushNotifications) -> str | None:
-    """Why this push should no longer go out, or None when its cause still holds."""
+    """Why this push should no longer go out, or None when its cause still holds.
+
+    An ``event_updated`` that still goes is rewritten here from the event as it
+    is now (``row.payload``), so a later change never leaves it saying old news.
+    """
     cause = row.payload.get("cause") or {}
     event = session.get(Events, row.event_id) if row.event_id is not None else None
     if row.kind in (PushKind.EVENT_UPDATED, PushKind.EVENT_LIVE):
@@ -645,8 +693,12 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
         if event is None or event.status not in PUBLIC:
             return "event_closed"
         if row.kind == PushKind.EVENT_UPDATED:
-            now = event_state(event)
-            return None if all(now[f] == v for f, v in (cause.get("changed") or {}).items()) else "event_changed"
+            # Said as the event is now: whatever changed since the row was written is in it.
+            net = what_is_new(event, cause.get("from") or {})
+            if not net:
+                return "unchanged"
+            row.payload = {**row.payload, **_update_text(event, net), "cause": {**cause, "changed": net}}
+            return None
         starts = [day_start(event, day).isoformat() for day in range(1, event_days(event) + 1)]
         if cause.get("starts") not in starts:
             return "event_changed"
@@ -655,7 +707,21 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
     if row.kind == PushKind.EVENT_CANCELLED:
         if not _still_accepted(session, cause):
             return "not_accepted"
-        return "event_reopened" if event is not None and event.status in PUBLIC else None
+        if event is not None and event.status in PUBLIC:
+            return "event_reopened"
+        newer_sent = session.scalar(
+            select(PushNotifications.id)
+            .where(
+                PushNotifications.kind == PushKind.EVENT_CANCELLED,
+                PushNotifications.event_id == row.event_id,
+                PushNotifications.member_id == row.member_id,
+                PushNotifications.status == PushStatus.SENT,
+                # Ids are time-ordered (UUIDv7): a newer cancellation told them already.
+                PushNotifications.id > row.id,
+            )
+            .limit(1)
+        )
+        return "superseded" if newer_sent is not None else None
     if row.kind == PushKind.REGISTRATION_CLOSING:
         if event is None or event.status != EventsStatus.OPEN:
             return "event_closed"

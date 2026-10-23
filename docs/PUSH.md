@@ -27,7 +27,7 @@ nothing is sent. Turning push on is only setting the variables
 |---|---|
 | `member_devices` | a phone: its APNs token (unique: a token belongs to one member at a time), `environment` (`production` for TestFlight / App Store builds, `development` for dev builds), app version and build, the app's language. At most 5 per member; unseen for 180 days → deleted by the sweep |
 | `member_notification_prefs` | a member's four switches `remind`, `accept`, `points`, `news`. No row = all four on (`news` too since revision `bfc96a1c1507`, which also switched `news` on in every row saved before it) |
-| `push_notifications` | the outbox and the sent log: one notification for one member, its text in both languages, `status` `pending` / `sent` / `skipped` / `failed`, `not_before`, `expires_at`. Deleted after 90 days. `kind` gained the 1.0.3 kinds in revision `80d73cc07c1a` |
+| `push_notifications` | the outbox and the sent log: one notification for one member, its text in both languages, `status` `pending` / `sent` / `skipped` / `failed`, `not_before`, `expires_at`. Deleted after 90 days. `kind` gained the 1.0.3 kinds in revision `80d73cc07c1a`, which also added `event_content_links.published_at` (when a link last became visible; `created_at` for the ones already published) |
 | `push_broadcasts` | an organizer's announcement (`POST /notifications/broadcast`) |
 
 Deleting an account (`DELETE /members/me`, `anonymize_member`) deletes the
@@ -79,11 +79,11 @@ app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
 | `broadcast` | `POST /notifications/broadcast` | the audience | `news` or `remind` | quiet hours; 2 days |
 | `event_updated` | an open or active event that has not ended gets a new start, end, place (`location`, `location_type`) or join link (`PUT /events/{id}`, `…/status`, `…/meeting-url`). Only the link removed, or other fields: nothing | accepted, not cancelled registrations | `remind` | quiet hours; capped; expires at the event's end |
 | `event_cancelled` | an `open` or `active` event that has not started is set to `closed` or back to `draft` (same routes) | accepted, not cancelled registrations | `remind` | **not** held for quiet hours, not capped; expires at the planned start |
-| `event_live` | an online day of an open or active event started in the last 15 minutes (sweep): every day of an online event, and the days a mixed pipeline event's request marks `online` in `day_modes` (it is published on-site with the Meet link) | accepted, not cancelled registrations not checked in that day | `remind` | **not** held for quiet hours, not capped; expires at that day's end |
+| `event_live` | an online day of an open or active event started in the last 15 minutes (sweep): every day of an online event, and the online days of a pipeline event that mixes on-site and online days (it is published on-site with the Meet link). Those come from what Logistics confirmed, the event's own source, counted by day number from the confirmed start, so an edit that moves the event keeps them; the edit form also keeps an on-site event's Meet link now (it used to clear it) | accepted, not cancelled registrations not checked in that day | `remind` | **not** held for quiet hours, not capped; expires at that day's end |
 | `registration_closing` | 24 hours before an `open` online or on-site event with a `registration` or `google` form starts, if it was already open then; sent within 6 hours of that mark or not at all (sweep) | members with club news on and no submission on the event (a cancelled or partial one counts as one) | `news` | quiet hours; capped; expires at the start |
 | `certificate` | each certificate e-mail sent for an event (`POST /emails/{event_id}`, and `POST /emails/manual-certificate` for a member of an event) | that member | `points` | quiet hours; capped; 7 days |
-| `event_content` | slides or a recording published on an event (`POST /events/{id}/content-links`, a draft link published with `PUT`, `POST /upload/drive-slides/`); `other` links send nothing. Attendance staff record later (scan, manual, import) brings the content of the last 7 days to that member | members with attendance on the event | `remind` | quiet hours; capped; 7 days |
-| `weekly_summary` | Thursday 20:00-22:00 Riyadh while a semester runs (today between its start and end dates) (sweep) | members with points this semester: "+N this week · M this semester". A point counts for the day it was earned: its attendance row's effective day, never after its event's last day (editing an old custom-points entry rewrites its rows' dates) | `points` | capped; 12 hours |
+| `event_content` | slides or a recording published on an event (`POST /events/{id}/content-links`, a draft link published with `PUT`, `POST /upload/drive-slides/`); `other` links send nothing. Attendance staff record later (scan, manual, import) brings the content published in the last 7 days (`published_at`) to those members, looked up once per request | members with attendance on the event | `remind` | quiet hours; capped; 7 days |
+| `weekly_summary` | Thursday 20:00-22:00 Riyadh while a semester runs (today between its start and end dates) (sweep) | members with points this semester: "+N this week · M this semester". A point counts for the day its `members_logs` row was written (attendance: the day it records; custom points: when given). Editing a custom-points entry (`PUT /custom/members/{log_id}`) now keeps the rows of the members who stay on it, so an edit moves no points into this week | `points` | capped; 12 hours |
 | `welcome` | a member's first phone registers (`POST /notifications/devices`) within 7 days of their member record's creation | that member | `news` | quiet hours; capped; 3 days |
 
 **Quiet hours** are 22:00-08:00 Riyadh: a push queued then waits until 08:00.
@@ -101,17 +101,29 @@ time-critical and always go. The 1.0.2 kinds keep their own rules.
 **`event_updated` says everything not yet told.** A registrant's earlier
 `event_updated` for the same event that has not gone out yet (held for quiet
 hours, never handed to Apple) is folded into the new one and `skipped` as
-`superseded`: the newest value of each field wins, and a field back at the
-value the registrant last heard of drops out (all of them back: no push).
+`superseded`. What the registrant last heard of each field is the oldest
+`from` among them; the push says each field that differs from it, at its value
+now (all back as they were: no push). Delivery says it again from the event as
+it is then, and skips it as `unchanged` when nothing differs any more. The
+waiting rows are found with a plain read and locked by id with `FOR UPDATE SKIP
+LOCKED`: only those rows, and a row delivery holds is left to go on its own, so
+an edit never waits on delivery.
+
+**`event_cancelled` once per cancellation.** A cancellation supersedes the
+registrant's earlier one still waiting (a retry after a 5xx, say), and delivery
+skips an older one when a newer one already went out (`superseded`).
+
+**Event edits are serialized.** `PUT /events/{id}`, `/status` and
+`/meeting-url` lock the event row first, so a double submit finds the change
+made, records no history and queues nothing.
 
 **One push per `dedupe_key`**, ever: `reminder:{event}:{Riyadh date}:{member}`,
 `accepted:{submission}:{submitted_at epoch}`, `points:{log}:{member}:{day}`,
 `points:custom:{log}:{member}`, `new_event:{event}:{member}`,
-`broadcast:{broadcast}:{member}`, `event_updated:{event}:{member}:{hash}` (the
-first 16 hex of the SHA-256 of the fields' values before and after and the
-change's epoch: each change has its own key, so a change back to an earlier value
-is told again), `event_cancelled:{event}:{member}:{epoch of the cancellation}`
-(a cancellation undone before delivery leaves the next one free), `event_live:{event}:{Riyadh date}:{member}`,
+`broadcast:{broadcast}:{member}`, `event_updated:{event}:{member}:{event_history id}`
+and `event_cancelled:{event}:{member}:{event_history id}` (the history row the
+route recorded for the change: one per real change, the same for a replay, so a
+change back to an earlier value is told again), `event_live:{event}:{Riyadh date}:{member}`,
 `registration_closing:{event}:{member}`, `certificate:{event}:{member}`,
 `event_content:{event}:{content link id}:{member}`,
 `weekly_summary:{ISO week, 2026-W30}:{member}`, `welcome:{member}`. Triggers can
@@ -121,9 +133,10 @@ run twice (four workers, retries, the sweep) and add nothing the second time.
 phone still registered, and the cause - the registration still accepted and the
 day still on the calendar, the attendance row still there, the event still
 open. For the 1.0.3 kinds: `event_updated` - still accepted, the event still
-open or active and the changed fields still as the push says (a later change
-sends its own push, `event_changed`); `event_cancelled` - still accepted, the
-event not reopened (`event_reopened`); `event_live` - still accepted, the day
+open or active, something still different from what the registrant last heard
+(`unchanged`), and the text rewritten from the event as it is now;
+`event_cancelled` - still accepted, the event not reopened (`event_reopened`),
+no newer cancellation sent already (`superseded`); `event_live` - still accepted, the day
 still on the calendar, not checked in since (`checked_in`);
 `registration_closing` - the event still open at the same start, still no
 submission (`registered`); `certificate` - its e-mail log still there;

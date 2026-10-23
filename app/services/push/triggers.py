@@ -172,9 +172,9 @@ def attendance_recorded(session: Session, event: Events, log: Logs, member_log: 
 def custom_points_given(session: Session, event: Events, log_id: int, member_ids: Iterable[int]) -> int:
     """Staff gave custom points. Editing the entry later notifies only the members it adds.
 
-    Keyed by log and member, not by the ``members_logs`` row: an edit
-    (``PUT /custom/members/{log_id}``) deletes and recreates every row, which
-    would notify everyone again. A deduction (zero or fewer points) sends nothing.
+    Keyed by log and member, not by the ``members_logs`` row: a member taken off
+    the entry and put back gets a new row, and must not hear of it twice. A
+    deduction (zero or fewer points) sends nothing.
     """
     if not config.push_enabled:
         return 0

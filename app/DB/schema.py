@@ -1650,6 +1650,8 @@ class EventContentLinks(Base):
         VARCHAR(255, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
     )
     published: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    # When it last became visible to members (UTC); NULL while it is a draft.
+    published_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
