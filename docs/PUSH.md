@@ -79,11 +79,11 @@ app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
 | `broadcast` | `POST /notifications/broadcast` | the audience | `news` or `remind` | quiet hours; 2 days |
 | `event_updated` | an open or active event that has not ended gets a new start, end, place (`location`, `location_type`) or join link (`PUT /events/{id}`, `…/status`, `…/meeting-url`). Only the link removed, or other fields: nothing | accepted, not cancelled registrations | `remind` | quiet hours; capped; expires at the event's end |
 | `event_cancelled` | an `open` or `active` event that has not started is set to `closed` or back to `draft` (same routes) | accepted, not cancelled registrations | `remind` | **not** held for quiet hours, not capped; expires at the planned start |
-| `event_live` | an online, open or active event's day started in the last 15 minutes (sweep) | accepted, not cancelled registrations not checked in that day | `remind` | **not** held for quiet hours, not capped; expires at that day's end |
+| `event_live` | an online day of an open or active event started in the last 15 minutes (sweep): every day of an online event, and the days a mixed pipeline event's request marks `online` in `day_modes` (it is published on-site with the Meet link) | accepted, not cancelled registrations not checked in that day | `remind` | **not** held for quiet hours, not capped; expires at that day's end |
 | `registration_closing` | 24 hours before an `open` online or on-site event with a `registration` or `google` form starts, if it was already open then; sent within 6 hours of that mark or not at all (sweep) | members with club news on and no submission on the event (a cancelled or partial one counts as one) | `news` | quiet hours; capped; expires at the start |
 | `certificate` | each certificate e-mail sent for an event (`POST /emails/{event_id}`, and `POST /emails/manual-certificate` for a member of an event) | that member | `points` | quiet hours; capped; 7 days |
-| `event_content` | slides or a recording published on an event (`POST /events/{id}/content-links`, a draft link published with `PUT`, `POST /upload/drive-slides/`); `other` links send nothing | members with attendance on the event | `remind` | quiet hours; capped; 7 days |
-| `weekly_summary` | Thursday 20:00-22:00 Riyadh while a semester runs (today between its start and end dates) (sweep) | members with points this semester: "+N this week · M this semester" | `points` | capped; 12 hours |
+| `event_content` | slides or a recording published on an event (`POST /events/{id}/content-links`, a draft link published with `PUT`, `POST /upload/drive-slides/`); `other` links send nothing. Attendance staff record later (scan, manual, import) brings the content of the last 7 days to that member | members with attendance on the event | `remind` | quiet hours; capped; 7 days |
+| `weekly_summary` | Thursday 20:00-22:00 Riyadh while a semester runs (today between its start and end dates) (sweep) | members with points this semester: "+N this week · M this semester". A point counts for the day it was earned: its attendance row's effective day, never after its event's last day (editing an old custom-points entry rewrites its rows' dates) | `points` | capped; 12 hours |
 | `welcome` | a member's first phone registers (`POST /notifications/devices`) within 7 days of their member record's creation | that member | `news` | quiet hours; capped; 3 days |
 
 **Quiet hours** are 22:00-08:00 Riyadh: a push queued then waits until 08:00.
@@ -91,15 +91,27 @@ app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
 **Capped**: at most 3 pushes of the capped 1.0.3 kinds (`event_updated`,
 `registration_closing`, `certificate`, `event_content`, `weekly_summary`,
 `welcome`) reach a member in a Riyadh day; more are `skipped` with
-`daily_cap`. `event_live` and `event_cancelled` are time-critical and always go.
-The 1.0.2 kinds keep their own rules.
+`daily_cap`. Pushes another worker has out for delivery (claimed, not yet
+recorded) count too, and the count is taken under a lock on each member's row
+(`SELECT ... FOR UPDATE SKIP LOCKED` on `members`), so two workers claiming at
+the same moment cannot both pass it: a member another claim holds keeps their
+capped rows for the next round. `event_live` and `event_cancelled` are
+time-critical and always go. The 1.0.2 kinds keep their own rules.
+
+**`event_updated` says everything not yet told.** A registrant's earlier
+`event_updated` for the same event that has not gone out yet (held for quiet
+hours, never handed to Apple) is folded into the new one and `skipped` as
+`superseded`: the newest value of each field wins, and a field back at the
+value the registrant last heard of drops out (all of them back: no push).
 
 **One push per `dedupe_key`**, ever: `reminder:{event}:{Riyadh date}:{member}`,
 `accepted:{submission}:{submitted_at epoch}`, `points:{log}:{member}:{day}`,
 `points:custom:{log}:{member}`, `new_event:{event}:{member}`,
 `broadcast:{broadcast}:{member}`, `event_updated:{event}:{member}:{hash}` (the
-first 16 hex of the SHA-256 of the changed fields' new values),
-`event_cancelled:{event}:{member}`, `event_live:{event}:{Riyadh date}:{member}`,
+first 16 hex of the SHA-256 of the fields' values before and after and the
+change's epoch: each change has its own key, so a change back to an earlier value
+is told again), `event_cancelled:{event}:{member}:{epoch of the cancellation}`
+(a cancellation undone before delivery leaves the next one free), `event_live:{event}:{Riyadh date}:{member}`,
 `registration_closing:{event}:{member}`, `certificate:{event}:{member}`,
 `event_content:{event}:{content link id}:{member}`,
 `weekly_summary:{ISO week, 2026-W30}:{member}`, `welcome:{member}`. Triggers can

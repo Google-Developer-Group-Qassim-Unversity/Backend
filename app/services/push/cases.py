@@ -13,13 +13,15 @@ route kicks delivery after the commit:
 - ``certificate_sent`` (the certificate e-mail jobs): per member, as each
   certificate e-mail goes out.
 - ``content_added`` (content links, the Drive slides upload): slides or a
-  recording published on an event.
+  recording published on an event; ``attendance_added`` (staff recording
+  attendance) brings the last 7 days' content to a member recorded later.
 - ``first_device`` (``POST /notifications/devices``): a member's first phone,
   within 7 days of their member record being created.
 
 Sweep rules take the ``RULES`` signature ``(session, now, result)``:
 
-- ``enqueue_event_live``: an online event day has just started.
+- ``enqueue_event_live``: an online day has just started (an online event's,
+  or a mixed pipeline event's online one).
 - ``enqueue_registration_closing``: 24 hours before an open event starts. The
   database has no registration deadline: a ``registration`` or ``google`` form
   takes registrations while its event is ``open`` (the app reads leaving the
@@ -37,9 +39,9 @@ ever, quiet hours except ``event_live`` and ``event_cancelled``, and at most
 import hashlib
 import json
 import logging
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import config
@@ -48,6 +50,7 @@ from app.DB.schema import (
     EmailLogs,
     EmailLogsEmailType,
     EventContentLinks,
+    EventRequests,
     Events,
     EventsContentLinkKind,
     EventsLocationType,
@@ -60,6 +63,7 @@ from app.DB.schema import (
     ModificationsType,
     PushKind,
     PushNotifications,
+    PushStatus,
     Submissions,
     SubmissionsSubmissionType,
 )
@@ -160,58 +164,118 @@ def _riyadh(value: str | None) -> datetime | None:
 
 @never_blocks
 def event_changed(session: Session, event: Events, before: dict) -> int:
-    """An organizer changed an event; ``before`` is ``event_state`` from before the change."""
+    """An organizer changed an event; ``before`` is ``event_state`` from before the change.
+
+    Returns how many pushes were queued. A request retried with nothing left to
+    change finds no change and queues nothing.
+    """
     if not config.push_enabled or before.get("status") not in {status.value for status in PUBLIC}:
         return 0
     after = event_state(event)
-    local_now = clock.to_riyadh(clock.now())
+    now = clock.now()
+    local_now = clock.to_riyadh(now)
     if after["status"] not in {status.value for status in PUBLIC}:
         planned = _riyadh(before["start_datetime"])
         if planned is None or planned <= local_now:
             return 0  # it has started (or ended): closing it now is not a cancellation
-        return _cancelled(session, event, planned, after["status"])
+        return _cancelled(session, event, planned, after["status"], now)
     changed = {field: after[field] for field in WATCHED if before[field] != after[field]}
-    if set(changed) == {"meeting_url"} and not changed["meeting_url"]:
-        return 0  # only the link was taken away: nothing to tell
     if not changed or event.end_datetime <= local_now:
         return 0
-    return _updated(session, event, changed)
+    original = {field: before[field] for field in changed}
+    return _updated(session, event, original, changed, now)
 
 
-def _updated(session: Session, event: Events, changed: dict) -> int:
-    digest = _digest(changed)
-    pushes = [
-        Push(
-            member_id=member_id,
-            dedupe_key=f"event_updated:{event.id}:{member_id}:{digest}",
-            cause={"submission_id": submission_id, "changed": changed},
+def _updated(session: Session, event: Events, original: dict, changed: dict, now: datetime) -> int:
+    """One push per registrant that says everything not yet told: this change merged with their waiting ones.
+
+    A registrant's earlier ``event_updated`` that has not gone out yet (held for
+    quiet hours, never handed to Apple) is folded into this one and skipped as
+    ``superseded``: the newest value of each field wins, and a field back at the
+    value the registrant last heard of drops out (all of them back: no push).
+    Each change has its own key (the fields' values before and after, and when),
+    so a later change back to an earlier value is told again.
+    """
+    registrations = _accepted(session, event.id)
+    if not registrations:
+        return 0
+    waiting: dict[int, list[PushNotifications]] = {}
+    for row in session.scalars(
+        select(PushNotifications)
+        .where(
+            PushNotifications.kind == PushKind.EVENT_UPDATED,
+            PushNotifications.event_id == event.id,
+            PushNotifications.status == PushStatus.PENDING,
+            PushNotifications.attempts == 0,
+            PushNotifications.member_id.in_({member_id for _, member_id in registrations}),
         )
-        for submission_id, member_id in _accepted(session, event.id)
-    ]
-    starts = "start_datetime" in changed
+        .order_by(PushNotifications.created_at, PushNotifications.id)
+        .with_for_update()
+    ).all():
+        waiting.setdefault(row.member_id, []).append(row)
+
+    pushes: list[Push] = []
+    superseded: list[PushNotifications] = []
+    for submission_id, member_id in registrations:
+        told, news = {}, {}
+        for row in waiting.get(member_id, []):
+            cause = row.payload.get("cause") or {}
+            for field, value in (cause.get("from") or {}).items():
+                told.setdefault(field, value)
+            news.update(cause.get("changed") or {})
+        for field, value in original.items():
+            told.setdefault(field, value)
+        news.update(changed)
+        net = {field: value for field, value in news.items() if told.get(field) != value}
+        if set(net) == {"meeting_url"} and not net["meeting_url"]:
+            net = {}  # only the link was taken away: nothing to tell
+        key = None
+        if net:
+            told = {field: told.get(field) for field in net}
+            key = f"event_updated:{event.id}:{member_id}:{_digest({'from': told, 'to': net, 'at': clock.epoch(now)})}"
+            pushes.append(
+                Push(
+                    member_id=member_id,
+                    dedupe_key=key,
+                    cause={"submission_id": submission_id, "from": told, "changed": net},
+                )
+            )
+        superseded += [row for row in waiting.get(member_id, []) if row.dedupe_key != key]
+    for row in superseded:
+        row.status = PushStatus.SKIPPED
+        row.last_error = "superseded"
+    session.flush()
+
+    def text(push: Push) -> messages.Text:
+        net = (push.cause or {})["changed"]
+        starts = "start_datetime" in net
+        return messages.event_updated(
+            event.name,
+            starts=event.start_datetime if starts else None,
+            ends=event.end_datetime if "end_datetime" in net and not starts else None,
+            location=event.location if {"location", "location_type"} & set(net) else None,
+            new_link=bool(net.get("meeting_url")),
+        )
+
     return outbox.enqueue(
         session,
         PushKind.EVENT_UPDATED,
         pushes,
-        text=messages.event_updated(
-            event.name,
-            starts=event.start_datetime if starts else None,
-            ends=event.end_datetime if "end_datetime" in changed and not starts else None,
-            location=event.location if {"location", "location_type"} & set(changed) else None,
-            new_link=bool(changed.get("meeting_url")),
-        ),
+        text=text,
         url=links.event_url(event.id),
         thread_id=f"event-{event.id}",
         event_id=event.id,
         expires_at=clock.to_utc(event.end_datetime),
+        now=now,
     )
 
 
-def _cancelled(session: Session, event: Events, planned: datetime, status: str) -> int:
+def _cancelled(session: Session, event: Events, planned: datetime, status: str, now: datetime) -> int:
+    """Keyed by the moment of the cancellation: one undone before delivery leaves the next one free to go."""
     pushes = [
         Push(
             member_id=member_id,
-            dedupe_key=f"event_cancelled:{event.id}:{member_id}",
+            dedupe_key=f"event_cancelled:{event.id}:{member_id}:{clock.epoch(now)}",
             cause={"submission_id": submission_id, "status": status},
         )
         for submission_id, member_id in _accepted(session, event.id)
@@ -226,6 +290,7 @@ def _cancelled(session: Session, event: Events, planned: datetime, status: str) 
         event_id=event.id,
         expires_at=clock.to_utc(planned),
         quiet_hours=False,
+        now=now,
     )
 
 
@@ -263,13 +328,41 @@ def content_added(session: Session, link: EventContentLinks) -> int:
         .join(Logs, Logs.id == MembersLogs.log_id)
         .where(Logs.event_id == event.id)
     ).all()
+    return _content(session, event, link, attendees)
+
+
+@never_blocks
+def attendance_added(session: Session, event: Events, member_id: int) -> int:
+    """Staff recorded a member's attendance after slides or a recording went up: they hear of them too.
+
+    Called next to ``triggers.attendance_recorded`` (scan, manual, import). Only
+    content added in the last 7 days: a member added to an old event's
+    attendance is not told about its slides weeks later. The keys are
+    ``content_added``'s, so nobody hears of one link twice.
+    """
+    if not config.push_enabled:
+        return 0
+    added = session.scalars(
+        select(EventContentLinks)
+        .where(
+            EventContentLinks.event_id == event.id,
+            EventContentLinks.published == 1,
+            EventContentLinks.kind.in_(CONTENT_KINDS),
+            EventContentLinks.created_at >= clock.now() - CONTENT_TTL,
+        )
+        .order_by(EventContentLinks.created_at, EventContentLinks.id)
+    ).all()
+    return sum(_content(session, event, link, [member_id]) for link in added)
+
+
+def _content(session: Session, event: Events, link: EventContentLinks, member_ids) -> int:
     pushes = [
         Push(
             member_id=member_id,
             dedupe_key=f"event_content:{event.id}:{link.id}:{member_id}",
             cause={"link_id": link.id},
         )
-        for member_id in attendees
+        for member_id in member_ids
     ]
     return outbox.enqueue(
         session,
@@ -312,24 +405,40 @@ def first_device(session: Session, member: Members, *, had_device: bool) -> int:
 
 
 def enqueue_event_live(session: Session, now: datetime, result) -> None:
-    """An online event day has started in the last 15 minutes: accepted registrants not checked in that day."""
+    """An online day started in the last 15 minutes: accepted registrants not checked in that day.
+
+    Online days are every day of an online event, and the online days of a
+    pipeline event that mixes the two: it is published on-site with the Meet
+    link, and its request's ``day_modes`` says which days are online.
+    """
     if not config.push_enabled:
         return
     local_now = clock.to_riyadh(now)
-    events = session.scalars(
-        select(Events).where(
+    rows = session.execute(
+        select(Events, EventRequests.day_modes)
+        .outerjoin(EventRequests, EventRequests.event_id == Events.id)
+        .where(
             Events.status.in_(PUBLIC),
-            Events.location_type == EventsLocationType.ONLINE,
+            or_(
+                Events.location_type == EventsLocationType.ONLINE,
+                and_(Events.location_type == EventsLocationType.ON_SITE, Events.meeting_url.is_not(None)),
+            ),
             Events.start_datetime <= local_now,
             Events.end_datetime >= local_now - timedelta(days=1),
         )
     ).all()
-    for event in events:
+    for event, day_modes in rows:
         total = event_days(event)
         for day in range(1, total + 1):
             starts = day_start(event, day)
-            if local_now - LIVE_WINDOW < starts <= local_now:
+            if local_now - LIVE_WINDOW < starts <= local_now and _online_on(event, day_modes, starts):
                 result.push_event_live += _live(session, event, day, total, starts, now)
+
+
+def _online_on(event: Events, day_modes: dict | None, starts: datetime) -> bool:
+    if event.location_type == EventsLocationType.ONLINE:
+        return True
+    return isinstance(day_modes, dict) and day_modes.get(starts.date().isoformat()) == "online"
 
 
 def _day_end(event: Events, starts: datetime) -> datetime:
@@ -457,12 +566,11 @@ def enqueue_weekly_summaries(session: Session, now: datetime, result) -> None:
 def semester_points(
     session: Session, semester_id: str, member_ids: set[int], *, week_from
 ) -> dict[int, tuple[int, int]]:
-    """{member: (points this semester, points on attendance days from ``week_from`` on)}.
+    """{member: (points this semester, points earned from ``week_from`` on)}.
 
     The semester total is the leaderboard's (``app/DB/points.py``): the
     action's points plus the log's bonuses and discounts, on events of the
-    semester that are not drafts. A day is the attendance row's effective date,
-    as attendance reads it.
+    semester that are not drafts. When points were earned is ``earned_on``.
     """
     if not member_ids:
         return {}
@@ -487,6 +595,7 @@ def semester_points(
         select(
             MembersLogs.member_id,
             MembersLogs.date,
+            Events.end_datetime,
             func.coalesce(Actions.points, 0) + func.coalesce(modifiers.c.value, 0),
         )
         .join(Logs, Logs.id == MembersLogs.log_id)
@@ -500,12 +609,22 @@ def semester_points(
         )
     ).all()
     found: dict[int, tuple[int, int]] = {}
-    for member_id, logged, value in rows:
+    for member_id, logged, event_ends, value in rows:
         total, week = found.get(member_id, (0, 0))
         value = int(value or 0)
-        in_week = logged is not None and _effective_day(logged) >= week_from
-        found[member_id] = (total + value, week + (value if in_week else 0))
+        found[member_id] = (total + value, week + (value if earned_on(logged, event_ends) >= week_from else 0))
     return found
+
+
+def earned_on(logged: datetime, event_ends: datetime) -> date:
+    """The day points were earned: the attendance row's effective day, never after its event's last day.
+
+    An attendance row is written on the day it records. A custom-points row is
+    rewritten whenever staff edit the entry (``PUT /custom/members/{log_id}``
+    deletes and recreates them), so its own date can be much later than the
+    event the points are for; the event's last day bounds it.
+    """
+    return min(_effective_day(logged), event_ends.date())
 
 
 SWEEP_RULES = [

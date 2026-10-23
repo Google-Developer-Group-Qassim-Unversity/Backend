@@ -12,6 +12,8 @@ from sqlalchemy import select
 from app.DB import logs as log_queries
 from app.DB.schema import (
     EventContentLinks,
+    EventRequests,
+    EventRequestStage,
     Events,
     EventsContentLinkKind,
     EventsLocationType,
@@ -130,9 +132,77 @@ def test_the_same_change_twice_is_one_push_and_another_change_is_another(db_sess
     event.location = "Hall 61"
     db_session.flush()
     assert cases.event_changed(db_session, event, before) == 1
-    assert cases.event_changed(db_session, event, before) == 0
-    assert change(db_session, event, location="Hall 62") == 1
-    assert len(rows(db_session, PushKind.EVENT_UPDATED)) == 2
+    assert cases.event_changed(db_session, event, before) == 0  # the trigger run twice for one change
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.status == PushStatus.PENDING
+
+
+def test_changing_back_to_an_earlier_value_is_told_again(db_session, push_on, apns_mock, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    register(db_session, event, app_user(db_session))
+    for hour in (18, 16, 18):
+        frozen.advance(minutes=10)
+        assert change(db_session, event, start_datetime=datetime(2026, 7, 28, hour, 0)) == 1
+        db_session.commit()
+        assert deliver().sent == 1
+    sent = rows(db_session, PushKind.EVENT_UPDATED)
+    assert [row.payload["en"]["body"] for row in sent] == [
+        "New time: Jul 28 · 6:00 PM",
+        "New time: Jul 28 · 4:00 PM",
+        "New time: Jul 28 · 6:00 PM",
+    ]
+    assert len({row.dedupe_key for row in sent}) == 3
+
+
+def test_a_waiting_update_is_folded_into_the_next_one(db_session, push_on, apns_mock, frozen):
+    """23:00 the time and place move; 23:05 a typo in the place is fixed. 08:00: one push says both."""
+    frozen.set(ELEVEN_PM)
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
+    register(db_session, event, app_user(db_session))
+    moved = {"start_datetime": datetime(2026, 7, 29, 17, 0), "end_datetime": datetime(2026, 7, 29, 19, 0)}
+    assert change(db_session, event, **moved, location="Hal 61") == 1
+    frozen.advance(minutes=5)
+    assert change(db_session, event, location="Hall 61") == 1
+    db_session.commit()
+
+    first, second = rows(db_session, PushKind.EVENT_UPDATED)
+    assert (first.status, first.last_error) == (PushStatus.SKIPPED, "superseded")
+    assert second.payload["cause"]["from"] == {
+        "start_datetime": "2026-07-28T16:00:00",
+        "end_datetime": "2026-07-28T18:00:00",
+        "location": "Hall 60",
+    }
+    assert second.payload["en"]["body"] == "New time: Jul 29 · 5:00 PM · New place: \u2068Hall 61\u2069"
+    assert second.not_before == EIGHT_AM_TOMORROW
+
+    frozen.set(EIGHT_AM_TOMORROW)
+    assert deliver().sent == 1
+    assert rows(db_session, PushKind.EVENT_UPDATED)[1].status == PushStatus.SENT
+
+
+def test_a_waiting_update_undone_before_it_goes_sends_nothing(db_session, push_on, frozen):
+    frozen.set(ELEVEN_PM)
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, location="Hall 61") == 1
+    frozen.advance(minutes=5)
+    assert change(db_session, event, location="Hall 60") == 0
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert (row.status, row.last_error) == (PushStatus.SKIPPED, "superseded")
+
+
+def test_an_update_already_out_for_delivery_is_not_folded(db_session, push_on, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, location="Hall 61") == 1
+    claimed = rows(db_session, PushKind.EVENT_UPDATED)[0]
+    claimed.attempts, claimed.not_before = 1, frozen.now + timedelta(minutes=5)  # leased by a worker
+    db_session.flush()
+    frozen.advance(minutes=1)
+    assert change(db_session, event, start_datetime=datetime(2026, 7, 28, 17, 0)) == 1
+    first, second = rows(db_session, PushKind.EVENT_UPDATED)
+    assert first.status == PushStatus.PENDING
+    assert second.payload["cause"]["changed"] == {"start_datetime": "2026-07-28T17:00:00"}
 
 
 def test_a_new_place_or_link_is_what_the_text_says(db_session, push_on, frozen):
@@ -145,6 +215,8 @@ def test_a_new_place_or_link_is_what_the_text_says(db_session, push_on, frozen):
         change(db_session, event, location_type=EventsLocationType.ON_SITE, location="Hall 60", meeting_url=None) == 1
     )
     link, place = rows(db_session, PushKind.EVENT_UPDATED)
+    # The link one had not gone out yet: the second says what is left of both (the link went again).
+    assert (link.status, link.last_error) == (PushStatus.SKIPPED, "superseded")
     assert link.payload["en"]["body"] == "New link to join"
     assert link.payload["ar"]["body"] == "رابط جديد للانضمام"
     assert place.payload["en"]["body"] == "New place: \u2068Hall 60\u2069"
@@ -177,8 +249,9 @@ def test_an_update_at_night_waits_for_8am_and_a_later_change_replaces_it(db_sess
     frozen.set(EIGHT_AM_TOMORROW)
     deliver()
     first, second = rows(db_session, PushKind.EVENT_UPDATED)
-    assert (first.status, first.last_error) == (PushStatus.SKIPPED, "event_changed")
+    assert (first.status, first.last_error) == (PushStatus.SKIPPED, "superseded")
     assert second.status == PushStatus.SENT
+    assert second.payload["en"]["body"] == "New place: \u2068Hall 62\u2069"
     assert len(apns_mock.requests) == 1
 
 
@@ -246,7 +319,8 @@ def test_closing_an_event_before_it_starts_tells_its_registrants_even_at_night(
     deliver()
 
     [row] = rows(db_session, PushKind.EVENT_CANCELLED)
-    assert (row.member_id, row.dedupe_key) == (accepted.id, f"event_cancelled:{event.id}:{accepted.id}")
+    epoch = int((ELEVEN_PM - datetime(1970, 1, 1)).total_seconds())
+    assert (row.member_id, row.dedupe_key) == (accepted.id, f"event_cancelled:{event.id}:{accepted.id}:{epoch}")
     assert row.payload["en"] == {"title": f"Cancelled: {NAME}", "body": "Jul 28 · 4:00 PM · It will not take place"}
     assert row.payload["ar"] == {"title": f"أُلغيت: {NAME}", "body": "28 يوليو · 4:00 م · لن تُقام في موعدها"}
     assert row.status == PushStatus.SENT
@@ -282,6 +356,13 @@ def test_a_cancellation_undone_before_delivery_is_skipped(db_session, push_on, a
     [row] = rows(db_session, PushKind.EVENT_CANCELLED)
     assert (row.status, row.last_error) == (PushStatus.SKIPPED, "event_reopened")
     assert apns_mock.requests == []
+
+    # A real cancellation later still goes out: each cancellation has its own key.
+    frozen.advance(hours=2)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    assert [row.status for row in rows(db_session, PushKind.EVENT_CANCELLED)] == [PushStatus.SKIPPED, PushStatus.SENT]
 
 
 # ---------------------------------------------------------------- event_live
@@ -322,6 +403,28 @@ def test_live_is_for_online_events_and_only_just_after_the_start(db_session, pus
     assert sweep(db_session, datetime(2026, 7, 20, 9, 10)).push_event_live == 1
     [row] = rows(db_session, PushKind.EVENT_LIVE)
     assert row.event_id == online.id
+
+
+def test_live_for_the_online_days_of_a_mixed_pipeline_event(db_session, seed_refs, push_on):
+    """The pipeline publishes a mix of on-site and online days as on-site with the Meet link (event_pipeline)."""
+    event = make_event(db_session, start=datetime(2026, 7, 20, 12, 0), end=datetime(2026, 7, 21, 14, 0))
+    event.meeting_url = "https://meet.google.com/abc-defg-hij"
+    db_session.add(
+        EventRequests(
+            department_id=seed_refs.dept_business.id,
+            requested_by=make_member(db_session).id,
+            stage=EventRequestStage.PUBLISHED,
+            event_id=event.id,
+            day_modes={"2026-07-20": "on_site", "2026-07-21": "online"},
+        )
+    )
+    register(db_session, event, app_user(db_session))
+    db_session.commit()
+    assert sweep(db_session, datetime(2026, 7, 20, 9, 5)).push_event_live == 0  # day 1, on-site
+    assert sweep(db_session, datetime(2026, 7, 21, 9, 5)).push_event_live == 1  # day 2, online
+    [row] = rows(db_session, PushKind.EVENT_LIVE)
+    assert row.dedupe_key.startswith(f"event_live:{event.id}:2026-07-21:")
+    assert row.payload["en"]["body"] == "Day 2 of 2 · Tap to join"
 
 
 def test_live_is_not_held_for_quiet_hours(db_session, push_on):
@@ -519,6 +622,54 @@ def test_a_draft_link_pushes_once_it_is_published_and_other_content_never(
     assert kicks == [1]
 
 
+@pytest.fixture
+def attendable(monkeypatch):
+    """Any log of the event is its attendance log (production hardcodes action ids; see test_attendance.py)."""
+    from app.DB.schema import Logs
+
+    monkeypatch.setattr(
+        log_queries,
+        "get_attendable_logs",
+        lambda session, event_id: session.scalar(select(Logs).where(Logs.event_id == event_id).order_by(Logs.id)),
+    )
+
+
+def test_attendance_recorded_after_the_slides_tells_that_member(
+    admin_client, db_session, attendable, outbound, push_on, frozen, kicks
+):
+    event = make_event(db_session, start=datetime(2026, 7, 18, 16, 0))
+    attendance_log(db_session, event)
+    late = app_user(db_session)
+    recent = EventContentLinks(
+        event_id=event.id,
+        label="Slides",
+        url="https://example.com/s.pdf",
+        kind=EventsContentLinkKind.SLIDES,
+        published=1,
+    )
+    old = EventContentLinks(
+        event_id=event.id,
+        label="Old recording",
+        url="https://example.com/r",
+        kind=EventsContentLinkKind.RECORDING,
+        published=1,
+        created_at=frozen.now - timedelta(days=8),
+    )
+    draft = EventContentLinks(
+        event_id=event.id, label="Draft", url="https://example.com/d", kind=EventsContentLinkKind.SLIDES, published=0
+    )
+    db_session.add_all([recent, old, draft])
+    db_session.commit()
+
+    response = admin_client.post(f"/attendance/{event.id}/manual", json={"member_ids": [late.id], "day": 1})
+    assert_2xx(response)
+    [row] = rows(db_session, PushKind.EVENT_CONTENT)
+    assert (row.member_id, row.dedupe_key) == (late.id, f"event_content:{event.id}:{recent.id}:{late.id}")
+    # Publishing more later reaches them through content_added; this link is not told twice.
+    assert cases.content_added(db_session, recent) == 0
+    assert kicks
+
+
 def test_content_taken_down_before_delivery_is_skipped(db_session, push_on, apns_mock, frozen):
     frozen.set(ELEVEN_PM)
     event = make_event(db_session, start=datetime(2026, 7, 18, 16, 0))
@@ -582,6 +733,18 @@ def test_on_thursday_evening_each_member_with_points_gets_their_week(db_session,
     assert found[busy.id].payload["url"] == "gdgq://points/history"
     assert found[busy.id].not_before == THURSDAY_8PM
     assert sweep(db_session, THURSDAY_8PM + timedelta(hours=1)).push_weekly_summaries == 0
+
+
+def test_points_count_for_the_week_they_were_earned_not_when_their_entry_was_edited(db_session, push_on):
+    """``PUT /custom/members/{log_id}`` recreates the entry's rows with today's date; its event is weeks old."""
+    old = make_event(db_session, start=datetime(2026, 7, 2, 0, 0), location_type=EventsLocationType.NONE)
+    log = attendance_log(db_session, old, points=4)
+    member = app_user(db_session)
+    db_session.add(MembersLogs(member_id=member.id, log_id=log.id, date=datetime(2026, 7, 22, 10, 0)))
+    db_session.commit()
+    sweep(db_session, THURSDAY_8PM)
+    [row] = rows(db_session, PushKind.WEEKLY_SUMMARY)
+    assert row.payload["en"]["body"] == "4 points this semester"
 
 
 def test_no_summary_on_other_days_late_at_night_or_between_semesters(db_session, push_on):
@@ -668,6 +831,36 @@ def test_three_capped_pushes_a_day_but_live_and_cancelled_always_go(db_session, 
     ]
     [cancelled] = rows(db_session, PushKind.EVENT_CANCELLED)
     assert cancelled.status == PushStatus.SENT
+
+
+def test_the_cap_counts_pushes_another_worker_has_out_for_delivery(db_session, push_on, apns_mock, frozen):
+    member = app_user(db_session)
+    for n in range(3):
+        _queue(db_session, PushKind.WEEKLY_SUMMARY, member, f"weekly_summary:out-{n}:{member.id}")
+    for row in rows(db_session, PushKind.WEEKLY_SUMMARY):
+        row.attempts, row.not_before = 1, frozen.now + timedelta(minutes=5)  # leased, not recorded yet
+    _queue(db_session, PushKind.WEEKLY_SUMMARY, member, f"weekly_summary:due:{member.id}")
+    db_session.commit()
+    deliver()
+    due = next(row for row in rows(db_session, PushKind.WEEKLY_SUMMARY) if row.dedupe_key.endswith(f"due:{member.id}"))
+    assert (due.status, due.last_error) == (PushStatus.SKIPPED, "daily_cap")
+    assert apns_mock.requests == []
+
+
+def test_capped_pushes_wait_while_another_worker_holds_the_member(db_session, push_on, apns_mock, frozen, monkeypatch):
+    member = app_user(db_session)
+    _queue(db_session, PushKind.WEEKLY_SUMMARY, member, f"weekly_summary:held:{member.id}")
+    _queue(db_session, PushKind.BROADCAST, member, f"broadcast:held:{member.id}", switch="news")
+    db_session.commit()
+    lock_members = delivery.lock_members
+    monkeypatch.setattr(delivery, "lock_members", lambda session, member_ids: set())
+    deliver()
+    [summary] = rows(db_session, PushKind.WEEKLY_SUMMARY)
+    assert (summary.status, summary.attempts) == (PushStatus.PENDING, 0)
+    assert rows(db_session, PushKind.BROADCAST)[0].status == PushStatus.SENT
+    monkeypatch.setattr(delivery, "lock_members", lock_members)
+    deliver()
+    assert rows(db_session, PushKind.WEEKLY_SUMMARY)[0].status == PushStatus.SENT
 
 
 def test_a_1_0_2_phone_gets_the_new_kinds_too(db_session, push_on, apns_mock, frozen):

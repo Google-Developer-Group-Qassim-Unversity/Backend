@@ -34,7 +34,7 @@ from starlette.concurrency import run_in_threadpool
 from app.config import config
 from app.DB import push as push_queries
 from app.DB.main import db_session
-from app.DB.schema import MemberNotificationPrefs, PushKind, PushNotifications, PushStatus
+from app.DB.schema import MemberNotificationPrefs, Members, PushKind, PushNotifications, PushStatus
 from app.services.push import apns, cases, clock, outbox, triggers
 
 logger = logging.getLogger(__name__)
@@ -125,13 +125,21 @@ def claim(now: datetime, limit: int = BATCH_SIZE) -> tuple[list[Job], int]:
         if not rows:
             session.rollback()
             return [], 0
+        # The daily cap is counted under a lock on each member's row, so two workers claiming at the same
+        # moment cannot both pass it. A member another worker holds: their capped rows wait for the next round.
+        capped = {row.member_id for row in rows if row.kind in cases.CAPPED}
+        held = lock_members(session, capped) if capped else set()
+        rows = [row for row in rows if row.kind not in cases.CAPPED or row.member_id in held]
+        if not rows:
+            session.rollback()
+            return [], 0
         member_ids = {row.member_id for row in rows}
         devices = push_queries.devices_for(session, member_ids, outbox.device_environment())
         switches = _switches(session, member_ids)
         sent_today = _sent_today(
             session, {r.member_id for r in rows if r.kind == PushKind.NEW_EVENT}, {PushKind.NEW_EVENT}, now
         )
-        capped_today = _sent_today(session, {r.member_id for r in rows if r.kind in cases.CAPPED}, cases.CAPPED, now)
+        capped_today = _capped_today(session, held, {row.id for row in rows}, now)
         jobs: list[Job] = []
         skipped = 0
         for row in rows:
@@ -168,6 +176,39 @@ def claim(now: datetime, limit: int = BATCH_SIZE) -> tuple[list[Job], int]:
 def _switches(session: Session, member_ids: set[int]) -> dict[int, dict[str, bool]]:
     rows = session.scalars(select(MemberNotificationPrefs).where(MemberNotificationPrefs.member_id.in_(member_ids)))
     return {prefs.member_id: push_queries.prefs_as_dict(prefs) for prefs in rows}
+
+
+def lock_members(session: Session, member_ids: set[int]) -> set[int]:
+    """Lock these members' rows until the claim commits; the ones another transaction holds are left out."""
+    return set(
+        session.scalars(
+            select(Members.id).where(Members.id.in_(member_ids)).order_by(Members.id).with_for_update(skip_locked=True)
+        ).all()
+    )
+
+
+def _capped_today(session: Session, member_ids: set[int], batch: set[str], now: datetime) -> dict[int, int]:
+    """Capped pushes each member was sent this Riyadh day, plus the ones out for delivery (claimed, not recorded).
+
+    The batch's own rows are left out: the loop counts them as it claims them.
+    """
+    counts = _sent_today(session, member_ids, cases.CAPPED, now)
+    if not member_ids:
+        return counts
+    out = session.execute(
+        select(PushNotifications.member_id, func.count())
+        .where(
+            PushNotifications.member_id.in_(member_ids),
+            PushNotifications.kind.in_(cases.CAPPED),
+            PushNotifications.status == PushStatus.PENDING,
+            PushNotifications.attempts > 0,
+            PushNotifications.id.notin_(batch),
+        )
+        .group_by(PushNotifications.member_id)
+    ).all()
+    for member_id, count in out:
+        counts[member_id] = counts.get(member_id, 0) + int(count)
+    return counts
 
 
 def _sent_today(session: Session, member_ids: set[int], kinds, now: datetime) -> dict[int, int]:
