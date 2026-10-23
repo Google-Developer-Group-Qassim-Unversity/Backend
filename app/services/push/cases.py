@@ -33,9 +33,12 @@ Sweep rules take the ``RULES`` signature ``(session, now, result)``:
 - ``enqueue_weekly_summaries``: Thursday 20:00 Riyadh, during a semester.
 
 Every kind has one switch (``outbox.SWITCH_FOR``), one row per dedupe key
-ever, quiet hours except ``event_live`` and ``event_cancelled``, and at most
-``DAILY_CAP`` pushes of the capped kinds per member per Riyadh day
-(``delivery``). ``cause_gone`` checks the cause again at delivery.
+ever, and quiet hours except ``event_live``, ``event_cancelled`` and an
+``event_updated`` "Back on". At most ``DAILY_CAP`` pushes of the ``CAPPED``
+kinds (registration_closing, certificate, event_content, weekly_summary,
+welcome) reach a member per Riyadh day (``delivery``); a change to an event
+they registered for is never capped. ``cause_gone`` checks the cause again at
+delivery.
 """
 
 import logging
@@ -101,7 +104,8 @@ KINDS = frozenset(
 # Time-critical: sent at night too, and not counted against the daily cap.
 URGENT = frozenset({PushKind.EVENT_LIVE, PushKind.EVENT_CANCELLED})
 # At most this many pushes of these kinds a member gets in a Riyadh day; more are skipped.
-CAPPED = KINDS - URGENT
+# A real change to an event the member registered for is never dropped by the cap.
+CAPPED = KINDS - URGENT - {PushKind.EVENT_UPDATED}
 DAILY_CAP = 3
 # One push per registrant and event: delivery sends only the newest row of these (``_superseded``).
 NEWEST_ONLY = frozenset({PushKind.EVENT_UPDATED, PushKind.EVENT_CANCELLED})
@@ -194,13 +198,12 @@ def event_changed(session: Session, event: Events, before: dict, change_id: str 
         planned = _riyadh(before["start_datetime"])
         if planned is None or planned <= local_now:
             return 0  # it has started (or ended): closing it now is not a cancellation
-        return _cancelled(session, event, change_id, planned, now)
+        return _cancelled(session, event, change_id, before, planned, now)
     if not is_public or event.end_datetime <= local_now:
         return 0
     fields = sorted(field for field in WATCHED if before[field] != after[field])
     if not was_public:
-        if event.start_datetime <= local_now:
-            return 0
+        # Back on (also after the start: closed by mistake at 17:59, reopened at 18:00), to those told.
         return _updated(session, event, change_id, fields, now, back_on=True)
     if not fields or (fields == ["meeting_url"] and not after["meeting_url"]):
         return 0  # nothing watched changed, or only the link was taken away
@@ -212,20 +215,24 @@ def _updated(
 ) -> int:
     registrations = _accepted(session, event.id)
     if back_on:
-        # Only the ones told it was cancelled (or being told: claimed, not recorded yet) hear it is on again.
-        told = set(
-            session.scalars(
-                select(PushNotifications.member_id).where(
-                    PushNotifications.kind == PushKind.EVENT_CANCELLED,
-                    PushNotifications.event_id == event.id,
-                    or_(
-                        PushNotifications.status == PushStatus.SENT,
-                        and_(PushNotifications.status == PushStatus.PENDING, PushNotifications.attempts > 0),
-                    ),
-                )
-            ).all()
-        )
+        # The ones told it was cancelled, or about to be (a cancellation skipped as event_reopened just
+        # means one extra, truthful Back on), hear it is on again.
+        cancellations = session.scalars(
+            select(PushNotifications)
+            .where(
+                PushNotifications.kind == PushKind.EVENT_CANCELLED,
+                PushNotifications.event_id == event.id,
+                PushNotifications.status.in_([PushStatus.SENT, PushStatus.PENDING]),
+            )
+            .order_by(PushNotifications.id)
+        ).all()
+        told = {row.member_id for row in cancellations}
         registrations = [(s, m) for s, m in registrations if m in told]
+        # What changed while it was closed (a new link, say) counts too: against the event as it was cancelled.
+        if cancellations:
+            as_cancelled = (cancellations[-1].payload.get("cause") or {}).get("state") or {}
+            after = event_state(event)
+            fields = sorted(set(fields) | {f for f in WATCHED if f in as_cancelled and as_cancelled[f] != after[f]})
     cause = {"fields": fields, "back_on": back_on}
     pushes = [
         Push(
@@ -256,14 +263,15 @@ def is_back_on(row: PushNotifications) -> bool:
 
 
 def counts_toward_cap(kind: PushKind, payload: dict | None) -> bool:
-    """The capped kinds, except "Back on" (urgent, like a cancellation)."""
-    if kind not in CAPPED:
-        return False
-    return not (kind == PushKind.EVENT_UPDATED and bool(((payload or {}).get("cause") or {}).get("back_on")))
+    """Whether a push of ``kind`` counts toward (and is held to) the daily cap: never an event_updated."""
+    return kind in CAPPED
 
 
-def _folds_back_on(session: Session, row: PushNotifications) -> bool:
-    """An older row this one stands for (superseded, or about to be, since the last one sent) was a "Back on"."""
+def _folded(session: Session, row: PushNotifications) -> tuple[bool, set[str]]:
+    """What the older rows this one stands for said: whether one was a "Back on", and the fields they changed.
+
+    The older rows are the ones superseded (or about to be) since the last one sent.
+    """
     same = (
         PushNotifications.kind == row.kind,
         PushNotifications.event_id == row.event_id,
@@ -282,16 +290,23 @@ def _folds_back_on(session: Session, row: PushNotifications) -> bool:
     )
     if last_sent is not None:
         older = older.where(PushNotifications.id > last_sent)
-    return any(is_back_on(other) for other in session.scalars(older).all())
+    back_on, fields = False, set()
+    for other in session.scalars(older).all():
+        back_on = back_on or is_back_on(other)
+        fields |= set((other.payload.get("cause") or {}).get("fields") or [])
+    return back_on, fields
 
 
-def _cancelled(session: Session, event: Events, change_id: str, planned: datetime, now: datetime) -> int:
-    """Due at once (not debounced), so deleting the draft right after cannot swallow it; kicked by the route."""
+def _cancelled(session: Session, event: Events, change_id: str, before: dict, planned: datetime, now: datetime) -> int:
+    """Due at once (not debounced), so deleting the draft right after cannot swallow it; kicked by the route.
+
+    ``state``: the event as registrants knew it, so a "Back on" can tell what changed while it was closed.
+    """
     pushes = [
         Push(
             member_id=member_id,
             dedupe_key=f"event_cancelled:{event.id}:{member_id}:{change_id}",
-            cause={"submission_id": submission_id, "starts": planned.isoformat()},
+            cause={"submission_id": submission_id, "starts": planned.isoformat(), "state": before},
         )
         for submission_id, member_id in _accepted(session, event.id)
     ]
@@ -785,8 +800,14 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
         local_now = clock.to_riyadh(clock.now())
         if event.end_datetime <= local_now:
             return "event_over"
-        if not cause.get("back_on") and _folds_back_on(session, row):
-            cause = {**cause, "back_on": True}  # it stands for a "Back on": says so, and is urgent too
+        # It stands for the rows it superseded: a "Back on" among them makes it one (urgent too), and their
+        # changed fields count (a new link one of them was about still says "New link to join").
+        back_on, fields = _folded(session, row)
+        cause = {
+            **cause,
+            "back_on": bool(cause.get("back_on")) or back_on,
+            "fields": sorted(set(cause.get("fields") or []) | fields),
+        }
         row.payload = {**row.payload, **_update_text(event, cause, local_now), "cause": cause}
         return None
     if row.kind == PushKind.EVENT_CANCELLED:

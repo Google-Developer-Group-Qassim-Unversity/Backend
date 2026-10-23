@@ -192,8 +192,8 @@ def lock_members(session: Session, member_ids: set[int]) -> set[int]:
 def _capped_today(session: Session, member_ids: set[int], batch: set[str], now: datetime) -> dict[int, int]:
     """Capped pushes each member was sent this Riyadh day, plus the ones out for delivery (claimed, not recorded).
 
-    The batch's own rows are left out: the loop counts them as it claims them. A
-    "Back on" is not capped and does not count (``cases.counts_toward_cap``).
+    The batch's own rows are left out: the loop counts them as it claims them.
+    Only the ``cases.CAPPED`` kinds count (``cases.counts_toward_cap``).
     """
     if not member_ids:
         return {}
@@ -261,7 +261,6 @@ def _skip_reason(
         return gone
     if row.kind == PushKind.NEW_EVENT and sent_today.get(row.member_id, 0) >= NEW_EVENT_DAILY_CAP:
         return "daily_cap"
-    # After cause_gone: a row standing for a "Back on" was marked so there, and is not capped.
     if cases.counts_toward_cap(row.kind, row.payload) and capped_today.get(row.member_id, 0) >= cases.DAILY_CAP:
         return "daily_cap"
     if not devices.get(row.member_id):

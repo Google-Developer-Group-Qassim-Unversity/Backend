@@ -374,18 +374,19 @@ def test_closing_a_started_or_never_public_event_is_not_a_cancellation(db_sessio
     assert rows(db_session) == []
 
 
-def test_a_cancel_undone_before_it_went_out_sends_nothing(db_session, push_on, apns_mock, frozen):
+def test_a_cancel_undone_before_it_went_out_ends_as_one_truthful_back_on(db_session, push_on, apns_mock, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, status=EventsStatus.CLOSED) == 1
     frozen.advance(seconds=40)
-    assert change(db_session, event, status=EventsStatus.OPEN) == 0  # reopening queues nothing
+    assert change(db_session, event, status=EventsStatus.OPEN) == 1  # its cancellation was waiting
     db_session.commit()
     frozen.advance(minutes=2)
-    deliver()
-    [row] = rows(db_session, PushKind.EVENT_CANCELLED)
-    assert (row.status, row.last_error) == (PushStatus.SKIPPED, "event_reopened")
-    assert apns_mock.requests == []
+    assert deliver().sent == 1
+    [cancellation] = rows(db_session, PushKind.EVENT_CANCELLED)
+    assert (cancellation.status, cancellation.last_error) == (PushStatus.SKIPPED, "event_reopened")
+    [back_on] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert back_on.status == PushStatus.SENT and back_on.payload["en"]["title"] == f"Back on: {NAME}"
 
 
 def test_cancel_reopen_cancel_is_one_push(db_session, push_on, apns_mock, frozen):
@@ -579,24 +580,87 @@ def test_an_edit_right_after_a_reopen_still_goes_as_back_on(db_session, push_on,
     assert edit.payload["en"]["body"] == "Jul 28 · 4:00 PM – 6:00 PM · \u2068Hall 61\u2069"
 
 
-def test_back_on_also_reaches_a_member_whose_cancellation_is_still_going_out(db_session, push_on, frozen):
+@pytest.mark.parametrize("attempts", [0, 1])
+def test_back_on_also_reaches_a_member_whose_cancellation_has_not_gone_yet(db_session, push_on, frozen, attempts):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     member = app_user(db_session)
     register(db_session, event, member)
     assert change(db_session, event, status=EventsStatus.CLOSED) == 1
     cancellation = rows(db_session, PushKind.EVENT_CANCELLED)[0]
-    cancellation.attempts = 1  # claimed, not recorded yet
+    cancellation.attempts = attempts  # waiting (0) or claimed and not recorded yet (1)
     db_session.flush()
     assert change(db_session, event, status=EventsStatus.OPEN) == 1
     assert [row.member_id for row in rows(db_session, PushKind.EVENT_UPDATED)] == [member.id]
 
 
-def test_reopening_after_the_start_sends_nothing(db_session, push_on, frozen):
-    event = make_event(db_session, start=datetime(2026, 7, 20, 11, 0), end=datetime(2026, 7, 20, 14, 0))
+def test_reopening_after_the_start_tells_only_those_told_it_was_cancelled(db_session, push_on, apns_mock, frozen):
+    """Closed by mistake just before the start, reopened just after it: Back on, to the ones who were told."""
+    event = make_event(db_session, start=datetime(2026, 7, 20, 12, 5), end=datetime(2026, 7, 20, 14, 0))
+    told = app_user(db_session)
+    register(db_session, event, told)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1  # 12:00, five minutes before the start
+    db_session.commit()
+    assert deliver().sent == 1
+    untold = app_user(db_session)
+    register(db_session, event, untold)
+    frozen.advance(minutes=10)  # 12:10: it has started
+    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.member_id == told.id
+    db_session.commit()
+    assert deliver().sent == 1
+    assert rows(db_session, PushKind.EVENT_UPDATED)[0].payload["en"]["title"] == f"Back on: {NAME}"
+
+
+def test_a_real_change_is_never_dropped_by_the_daily_cap(db_session, push_on, apns_mock, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    member = app_user(db_session)
+    register(db_session, event, member)
+    _fill_the_cap(db_session, member, frozen.now)
+    assert change(db_session, event, location="Hall 61") == 1
+    db_session.commit()
+    frozen.advance(minutes=2)
+    assert deliver().sent == 1
+    # And it does not count toward the cap of the capped kinds either.
+    assert not cases.counts_toward_cap(PushKind.EVENT_UPDATED, {})
+
+
+def test_a_new_link_survives_newest_only(db_session, push_on, apns_mock, frozen):
+    event = make_event(
+        db_session, start=datetime(2026, 7, 28, 16, 0), location_type=EventsLocationType.ONLINE, location="Online"
+    )
     register(db_session, event, app_user(db_session))
-    event.status = EventsStatus.CLOSED
-    db_session.flush()
-    assert change(db_session, event, status=EventsStatus.OPEN) == 0
+    assert change(db_session, event, meeting_url="https://meet.google.com/abc-defg-hij") == 1
+    frozen.advance(seconds=30)
+    assert change(db_session, event, start_datetime=datetime(2026, 7, 28, 17, 0)) == 1
+    db_session.commit()
+    frozen.advance(minutes=2)  # both due
+    assert deliver().sent == 1
+    link, time_change = rows(db_session, PushKind.EVENT_UPDATED)
+    assert link.last_error == "superseded"
+    assert time_change.payload["en"]["body"] == "Jul 28 · 5:00 PM – 6:00 PM · Online · New link to join"
+
+
+def test_back_on_says_a_link_changed_while_the_event_was_closed(db_session, push_on, apns_mock, frozen):
+    event = make_event(
+        db_session, start=datetime(2026, 7, 28, 16, 0), location_type=EventsLocationType.ONLINE, location="Online"
+    )
+    event.meeting_url = "https://meet.google.com/old-link-xyz"
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    frozen.advance(minutes=5)
+    assert change(db_session, event, meeting_url="https://meet.google.com/new-link-abc") == 0  # closed: no push
+    frozen.advance(minutes=5)
+    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.payload["en"] == {
+        "title": f"Back on: {NAME}",
+        "body": "Jul 28 · 4:00 PM – 6:00 PM · Online · New link to join",
+    }
 
 
 def test_deleting_the_draft_right_after_unpublishing_still_sends_the_cancellation(
