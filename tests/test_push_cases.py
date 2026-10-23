@@ -125,8 +125,15 @@ def test_a_change_tells_the_accepted_registrants_two_minutes_later(db_session, p
     assert deliver().sent == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
     # The event as it is, not what changed.
-    assert row.payload["en"] == {"title": f"Updated: {NAME}", "body": "Jul 29 · 5:30 PM · \u2068Hall 60\u2069"}
-    assert row.payload["ar"] == {"title": f"تحديث: {NAME}", "body": "29 يوليو · 5:30 م · \u2068Hall 60\u2069"}
+    assert row.payload["en"] == {
+        "title": f"Updated: {NAME}",
+        "body": "Jul 29 · 5:30 PM – 7:30 PM · \u2068Hall 60\u2069",
+    }
+    assert row.payload["ar"] == {
+        "title": f"تحديث: {NAME}",
+        "body": "29 يوليو · 5:30 م إلى 7:30 م · \u2068Hall 60\u2069",
+    }
+    assert row.payload["cause"]["fields"] == ["end_datetime", "start_datetime"]
 
 
 def test_an_online_event_says_online(db_session, push_on, frozen):
@@ -136,8 +143,8 @@ def test_an_online_event_says_online(db_session, push_on, frozen):
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, meeting_url="https://meet.google.com/abc-defg-hij") == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert row.payload["en"]["body"] == "Jul 28 · 4:00 PM · Online"
-    assert row.payload["ar"]["body"] == "28 يوليو · 4:00 م · عن بُعد"
+    assert row.payload["en"]["body"] == "Jul 28 · 4:00 PM – 6:00 PM · Online · New link to join"
+    assert row.payload["ar"]["body"] == "28 يوليو · 4:00 م إلى 6:00 م · عن بُعد · رابط جديد للانضمام"
 
 
 def test_the_same_change_run_twice_is_one_row(db_session, push_on, frozen):
@@ -167,7 +174,7 @@ def test_two_quick_edits_end_as_one_push_saying_the_newest(db_session, push_on, 
     first, second = rows(db_session, PushKind.EVENT_UPDATED)
     assert (first.status, first.last_error) == (PushStatus.SKIPPED, "superseded")
     assert second.status == PushStatus.SENT
-    assert second.payload["en"]["body"] == "Jul 28 · 4:00 PM · \u2068Hall 61\u2069"
+    assert second.payload["en"]["body"] == "Jul 28 · 4:00 PM – 6:00 PM · \u2068Hall 61\u2069"
     assert len(apns_mock.requests) == 1
 
 
@@ -211,8 +218,8 @@ def test_the_text_is_the_event_as_it_is_at_delivery(db_session, push_on, apns_mo
     frozen.advance(minutes=2)
     assert deliver().sent == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert row.payload["en"]["body"] == "Jul 28 · 4:00 PM · \u2068Hall 63\u2069"
-    assert apns_mock.payloads()[0]["aps"]["alert"]["body"] == "28 يوليو · 4:00 م · \u2068Hall 63\u2069"
+    assert row.payload["en"]["body"] == "Jul 28 · 4:00 PM – 6:00 PM · \u2068Hall 63\u2069"
+    assert apns_mock.payloads()[0]["aps"]["alert"]["body"] == "28 يوليو · 4:00 م إلى 6:00 م · \u2068Hall 63\u2069"
 
 
 def test_cancel_reregister_then_a_move_is_told(db_session, push_on, apns_mock, frozen):
@@ -306,7 +313,7 @@ def test_the_edit_form_pushes_a_new_time(admin_client, db_session, seed_refs, ou
 
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
     assert row.member_id == member.id
-    assert row.payload["en"]["body"] == "Jul 28 · 5:00 PM · \u2068Hall 60\u2069"
+    assert row.payload["en"]["body"] == "Jul 28 · 5:00 PM – 7:00 PM · \u2068Hall 60\u2069"
     assert kicks == [1]
 
 
@@ -325,9 +332,8 @@ def test_closing_an_event_before_it_starts_tells_its_registrants_even_at_night(
 
     assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "closed"}))
     assert kicks == [1]
-    # Not held until 08:00, only debounced.
-    assert rows(db_session, PushKind.EVENT_CANCELLED)[0].not_before == ELEVEN_PM + TWO_MINUTES
-    frozen.advance(minutes=2)
+    # Due at once: not debounced, not held until 08:00.
+    assert rows(db_session, PushKind.EVENT_CANCELLED)[0].not_before == ELEVEN_PM
     deliver()
 
     [row] = rows(db_session, PushKind.EVENT_CANCELLED)
@@ -368,7 +374,7 @@ def test_closing_a_started_or_never_public_event_is_not_a_cancellation(db_sessio
     assert rows(db_session) == []
 
 
-def test_a_cancel_then_reopen_within_two_minutes_sends_nothing(db_session, push_on, apns_mock, frozen):
+def test_a_cancel_undone_before_it_went_out_sends_nothing(db_session, push_on, apns_mock, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, status=EventsStatus.CLOSED) == 1
@@ -399,6 +405,144 @@ def test_cancel_reopen_cancel_is_one_push(db_session, push_on, apns_mock, frozen
     first, second = rows(db_session, PushKind.EVENT_CANCELLED)
     assert (first.status, first.last_error) == (PushStatus.SKIPPED, "superseded")
     assert second.status == PushStatus.SENT
+
+
+def test_a_newer_update_held_by_quiet_hours_does_not_stop_one_due_now(db_session, push_on, apns_mock, frozen):
+    """21:56 the place moves; 21:58:30 it is fixed, and that row would wait until 08:00: the 21:58 one goes."""
+    frozen.set(datetime(2026, 7, 20, 18, 56))  # 21:56 Riyadh
+    event = make_event(db_session, start=datetime(2026, 7, 21, 7, 0), end=datetime(2026, 7, 21, 9, 0))
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, location="Hall B") == 1
+    frozen.advance(minutes=2, seconds=30)
+    assert change(db_session, event, location="Hall B2") == 1
+    first, second = rows(db_session, PushKind.EVENT_UPDATED)
+    assert second.not_before == EIGHT_AM_TOMORROW
+    db_session.commit()
+    assert deliver().sent == 1
+    first, second = rows(db_session, PushKind.EVENT_UPDATED)
+    assert first.status == PushStatus.SENT
+    assert first.payload["en"]["body"] == "Jul 21 · 7:00 AM – 9:00 AM · \u2068Hall B2\u2069"
+    assert second.status == PushStatus.PENDING
+
+
+def test_no_row_is_written_that_would_expire_before_it_is_due(db_session, push_on, frozen):
+    frozen.set(datetime(2026, 7, 20, 18, 58))  # 21:58 Riyadh: due after 22:00, so at 08:00
+    event = make_event(db_session, start=datetime(2026, 7, 20, 21, 0), end=datetime(2026, 7, 20, 23, 0))
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, location="Hall B") == 0  # it ends at 23:00, long before 08:00
+    assert rows(db_session) == []
+
+
+def test_a_multi_day_event_says_its_next_day_and_hours(db_session, push_on, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 19, 16, 0), end=datetime(2026, 7, 21, 18, 0))
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, end_datetime=datetime(2026, 7, 21, 20, 0)) == 1  # 12:00 on day 2
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.payload["en"]["body"] == "Day 2 of 3 · Jul 20 · 4:00 PM – 8:00 PM · \u2068Hall 60\u2069"
+    assert row.payload["ar"]["body"] == "اليوم 2 من 3 · 20 يوليو · 4:00 م إلى 8:00 م · \u2068Hall 60\u2069"
+
+
+def test_an_edit_undone_inside_the_window_sends_nothing(db_session, push_on, apns_mock, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, location="Hall 61") == 1
+    frozen.advance(minutes=1)
+    assert change(db_session, event, location="Hall 60") == 1
+    db_session.commit()
+    frozen.advance(minutes=2, seconds=30)  # both due
+    deliver()
+    first, second = rows(db_session, PushKind.EVENT_UPDATED)
+    assert (first.last_error, second.last_error) == ("superseded", "reverted")
+    assert apns_mock.requests == []
+
+
+def test_an_update_for_an_event_that_ended_meanwhile_is_skipped(db_session, push_on, apns_mock, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 20, 11, 0), end=datetime(2026, 7, 20, 13, 0))
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, location="Hall 61") == 1
+    event.end_datetime = datetime(2026, 7, 20, 12, 1)  # finished early (a change that queues nothing)
+    db_session.commit()
+    frozen.advance(minutes=2)
+    deliver()
+    assert rows(db_session, PushKind.EVENT_UPDATED)[0].last_error == "event_over"
+
+
+def test_an_event_moved_out_of_the_app_sends_nothing(db_session, push_on, apns_mock, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, location="Hall 61") == 1
+    assert change(db_session, event, location_type=EventsLocationType.HIDDEN) == 0
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 0  # not even a cancellation
+    event.status = EventsStatus.OPEN
+    db_session.commit()
+    frozen.advance(minutes=2)
+    deliver()
+    assert rows(db_session, PushKind.EVENT_UPDATED)[0].last_error == "event_hidden"
+    assert rows(db_session, PushKind.EVENT_CANCELLED) == []
+
+
+def test_a_cancellation_names_the_start_that_was_cancelled(db_session, push_on, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 25, 16, 0))
+    register(db_session, event, app_user(db_session))
+    postponed = {"start_datetime": datetime(2026, 8, 15, 16, 0), "end_datetime": datetime(2026, 8, 15, 18, 0)}
+    assert change(db_session, event, status=EventsStatus.CLOSED, **postponed) == 1
+    db_session.commit()
+    deliver()
+    [row] = rows(db_session, PushKind.EVENT_CANCELLED)
+    assert row.payload["en"]["body"] == "Jul 25 · 4:00 PM · It will not take place"
+
+
+def test_reopening_tells_the_registrants_who_were_told_it_was_cancelled(db_session, push_on, apns_mock, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
+    told = app_user(db_session)
+    register(db_session, event, told)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    later = app_user(db_session)
+    register(db_session, event, later)  # accepted after the cancellation went out
+    frozen.advance(minutes=10)
+    moved = {"start_datetime": datetime(2026, 7, 29, 16, 0), "end_datetime": datetime(2026, 7, 29, 18, 0)}
+    assert change(db_session, event, status=EventsStatus.OPEN, **moved) == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.member_id == told.id
+    db_session.commit()
+    frozen.advance(minutes=2)
+    assert deliver().sent == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.payload["en"] == {
+        "title": f"Back on: {NAME}",
+        "body": "Jul 29 · 4:00 PM – 6:00 PM · \u2068Hall 60\u2069",
+    }
+    assert row.payload["ar"]["title"] == f"عادت: {NAME}"
+
+
+def test_reopening_after_the_start_sends_nothing(db_session, push_on, frozen):
+    event = make_event(db_session, start=datetime(2026, 7, 20, 11, 0), end=datetime(2026, 7, 20, 14, 0))
+    register(db_session, event, app_user(db_session))
+    event.status = EventsStatus.CLOSED
+    db_session.flush()
+    assert change(db_session, event, status=EventsStatus.OPEN) == 0
+
+
+def test_deleting_the_draft_right_after_unpublishing_still_sends_the_cancellation(
+    admin_client, db_session, outbound, push_on, apns_mock, frozen, kicks
+):
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
+    member = app_user(db_session)
+    register(db_session, event, member)
+    db_session.commit()
+    assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "draft"}))
+    [row] = rows(db_session, PushKind.EVENT_CANCELLED)
+    row.attempts, row.not_before = 1, frozen.now + timedelta(minutes=2)  # Apple answered 5xx: waits to retry
+    db_session.commit()
+    assert_2xx(admin_client.delete(f"/events/{event.id}"))
+    assert kicks == [1, 1]
+    [row] = rows(db_session, PushKind.EVENT_CANCELLED)
+    assert (row.event_id, row.payload["url"]) == (None, "gdgq://notifications")
+    frozen.advance(minutes=3)
+    assert deliver().sent == 1
+    assert apns_mock.payloads()[0]["aps"]["alert"]["title"].startswith("أُلغيت")
 
 
 # ---------------------------------------------------------------- event_live

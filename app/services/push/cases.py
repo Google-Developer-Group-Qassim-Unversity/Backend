@@ -41,7 +41,7 @@ ever, quiet hours except ``event_live`` and ``event_cancelled``, and at most
 import logging
 from datetime import datetime, time, timedelta
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import config
@@ -169,80 +169,228 @@ def event_changed(session: Session, event: Events, before: dict, change_id: str 
     """An organizer changed an event; ``before`` is ``event_state`` from before the change.
 
     ``change_id`` is the ``event_history`` row the route recorded for the change
-    (None: nothing changed). Each registrant gets one row per change, keyed by
-    it and held back ``DEBOUNCE``; delivery sends only a registrant's newest one
-    and says the event as it is then (``cause_gone``), so quick edits, and a
-    double submit, end as one push with the truth.
+    (None: nothing changed); it keys the pushes, one per registrant per change.
+    Only events the app lists (online, on-site) push; one moved to hidden or
+    none sends nothing.
+
+    - Public (open, active) and not started -> closed or draft: ``event_cancelled``,
+      due at once.
+    - Closed or draft -> public, not started: ``event_updated`` "Back on" to the
+      registrants who were sent its cancellation.
+    - Public, not ended, a watched field changed: ``event_updated``, held back
+      ``DEBOUNCE``.
+
+    Delivery sends only a registrant's newest row of a kind for the event and
+    says the event as it is then (``cause_gone``).
     """
-    if not config.push_enabled or change_id is None or before.get("status") not in PUBLIC_VALUES:
+    if not config.push_enabled or change_id is None or event.location_type not in ATTENDED_LOCATIONS:
         return 0
     after = event_state(event)
+    was_public, is_public = before.get("status") in PUBLIC_VALUES, after["status"] in PUBLIC_VALUES
     now = clock.now()
     local_now = clock.to_riyadh(now)
-    if after["status"] not in PUBLIC_VALUES:
+    if was_public and not is_public:
         planned = _riyadh(before["start_datetime"])
         if planned is None or planned <= local_now:
             return 0  # it has started (or ended): closing it now is not a cancellation
-        return _queue_change(session, event, PushKind.EVENT_CANCELLED, change_id, now, clock.to_utc(planned))
-    changed = {field for field in WATCHED if before[field] != after[field]}
-    if not changed or event.end_datetime <= local_now:
+        return _cancelled(session, event, change_id, planned, now)
+    if not is_public or event.end_datetime <= local_now:
         return 0
-    if changed == {"meeting_url"} and not after["meeting_url"]:
-        return 0  # only the link was taken away: nothing to tell
-    return _queue_change(session, event, PushKind.EVENT_UPDATED, change_id, now, clock.to_utc(event.end_datetime))
+    fields = sorted(field for field in WATCHED if before[field] != after[field])
+    if not was_public:
+        if event.start_datetime <= local_now:
+            return 0
+        return _updated(session, event, change_id, before, fields, now, back_on=True)
+    if not fields or (fields == ["meeting_url"] and not after["meeting_url"]):
+        return 0  # nothing watched changed, or only the link was taken away
+    return _updated(session, event, change_id, before, fields, now, back_on=False)
 
 
-def _queue_change(
-    session: Session, event: Events, kind: PushKind, change_id: str, now: datetime, expires_at: datetime
+def _updated(
+    session: Session, event: Events, change_id: str, before: dict, fields: list[str], now: datetime, *, back_on: bool
 ) -> int:
-    prefix = "event_cancelled" if kind == PushKind.EVENT_CANCELLED else "event_updated"
+    registrations = _accepted(session, event.id)
+    if back_on:
+        # Only the ones told it was cancelled need to hear it is on again.
+        told = set(
+            session.scalars(
+                select(PushNotifications.member_id).where(
+                    PushNotifications.kind == PushKind.EVENT_CANCELLED,
+                    PushNotifications.event_id == event.id,
+                    PushNotifications.status == PushStatus.SENT,
+                )
+            ).all()
+        )
+        registrations = [(s, m) for s, m in registrations if m in told]
+    cause = {"before": before, "fields": fields, "back_on": back_on}
     pushes = [
         Push(
             member_id=member_id,
-            dedupe_key=f"{prefix}:{event.id}:{member_id}:{change_id}",
-            cause={"submission_id": submission_id},
+            dedupe_key=f"event_updated:{event.id}:{member_id}:{change_id}",
+            cause={"submission_id": submission_id, **cause},
         )
-        for submission_id, member_id in _accepted(session, event.id)
+        for submission_id, member_id in registrations
     ]
     return outbox.enqueue(
         session,
-        kind,
+        PushKind.EVENT_UPDATED,
         pushes,
-        text=_change_text(event, kind),
+        text=_update_text(event, cause, clock.to_riyadh(now)),
         url=links.event_url(event.id),
         thread_id=f"event-{event.id}",
         event_id=event.id,
-        expires_at=expires_at,
-        quiet_hours=kind != PushKind.EVENT_CANCELLED,
+        expires_at=clock.to_utc(event.end_datetime),
         now=now,
         delay=DEBOUNCE,
     )
 
 
-def _change_text(event: Events, kind: PushKind) -> messages.Text:
-    """The event as it is: its time and place now (or that it will not take place), never a diff."""
-    if kind == PushKind.EVENT_CANCELLED:
-        return messages.event_cancelled(event.name, event.start_datetime)
-    return messages.event_updated(
-        event.name, event.start_datetime, event.location, online=event.location_type == EventsLocationType.ONLINE
+def _cancelled(session: Session, event: Events, change_id: str, planned: datetime, now: datetime) -> int:
+    """Due at once (not debounced), so deleting the draft right after cannot swallow it; kicked by the route."""
+    pushes = [
+        Push(
+            member_id=member_id,
+            dedupe_key=f"event_cancelled:{event.id}:{member_id}:{change_id}",
+            cause={"submission_id": submission_id, "starts": planned.isoformat()},
+        )
+        for submission_id, member_id in _accepted(session, event.id)
+    ]
+    return outbox.enqueue(
+        session,
+        PushKind.EVENT_CANCELLED,
+        pushes,
+        text=messages.event_cancelled(event.name, planned),
+        url=links.event_url(event.id),
+        thread_id=f"event-{event.id}",
+        event_id=event.id,
+        expires_at=clock.to_utc(planned),
+        quiet_hours=False,
+        now=now,
     )
 
 
+def _next_day(event: Events, local_now: datetime) -> tuple[int, int, datetime, datetime]:
+    """(day, days, its start, its end) of the first day that has not ended; the last day when all have."""
+    total = event_days(event)
+    for day in range(1, total + 1):
+        starts = day_start(event, day)
+        ends = _day_end(event, starts)
+        if ends > local_now or day == total:
+            return day, total, starts, ends
+    raise AssertionError("an event has at least one day")
+
+
+def _update_text(event: Events, cause: dict, local_now: datetime) -> messages.Text:
+    """The event as it is: its next day's date and time and its place (or Online), never a diff."""
+    day, total, starts, ends = _next_day(event, local_now)
+    return messages.event_updated(
+        event.name,
+        starts,
+        ends,
+        event.location,
+        day=day,
+        total_days=total,
+        online=event.location_type == EventsLocationType.ONLINE,
+        new_link="meeting_url" in (cause.get("fields") or []) and bool(event.meeting_url),
+        back_on=bool(cause.get("back_on")),
+    )
+
+
+@never_blocks
+def event_deleted(session: Session, event_id: int) -> int:
+    """A draft is about to be deleted: its cancellations still waiting are kept and sent.
+
+    The foreign key would delete them with the event. Each registrant's newest
+    one is detached (``event_id`` NULL, opens Notifications) and goes out as it
+    is; older ones are ``superseded``. Call before deleting; kick after the commit.
+    """
+    if not config.push_enabled:
+        return 0
+    rows = session.scalars(
+        select(PushNotifications)
+        .where(
+            PushNotifications.kind == PushKind.EVENT_CANCELLED,
+            PushNotifications.event_id == event_id,
+            PushNotifications.status == PushStatus.PENDING,
+        )
+        .order_by(PushNotifications.member_id, PushNotifications.id.desc())
+    ).all()
+    kept: set[int] = set()
+    for row in rows:
+        if row.member_id in kept:
+            row.status, row.last_error = PushStatus.SKIPPED, "superseded"
+            continue
+        kept.add(row.member_id)
+        row.event_id = None
+        row.payload = {
+            **row.payload,
+            "url": links.DEFAULT_URL,
+            "cause": {**(row.payload.get("cause") or {}), "deleted": True},
+        }
+    session.flush()
+    return len(kept)
+
+
 def _superseded(session: Session, row: PushNotifications) -> bool:
-    """A newer row of the same kind for this member and event is waiting or went out: that one says it."""
+    """A newer row of the same kind for this member and event went out, is going out, or is due about as soon.
+
+    A newer one held much longer (by quiet hours, say) does not stop this one:
+    this one goes, said as the event is now.
+    """
+    if row.event_id is None:
+        return False
     newer = session.scalar(
         select(PushNotifications.id)
         .where(
             PushNotifications.kind == row.kind,
             PushNotifications.event_id == row.event_id,
             PushNotifications.member_id == row.member_id,
-            PushNotifications.status.in_([PushStatus.PENDING, PushStatus.SENT]),
             # Ids are time-ordered (UUIDv7).
             PushNotifications.id > row.id,
+            or_(
+                PushNotifications.status == PushStatus.SENT,
+                and_(
+                    PushNotifications.status == PushStatus.PENDING,
+                    or_(
+                        PushNotifications.attempts > 0,  # claimed: going out now (this batch or another worker's)
+                        PushNotifications.not_before <= row.not_before + DEBOUNCE,
+                    ),
+                ),
+            ),
         )
         .limit(1)
     )
     return newer is not None
+
+
+def _reverted(session: Session, row: PushNotifications, event: Events) -> bool:
+    """The event is back exactly as it was before the oldest change this row (with the ones it superseded) is about.
+
+    Only rows since the last update sent to the member count: nothing is
+    compared with what an earlier push said.
+    """
+    same = (
+        PushNotifications.kind == row.kind,
+        PushNotifications.event_id == row.event_id,
+        PushNotifications.member_id == row.member_id,
+    )
+    last_sent = session.scalar(
+        select(func.max(PushNotifications.id)).where(*same, PushNotifications.status == PushStatus.SENT)
+    )
+    chain = select(PushNotifications).where(
+        *same,
+        PushNotifications.id <= row.id,
+        or_(
+            PushNotifications.status == PushStatus.PENDING,
+            and_(PushNotifications.status == PushStatus.SKIPPED, PushNotifications.last_error == "superseded"),
+        ),
+    )
+    if last_sent is not None:
+        chain = chain.where(PushNotifications.id > last_sent)
+    oldest = session.scalars(chain.order_by(PushNotifications.id).limit(1)).first()
+    before = ((oldest.payload.get("cause") or {}).get("before") if oldest is not None else None) or {}
+    now = event_state(event)
+    return bool(before) and all(now[field] == before.get(field) for field in now)
 
 
 @never_blocks
@@ -610,22 +758,40 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
 
     ``event_updated`` and ``event_cancelled``: only a registrant's newest row
     goes (older ones are ``superseded``), and its text is written again here
-    from the event as it is now (``row.payload``).
+    from the event as it is now (``row.payload``); a cancellation names the
+    start that was cancelled.
     """
     cause = row.payload.get("cause") or {}
     event = session.get(Events, row.event_id) if row.event_id is not None else None
-    if row.kind in (PushKind.EVENT_UPDATED, PushKind.EVENT_CANCELLED):
+    if row.kind == PushKind.EVENT_UPDATED:
         if _superseded(session, row):
             return "superseded"
         if not _still_accepted(session, cause):
             return "not_accepted"
+        if event is None or event.status not in PUBLIC:
+            return "event_closed"
+        if event.location_type not in ATTENDED_LOCATIONS:
+            return "event_hidden"
+        local_now = clock.to_riyadh(clock.now())
+        if event.end_datetime <= local_now:
+            return "event_over"
+        if not cause.get("back_on") and _reverted(session, row, event):
+            return "reverted"
+        row.payload = {**row.payload, **_update_text(event, cause, local_now)}
+        return None
+    if row.kind == PushKind.EVENT_CANCELLED:
+        if _superseded(session, row):
+            return "superseded"
+        planned = _riyadh(cause.get("starts"))
+        if row.event_id is None:
+            return None  # the draft was deleted after it (event_deleted): it goes as written
+        if not _still_accepted(session, cause):
+            return "not_accepted"
         if event is None:
             return "event_closed"
-        if row.kind == PushKind.EVENT_UPDATED and event.status not in PUBLIC:
-            return "event_closed"
-        if row.kind == PushKind.EVENT_CANCELLED and event.status in PUBLIC:
+        if event.status in PUBLIC:
             return "event_reopened"
-        row.payload = {**row.payload, **_change_text(event, row.kind)}
+        row.payload = {**row.payload, **messages.event_cancelled(event.name, planned or event.start_datetime)}
         return None
     if row.kind == PushKind.EVENT_LIVE:
         if not _still_accepted(session, cause):

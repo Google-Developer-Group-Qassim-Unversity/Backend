@@ -77,8 +77,8 @@ app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
 | `points` | staff record attendance (card scan, manual, import) or custom points | the member | `points` | quiet hours; 3 days. Not the member's own QR check-in. A deduction sends nothing |
 | `new_event` | an online or on-site event that became open in the last 48 hours and has not started | members with club news on | `news` | quiet hours; at most 2 a member a Riyadh day; expires at the start |
 | `broadcast` | `POST /notifications/broadcast` | the audience | `news` or `remind` | quiet hours; 2 days |
-| `event_updated` | an open or active event that has not ended gets a new start, end, place (`location`, `location_type`) or join link (`PUT /events/{id}`, `…/status`, `…/meeting-url`). Only the link removed, or other fields: nothing. Says the event as it is at delivery ("Updated: … · Jul 28 · 4:00 PM · Hall 60", or Online), not what changed | accepted, not cancelled registrations | `remind` | 2 minutes' debounce, then quiet hours; capped; newest only; expires at the event's end |
-| `event_cancelled` | an `open` or `active` event that has not started is set to `closed` or back to `draft` (same routes) | accepted, not cancelled registrations | `remind` | 2 minutes' debounce, **not** held for quiet hours, not capped; newest only; expires at the planned start |
+| `event_updated` | an open or active online or on-site event that has not ended gets a new start, end, place (`location`, `location_type`) or join link (`PUT /events/{id}`, `…/status`, `…/meeting-url`); only the link removed, or other fields: nothing. Also **"Back on"**: a closed or draft event made open or active again before its start, to the registrants who were sent its cancellation. Says the event as it is at delivery, not what changed: its next day that has not ended ("Day 2 of 3" when it has several), that day's date and hours, the place or Online, and "New link to join" when the link changed ("Updated: … · Jul 28 · 4:00 PM – 6:00 PM · Hall 60"). An event moved to hidden or none sends nothing | accepted, not cancelled registrations ("Back on": only those told it was cancelled) | `remind` | 2 minutes' debounce, then quiet hours; delivered by the next sweep after that, so 2-7 minutes after the change; capped; newest only; skipped when undone inside the window (`reverted`), the event ended (`event_over`), closed (`event_closed`) or left the app (`event_hidden`); expires at the event's end |
+| `event_cancelled` | an `open` or `active` online or on-site event that has not started is set to `closed` or back to `draft` (same routes). Names the start that was cancelled. Deleting the draft afterwards (`DELETE /events/{id}`) keeps the cancellations still waiting (the foreign key would delete them) and sends them, opening Notifications | accepted, not cancelled registrations | `remind` | due at once and kicked by the route (no debounce), **not** held for quiet hours, not capped; newest only; expires at the planned start |
 | `event_live` | an online day of an open or active event started in the last 15 minutes (sweep): every day of an online event, and the online days of a pipeline event that mixes on-site and online days (it is published on-site with the Meet link). Those come from what Logistics confirmed, the event's own source, counted by day number from the confirmed start, and go only while the event still has its Meet link (checked again at delivery: `no_link`). Saving the edit form clears the link of an event that is not online, so after an edit a mixed event sends no live push | accepted, not cancelled registrations not checked in that day | `remind` | **not** held for quiet hours, not capped; expires at that day's end |
 | `registration_closing` | 24 hours before an `open` online or on-site event with a `registration` or `google` form starts, if it was already open then; sent within 6 hours of that mark or not at all (sweep) | members with club news on and no submission on the event (a cancelled or partial one counts as one) | `news` | quiet hours; capped; expires at the start |
 | `certificate` | each certificate e-mail sent for an event (`POST /emails/{event_id}`, and `POST /emails/manual-certificate` for a member of an event) | that member | `points` | quiet hours; capped; 7 days |
@@ -98,17 +98,21 @@ the same moment cannot both pass it: a member another claim holds keeps their
 capped rows for the next round. `event_live` and `event_cancelled` are
 time-critical and always go. The 1.0.2 kinds keep their own rules.
 
-**`event_updated` and `event_cancelled`: debounced, newest only, said as it is.**
-Each change writes one row per registrant, keyed by the `event_history` row the
-route recorded for it and held back 2 minutes. At delivery (under the member-row
-lock the claim already takes) only a registrant's newest row of that kind for
-the event goes; an older one is `skipped` as `superseded` when a newer one is
-waiting or went out. The text is written at delivery from the event as it is
-then: its time and place (or that it will not take place), never a diff, so a
-member who got an older push still ends with the truth. So quick edits, a
-double submit, or a cancel and reopen inside the 2 minutes end as one push
-(or none: a reopened event skips the cancellation, `event_reopened`). The
-routes take no extra locks for this.
+**`event_updated` and `event_cancelled`: newest only, said as it is.** Each
+change writes one row per registrant, keyed by the `event_history` row the
+route recorded for it; an update is held back 2 minutes, a cancellation is not.
+At delivery (under the member-row lock the claim already takes) only a
+registrant's newest row of that kind for the event goes: an older one is
+`skipped` as `superseded` when a newer one went out, is going out, or is due
+within 2 minutes of it (a newer one that quiet hours hold until 08:00 does not
+stop one due now). The text is written at delivery from the event as it is
+then, never a diff, so a member who got an older push still ends with the
+truth. The update rows remember the event as it was before their change and
+which fields changed; when the event is back as it was before the oldest
+waiting change, the newest is skipped as `reverted`. So quick edits and a double
+submit end as one push, and a change undone inside the window as none. A row
+that would expire before it is due (an update at 21:59 for an event ending at
+23:00) is not written. The routes take no extra locks for this.
 
 **One push per `dedupe_key`**, ever: `reminder:{event}:{Riyadh date}:{member}`,
 `accepted:{submission}:{submitted_at epoch}`, `points:{log}:{member}:{day}`,
@@ -126,9 +130,11 @@ run twice (four workers, retries, the sweep) and add nothing the second time.
 phone still registered, and the cause - the registration still accepted and the
 day still on the calendar, the attendance row still there, the event still
 open. For the 1.0.3 kinds: `event_updated` - the newest row (`superseded`),
-still accepted, the event still there and open or active (`event_closed`), the
-text rewritten from the event as it is now; `event_cancelled` - the newest row,
-still accepted, the event still closed or a draft (`event_reopened`); `event_live` - still accepted, the day
+still accepted, the event still there and open or active (`event_closed`),
+still online or on-site (`event_hidden`), not ended (`event_over`), not undone
+(`reverted`), the text rewritten from the event as it is now; `event_cancelled`
+- the newest row, still accepted, the event still closed or a draft
+(`event_reopened`), or deleted since (then it goes as written); `event_live` - still accepted, the day
 still on the calendar, not checked in since (`checked_in`), a mixed event still
 with its link (`no_link`);
 `registration_closing` - the event still open at the same start, still no

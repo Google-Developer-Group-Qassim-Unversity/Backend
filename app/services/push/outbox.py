@@ -97,6 +97,9 @@ def enqueue(
         return 0
     # ``delay`` holds the row back first (a debounce); quiet hours then apply to that moment.
     not_before = clock.after_quiet_hours(now + delay) if quiet_hours else now + delay
+    if not_before >= expires_at:
+        logger.info("Not queueing %s: it would expire before it is due", kind.value)
+        return 0
     rows = []
     for push in fresh:
         payload: dict[str, Any] = dict(text(push) if callable(text) else text)

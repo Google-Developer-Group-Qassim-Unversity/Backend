@@ -437,9 +437,13 @@ def delete_event(event_id: int, session: DB, member: CurrentMember, background_t
         )
     event_history.record(session, event, EventHistoryAction.DELETED, member)
     event_name = event.name
+    # Its cancellations still waiting would go with it (the foreign key): kept, and sent after the commit.
+    kept = push_cases.event_deleted(session, event_id)
     events_queries.delete_event(session, event_id)
     session.commit()
     pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
+    if kept:
+        background_tasks.add_task(push_delivery.kick)
     logger.info(f"Event [{event_id}]: {event_name} deleted successfully")
     return {"detail": "Event deleted successfully"}
 

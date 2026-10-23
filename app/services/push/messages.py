@@ -134,14 +134,36 @@ def broadcast(title_ar: str, body_ar: str, title_en: str | None, body_en: str | 
 # ---------------------------------------------------------------- app 1.0.3 (app/services/push/cases.py)
 
 
-def event_updated(name: str | None, starts: datetime, location: str | None, *, online: bool) -> Text:
-    """The event as it is now (its time and place), not what changed: an older push is corrected by a newer one."""
+def event_updated(
+    name: str | None,
+    starts: datetime,
+    ends: datetime,
+    location: str | None,
+    *,
+    day: int = 1,
+    total_days: int = 1,
+    online: bool = False,
+    new_link: bool = False,
+    back_on: bool = False,
+) -> Text:
+    """The event as it is now, not what changed: its next day, that day's date and hours, and its place.
+
+    ``starts``/``ends`` are that day's, Riyadh time. ``back_on``: it was
+    cancelled and is on again. ``new_link``: the join link changed.
+    """
     title = event_name(name)
-    ar_place = "عن بُعد" if online else isolate(place_label(location))
-    en_place = "Online" if online else isolate(place_label(location))
+    parts: dict[str, list[str]] = {}
+    for lang in ("ar", "en"):
+        hours = f"{time_text(starts, lang)} {'إلى' if lang == 'ar' else '–'} {time_text(ends, lang)}"
+        when = f"{date_text(starts, lang)}{SEP}{hours}"
+        if total_days > 1:
+            when = (f"اليوم {day} من {total_days}" if lang == "ar" else f"Day {day} of {total_days}") + SEP + when
+        place = ("عن بُعد" if lang == "ar" else "Online") if online else isolate(place_label(location))
+        link = ("رابط جديد للانضمام" if lang == "ar" else "New link to join") if new_link else ""
+        parts[lang] = [when, place, link]
     return {
-        "ar": {"title": f"تحديث: {title}", "body": _join(date_time_text(starts, "ar"), ar_place)},
-        "en": {"title": f"Updated: {title}", "body": _join(date_time_text(starts, "en"), en_place)},
+        "ar": {"title": f"{'عادت' if back_on else 'تحديث'}: {title}", "body": _join(*parts["ar"])},
+        "en": {"title": f"{'Back on' if back_on else 'Updated'}: {title}", "body": _join(*parts["en"])},
     }
 
 
