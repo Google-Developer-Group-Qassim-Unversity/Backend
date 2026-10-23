@@ -524,17 +524,20 @@ def test_reopening_tells_the_registrants_who_were_told_it_was_cancelled(db_sessi
     register(db_session, event, later)  # accepted after the cancellation went out
     frozen.advance(minutes=10)
     moved = {"start_datetime": datetime(2026, 7, 29, 16, 0), "end_datetime": datetime(2026, 7, 29, 18, 0)}
-    assert change(db_session, event, status=EventsStatus.OPEN, **moved) == 1
-    [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert (row.member_id, row.not_before) == (told.id, frozen.now)  # due at once, like the cancellation
+    assert change(db_session, event, status=EventsStatus.OPEN, **moved) == 2
+    found = {row.member_id: row for row in rows(db_session, PushKind.EVENT_UPDATED)}
+    assert found[told.id].not_before == frozen.now  # due at once, like the cancellation
+    assert found[later.id].not_before == frozen.now + TWO_MINUTES  # never told: an ordinary update of the move
     db_session.commit()
-    assert deliver().sent == 1
-    [row] = rows(db_session, PushKind.EVENT_UPDATED)
-    assert row.payload["en"] == {
+    frozen.advance(minutes=2)
+    assert deliver().sent == 2
+    found = {row.member_id: row for row in rows(db_session, PushKind.EVENT_UPDATED)}
+    assert found[told.id].payload["en"] == {
         "title": f"Back on: {NAME}",
         "body": "Jul 29 · 4:00 PM – 6:00 PM · \u2068Hall 60\u2069",
     }
-    assert row.payload["ar"]["title"] == f"عادت: {NAME}"
+    assert found[told.id].payload["ar"]["title"] == f"عادت: {NAME}"
+    assert found[later.id].payload["en"]["title"] == f"Updated: {NAME}"
 
 
 def _fill_the_cap(session, member, now):
