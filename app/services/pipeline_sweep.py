@@ -42,6 +42,7 @@ from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail, send_pipeline_email_job
 from app.services.push import cases as push_cases
 from app.services.push import delivery as push_delivery
+from app.services.push import rank as push_rank
 from app.services.push import triggers as push_triggers
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class SweepResult:
     push_event_live: int = 0
     push_registration_closing: int = 0
     push_weekly_summaries: int = 0
+    push_rank: int = 0
     push_cleaned: int = 0
 
     def counts(self) -> dict[str, int]:
@@ -80,6 +82,7 @@ class SweepResult:
             "push_event_live": self.push_event_live,
             "push_registration_closing": self.push_registration_closing,
             "push_weekly_summaries": self.push_weekly_summaries,
+            "push_rank": self.push_rank,
             "push_cleaned": self.push_cleaned,
         }
 
@@ -160,6 +163,7 @@ RULES = [
     collect_calendar_entries,
     *push_triggers.SWEEP_RULES,
     *push_cases.SWEEP_RULES,
+    *push_rank.SWEEP_RULES,
 ]
 
 

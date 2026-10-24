@@ -35,7 +35,7 @@ from app.config import config
 from app.DB import push as push_queries
 from app.DB.main import db_session
 from app.DB.schema import MemberNotificationPrefs, Members, PushKind, PushNotifications, PushStatus
-from app.services.push import apns, cases, clock, outbox, triggers
+from app.services.push import apns, cases, clock, outbox, rank, triggers
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ LOW_PRIORITY = {
     PushKind.EVENT_CONTENT,
     PushKind.WEEKLY_SUMMARY,
     PushKind.WELCOME,
+    *rank.KINDS,
 }
 
 GONE_REASONS = {"BadDeviceToken", "DeviceTokenNotForTopic"}
@@ -142,13 +143,16 @@ def claim(now: datetime, limit: int = BATCH_SIZE) -> tuple[list[Job], int]:
             session, {r.member_id for r in rows if r.kind == PushKind.NEW_EVENT}, {PushKind.NEW_EVENT}, now
         )
         capped_today = _capped_today(session, held, {row.id for row in rows}, now)
+        boards: dict[str, rank.Board] = {}
         jobs: list[Job] = []
         skipped = 0
         for row in rows:
-            reason = _skip_reason(session, row, now, devices, switches, sent_today, capped_today)
+            reason = _skip_reason(session, row, now, devices, switches, sent_today, capped_today, boards)
             if reason is not None:
                 row.status = PushStatus.SKIPPED
                 row.last_error = reason
+                if row.kind in rank.KINDS and reason in rank.UNTOLD:
+                    rank.untell(session, row, now)
                 skipped += 1
                 continue
             if row.kind == PushKind.NEW_EVENT:
@@ -250,13 +254,19 @@ def _skip_reason(
     switches: dict[int, dict[str, bool]],
     sent_today: dict[int, int],
     capped_today: dict[int, int],
+    boards: dict[str, rank.Board],
 ) -> str | None:
     if row.expires_at <= now:
         return "expired"
     switch = row.payload.get("switch") or outbox.SWITCH_FOR.get(row.kind)
     if switch and not switches.get(row.member_id, push_queries.DEFAULT_PREFS).get(switch, False):
         return "switch_off"
-    gone = cases.cause_gone(session, row) if row.kind in cases.KINDS else triggers.cause_gone(session, row)
+    if row.kind in rank.KINDS:
+        gone = rank.cause_gone(session, row, now, boards)
+    elif row.kind in cases.KINDS:
+        gone = cases.cause_gone(session, row)
+    else:
+        gone = triggers.cause_gone(session, row)
     if gone is not None:
         return gone
     if row.kind == PushKind.NEW_EVENT and sent_today.get(row.member_id, 0) >= NEW_EVENT_DAILY_CAP:
