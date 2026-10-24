@@ -22,10 +22,11 @@ member adds the card ──► Wallet: POST /wallet/apple/v1/devices/{device}/re
                               ├─ yes: member_profiles.pass_welcomed_at, pass_updated_at = now
                               │       registration.push_due_at = now ──► after the response:
                               │       APNs (Pass Type ID certificate, topic = pass type id, payload {})
+                              ├─ no, but a new device within 10 minutes of it (a paired watch): the same push
                               ▼
         Wallet: GET .../registrations/{pass type}?passesUpdatedSince=  ──► the serial
         Wallet: GET /wallet/apple/v1/passes/{pass type}/{serial}       ──► the pass, «رسالة النادي» = the welcome
-        Wallet sees the field change (changeMessage "%@") ──► notification from the card
+        Wallet sees the field change (changeMessage "%@", within an hour of the welcome) ──► notification from the card
 ```
 
 ## Off until configured
@@ -57,7 +58,7 @@ so every guest card would be a new card).
 | `serialNumber` | unchanged: `GDGQ-` + the first 8 characters of `member_profiles.uuid`, uppercased. A new format would put a second card in every member's Wallet |
 | `webServiceURL` | `APPLE_PASS_WEB_SERVICE_URL`, without a trailing slash |
 | `authenticationToken` | `base64url(HMAC-SHA256(APPLE_PASS_AUTH_SECRET, "pass:v1:" + uuid))`, 43 characters |
-| back field `club_message` | label «رسالة النادي», `changeMessage` `%@`. Before the welcome: «رسائل النادي تظهر هنا»; after it: the welcome line (`GDG Qassim` wrapped in Unicode isolates, as in `app/services/push/messages.py`) |
+| back field `club_message` | label «رسالة النادي». Before the welcome: «رسائل النادي تظهر هنا»; after it: the welcome line (`GDG Qassim` wrapped in Unicode isolates, as in `app/services/push/messages.py`). `changeMessage` `%@` (Wallet announces a change of the value) only on passes served before the welcome or within an hour of it; later passes have none, so a late fetch updates the back silently |
 
 The token is not stored. The server makes it again from the card's uuid and
 compares in constant time, so a copy of the database (staging is one, backups
@@ -105,21 +106,26 @@ gets 401.
 
 - First registration ever: welcome, bump the tag, push to that device right
   away, quiet hours or not (the member just tapped Add).
-- Another device later, a re-added card, a new iPhone: the pass they download
-  already carries the welcome, so nothing changes and nothing is announced. No
-  push.
+- Another of the member's devices registering within 10 minutes of the welcome
+  (`WELCOME_PUSH_WINDOW`): pushed too. A paired Apple Watch registers on its
+  own, seconds after the iPhone, and its copy still holds the placeholder, so
+  it shows the welcome as well. A device whose copy already has the welcome
+  fetches the same pass and shows nothing. Two devices registering at the same
+  moment welcome once and are both pushed.
+- A device added after that, a re-added card, a new iPhone: the pass they
+  download already carries the welcome, so nothing changes and nothing is
+  announced. No push.
 - Another member: their own welcome.
 - Cards added before the settings were set have no `webServiceURL` and never
   call. Adding the card again (same serial: Wallet replaces it) makes it live,
   and that member gets the welcome then.
-- A paired Apple Watch that registers on its own: the push goes only to the
-  device that registered first (the iPhone, in practice), whose notification
-  shows on the watch as usual. The watch's copy keeps the placeholder until a
-  later update.
 - Wallet's per-card "Allow Notifications" off (it is on by default), or Wallet
   notifications off in iOS: the line still lands on the back, silently.
-- A push that never arrives (given up after 5 attempts): the welcome shows the
-  next time Wallet fetches the pass, after a later update or a manual refresh.
+- A push that arrives within the hour (a retry, a phone back online): announced
+  as usual. One that never arrives (given up after 5 attempts), or a device
+  that fetches the pass later than an hour after the welcome
+  (`WELCOME_ANNOUNCE_WINDOW`): the line lands on the back silently, the next
+  time Wallet fetches the pass, and never greets the member days later.
 
 ## The push
 
@@ -205,8 +211,11 @@ identity: a staging card has the same serial as your production card, so it
    show `POST /wallet/apple/v1/devices/[device]/registrations/... -> 201`,
    `first Wallet pass registration`, `Wallet pass push sent to registration ...`,
    then Wallet's `GET .../registrations/...` and `GET /wallet/apple/v1/passes/... -> 200`.
-4. Remove the card: `DELETE ... -> 200`. Add it again: `-> 201`, no
-   notification, no push (welcomed once).
+4. Remove the card: `DELETE ... -> 200`. Wait 10 minutes and add it again:
+   `-> 201`, no push (welcomed once). Re-added sooner, it is pushed like a
+   second device; re-adding the same `card.pkpass` (it holds the placeholder)
+   then shows the welcome again. With a paired Apple Watch, the watch's own
+   `POST ... -> 201` follows within seconds, with its own push.
 5. Nothing shows? Check the card's "Allow Notifications", then `POST
    /wallet/apple/v1/log` lines in the log (Wallet reports what failed). On a Mac,
    Console.app with the phone connected, filtered on `passd`, shows Wallet's

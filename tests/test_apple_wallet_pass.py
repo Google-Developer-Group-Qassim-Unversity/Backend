@@ -116,6 +116,7 @@ def test_the_web_service_and_the_club_message_go_into_the_pass(signing_certs) ->
         "webServiceURL": "https://api.example.test/wallet/apple",
         "authenticationToken": "a" * 43,
         "clubMessage": "رسائل النادي تظهر هنا",
+        "clubMessageAnnounce": True,
     }
     pass_json = json.loads(_unpack(generate_apple_pkpass(card))["pass.json"])
 
@@ -129,6 +130,16 @@ def test_the_web_service_and_the_club_message_go_into_the_pass(signing_certs) ->
         "changeMessage": "%@",
     }
     assert pass_json["serialNumber"] == "GDGQ-2B53403D"
+
+
+def test_a_club_message_not_announced_changes_silently(signing_certs) -> None:
+    pass_json = json.loads(_unpack(generate_apple_pkpass({**CARD, "clubMessage": "أهلًا"}))["pass.json"])
+
+    assert pass_json["eventTicket"]["backFields"][0] == {
+        "key": "club_message",
+        "label": "رسالة النادي",
+        "value": "أهلًا",
+    }, "no changeMessage: Wallet updates the back without a notification"
 
 
 def test_a_token_without_a_url_is_left_out(signing_certs) -> None:

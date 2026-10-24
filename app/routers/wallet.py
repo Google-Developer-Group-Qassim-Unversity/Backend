@@ -630,7 +630,8 @@ def register_wallet_pass(
 
     The member's first registration ever welcomes them: the pass's message
     changes and a pass update push goes to this device after the response
-    (``wallet_push.kick``). A failed push is retried later and never changes
+    (``wallet_push.kick``), as it does to another of their devices registering
+    within minutes of it. A failed push is retried later and never changes
     this answer.
     """
     registered = wallet_updates.register(
@@ -641,7 +642,7 @@ def register_wallet_pass(
         push_token=body.pushToken.lower(),
     )
     session.commit()
-    if registered.welcomed:
+    if registered.push_owed:
         background_tasks.add_task(wallet_push.kick)
     return Response(status_code=status.HTTP_201_CREATED if registered.created else status.HTTP_200_OK)
 

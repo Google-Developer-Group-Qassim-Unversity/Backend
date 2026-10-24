@@ -314,16 +314,76 @@ def test_the_pass_fetched_after_the_push_carries_the_welcome(client: TestClient,
     assert wallet_updates.WELCOME.endswith("متحمسين نشوفك قريب في فعالياتنا")
 
 
-def test_a_second_device_is_not_welcomed_again(client: TestClient, db_session, web_service, frozen):
+def test_a_paired_watch_registering_right_after_is_pushed_too(client: TestClient, db_session, web_service, frozen):
+    """The watch registers on its own, seconds after the iPhone; its copy still holds the placeholder."""
     profile = make_profile(db_session)
     register(client, profile)
-    frozen.advance(hours=3)
+    frozen.advance(seconds=3)
+
+    registered = register(client, profile, device=DEVICE_2, push=PUSH_2)
+
+    assert registered.status_code == 201
+    assert web_service.tokens() == [PUSH, PUSH_2]
+    assert fresh(db_session, profile).pass_welcomed_at == NOW, "welcomed once"
+    assert all(row.push_due_at is None for row in registrations(db_session, profile))
+    message = pass_json(client.get(pass_url(profile), headers=auth(profile)).content)["eventTicket"]["backFields"][0]
+    assert message["value"] == wallet_updates.WELCOME and message["changeMessage"] == "%@"
+
+
+def test_two_devices_registering_at_the_same_moment_are_both_pushed(db_session, frozen):
+    """The second one read the profile before the first welcomed it, and lost the race to mark it."""
+    holder = make_profile(db_session)
+    first = wallet_updates.register(
+        db_session, holder, device_library_id=DEVICE, serial_number=pass_serial_number(holder.uuid), push_token=PUSH
+    )
+    assert holder.pass_welcomed_at is None, "the second request's copy of the profile"
+
+    second = wallet_updates.register(
+        db_session, holder, device_library_id=DEVICE_2, serial_number=pass_serial_number(holder.uuid), push_token=PUSH_2
+    )
+
+    assert first == wallet_updates.Registered(created=True, welcomed=True, push_owed=True)
+    assert second == wallet_updates.Registered(created=True, welcomed=False, push_owed=True)
+    assert [row.push_due_at for row in registrations(db_session, holder)] == [NOW, NOW]
+
+
+@pytest.mark.parametrize("later", [timedelta(minutes=10), timedelta(hours=3)], ids=["10-minutes", "3-hours"])
+def test_a_device_added_later_is_not_welcomed_again(client: TestClient, db_session, web_service, frozen, later):
+    profile = make_profile(db_session)
+    register(client, profile)
+    frozen.set(NOW + later)
 
     assert register(client, profile, device=DEVICE_2, push=PUSH_2).status_code == 201
 
     assert len(web_service.requests) == 1
     assert fresh(db_session, profile).pass_welcomed_at == NOW
     assert len(registrations(db_session, profile)) == 2
+
+
+def test_the_welcomed_device_registering_again_is_not_pushed_again(client: TestClient, db_session, web_service, frozen):
+    profile = make_profile(db_session)
+    register(client, profile)
+    frozen.advance(minutes=1)
+
+    assert register(client, profile, push=PUSH_2).status_code == 200
+
+    assert web_service.tokens() == [PUSH]
+
+
+def test_a_late_fetch_updates_the_message_silently(client: TestClient, db_session, web_service, frozen):
+    """A device that missed its push (offline, given up) must not greet the member days later."""
+    profile = make_profile(db_session)
+    register(client, profile)
+
+    def message() -> dict:
+        return pass_json(client.get(pass_url(profile), headers=auth(profile)).content)["eventTicket"]["backFields"][0]
+
+    frozen.set(NOW + wallet_updates.WELCOME_ANNOUNCE_WINDOW - timedelta(seconds=1))
+    assert message()["changeMessage"] == "%@", "still news"
+    frozen.set(NOW + wallet_updates.WELCOME_ANNOUNCE_WINDOW)
+    late = message()
+    assert late["value"] == wallet_updates.WELCOME
+    assert "changeMessage" not in late
 
 
 def test_a_re_added_card_is_not_welcomed_again(client: TestClient, db_session, web_service, frozen):

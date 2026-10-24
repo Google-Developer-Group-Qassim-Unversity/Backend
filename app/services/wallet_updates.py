@@ -13,16 +13,23 @@ member pass carries:
   token again from the card's uuid and compares in constant time, so a copy
   of the database (staging is one) holds no working token, and each member's
   token differs even when two serial numbers collide. Never logged.
-- the back field «رسالة النادي» with ``changeMessage`` ``%@``: a placeholder
-  until the member is welcomed, then the welcome line.
+- the back field «رسالة النادي»: a placeholder until the member is welcomed,
+  then the welcome line. With ``changeMessage`` ``%@`` (Wallet announces a
+  change of it) until an hour after the welcome, none after that.
 
 The welcome: the first time one of a member's cards registers - ever, across
 devices and re-adds - ``member_profiles.pass_welcomed_at`` and the pass's
 update tag (``pass_updated_at``) are set and a pass update push goes to that
 device right away, quiet hours or not (``app/services/wallet_push.py``). Wallet
 fetches the pass, sees the field change, and shows the line as a notification
-from the card. Every pass issued after that already carries the line, so a
-second device, a re-added card or a new iPhone has nothing to announce.
+from the card. Another of the member's devices registering within 10 minutes
+(a paired Apple Watch registers on its own, seconds after the iPhone) is
+pushed too: its copy may still hold the placeholder, and one that already has
+the welcome fetches the same pass and shows nothing. Every pass issued after
+the welcome already carries the line, so a device added later, a re-added card
+or a new iPhone has nothing to announce; and a device that misses its push
+(offline, given up) updates silently on a later fetch instead of greeting the
+member days later, since passes served after the hour announce nothing.
 
 Serial numbers stay ``GDGQ-`` + the uuid's first 8 characters
 (``app/wallet_signer.py``): a new format would give every holder a second card.
@@ -36,7 +43,7 @@ import hmac
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -56,6 +63,10 @@ TOKEN_CONTEXT = "pass:v1:"
 WELCOME = f"أهلًا بك في {isolate('GDG Qassim')}! متحمسين نشوفك قريب في فعالياتنا"
 # On the back of the card until the welcome replaces it: neutral, never announced.
 PLACEHOLDER = "رسائل النادي تظهر هنا"
+# Another of the member's devices registering this soon after the welcome is pushed too.
+WELCOME_PUSH_WINDOW = timedelta(minutes=10)
+# Passes served this long after the welcome announce it (changeMessage); later ones update it silently.
+WELCOME_ANNOUNCE_WINDOW = timedelta(hours=1)
 
 _SERIAL = re.compile(r"GDGQ-[0-9A-Za-z]{8}")
 LOG_LINES = 10
@@ -68,8 +79,10 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
 @dataclass(frozen=True)
 class Registered:
     created: bool
-    # This registration welcomed the member: a pass update push is owed to the device.
+    # This registration welcomed the member.
     welcomed: bool
+    # A pass update push is owed to the device: the welcome, or a device added right after it.
+    push_owed: bool
 
 
 def authentication_token(uuid: str) -> str | None:
@@ -85,10 +98,12 @@ def card_fields(profile: MemberProfiles) -> dict[str, Any]:
     """What a member pass adds for the web service; nothing while it is off."""
     if not config.apple_pass_updates_enabled:
         return {}
+    welcomed_at = profile.pass_welcomed_at
     return {
         "webServiceURL": config.APPLE_PASS_WEB_SERVICE_URL,
         "authenticationToken": authentication_token(profile.uuid),
-        "clubMessage": WELCOME if profile.pass_welcomed_at is not None else PLACEHOLDER,
+        "clubMessage": WELCOME if welcomed_at is not None else PLACEHOLDER,
+        "clubMessageAnnounce": welcomed_at is None or clock.now() - welcomed_at < WELCOME_ANNOUNCE_WINDOW,
     }
 
 
@@ -125,7 +140,11 @@ def find_holder(session: Session, pass_type_id: str, serial_number: str, token: 
 def register(
     session: Session, holder: MemberProfiles, *, device_library_id: str, serial_number: str, push_token: str
 ) -> Registered:
-    """Store the device's registration; the member's first one ever welcomes them. The caller commits."""
+    """Store the device's registration; the member's first one ever welcomes them. The caller commits.
+
+    A new registration within ``WELCOME_PUSH_WINDOW`` of the welcome is owed
+    the push too (a paired Apple Watch, a second iPhone).
+    """
     now = clock.now().replace(microsecond=0)
     registration, created = pass_queries.register(
         session,
@@ -135,11 +154,20 @@ def register(
         push_token=push_token,
         now=now,
     )
-    welcomed = holder.pass_welcomed_at is None and pass_queries.mark_welcomed(session, holder.id, now)
-    if welcomed:
+    if holder.pass_welcomed_at is None:
+        welcomed = pass_queries.mark_welcomed(session, holder.id, now)
+        # False: another of the member's devices, registering at the same moment, welcomed them.
+        welcomed_at = now
+    else:
+        welcomed, welcomed_at = False, holder.pass_welcomed_at
+    push_owed = welcomed or (created and now - welcomed_at < WELCOME_PUSH_WINDOW)
+    if push_owed:
         pass_queries.owe_push(session, registration.id, now)
+    if welcomed:
         logger.info("Member %s: first Wallet pass registration, welcome push owed", holder.member_id)
-    return Registered(created=created, welcomed=welcomed)
+    elif push_owed:
+        logger.info("Member %s: another Wallet pass registration right after the welcome, push owed", holder.member_id)
+    return Registered(created=created, welcomed=welcomed, push_owed=push_owed)
 
 
 def unregister(session: Session, holder: MemberProfiles, *, device_library_id: str, serial_number: str) -> bool:

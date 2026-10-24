@@ -122,7 +122,8 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
 
     A member's pass can also carry Apple's web service (``webServiceURL`` and
     ``authenticationToken``) and the club's message on its back
-    (``clubMessage``); card data without them gives the pass it always did.
+    (``clubMessage``, announced by Wallet when it changes only with
+    ``clubMessageAnnounce``); card data without them gives the pass it always did.
     """
     theme_id = card_data.get("themeId", DEFAULT_THEME)
     if theme_id not in THEMES_CONFIG:
@@ -158,10 +159,12 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     ]
     club_message = card_data.get("clubMessage")
     if club_message:
+        message_field = {"key": "club_message", "label": CLUB_MESSAGE_LABEL, "value": club_message}
+        if card_data.get("clubMessageAnnounce"):
+            # Wallet shows a change of the value as a notification from the card.
+            message_field["changeMessage"] = "%@"
         # First on the back, where the holder finds the message Wallet showed them.
-        back_fields.insert(
-            0, {"key": "club_message", "label": CLUB_MESSAGE_LABEL, "value": club_message, "changeMessage": "%@"}
-        )
+        back_fields.insert(0, message_field)
 
     # 1. Build pass.json
     pass_json = {
