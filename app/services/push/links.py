@@ -10,6 +10,8 @@ _ALLOWED = (
     re.compile(r"gdgq://notifications"),
     re.compile(r"gdgq://profile/my-events"),
     re.compile(r"gdgq://wallet/card"),
+    # App 1.0.3: the member's certificates. 1.0.2 does not know it and opens Notifications instead.
+    re.compile(r"gdgq://profile/certificates"),
 )
 
 
@@ -22,3 +24,4 @@ def event_url(event_id: int) -> str:
 
 
 POINTS_URL = "gdgq://points/history"
+CERTIFICATES_URL = "gdgq://profile/certificates"

@@ -52,6 +52,8 @@ from sqlalchemy.orm import Session
 from app.DB import event_pipeline as pipeline_queries
 from app.DB.schema import EventHistoryAction, EventsLocationType, EventsStatus, FormType, Members, PipelineHistoryAction
 from app.services import event_history, pipeline_calendar, pipeline_history
+from app.services.push import cases as push_cases
+from app.services.push import delivery as push_delivery
 
 from app.routers.responses import DetailResponse
 from app.services.permissions.catalogue import Perm
@@ -259,6 +261,7 @@ def update_event(
         logger.info(f"Updating Event [{event_id}]")
         existing = events_queries.get_event_by_id(session, event_id)
         before = event_history.snapshot(existing) if existing else {}
+        push_before = push_cases.event_state(existing) if existing else {}
         points_before: dict = {}
 
         # 1. Validate event exists and update event fields
@@ -378,11 +381,17 @@ def update_event(
                 "department_id": event_data.actions[0].department_id or points_before["department_id"],
             }
             changed |= event_history.changes(points_before, points_after)
-        if changed:
+        recorded = (
             event_history.record(session, updated_event, EventHistoryAction.EDITED, member, changed)
+            if changed
+            else None
+        )
+        pushed = push_cases.event_changed(session, updated_event, push_before, recorded.id if recorded else None)
         calendar_request = pipeline_calendar.mark_event(session, event_id)
         session.commit()
         pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
+        if pushed:
+            background_tasks.add_task(push_delivery.kick)
         session.refresh(updated_event)
         logger.info(f"Event [{event_id}] updated successfully")
         return updated_event
@@ -428,9 +437,13 @@ def delete_event(event_id: int, session: DB, member: CurrentMember, background_t
         )
     event_history.record(session, event, EventHistoryAction.DELETED, member)
     event_name = event.name
+    # Its cancellations still waiting would go with it (the foreign key): kept, and sent after the commit.
+    kept = push_cases.event_deleted(session, event_id)
     events_queries.delete_event(session, event_id)
     session.commit()
     pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
+    if kept:
+        background_tasks.add_task(push_delivery.kick)
     logger.info(f"Event [{event_id}]: {event_name} deleted successfully")
     return {"detail": "Event deleted successfully"}
 
@@ -442,11 +455,18 @@ def delete_event(event_id: int, session: DB, member: CurrentMember, background_t
     responses={404: {"model": NotFoundResponse, "description": "Event not found"}},
     dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
 )
-def update_event_status(event_id: int, status_data: UpdateEventStatus_model, session: DB, member: CurrentMember):
+def update_event_status(
+    event_id: int,
+    status_data: UpdateEventStatus_model,
+    session: DB,
+    member: CurrentMember,
+    background_tasks: BackgroundTasks,
+):
     event = events_queries.get_event_by_id(session, event_id)
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     old_status = event.status
+    push_before = push_cases.event_state(event)
 
     # Publishing/unpublishing the event also publishes/unpublishes its Google
     # Form, if it has one - a copied form does not inherit the template's
@@ -470,15 +490,19 @@ def update_event_status(event_id: int, status_data: UpdateEventStatus_model, ses
                 )
 
     event.status = EventsStatus(status_data.status)
+    recorded = None
     if event.status != old_status:
-        event_history.record(
+        recorded = event_history.record(
             session,
             event,
             EventHistoryAction.STATUS_CHANGED,
             member,
             {"status": [old_status.value, event.status.value]},
         )
+    pushed = push_cases.event_changed(session, event, push_before, recorded.id if recorded else None)
     session.commit()
+    if pushed:
+        background_tasks.add_task(push_delivery.kick)
     session.refresh(event)
 
     # Best-effort: reset the leaderboard cache when entering or leaving the "open" status,
@@ -512,19 +536,24 @@ def update_event_meeting_url(
             status_code=status.HTTP_400_BAD_REQUEST, detail="meeting_url can only be set on an online event"
         )
     old_url = existing_event.meeting_url
+    push_before = push_cases.event_state(existing_event)
     events_queries.update_event_meeting_url(session, event_id, meeting_url_data.meeting_url)
     event = existing_event
+    recorded = None
     if old_url != event.meeting_url:
-        event_history.record(
+        recorded = event_history.record(
             session,
             event,
             EventHistoryAction.MEETING_URL_CHANGED,
             member,
             {"meeting_url": [old_url, event.meeting_url]},
         )
+    pushed = push_cases.event_changed(session, event, push_before, recorded.id if recorded else None)
     calendar_request = pipeline_calendar.mark_event(session, event_id)
     session.commit()
     pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
+    if pushed:
+        background_tasks.add_task(push_delivery.kick)
     session.refresh(event)
     logger.info(f"Event [{event_id}] meeting url {'set' if meeting_url_data.meeting_url else 'cleared'}")
 
@@ -554,7 +583,11 @@ def _label_taken_response(detail: str) -> HTTPException:
     dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
 )
 def create_event_content_link(
-    event_id: int, link_data: CreateEventContentLink_model, session: DB, member: CurrentMember
+    event_id: int,
+    link_data: CreateEventContentLink_model,
+    session: DB,
+    member: CurrentMember,
+    background_tasks: BackgroundTasks,
 ):
     """Manually paste a link to event content (Drive/YouTube) with the display
     label shown to members; published immediately."""
@@ -572,6 +605,7 @@ def create_event_content_link(
             member,
             {"content_link": [None, _content_link_snapshot(link)]},
         )
+        pushed = push_cases.content_added(session, link)
         session.commit()
         session.refresh(link)
         # The response carries the derived download_url too, same as the read
@@ -582,6 +616,8 @@ def create_event_content_link(
         if not _duplicate_label_error(exc):
             raise
         raise _label_taken_response("A content link with this label already exists for this event")
+    if pushed:
+        background_tasks.add_task(push_delivery.kick)
     logger.info(f"Event [{event_id}] content link [{link.id}] created, kind [{link.kind}]")
     reset_leaderboard_cache_best_effort()
     return link
@@ -598,7 +634,12 @@ def create_event_content_link(
     dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
 )
 def update_event_content_link(
-    event_id: int, link_id: UUID, link_data: UpdateEventContentLink_model, session: DB, member: CurrentMember
+    event_id: int,
+    link_id: UUID,
+    link_data: UpdateEventContentLink_model,
+    session: DB,
+    member: CurrentMember,
+    background_tasks: BackgroundTasks,
 ):
     """Edit a content link's label/url/kind/published state. Links stay
     editable and deletable forever - nothing here clears or locks them."""
@@ -623,12 +664,16 @@ def update_event_content_link(
             member,
             {"content_link": [before, _content_link_snapshot(link)]},
         )
+        # Published only now: to members it is new.
+        pushed = push_cases.content_added(session, link) if not before["published"] else 0
         session.commit()
     except IntegrityError as exc:
         session.rollback()
         if not _duplicate_label_error(exc):
             raise
         raise _label_taken_response("A content link with this label already exists for this event")
+    if pushed:
+        background_tasks.add_task(push_delivery.kick)
     logger.info(f"Event [{event_id}] content link [{link_id}] updated")
     reset_leaderboard_cache_best_effort()
     return link

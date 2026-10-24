@@ -24,6 +24,7 @@ from app.routers.models import Events_model
 from app.config import config
 from app.helpers import get_effective_date
 from app.semesters import semester_for_event
+from app.services import event_pipeline_clock
 from datetime import datetime, timedelta
 
 if TYPE_CHECKING:
@@ -335,6 +336,7 @@ def create_event_content_link(
         url=link_data.url,
         kind=link_data.kind,
         published=link_data.published,
+        published_at=event_pipeline_clock.now() if link_data.published else None,
         drive_file_id=getattr(link_data, "drive_file_id", None),
         created_by=created_by,
     )
@@ -377,6 +379,10 @@ def update_event_content_link(session: Session, existing: EventContentLinks, lin
     if link_data.kind is not None:
         existing.kind = link_data.kind
     if link_data.published is not None:
+        if link_data.published and not existing.published:
+            existing.published_at = event_pipeline_clock.now()
+        elif not link_data.published:
+            existing.published_at = None
         existing.published = link_data.published
     session.flush()
     return existing

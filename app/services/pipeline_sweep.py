@@ -40,6 +40,7 @@ from app.services import pipeline_history as history
 from app.services import pipeline_notion as notion
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail, send_pipeline_email_job
+from app.services.push import cases as push_cases
 from app.services.push import delivery as push_delivery
 from app.services.push import triggers as push_triggers
 
@@ -63,6 +64,9 @@ class SweepResult:
     # The member app's pushes (app/services/push/triggers.py): queued here, sent after the commit.
     push_reminders: int = 0
     push_new_events: int = 0
+    push_event_live: int = 0
+    push_registration_closing: int = 0
+    push_weekly_summaries: int = 0
     push_cleaned: int = 0
 
     def counts(self) -> dict[str, int]:
@@ -73,6 +77,9 @@ class SweepResult:
             "calendar_synced": self.calendar_synced,
             "push_reminders": self.push_reminders,
             "push_new_events": self.push_new_events,
+            "push_event_live": self.push_event_live,
+            "push_registration_closing": self.push_registration_closing,
+            "push_weekly_summaries": self.push_weekly_summaries,
             "push_cleaned": self.push_cleaned,
         }
 
@@ -146,7 +153,14 @@ def collect_calendar_entries(session: Session, now: datetime, result: SweepResul
     result.calendar_requests = pipeline_calendar.pending_request_ids(session)
 
 
-RULES = [expire_holds, grow_penalties, collect_notion_cards, collect_calendar_entries, *push_triggers.SWEEP_RULES]
+RULES = [
+    expire_holds,
+    grow_penalties,
+    collect_notion_cards,
+    collect_calendar_entries,
+    *push_triggers.SWEEP_RULES,
+    *push_cases.SWEEP_RULES,
+]
 
 
 def run_sweep(session: Session, now: datetime | None = None) -> SweepResult:

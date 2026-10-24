@@ -1650,6 +1650,8 @@ class EventContentLinks(Base):
         VARCHAR(255, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
     )
     published: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    # When it last became visible to members (UTC); NULL while it is a draft.
+    published_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
@@ -1689,6 +1691,15 @@ class PushKind(str, enum.Enum):
     POINTS = "points"
     NEW_EVENT = "new_event"
     BROADCAST = "broadcast"
+    # App 1.0.3 (app/services/push/cases.py).
+    EVENT_UPDATED = "event_updated"
+    EVENT_CANCELLED = "event_cancelled"
+    EVENT_LIVE = "event_live"
+    REGISTRATION_CLOSING = "registration_closing"
+    CERTIFICATE = "certificate"
+    EVENT_CONTENT = "event_content"
+    WEEKLY_SUMMARY = "weekly_summary"
+    WELCOME = "welcome"
 
 
 class PushStatus(str, enum.Enum):

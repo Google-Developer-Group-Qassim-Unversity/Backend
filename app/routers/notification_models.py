@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.DB.schema import PushKind
 from app.services.push import links
 
 TITLE_MAX = 60
@@ -73,7 +74,7 @@ class NotificationPrefsUpdate(BaseModel):
 
 class FeedItemResponse(BaseModel):
     id: str
-    kind: Literal["reminder", "accepted", "points", "new_event", "broadcast"]
+    kind: PushKind = Field(description="What it is about; the 1.0.3 kinds are listed in docs/PUSH.md")
     title: str
     body: str
     url: str

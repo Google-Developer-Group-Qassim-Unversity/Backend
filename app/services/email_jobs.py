@@ -32,6 +32,7 @@ from app.routers.email_models import (
 from app.services.email_recipients import _resolve_event, _resolve_member
 from app.services.email_capacity import _personalize, get_from_address, get_send_capacity
 from app.services.job_tracker import EMAIL_JOB_QUERIES, job_boundary
+from app.services.push import cases as push_cases
 from app.services.email_gateway import (
     call_acceptance_api,
     call_blast_api,
@@ -95,6 +96,7 @@ def send_certificates_by_event_id(
                         "event": simple_event.model_dump(mode="json"),
                     },
                 )
+                push_cases.certificate_sent(session, event_id, member.id)
                 session.commit()
 
 
@@ -132,6 +134,7 @@ def send_manual_certificates_job(request_data: ManualCertificateRequest, sent_by
                         "event": simple_event.model_dump(mode="json"),
                     },
                 )
+                push_cases.certificate_sent(session, event_id, member_id)
                 session.commit()
 
 
