@@ -17,7 +17,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sentry_sdk.utils import event_from_exception
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -241,7 +241,29 @@ def test_an_unknown_serial_is_refused(client: TestClient, db_session, web_servic
     url = registration_url(profile).replace("GDGQ-1234ABCD", "GDGQ-FFFFFFFF")
 
     assert client.post(url, json={"pushToken": PUSH}, headers=auth(profile)).status_code == 401
-    assert client.post(url.replace("GDGQ-FFFFFFFF", "GDGQ-1234AB%25"), json={"pushToken": PUSH}).status_code == 401
+
+
+@pytest.mark.parametrize("serial", ["GDGQ-1234ABC%25", "GDGQ-1234AB_D", "GDGQ-%25%25%25%25%25%25%25%25"])
+def test_a_serial_with_like_wildcards_never_reaches_the_query(
+    client: TestClient, db_session, web_service, monkeypatch, serial
+):
+    """``%`` and ``_`` would widen the uuid ``LIKE`` (``________`` matches every member)."""
+    profile = make_profile(db_session, uuid="1234abcd" + "0" * 24)
+    looked_up = []
+    lookup = pass_queries.profiles_for_serial_prefix
+    monkeypatch.setattr(
+        pass_queries,
+        "profiles_for_serial_prefix",
+        lambda session, prefix: looked_up.append(prefix) or lookup(session, prefix),
+    )
+    assert client.get(pass_url(profile), headers=auth(profile)).status_code == 200
+    assert looked_up == ["1234ABCD"], "the real serial is looked up"
+
+    url = registration_url(profile).replace("GDGQ-1234ABCD", serial)
+
+    assert client.post(url, json={"pushToken": PUSH}, headers=auth(profile)).status_code == 401
+    assert looked_up == ["1234ABCD"]
+    assert registrations(db_session) == []
 
 
 def test_another_pass_type_is_refused(client: TestClient, db_session, web_service):
@@ -266,7 +288,10 @@ def test_the_first_registration_welcomes_the_member_with_a_push_to_that_device(
     client: TestClient, db_session, web_service
 ):
     profile = make_profile(db_session)
-    edited_at = fresh(db_session, profile).updated_at
+    # Long ago: an ON UPDATE bump would show, even within the same second as the profile's creation.
+    edited_at = datetime(2020, 1, 1)
+    db_session.execute(update(MemberProfiles).where(MemberProfiles.id == profile.id).values(updated_at=edited_at))
+    db_session.commit()
 
     assert register(client, profile).status_code == 201
 
