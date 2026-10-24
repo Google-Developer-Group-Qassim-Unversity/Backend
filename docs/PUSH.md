@@ -91,7 +91,7 @@ app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
 | `welcome` | a member's first phone registers (`POST /notifications/devices`) within 7 days of their member record's creation | that member | `news` | quiet hours; capped; 3 days |
 | `rank_top5` | the member entered the semester's top 5 from outside it (sweep, [rank pushes](#rank-pushes)): "You're in the top 5!" · "You're #N this semester…" | that member | `points` | after the standing held 10 minutes; quiet hours; one rank push a day; not capped; 12 hours |
 | `rank_first` | the member reached #1, a shared #1 too, from the top 5 or from outside it: "You're #1!" · "…with P points…" | that member | `points` | as `rank_top5` |
-| `rank_left` | the member left the top 5, only after a `rank_top5` or `rank_first` was sent to them that semester: "You can get back!" | that member | `points` | as `rank_top5` |
+| `rank_left` | the member left the top 5, only after a `rank_top5` or `rank_first` was sent to them that semester: "You can get back in!" | that member | `points` | as `rank_top5` |
 
 **Quiet hours** are 22:00-08:00 Riyadh: a push queued then waits until 08:00.
 

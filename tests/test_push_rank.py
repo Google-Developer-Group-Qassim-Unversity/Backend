@@ -251,7 +251,7 @@ def test_leaving_the_top_5_after_being_told_in(db_session, push_on, apns_mock, f
         f"rank_left:475:{climber.id}:2",
     )
     assert left.payload["en"] == {
-        "title": "You can get back!",
+        "title": "You can get back in!",
         "body": "You dropped out of the top 5, but we want to see you first, always. Your next event is your chance!",
     }
     assert left.payload["ar"] == {

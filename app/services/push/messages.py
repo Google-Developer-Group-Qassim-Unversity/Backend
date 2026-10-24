@@ -285,7 +285,7 @@ def rank_left() -> Text:
             "body": "طلعت من الخمسة الأوائل، بس نبي نشوفك دايم الأول. الفعالية الجاية فرصتك!",
         },
         "en": {
-            "title": "You can get back!",
+            "title": "You can get back in!",
             "body": "You dropped out of the top 5, but we want to see you first, always. Your next event is your chance!",
         },
     }
