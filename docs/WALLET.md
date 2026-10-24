@@ -162,7 +162,7 @@ library id is in the request paths, so the request log line, the error
 handler's and uvicorn's access line read `/v1/devices/[device]`. Sentry events
 lose any value under `pushToken`, `push_token` or `device_library_id` (in
 dicts, and in reprs such as `WalletPassRegistrationRequest(pushToken='...')`),
-any stack-frame local named like `token`, `authorization` or `device_library`,
+any stack-frame local named like `token`, `authorization`, `device_library`, `password`, `secret`, `p12`, `pem` or `private_key`,
 and every local of the frames inside SQLAlchemy and the MySQL driver, which hold
 the statement's values (`app/services/push/redact.py`). A database error's own
 text never shows them: the engine is built with `hide_parameters`

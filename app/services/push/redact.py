@@ -18,8 +18,10 @@ Two more places a token could reach: hpack's DEBUG lines print every HTTP/2
 header (the path and the encoded ``authorization`` with the provider token),
 so that logger stays at INFO even when ``LOG_LEVEL=DEBUG``; and a Sentry
 event's stack frames carry each frame's local variables, so any local whose
-name has ``token``, ``authorization`` or ``device_library`` in it is filtered
-(Sentry's own list only matches the exact names), and frames inside SQLAlchemy
+name has ``token``, ``authorization``, ``device_library``, ``password``,
+``secret``, ``p12``, ``pem`` or ``private_key`` in it is filtered (Sentry's own
+list only matches the exact names; the last five keep the Pass Type ID
+certificate, its key and their passwords out when loading it fails), and frames inside SQLAlchemy
 and the MySQL driver lose their locals altogether: they hold every statement's
 parameters, and the driver's the statement with its values written in. The
 exception's own text never shows them either: the engine is built with
@@ -36,7 +38,9 @@ _PASS_DEVICE_PATH = re.compile(r"/v1/devices/[^/\s?#\"']+")
 _PASS_DEVICE_REPLACEMENT = "/v1/devices/[device]"
 _MARKERS = ("/3/device/", "/v1/devices/")
 _FILTERED_KEYS = {"pushToken", "push_token", "device_library_id"}
-_FILTERED_VARS = ("token", "authorization", "device_library")
+# The Pass Type ID certificate's locals too (``p12_password``, ``p12_bytes``, ``pem``): Sentry's own
+# list matches only exact names like ``password``, and a failed load would ship the key and its password.
+_FILTERED_VARS = ("token", "authorization", "device_library", "password", "secret", "p12", "pem", "private_key")
 _FILTERED = "[Filtered]"
 # One of those keys in a repr: ``pushToken='...'``, ``'push_token': '...'``.
 _KEYED_IN_TEXT = re.compile(r"""((?:pushToken|push_token|device_library_id)['"]?\s*[=:]\s*)(['"])[^'"]*\2""")

@@ -179,3 +179,22 @@ def test_sentry_events_lose_the_wallet_device_id_and_the_push_token_in_every_sha
     assert route["vars"]["body"] == "WalletPassRegistrationRequest(pushToken='[Filtered]')"
     assert queries["vars"]["values"] == {"push_token": "[Filtered]", "member_id": "7"}
     assert [frame.get("vars") for frame in library] == [None, None], "the database library's frames lose their locals"
+
+
+def test_sentry_events_lose_the_pass_certificate_and_its_passwords():
+    """A failed certificate load (a wrong APPLE_P12_PASSWORD) must not ship the key and its password."""
+    frames = [
+        {
+            "module": "app.wallet_signer",
+            "vars": {"p12_password": "'hunter2'", "p12_password_str": "'hunter2'", "p12_bytes": "b'0\\x82'"},
+        },
+        {"module": "app.services.wallet_push", "vars": {"pem": "b'-----BEGIN'", "password": "b'one-time'"}},
+        {"module": "app.services.wallet_push", "vars": {"private_key": "<RSAPrivateKey>", "context": "<SSLContext>"}},
+    ]
+    event = {"exception": {"values": [{"stacktrace": {"frames": frames}}]}}
+
+    cleaned = json.dumps(redact.before_send(event))
+
+    for secret in ("hunter2", "0\\\\x82", "BEGIN", "one-time", "RSAPrivateKey"):
+        assert secret not in cleaned, secret
+    assert "<SSLContext>" in cleaned, "other locals stay"
