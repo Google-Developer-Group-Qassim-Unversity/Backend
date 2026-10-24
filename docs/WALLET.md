@@ -98,9 +98,10 @@ the other two as public.
 | `member_profiles.pass_welcomed_at` | NULL until one of the member's cards first registers. Set once, under the row's lock (`IS NULL` in the `UPDATE`), so two devices at once welcome once |
 | `member_profiles.pass_updated_at` | the pass's update tag. Setting it leaves `member_profiles.updated_at` alone (it means the member's last card edit) |
 
-Revision `194e7997ddc9`. Deleting an account (`anonymize_member`) deletes the
-member's registrations, and the profile with its two columns; the old card then
-gets 401.
+Revision `194e7997ddc9`, after the rank pushes' `7b068beb7244`
+([PUSH.md](PUSH.md#rank-pushes)). Deleting an account (`anonymize_member`)
+deletes the member's registrations, and the profile with its two columns; the
+old card then gets 401.
 
 ## The welcome, once per member
 
@@ -169,7 +170,8 @@ text never shows them: the engine is built with `hide_parameters`
 
 ## Deploying
 
-1. Merge the Backend PR into `dev`. The deploy runs the migration on
+1. Merge the Backend PR into `dev`, after the rank pushes' PR (its migration
+   `7b068beb7244` is this one's parent). The deploy runs the migration on
    `scores_staging`; nothing changes while the settings are unset.
 2. Check the Pass Type ID certificate inside `APPLE_P12_BASE64` (Infisical
    `/admin-backend`): it must be the certificate of `pass.pass.com.gdg-q.wallet`

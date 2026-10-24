@@ -14,7 +14,7 @@ The table starts empty and both columns NULL: nothing existing changes, and
 passes stay as they were until ``APPLE_PASS_WEB_SERVICE_URL`` is set.
 
 Revision ID: 194e7997ddc9
-Revises: 80d73cc07c1a
+Revises: 7b068beb7244
 Create Date: 2026-10-24 02:00:00.000000
 
 """
@@ -28,7 +28,7 @@ from sqlalchemy.dialects import mysql
 
 # revision identifiers, used by Alembic.
 revision: str = "194e7997ddc9"
-down_revision: Union[str, Sequence[str], None] = "80d73cc07c1a"
+down_revision: Union[str, Sequence[str], None] = "7b068beb7244"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
