@@ -641,8 +641,53 @@ class MemberProfiles(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     )
+    # The Apple Wallet pass's web service (app/services/wallet_updates.py), naive UTC.
+    # When one of the member's cards first registered for updates: the welcome, sent once ever.
+    pass_welcomed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    # The pass's update tag: the last time its content changed for Wallet to fetch. Whole seconds.
+    pass_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
     member: Mapped["Members"] = relationship("Members", back_populates="profile")
+
+
+class WalletPassRegistrations(Base):
+    """A device that holds a member's Apple Wallet pass and asked to hear when it changes.
+
+    Wallet registers each pass it holds (``POST /wallet/apple/v1/devices/...``)
+    and unregisters it when the pass is removed. One row per device and serial
+    number: the serial is the member's card (``GDGQ-`` + the first 8 characters
+    of ``member_profiles.uuid``), and ``member_id`` is the member whose pass
+    token the device presented, so two members whose serials collide never
+    share a row. ``push_due_at`` is set while a pass update push is owed to the
+    device (``app/services/wallet_push.py``).
+    """
+
+    __tablename__ = "wallet_pass_registrations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["member_id"], ["members.id"], name="fk_wallet_pass_registrations_member", ondelete="CASCADE"
+        ),
+        Index("uq_wallet_pass_registrations_device_serial", "device_library_id", "serial_number", unique=True),
+        Index("ix_wallet_pass_registrations_member", "member_id", "updated_at"),
+        Index("ix_wallet_pass_registrations_push_due", "push_due_at"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    # Wallet's id for the device's pass library; it also authenticates the list of updated serials. Never logged.
+    device_library_id: Mapped[str] = mapped_column(VARCHAR(100, charset="ascii", collation="ascii_bin"), nullable=False)
+    serial_number: Mapped[str] = mapped_column(VARCHAR(40, charset="ascii", collation="ascii_bin"), nullable=False)
+    # The pass's own APNs token (lowercase hex), for the Pass Type ID topic. Never logged.
+    push_token: Mapped[str] = mapped_column(VARCHAR(200, charset="ascii", collation="ascii_bin"), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    # The last registration: Wallet registers again, with a new push token, after a restore.
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    push_due_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    push_attempts: Mapped[int] = mapped_column(SMALLINT(unsigned=True), nullable=False, server_default=text("'0'"))
 
 
 class DepartmentsLogs(Base):

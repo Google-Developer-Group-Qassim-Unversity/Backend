@@ -35,6 +35,10 @@ Deleting an account (`DELETE /members/me`, `anonymize_member`) deletes the
 member's phones, switches, rank standings and every `push_notifications` row,
 sent ones too.
 
+Apple Wallet pass update pushes (the welcome from the card) are separate: they
+go to the card, not the app, with the Pass Type ID certificate instead of the
+`.p8` key. See [WALLET.md](WALLET.md).
+
 ## Routes
 
 All under `/notifications`. Member routes take the member from the session
@@ -279,7 +283,10 @@ Logs name the outbox row and the device row, never a token, the JWT or the
 key. The token is in the APNs URL, so the `httpx` log line and Sentry's
 breadcrumbs and spans are rewritten to `/3/device/[token]`
 (`app/services/push/redact.py`). Sentry events also lose every stack-frame
-local whose name contains `token`, and the `hpack` logger stays at INFO even
+local whose name contains `token`, and every local of the frames inside
+SQLAlchemy and the MySQL driver (they hold the statement's values, a device
+token among them); a database error's text never shows those values either
+(`hide_parameters`, `app/DB/main.py`). The `hpack` logger stays at INFO even
 with `LOG_LEVEL=DEBUG` (its DEBUG lines print the HTTP/2 headers).
 
 The payload carries the app's keys twice, under `body` (which expo-notifications

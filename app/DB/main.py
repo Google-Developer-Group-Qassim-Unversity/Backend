@@ -63,6 +63,9 @@ def get_engine() -> Engine:
         pool_timeout=DB_POOL_TIMEOUT_SECONDS,
         pool_use_lifo=True,
         connect_args=_build_connect_args(config.DATABASE_URL),
+        # A database error's text names the statement but never its values (members'
+        # details, push tokens, Wallet device ids): it goes to the log and to Sentry.
+        hide_parameters=True,
     )
 
 

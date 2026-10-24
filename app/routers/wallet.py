@@ -1,13 +1,15 @@
 import logging
 import uuid as uuid_lib
+from datetime import UTC
+from email.utils import format_datetime
 from typing import Annotated, Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Response, status, Body
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Path, Query, Response, status, Body
 from pydantic import BaseModel, Field, field_validator
 from app.member_names import validate_member_name
 from app.leaderboard_cache import refresh_member_names_cache
 
 from app.config import config
-from app.DB.schema import Members
+from app.DB.schema import MemberProfiles, Members
 from app.DB.wallet import (
     card_visibility,
     get_or_create_member_profile,
@@ -16,6 +18,7 @@ from app.DB.wallet import (
     update_member_profile,
 )
 from app.helpers import MemberOrGuest, authenticated_guard
+from app.services import wallet_push, wallet_updates
 from app.services.card_qr import card_qr_value
 from app.wallet_signer import generate_apple_pkpass, generate_google_wallet_pass_url
 from app.dependencies import DB
@@ -105,6 +108,19 @@ class WalletHealthResponse(BaseModel):
     status: str
     apple_wallet_configured: bool
     google_wallet_configured: bool
+
+
+class WalletPassRegistrationRequest(BaseModel):
+    """What Wallet sends when it registers a pass: the pass's own APNs token (hex; stored lowercase)."""
+
+    pushToken: str = Field(min_length=16, max_length=200, pattern=r"^[0-9A-Fa-f]+$")
+
+
+class WalletPassSerialsResponse(BaseModel):
+    """Apple's ``SerialNumbers``: the device's passes that changed, and the tag to send next time."""
+
+    serialNumbers: list[str]
+    lastUpdated: str
 
 
 router = APIRouter(prefix="/wallet", tags=["wallet"])
@@ -199,6 +215,8 @@ def _member_card_data(session: Session, member: Members, card_data: Dict[str, An
         "nameLanguage": "ar",
         "isAdmin": is_admin,
         "qrValue": card_qr_value(profile.uuid),
+        # Apple's web service and the club's message (app/services/wallet_updates.py); nothing while it is off.
+        **wallet_updates.card_fields(profile),
     }
 
 
@@ -551,3 +569,150 @@ def wallet_health():
     has_apple_p12 = bool(config.APPLE_P12_BASE64) or bool(config.APPLE_P12_PASSWORD)
     has_google_key = bool(config.GOOGLE_WALLET_PRIVATE_KEY)
     return {"status": "healthy", "apple_wallet_configured": has_apple_p12, "google_wallet_configured": has_google_key}
+
+
+# =============================================================================
+# Apple Wallet web service (PassKit)
+# =============================================================================
+#
+# Apple's "Wallet Passes web service". While APPLE_PASS_WEB_SERVICE_URL and
+# APPLE_PASS_AUTH_SECRET are set, member passes carry webServiceURL =
+# https://<api host>/wallet/apple and Wallet calls the five routes below; Wallet
+# appends the /v1/... itself. They are Apple's to call, not the apps': the pass's
+# own token (Authorization: ApplePass <token>) authenticates them, except the
+# list of updated serials (the device library id is its secret) and the log.
+# All five answer 404 while the feature is off. Rules: app/services/wallet_updates.py.
+
+DeviceLibraryId = Annotated[str, Path(max_length=100, pattern=r"^[A-Za-z0-9._-]+$")]
+
+
+def _web_service_on() -> None:
+    if not config.apple_pass_updates_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+
+def apple_pass_holder(
+    pass_type_id: str, serial_number: str, session: DB, authorization: Annotated[str | None, Header()] = None
+) -> MemberProfiles:
+    """The member profile whose pass is in the path, when the request carries that pass's own token; else 401."""
+    _web_service_on()
+    token = wallet_updates.token_from_header(authorization)
+    holder = wallet_updates.find_holder(session, pass_type_id, serial_number, token)
+    if holder is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Request not authorized",
+            headers={"WWW-Authenticate": "ApplePass"},
+        )
+    return holder
+
+
+setattr(apple_pass_holder, "auth_label", "apple_pass_token")
+PassHolder = Annotated[MemberProfiles, Depends(apple_pass_holder)]
+
+
+@router.post(
+    "/apple/v1/devices/{device_library_id}/registrations/{pass_type_id}/{serial_number}",
+    summary="Wallet: register a device for a pass's updates",
+    response_class=Response,
+    status_code=status.HTTP_201_CREATED,
+)
+def register_wallet_pass(
+    device_library_id: DeviceLibraryId,
+    pass_type_id: str,
+    serial_number: str,
+    body: WalletPassRegistrationRequest,
+    holder: PassHolder,
+    session: DB,
+    background_tasks: BackgroundTasks,
+):
+    """201 for a new registration, 200 when the device already had it.
+
+    The member's first registration ever welcomes them: the pass's message
+    changes and a pass update push goes to this device after the response
+    (``wallet_push.kick``), as it does to another of their devices registering
+    within minutes of it. A failed push is retried later and never changes
+    this answer.
+    """
+    registered = wallet_updates.register(
+        session,
+        holder,
+        device_library_id=device_library_id,
+        serial_number=serial_number,
+        push_token=body.pushToken.lower(),
+    )
+    session.commit()
+    if registered.push_owed:
+        background_tasks.add_task(wallet_push.kick)
+    return Response(status_code=status.HTTP_201_CREATED if registered.created else status.HTTP_200_OK)
+
+
+@router.delete(
+    "/apple/v1/devices/{device_library_id}/registrations/{pass_type_id}/{serial_number}",
+    summary="Wallet: unregister a device from a pass's updates",
+    response_class=Response,
+)
+def unregister_wallet_pass(
+    device_library_id: DeviceLibraryId, pass_type_id: str, serial_number: str, holder: PassHolder, session: DB
+):
+    """The pass was removed from the device. 200 whether or not it was registered."""
+    wallet_updates.unregister(session, holder, device_library_id=device_library_id, serial_number=serial_number)
+    session.commit()
+    return Response(status_code=status.HTTP_200_OK)
+
+
+@router.get(
+    "/apple/v1/devices/{device_library_id}/registrations/{pass_type_id}",
+    summary="Wallet: the device's passes updated since a tag",
+    response_model=WalletPassSerialsResponse,
+    dependencies=[Depends(_web_service_on)],
+)
+def list_updated_wallet_passes(
+    device_library_id: DeviceLibraryId,
+    pass_type_id: str,
+    session: DB,
+    passes_updated_since: Annotated[str | None, Query(alias="passesUpdatedSince", max_length=20)] = None,
+):
+    """The serial numbers of the device's passes updated after ``passesUpdatedSince`` (all without it); 204 for none."""
+    found = wallet_updates.updated_serials(session, device_library_id, pass_type_id, passes_updated_since)
+    if found is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    serials, last_updated = found
+    return {"serialNumbers": serials, "lastUpdated": last_updated}
+
+
+@router.get(
+    "/apple/v1/passes/{pass_type_id}/{serial_number}",
+    summary="Wallet: the latest version of a pass",
+    response_class=Response,
+)
+def get_latest_wallet_pass(
+    pass_type_id: str,
+    serial_number: str,
+    holder: PassHolder,
+    session: DB,
+    if_modified_since: Annotated[str | None, Header()] = None,
+):
+    """The member's pass, signed now, with ``Last-Modified``; 304 when Wallet already has it."""
+    headers = {"Cache-Control": "no-cache"}
+    if holder.pass_updated_at is not None:
+        headers["Last-Modified"] = format_datetime(holder.pass_updated_at.replace(tzinfo=UTC), usegmt=True)
+    if wallet_updates.not_modified_since(holder, if_modified_since):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+    card_data = _member_card_data(session, holder.member, {})
+    return Response(
+        content=generate_apple_pkpass(card_data), media_type="application/vnd.apple.pkpass", headers=headers
+    )
+
+
+@router.post(
+    "/apple/v1/log",
+    summary="Wallet: messages about errors it met calling this service",
+    response_class=Response,
+    dependencies=[Depends(_web_service_on)],
+)
+def log_wallet_messages(payload: Annotated[Optional[Dict[str, Any]], Body()] = None):
+    """Wallet's own error reports about this web service: kept in the log (a few lines, device ids hidden)."""
+    for line in wallet_updates.log_lines(payload):
+        logger.warning("Apple Wallet reported: %s", line)
+    return Response(status_code=status.HTTP_200_OK)
