@@ -1858,8 +1858,8 @@ class MemberRankStandings(Base):
     ``observed`` is what the sweep last saw (``observed_since``: since when);
     ``told`` is the standing the member's rank news is settled at: what the last
     rank push queued said, or what was taken as known without one (the
-    semester's first look, a mass change, a member the push cannot reach). A
-    push goes when the two differ and ``observed`` has held 10 minutes.
+    semester's first look, a member the push cannot reach). A push goes when
+    the two differ and ``observed`` has held 10 minutes.
     ``pushes`` counts the rank pushes queued for the member this semester and
     keys their ``dedupe_key``. A row is written the first time the member is in
     the top 5 that semester, and kept.

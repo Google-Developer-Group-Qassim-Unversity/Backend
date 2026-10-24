@@ -24,9 +24,7 @@ saw (``observed``, since when) and what the member's rank news is settled at
 3. Later looks leave out a crowded tie: more than ``TIE_LIMIT`` members
    sharing one rank in the top 5 (the semester's first event gives 40
    attendees the same points) is not news. Their standing stays as it was, in
-   or out, until the tie breaks. A mass change (more than ``MASS_LIMIT``
-   standings moving at once: a catalogue edit, a whole event set back to
-   draft) is taken as known and pushes nothing.
+   or out, until the tie breaks.
 4. Otherwise records each standing that moved, and when one has held
    ``SETTLE`` (10 minutes) and differs from ``told``, queues what changed:
    out to top 5 ``rank_top5``; out or top 5 to #1 ``rank_first`` (so reaching
@@ -90,8 +88,6 @@ TTL = timedelta(hours=12)
 MIN_RANKED = 20
 # More members than this sharing one rank in the top 5 (a tie bigger than the top 5 itself) is not news.
 TIE_LIMIT = 5
-# More standings than this moving in one look is a mass change (a catalogue edit): taken as known, nothing pushed.
-MASS_LIMIT = 10
 # Skip reasons after which the member was not told: ``told`` goes back to what it was before the push.
 UNTOLD = frozenset({"rank_changed", "daily_cap"})
 
@@ -175,8 +171,7 @@ def enqueue_rank_changes(session: Session, now: datetime, result) -> None:
     }
     in_top = {member_id for member_id, place in board.places.items() if place.rank <= TOP}
     if not stored:
-        # The first look takes a crowded tie as known too: it was there at launch, so its breaking is not news.
-        _take_as_known(session, semester, stored, {member_id: board.standing(member_id) for member_id in in_top}, now)
+        _take_as_known(session, semester, board, in_top, now)
         logger.info(
             "Rank pushes: first look for semester %s, %d standing(s) taken as known", semester.hijri_code, len(in_top)
         )
@@ -187,12 +182,6 @@ def enqueue_rank_changes(session: Session, now: datetime, result) -> None:
         for member_id, standing in seen.items()
         if standing != (stored[member_id].observed if member_id in stored else RankStanding.OUT)
     }
-    if len(moved) > MASS_LIMIT:
-        _take_as_known(session, semester, stored, seen, now)
-        logger.info(
-            "Rank pushes: mass change for semester %s, %d standing(s) taken as known", semester.hijri_code, len(moved)
-        )
-        return
     for member_id, standing in moved.items():
         row = stored.get(member_id)
         if row is None:
@@ -211,29 +200,24 @@ def enqueue_rank_changes(session: Session, now: datetime, result) -> None:
         result.push_rank += _tell(session, semester, board, due, now)
 
 
-def _take_as_known(
-    session: Session, semester: Semesters, stored: dict[int, MemberRankStandings], seen: dict, now: datetime
-) -> None:
-    """Every standing in ``seen`` is what the member is taken to know; nothing is pushed."""
-    for member_id, standing in seen.items():
-        row = stored.get(member_id)
-        if row is None:
-            if standing != RankStanding.OUT:
-                session.add(
-                    MemberRankStandings(
-                        semester_id=semester.id,
-                        member_id=member_id,
-                        observed=standing,
-                        observed_since=now,
-                        told=standing,
-                        told_at=now,
-                        pushes=0,
-                    )
-                )
-            continue
-        if row.observed != standing:
-            row.observed, row.observed_since = standing, now
-        _settle(row, now)
+def _take_as_known(session: Session, semester: Semesters, board: Board, in_top: set[int], now: datetime) -> None:
+    """The semester's first look: every standing in the top 5 is what the member is taken to know; nothing is pushed.
+
+    A crowded tie's too: it was there at launch, so its breaking later is not news.
+    """
+    for member_id in sorted(in_top):
+        standing = board.standing(member_id)
+        session.add(
+            MemberRankStandings(
+                semester_id=semester.id,
+                member_id=member_id,
+                observed=standing,
+                observed_since=now,
+                told=standing,
+                told_at=now,
+                pushes=0,
+            )
+        )
     session.flush()
 
 

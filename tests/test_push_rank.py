@@ -639,8 +639,28 @@ def test_a_crowded_tie_at_the_first_look_breaking_later_is_not_news(db_session, 
     assert [standing(db_session, member).told for member in crowd] == [RankStanding.TOP5] * 6
 
 
-def test_a_mass_change_is_taken_as_known(db_session, push_on, apns_mock, frozen, season):
-    """A catalogue edit puts nine members in the top 5 at once (five share #5) and five out: nothing is pushed."""
+def test_an_event_that_turns_the_top_5_over_is_news(db_session, push_on, apns_mock, frozen, season):
+    """Six members pass the whole top 5 at once (two share #5): each is told. The old top 5 were never told in."""
+    top = leaders(db_session, season, 100, 90, 80, 70, 60)
+    newcomers = []
+    for _ in range(6):
+        member = app_user(db_session)
+        give(db_session, season, member, 30)
+        newcomers.append(member)
+    db_session.commit()
+    look(db_session, frozen)
+
+    for member, extra in zip(newcomers, (100, 95, 90, 85, 80, 80)):
+        give(db_session, season, member, extra)  # 130, 125, 120, 115, 110, 110: 6 standings in, 5 out
+    db_session.commit()
+    assert held(db_session, frozen) == 6
+    found = {row.member_id: row.kind for row in rank_rows(db_session)}
+    assert found == {newcomers[0].id: PushKind.RANK_FIRST} | {m.id: PushKind.RANK_TOP5 for m in newcomers[1:]}
+    assert [standing(db_session, m).told for m in top] == [RankStanding.OUT] * 5
+
+
+def test_a_catalogue_edit_put_back_within_10_minutes_sends_nothing(db_session, push_on, apns_mock, frozen, season):
+    """A catalogue edit puts nine members in the top 5 at once (five share #5) and five out, then is put back."""
     top = leaders(db_session, season, 100, 90, 80, 70, 60)
     shared = attendance_log(db_session, season, points=5)
     group = []
@@ -655,17 +675,15 @@ def test_a_mass_change_is_taken_as_known(db_session, push_on, apns_mock, frozen,
     action = db_session.get(Actions, shared.action_id)
     action.points = 200  # PUT /actions/{id}: every log using it is worth 200 now
     db_session.commit()
-    assert held(db_session, frozen) == 0
-    assert rank_rows(db_session) == []
-    assert standing(db_session, group[0]).told == RankStanding.FIRST
-    assert standing(db_session, group[-1]).told == RankStanding.TOP5
-    assert standing(db_session, top[0]).told == RankStanding.OUT
-
-    action.points = 5  # put back
+    assert look(db_session, frozen) == 0
+    action.points = 5  # put back, 5 minutes later
     db_session.commit()
-    assert held(db_session, frozen) == 0
+    assert look(db_session, frozen, minutes=5) == 0
+    assert look(db_session, frozen, minutes=5) == 0
+    assert look(db_session, frozen, minutes=5) == 0
     assert rank_rows(db_session) == []
     assert standing(db_session, top[0]).told == RankStanding.FIRST
+    assert standing(db_session, group[0]).told == RankStanding.OUT
 
 
 # ---------------------------------------------------------------- switch, bulk awards, deletion

@@ -203,9 +203,6 @@ current semester is skipped, members see an older public one then):
 3. **Crowded tie**: after that, more than 5 members sharing one rank in the
    top 5 (the semester's first event gives every attendee the same points) is
    not news. Their standing stays as it was, in or out, until the tie breaks.
-   A **mass change** (more than 10 standings moving in one look: a catalogue
-   edit, a whole event set back to draft, a bulk import that turns the top 5
-   over): what it sees is taken as known and nothing is pushed.
 4. Otherwise each standing that moved is recorded (`observed_since`), and one
    that has **held 10 minutes** and differs from `told` is told: out → top 5
    `rank_top5`; out or top 5 → #1 `rank_first` (entering and reaching #1 at
@@ -227,13 +224,14 @@ current semester is skipped, members see an older public one then):
   hours still hold (`skipped`, `rank_changed`; `told` goes back), and the new
   standing is told instead (in the top 5 at 22:30, #1 at 23:00: only the #1 goes,
   at 08:00). One out for delivery is left to the delivery check.
-- An undo or a quick swap inside the 10 minutes sends nothing; after them, the
+- An undo or a quick swap inside the 10 minutes (a catalogue edit put back, an
+  event set back to draft and published again) sends nothing; after them, the
   check at delivery skips the push (`rank_changed`).
 - A change is told 10-15 minutes after it (sweeps every 5 minutes), after the
   instant "+N points".
 
 Rows are kept 90 days like every other, so an "in" sent earlier than that no
-longer counts for "left" (it is then not sent). The thresholds (20, 5, 10, 10
+longer counts for "left" (it is then not sent). The thresholds (20, 5, 10
 minutes) are constants at the top of `rank.py`.
 
 ### The 1.0.2 app and the new kinds
