@@ -27,11 +27,13 @@ nothing is sent. Turning push on is only setting the variables
 |---|---|
 | `member_devices` | a phone: its APNs token (unique: a token belongs to one member at a time), `environment` (`production` for TestFlight / App Store builds, `development` for dev builds), app version and build, the app's language. At most 5 per member; unseen for 180 days → deleted by the sweep |
 | `member_notification_prefs` | a member's four switches `remind`, `accept`, `points`, `news`. No row = all four on (`news` too since revision `bfc96a1c1507`, which also switched `news` on in every row saved before it) |
-| `push_notifications` | the outbox and the sent log: one notification for one member, its text in both languages, `status` `pending` / `sent` / `skipped` / `failed`, `not_before`, `expires_at`. Deleted after 90 days. `kind` gained the 1.0.3 kinds in revision `80d73cc07c1a`, which also added `event_content_links.published_at` (when a link last became visible; `created_at` for the ones already published) |
+| `push_notifications` | the outbox and the sent log: one notification for one member, its text in both languages, `status` `pending` / `sent` / `skipped` / `failed`, `not_before`, `expires_at`. Deleted after 90 days. `kind` gained the 1.0.3 kinds in revision `80d73cc07c1a`, which also added `event_content_links.published_at` (when a link last became visible; `created_at` for the ones already published), and the rank kinds in revision `7b068beb7244` |
 | `push_broadcasts` | an organizer's announcement (`POST /notifications/broadcast`) |
+| `member_rank_standings` | a member's standing on a semester's members leaderboard, for the rank pushes ([below](#rank-pushes)): `observed` (`out` / `top5` / `first`, what the sweep last saw) and `observed_since`, `told` (what the member's rank news is settled at) and `told_at`, `pushes` (rank pushes queued that semester; keys their `dedupe_key`). Unique per semester and member; written the first time the member is in that semester's top 5, and kept. Revision `7b068beb7244` |
 
 Deleting an account (`DELETE /members/me`, `anonymize_member`) deletes the
-member's phones, switches and every `push_notifications` row, sent ones too.
+member's phones, switches, rank standings and every `push_notifications` row,
+sent ones too.
 
 ## Routes
 
@@ -66,7 +68,9 @@ gets it through the grant screens. No migration seeds it.
 A push opens one of these, and nothing else (`app/services/push/links.py`; the
 app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
 `gdgq://notifications`, `gdgq://profile/my-events`, `gdgq://wallet/card`,
-`gdgq://profile/certificates` (app 1.0.3; 1.0.2 opens Notifications for it).
+`gdgq://profile/certificates` (app 1.0.3; 1.0.2 opens Notifications for it),
+`gdgq://leaderboard` (the members leaderboard at the member's own row; app
+1.0.3 build 6, older builds open Notifications for it).
 
 ## What sends a push
 
@@ -85,6 +89,9 @@ app keeps the same list): `gdgq://events/{id}`, `gdgq://points/history`,
 | `event_content` | slides or a recording published on an event (`POST /events/{id}/content-links`, a draft link published with `PUT`, `POST /upload/drive-slides/`); `other` links send nothing. Attendance staff record later (scan, manual, import) brings the content published in the last 7 days (`published_at`) to those members, looked up once per request | members with attendance on the event | `remind` | quiet hours; capped; 7 days |
 | `weekly_summary` | Thursday 20:00-22:00 Riyadh while a semester runs (today between its start and end dates) (sweep) | members with points this semester: "+N this week · M this semester". A point counts for the day its `members_logs` row was written (attendance: the day it records; custom points: when given). Editing a custom-points entry (`PUT /custom/members/{log_id}`) now keeps the rows of the members who stay on it, so an edit moves no points into this week | `points` | capped; 12 hours |
 | `welcome` | a member's first phone registers (`POST /notifications/devices`) within 7 days of their member record's creation | that member | `news` | quiet hours; capped; 3 days |
+| `rank_top5` | the member entered the semester's top 5 from outside it (sweep, [rank pushes](#rank-pushes)): "You're in the top 5!" · "You're #N this semester…" | that member | `points` | after the standing held 10 minutes; quiet hours; one rank push a day; not capped; 12 hours |
+| `rank_first` | the member reached #1, a shared #1 too, from the top 5 or from outside it: "You're #1!" · "…with P points…" | that member | `points` | as `rank_top5` |
+| `rank_left` | the member left the top 5, only after a `rank_top5` or `rank_first` was sent to them that semester: "You can get back!" | that member | `points` | as `rank_top5` |
 
 **Quiet hours** are 22:00-08:00 Riyadh: a push queued then waits until 08:00.
 
@@ -97,7 +104,8 @@ recorded) count too, and the count is taken under a lock on each member's row
 the same moment cannot both pass it: a member another claim holds keeps their
 capped rows for the next round. `event_live`, `event_cancelled` and
 `event_updated` (a real change to an event the member registered for) are never
-capped and do not count. The 1.0.2 kinds keep their own rules.
+capped and do not count. The 1.0.2 kinds keep their own rules. The rank kinds
+have their own limit, one a member a Riyadh day, and do not count either.
 
 **`event_updated` and `event_cancelled`: newest only, said as it is.** Each
 change writes one row per registrant, keyed by the `event_history` row the
@@ -127,8 +135,11 @@ route recorded for the change: one per real change, the same for a replay, so a
 change back to an earlier value is told again), `event_live:{event}:{Riyadh date}:{member}`,
 `registration_closing:{event}:{member}`, `certificate:{event}:{member}`,
 `event_content:{event}:{content link id}:{member}`,
-`weekly_summary:{ISO week, 2026-W30}:{member}`, `welcome:{member}`. Triggers can
-run twice (four workers, retries, the sweep) and add nothing the second time.
+`weekly_summary:{ISO week, 2026-W30}:{member}`, `welcome:{member}`,
+`rank_top5:{semester Hijri code}:{member}:{n}`, `rank_first:…` and `rank_left:…`
+the same (`n` is the member's `member_rank_standings.pushes`: the nth rank push
+queued for them that semester). Triggers can run twice (four workers, retries,
+the sweep) and add nothing the second time.
 
 **Checked again at delivery**, since a row can wait until 08:00: the switch, a
 phone still registered, and the cause - the registration still accepted and the
@@ -143,7 +154,13 @@ still on the calendar, not checked in since (`checked_in`), a mixed event still
 with its link (`no_link`);
 `registration_closing` - the event still open at the same start, still no
 submission (`registered`); `certificate` - its e-mail log still there;
-`event_content` - the link still there and published (`content_removed`).
+`event_content` - the link still there and published (`content_removed`);
+the rank kinds - the semester still the current public one and running
+(`semester_over`), the member's standing still the one the push says, ranked
+again (`rank_changed`), no rank push sent to them yet that Riyadh day
+(`daily_cap`), the numbers written then. A rank push skipped as `rank_changed`
+or `daily_cap` gives its news back (`told` returns to what it was), so the
+member was never told it and the sweep looks again.
 Otherwise the row is `skipped` with the reason in `last_error`.
 
 ### What the 1.0.3 kinds mean here
@@ -161,11 +178,68 @@ Otherwise the row is `skipped` with the reason in `last_error`.
   (`members.created_at`). A member who linked an older record at onboarding
   (registered on the website, or added by staff) is not new and gets none.
 
+### Rank pushes
+
+`app/services/push/rank.py`, a sweep rule. The board is the app's Points tab:
+`GET /points/members/total` for the current semester (`app/DB/points.py`:
+points on the semester's events that are not drafts, deleted accounts left out,
+staff included), ranked as the app ranks it (`src/lib/rank.ts`): competition
+ranking (1, 2, 2, 4), 0 points or fewer unranked. A member is `first` at rank 1
+(a shared #1 too), `top5` at rank 5 or better (a shared #5 too), else `out`.
+
+Points change in a dozen places (attendance, custom points, event and
+catalogue edits, an account deletion), and a member leaves the top 5 when
+others pass them, so nothing hooks the writes: every sweep looks at the whole
+board, and a bulk award (100 attendances, custom points to 30 members) is one
+look and at most one push per member per change of standing. Each sweep, while
+a public semester runs (today between its start and end dates; a private
+current semester is skipped, members see an older public one then):
+
+1. **Small board**: fewer than 20 members with points, nothing happens.
+2. **Crowded tie**: more than 5 members sharing one rank in the top 5 (the
+   semester's first event gives every attendee the same points) is not news.
+   Their standing stays as it was, in or out, until the tie breaks.
+3. **First look** at a semester (deploy day, a new semester: standings are
+   per semester, so a new one starts empty) and **mass change** (more than 10
+   standings moving in one look: a catalogue edit, a whole event set back to
+   draft, a bulk import that turns the top 5 over): what it sees is taken as
+   known (`told` = `observed`) and nothing is pushed.
+4. Otherwise each standing that moved is recorded (`observed_since`), and one
+   that has **held 10 minutes** and differs from `told` is told: out → top 5
+   `rank_top5`; out or top 5 → #1 `rank_first` (entering and reaching #1 at
+   once says the more important one); top 5 or #1 → out `rank_left`. #1 → top 5
+   (losing #1 inside the top 5) says nothing, and taking #1 back is told again.
+   `told` becomes the new standing,
+   also when the push reaches no phone (the `points` switch off, no app), so
+   nobody gets old news after installing the app.
+
+- **"Left" only after "in"**: `rank_left` goes only when the last rank push
+  *sent* to the member that semester was `rank_top5` or `rank_first`. The first
+  look's top 5, a muted member, one whose "in" was withdrawn: their leaving is
+  settled silently, and a later return is told as `rank_top5`.
+- **One a Riyadh day**, whatever the kind: another one due that day waits, and
+  is looked at again by every sweep (once the day the push would arrive on,
+  after quiet hours, is a new one). A member who bounced back by then gets
+  nothing.
+- **One waits at a time**: a newer change that held withdraws the push quiet
+  hours still hold (`skipped`, `rank_changed`; `told` goes back), and the new
+  standing is told instead (in the top 5 at 22:30, #1 at 23:00: only the #1 goes,
+  at 08:00). One out for delivery is left to the delivery check.
+- An undo or a quick swap inside the 10 minutes sends nothing; after them, the
+  check at delivery skips the push (`rank_changed`).
+- A change is told 10-15 minutes after it (sweeps every 5 minutes), after the
+  instant "+N points".
+
+Rows are kept 90 days like every other, so an "in" sent earlier than that no
+longer counts for "left" (it is then not sent). The thresholds (20, 5, 10, 10
+minutes) are constants at the top of `rank.py`.
+
 ### The 1.0.2 app and the new kinds
 
 The 1.0.2 app (build 4) reads a `kind` it does not know as none: iOS still
 shows the alert, a tap opens the push's `url` through its allow-list (an event,
-the points history, Notifications for `gdgq://profile/certificates`), and the
+the points history, Notifications for `gdgq://profile/certificates` and
+`gdgq://leaderboard`), and the
 foreground refresh only refreshes the feed. It never calls
 `GET /notifications/me` (its feed is built on the phone). So the new kinds go to
 every phone, whatever its `app_build`, and the feed lists them for everyone.
