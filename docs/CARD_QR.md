@@ -19,8 +19,9 @@ https://gdg-q.com/p/{uuid}?s={sig}
 The public profile link is meant to be shared, so before the signature anyone
 could turn a member's `/p/` link into a QR and be checked in as them. A QR
 without the right `s` is now recognisable. A screenshot of a member's own card
-still works: the value is static, because a Wallet pass cannot change after it
-is added (that would need a PassKit web service).
+still works: the value is static. A Wallet pass changes after it is added only
+when the backend pushes it an update ([WALLET.md](WALLET.md)), and none changes
+the QR.
 
 The 71-character value is a version 5 QR (37×37) instead of version 4; every
 client draws any size. Sharing a profile keeps the unsigned `/p/{uuid}` link,

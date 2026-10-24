@@ -35,6 +35,10 @@ Deleting an account (`DELETE /members/me`, `anonymize_member`) deletes the
 member's phones, switches, rank standings and every `push_notifications` row,
 sent ones too.
 
+Apple Wallet pass update pushes (the welcome from the card) are separate: they
+go to the card, not the app, with the Pass Type ID certificate instead of the
+`.p8` key. See [WALLET.md](WALLET.md).
+
 ## Routes
 
 All under `/notifications`. Member routes take the member from the session

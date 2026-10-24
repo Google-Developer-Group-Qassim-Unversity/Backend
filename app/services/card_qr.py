@@ -8,7 +8,8 @@ can be told apart from the member's own card. See docs/CARD_QR.md.
 
 ``sig`` is the first 16 characters of base64url(HMAC-SHA256(CARD_QR_SECRET,
 "card:v1:" + uuid)): 96 bits. It is static - a screenshot of a member's own
-card still works - because a Wallet pass cannot change after it is added.
+card still works - because a Wallet pass changes only when the backend pushes
+it an update (docs/WALLET.md), and none changes the QR.
 
 With no ``CARD_QR_SECRET`` the value is the unsigned link every card carried
 before, and a signature can be neither made nor checked.
