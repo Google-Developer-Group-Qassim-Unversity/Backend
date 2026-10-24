@@ -24,6 +24,13 @@ Authorization header off the request and calling the guard by hand, inside a
 `try/except Exception` - which this test could not see. The token is a
 dependency now, so the table describes what they actually do. Neither route
 rejects an anonymous caller; both still issue a guest card.
+
+The five `/wallet/apple/v1/*` routes are Apple's PassKit web service, called by
+Wallet and never by the apps: no Clerk session there. Three take the pass's
+own `Authorization: ApplePass <token>` (`apple_pass_token`, the
+`apple_pass_holder` dependency in `app/routers/wallet.py`); the list of a
+device's updated serials and the log are public in Apple's design (the device
+library id is the list's secret).
 """
 
 import pytest
@@ -221,6 +228,16 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "PUT /semesters/{semester_id}": "semesters.manage",
     "PUT /submissions/accept": "submissions.review",
     "PUT /wallet/me": "authenticated_guard",
+    # Apple's PassKit web service (docs/WALLET.md); see the module docstring.
+    "POST /wallet/apple/v1/devices/{device_library_id}/registrations/{pass_type_id}/{serial_number}": (
+        "apple_pass_token"
+    ),
+    "DELETE /wallet/apple/v1/devices/{device_library_id}/registrations/{pass_type_id}/{serial_number}": (
+        "apple_pass_token"
+    ),
+    "GET /wallet/apple/v1/passes/{pass_type_id}/{serial_number}": "apple_pass_token",
+    "GET /wallet/apple/v1/devices/{device_library_id}/registrations/{pass_type_id}": None,
+    "POST /wallet/apple/v1/log": None,
     # Answers "not staff" for anyone signed in who is not; see app/services/permissions.
     "GET /access/me": "authenticated_guard",
     "GET /access/events/{event_id:int}": "admin.access",
