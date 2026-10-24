@@ -16,10 +16,12 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.config import reload_settings
+from app.config import config, reload_settings
 from app.services import wallet_push
 from app.services.push import clock, redact
+from app.wallet_signer import generate_apple_pkpass
 from tests.push_support import FakeApns
+from tests.wallet_support import sentry_event
 
 PUSH = "ab" * 32
 
@@ -198,3 +200,22 @@ def test_sentry_events_lose_the_pass_certificate_and_its_passwords():
     for secret in ("hunter2", "0\\\\x82", "BEGIN", "one-time", "RSAPrivateKey"):
         assert secret not in cleaned, secret
     assert "<SSLContext>" in cleaned, "other locals stay"
+
+
+@pytest.mark.parametrize("broken", ["cut short", "not base64"])
+def test_a_broken_p12_base64_never_sends_the_certificate_to_sentry(signing_certs, monkeypatch, broken):
+    """APPLE_P12_BASE64 cut short or mangled: the event Sentry would send holds no part of the p12 or its key."""
+    p12_base64 = config.APPLE_P12_BASE64
+    assert p12_base64
+    middle = len(p12_base64) // 2
+    value = p12_base64[:-3] if broken == "cut short" else p12_base64[:middle] + "*" + p12_base64[middle:]
+    monkeypatch.setenv("APPLE_P12_BASE64", value)
+    reload_settings()
+
+    raised, event = sentry_event(lambda: generate_apple_pkpass({"uuid": "2b53403d-2248-47d7-90f6-fc1b2ad3429a"}))
+
+    cleaned = json.dumps(event, default=str)
+    for start in range(0, len(value) - 32, 256):
+        assert value[start : start + 32] not in cleaned, f"the p12's characters {start}-{start + 32}"
+    assert [error["type"] for error in event["exception"]["values"]] == ["ValueError"], "not binascii's Error"
+    assert str(raised).startswith("APPLE_P12_BASE64 is not valid base64"), "says which setting, not what it holds"

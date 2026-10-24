@@ -101,7 +101,7 @@ content/event edit or the local Website's cache never refreshes.
 |---|---|---|---|
 | `APPLE_TEAM_ID` | optional | `7NN7W24VXR` | ⚠️ **hardcoded production identifier** - see the TODO in `app/config.py` |
 | `APPLE_PASS_TYPE_ID` | optional | `pass.pass.com.gdg-q.wallet` | ⚠️ **hardcoded production identifier** - see the TODO in `app/config.py` |
-| `APPLE_P12_BASE64` | optional | - | or supply the file at `APPLE_P12_PATH` |
+| `APPLE_P12_BASE64` | optional | - | the p12 in standard base64 (line breaks are fine; any other character that is not base64 is refused), or supply the file at `APPLE_P12_PATH` |
 | `APPLE_P12_PASSWORD` | when the feature runs | - |  |
 | `APPLE_P12_PATH` | optional | - | falls back to `app/certificates/Certificates.p12` |
 | `APPLE_WWDR_BASE64` | optional | - | or supply the file at `APPLE_WWDR_PATH` |
@@ -116,7 +116,7 @@ content/event edit or the local Website's cache never refreshes.
 | `GOOGLE_WALLET_ISSUER_ID` | optional | `BCR2DN6DTK643EAC` | ⚠️ **hardcoded production identifier** - see the TODO in `app/config.py` |
 | `GOOGLE_WALLET_CLASS_ID` | optional | empty | defaults to `<issuer id>.gdgq-card` |
 | `GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL` | when the feature runs | empty |  |
-| `GOOGLE_WALLET_PRIVATE_KEY` | when the feature runs | empty |  |
+| `GOOGLE_WALLET_PRIVATE_KEY` | when the feature runs | empty | the service account's RSA key, PEM (`\n` for its line breaks is fine). One that does not load: `/wallet/google-pass` answers 503 |
 
 ### Member app push notifications
 

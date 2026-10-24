@@ -166,7 +166,13 @@ any stack-frame local named like `token`, `authorization`, `device_library`, `pa
 and every local of the frames inside SQLAlchemy and the MySQL driver, which hold
 the statement's values (`app/services/push/redact.py`). A database error's own
 text never shows them: the engine is built with `hide_parameters`
-(`app/DB/main.py`).
+(`app/DB/main.py`). A broken `APPLE_P12_BASE64` (cut short, or with a character
+that is not base64; line breaks are fine) fails with an error that names the
+setting and nothing it holds, raised `from None`: the base64 decoder's frame
+holds the whole p12 in a local named `s`, so neither that frame nor its error
+reaches Sentry. A `GOOGLE_WALLET_PRIVATE_KEY` that does not load is the same
+(PyJWT's frames would hold it as `key`), and `/wallet/google-pass` answers 503
+(`app/wallet_signer.py`).
 
 ## Deploying
 

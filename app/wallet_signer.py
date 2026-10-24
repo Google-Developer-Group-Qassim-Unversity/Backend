@@ -1,4 +1,5 @@
 import base64
+import binascii
 import hashlib
 import io
 import json
@@ -12,9 +13,10 @@ import jwt
 
 from app.config import config
 from cryptography import x509
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.serialization import pkcs12, Encoding
+from cryptography.hazmat.primitives.serialization import pkcs12, Encoding, load_pem_private_key
 from cryptography.hazmat.primitives.serialization.pkcs7 import PKCS7Options, PKCS7SignatureBuilder
 
 logger = logging.getLogger(__name__)
@@ -90,7 +92,14 @@ def load_pass_certificate() -> tuple[
 
     p12_bytes = None
     if p12_base64:
-        p12_bytes = base64.b64decode(p12_base64)
+        try:
+            # Line breaks (base64 wrapped at 76 columns) are fine; any other character that is not
+            # base64 is refused rather than skipped.
+            p12_bytes = base64.b64decode("".join(p12_base64.split()), validate=True)
+        except (binascii.Error, ValueError):
+            # ``from None``: the decoder's frame holds the whole p12 as ``s``, a name nothing filters,
+            # and Sentry would send it with the chained binascii.Error. Only this error goes.
+            raise ValueError("APPLE_P12_BASE64 is not valid base64: cut short, or mangled when it was pasted") from None
     elif os.path.exists(p12_path):
         with open(p12_path, "rb") as f:
             p12_bytes = f.read()
@@ -353,11 +362,19 @@ def generate_google_wallet_pass_url(card_data: Dict[str, Any]) -> str:
         "payload": {"genericClasses": [generic_class], "genericObjects": [generic_object]},
     }
 
-    # Format RSA private key
-    formatted_key = private_key_pem.strip()
-    if formatted_key.startswith('"') and formatted_key.endswith('"'):
-        formatted_key = formatted_key[1:-1]
-    formatted_key = formatted_key.replace("\\n", "\n")
+    # Format RSA private key. Kept under a name the Sentry filter knows (app/services/push/redact.py).
+    private_key_pem = private_key_pem.strip()
+    if private_key_pem.startswith('"') and private_key_pem.endswith('"'):
+        private_key_pem = private_key_pem[1:-1]
+    private_key_pem = private_key_pem.replace("\\n", "\n")
+    # Loaded here, not by jwt.encode: PyJWT's frames hold the PEM as ``key`` and ``key_bytes``, names
+    # nothing filters, so a key that does not load would send it to Sentry. ``from None``: only this error goes.
+    try:
+        signing_key = load_pem_private_key(private_key_pem.encode(), password=None)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        raise ValueError("GOOGLE_WALLET_PRIVATE_KEY is not a readable PEM private key") from None
+    if not isinstance(signing_key, rsa.RSAPrivateKey):
+        raise ValueError("GOOGLE_WALLET_PRIVATE_KEY must be an RSA private key (RS256)")
 
-    signed_jwt = jwt.encode(jwt_claims, formatted_key, algorithm="RS256")
+    signed_jwt = jwt.encode(jwt_claims, signing_key, algorithm="RS256")
     return f"https://pay.google.com/gp/v/save/{signed_jwt}"

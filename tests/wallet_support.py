@@ -8,6 +8,7 @@ import base64
 import io
 import json
 import zipfile
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -17,8 +18,10 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import BestAvailableEncryption, Encoding, pkcs12
 from cryptography.x509.oid import NameOID
+from sentry_sdk.utils import event_from_exception
 
 from app.config import reload_settings
+from app.services.push import redact
 from tests.push_support import FakeApns
 
 P12_PASSWORD = "test-password"
@@ -55,6 +58,20 @@ def signing_certs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APPLE_P12_PASSWORD", P12_PASSWORD)
     monkeypatch.setenv("APPLE_WWDR_BASE64", base64.b64encode(wwdr.public_bytes(Encoding.DER)).decode())
     reload_settings()
+
+
+def sentry_event(call: Callable[[], object]) -> tuple[Exception, dict]:
+    """What ``call`` raises, and the event Sentry would send for it (``before_send`` applied).
+
+    Caught here, as the app's error handler would catch it, so the event's frames start here: the
+    test's own locals, which hold the secret, are not among them.
+    """
+    try:
+        call()
+    except Exception as exc:
+        event, _ = event_from_exception(exc)
+        return exc, redact.before_send(event)
+    raise AssertionError("nothing was raised")
 
 
 def unpack(pkpass: bytes) -> dict[str, bytes]:
