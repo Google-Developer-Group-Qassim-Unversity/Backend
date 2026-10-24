@@ -245,3 +245,47 @@ def welcome() -> Text:
             "body": "Your event reminders, points and club news will show up here",
         },
     }
+
+
+# ---------------------------------------------------------------- app 1.0.3 build 6 (app/services/push/rank.py)
+
+
+def rank_top5(rank: int) -> Text:
+    """Entered the top 5: ``rank`` is the member's rank now (2-5; #1 is ``rank_first``)."""
+    return {
+        "ar": {"title": "دخلت الخمسة الأوائل!", "body": f"صرت رقم {LRI}{rank}{PDI} في ترتيب الفصل. كمّل، الأول قريب!"},
+        "en": {
+            "title": "You're in the top 5!",
+            "body": f"You're #{rank} this semester. Keep going, first place is close!",
+        },
+    }
+
+
+def rank_first(semester_points: int) -> Text:
+    """Reached #1 (alone or shared): ``semester_points`` is the member's total this semester."""
+    # After "بـ" the dual is نقطتين; the other forms are the app's.
+    unit = "نقطتين" if semester_points == 2 else ar_points(semester_points)
+    return {
+        "ar": {
+            "title": "أنت الأول!",
+            "body": f"تصدّرت ترتيب الأعضاء هذا الفصل بـ{LRI}{semester_points}{PDI} {unit}. خلّك فوق!",
+        },
+        "en": {
+            "title": "You're #1!",
+            "body": f"You lead the members this semester with {semester_points} "
+            f"{'point' if semester_points == 1 else 'points'}. Stay on top!",
+        },
+    }
+
+
+def rank_left() -> Text:
+    return {
+        "ar": {
+            "title": "تقدر ترجع!",
+            "body": "طلعت من الخمسة الأوائل، بس نبي نشوفك دايم الأول. الفعالية الجاية فرصتك!",
+        },
+        "en": {
+            "title": "You can get back in!",
+            "body": "You dropped out of the top 5, but we want to see you first, always. Your next event is your chance!",
+        },
+    }

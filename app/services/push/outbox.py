@@ -42,6 +42,9 @@ SWITCH_FOR: dict[PushKind, str] = {
     PushKind.EVENT_CONTENT: "remind",
     PushKind.WEEKLY_SUMMARY: "points",
     PushKind.WELCOME: "news",
+    PushKind.RANK_TOP5: "points",
+    PushKind.RANK_FIRST: "points",
+    PushKind.RANK_LEFT: "points",
 }
 
 
