@@ -60,6 +60,9 @@ PLACEHOLDER = "رسائل النادي تظهر هنا"
 _SERIAL = re.compile(r"GDGQ-[0-9A-Za-z]{8}")
 LOG_LINES = 10
 LOG_LINE_LENGTH = 500
+# Anyone can post to /v1/log: a line break (or a terminal escape) in a line would let
+# them write log lines of their own. Each run of control characters becomes a space.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
 
 
 @dataclass(frozen=True)
@@ -185,8 +188,8 @@ def not_modified_since(holder: MemberProfiles, if_modified_since: str | None) ->
 
 
 def log_lines(payload: Any) -> list[str]:
-    """What Wallet reported to ``/v1/log``: at most 10 lines of 500 characters, device ids and tokens hidden."""
+    """What Wallet reported to ``/v1/log``: at most 10 lines of 500 characters, each one line, device ids hidden."""
     logs = payload.get("logs") if isinstance(payload, dict) else None
     if not isinstance(logs, list):
         return []
-    return [redact.scrub(str(line))[:LOG_LINE_LENGTH] for line in logs[:LOG_LINES]]
+    return [redact.scrub(_CONTROL.sub(" ", str(line)).strip())[:LOG_LINE_LENGTH] for line in logs[:LOG_LINES]]

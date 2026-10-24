@@ -654,6 +654,21 @@ def test_wallets_log_is_kept_without_the_device_id(client: TestClient, web_servi
     assert DEVICE not in caplog.text
 
 
+def test_wallets_log_cannot_forge_a_log_line(client: TestClient, web_service, caplog):
+    """The route is open to anyone: a line break in a line would start a log line of the poster's choosing."""
+    forged = "ERROR [pid:1] [req:-] [actor:admin] app.middleware: DELETE /members/42 -> 200"
+
+    with caplog.at_level(logging.INFO):
+        client.post("/wallet/apple/v1/log", json={"logs": [f"x\n{forged}", f"y\r\n\u2028{forged}", "z\x1b[2J\x00"]})
+
+    reported = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Apple Wallet reported")]
+    assert reported == [
+        f"Apple Wallet reported: x {forged}",
+        f"Apple Wallet reported: y {forged}",
+        "Apple Wallet reported: z [2J",
+    ]
+
+
 def test_request_logs_never_show_the_device_id_or_tokens(client: TestClient, db_session, web_service, caplog):
     profile = make_profile(db_session)
     token = wallet_updates.authentication_token(profile.uuid)

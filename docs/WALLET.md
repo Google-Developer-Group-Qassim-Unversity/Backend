@@ -79,7 +79,7 @@ All under `/wallet/apple/v1`, called by Wallet, never by the apps. All answer
 | `DELETE /devices/{device}/registrations/{pass type}/{serial}` | `ApplePass <token>` | 200 (also when it was not registered), 401 |
 | `GET /devices/{device}/registrations/{pass type}?passesUpdatedSince={tag}` | none: the device library id is its secret (Apple's design) | 200 `{"serialNumbers", "lastUpdated"}`, 204 nothing changed |
 | `GET /passes/{pass type}/{serial}` | `ApplePass <token>` | 200 the pass, signed now, with `Last-Modified`; 304 for `If-Modified-Since` at or after it; 401 |
-| `POST /log`, body `{"logs": [...]}` | none | 200; up to 10 lines of 500 characters kept as WARNING, device ids hidden |
+| `POST /log`, body `{"logs": [...]}` | none | 200; up to 10 lines of 500 characters kept as WARNING, device ids hidden. Each stays one line: line breaks and other control characters become spaces, so a post cannot forge log lines |
 
 401 covers a wrong or missing token, an unknown serial and another pass type
 alike, so the answer never tells which serials exist. The update tag
