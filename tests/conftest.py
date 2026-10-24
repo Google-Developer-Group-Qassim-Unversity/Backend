@@ -553,3 +553,6 @@ def outbound(monkeypatch) -> Generator:
 
 # The push notification tests' fixtures (tests/push_support.py).
 from tests.push_support import apns_mock, frozen, push_on  # noqa: E402, F401
+
+# The Apple Wallet tests' fixtures (tests/wallet_support.py).
+from tests.wallet_support import pass_apns, pass_updates_on, signing_certs  # noqa: E402, F401

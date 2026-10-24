@@ -57,6 +57,58 @@ THEMES_CONFIG = {
 }
 
 
+# The pass's back field for what the club tells its holder (app/services/wallet_updates.py).
+# ``%@`` makes Wallet show the new value as a notification when it changes.
+CLUB_MESSAGE_LABEL = "رسالة النادي"
+
+
+def pass_serial_number(uuid: str | None) -> str:
+    """The pass's serialNumber: ``GDGQ-`` and the first 8 characters of the card's uuid, uppercased.
+
+    Wallet tells passes apart by this and the pass type id, so it must never
+    change for a member: a new serial would put a second card in their Wallet.
+    """
+    return f"GDGQ-{uuid[:8].upper()}" if uuid else f"GDGQ-{str(int(time.time()))[-6:]}"
+
+
+def load_pass_certificate() -> tuple[
+    rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, x509.Certificate, list[x509.Certificate]
+]:
+    """The Pass Type ID certificate and key (the p12), plus the bundle's other certificates.
+
+    Passes are signed with it, and their update pushes authenticate with it
+    (app/services/wallet_push.py). Read from ``APPLE_P12_BASE64`` or the file
+    at ``APPLE_P12_PATH``; nothing here writes or logs it.
+    """
+    p12_password_str = config.APPLE_P12_PASSWORD
+    if not p12_password_str:
+        raise ValueError("APPLE_P12_PASSWORD environment variable is not configured")
+    p12_password = p12_password_str.encode("utf-8")
+
+    p12_base64 = config.APPLE_P12_BASE64
+    p12_path = config.APPLE_P12_PATH or os.path.join(os.path.dirname(__file__), "certificates", "Certificates.p12")
+
+    p12_bytes = None
+    if p12_base64:
+        p12_bytes = base64.b64decode(p12_base64)
+    elif os.path.exists(p12_path):
+        with open(p12_path, "rb") as f:
+            p12_bytes = f.read()
+
+    if not p12_bytes:
+        raise ValueError("Apple Pass signing certificate (APPLE_P12_BASE64 or Certificates.p12) is missing")
+
+    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(p12_bytes, p12_password)
+    if private_key is None or certificate is None:
+        raise ValueError("Apple Pass P12 bundle is missing a private key or signing certificate")
+    if not isinstance(private_key, (rsa.RSAPrivateKey, ec.EllipticCurvePrivateKey)):
+        # PKCS7SignatureBuilder.add_signer only accepts these two key types; Apple
+        # issues RSA certificates for pass signing, so anything else means a
+        # bundle that was never meant for this purpose.
+        raise ValueError(f"Apple Pass P12 private key must be RSA or EC, got {type(private_key).__name__}")
+    return private_key, certificate, list(additional_certs or [])
+
+
 def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     """
     Generates a cryptographically signed Apple Wallet .pkpass binary buffer
@@ -67,6 +119,10 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     every field value over that image in white, ignoring foregroundColor, so each
     theme's background is the card art darkened behind the text rather than the
     light card surface itself.
+
+    A member's pass can also carry Apple's web service (``webServiceURL`` and
+    ``authenticationToken``) and the club's message on its back
+    (``clubMessage``); card data without them gives the pass it always did.
     """
     theme_id = card_data.get("themeId", DEFAULT_THEME)
     if theme_id not in THEMES_CONFIG:
@@ -75,13 +131,10 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
 
     pass_type_id = config.APPLE_PASS_TYPE_ID
     team_id = config.APPLE_TEAM_ID
-    p12_password_str = config.APPLE_P12_PASSWORD
-    if not p12_password_str:
+    if not config.APPLE_P12_PASSWORD:
         raise ValueError("APPLE_P12_PASSWORD environment variable is not configured")
-    p12_password = p12_password_str.encode("utf-8")
 
-    uuid = card_data.get("uuid")
-    serial_number = f"GDGQ-{uuid[:8].upper()}" if uuid else f"GDGQ-{str(int(time.time()))[-6:]}"
+    serial_number = pass_serial_number(card_data.get("uuid"))
     qr_target_url = card_data.get("qrValue") or HOME_PAGE
 
     full_name = card_data.get("fullName") or "عضو GDG"
@@ -97,6 +150,19 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     # The last field sits at the card's right edge, where Arabic reads from.
     secondary_fields[-1]["textAlignment"] = "PKTextAlignmentRight"
 
+    back_fields = [
+        {"key": "email", "label": "البريد الإلكتروني", "value": card_data.get("email", "")},
+        {"key": "major", "label": "التخصص", "value": major},
+        {"key": "level", "label": "المستوى / المرحلة", "value": level},
+        {"key": "club_name", "label": "النادي", "value": "Google Developer Group - Qassim"},
+    ]
+    club_message = card_data.get("clubMessage")
+    if club_message:
+        # First on the back, where the holder finds the message Wallet showed them.
+        back_fields.insert(
+            0, {"key": "club_message", "label": CLUB_MESSAGE_LABEL, "value": club_message, "changeMessage": "%@"}
+        )
+
     # 1. Build pass.json
     pass_json = {
         "formatVersion": 1,
@@ -111,12 +177,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
         "eventTicket": {
             "primaryFields": [{"key": "member_name", "label": role_title, "value": full_name}],
             "secondaryFields": secondary_fields,
-            "backFields": [
-                {"key": "email", "label": "البريد الإلكتروني", "value": card_data.get("email", "")},
-                {"key": "major", "label": "التخصص", "value": major},
-                {"key": "level", "label": "المستوى / المرحلة", "value": level},
-                {"key": "club_name", "label": "النادي", "value": "Google Developer Group - Qassim"},
-            ],
+            "backFields": back_fields,
         },
         "barcodes": [
             {
@@ -133,6 +194,10 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
             "altText": serial_number,
         },
     }
+    # Apple's web service: Wallet registers the pass there and fetches it again after an update push.
+    if card_data.get("webServiceURL") and card_data.get("authenticationToken"):
+        pass_json["webServiceURL"] = card_data["webServiceURL"]
+        pass_json["authenticationToken"] = card_data["authenticationToken"]
 
     files_to_pack: Dict[str, bytes] = {}
     files_to_pack["pass.json"] = json.dumps(pass_json, ensure_ascii=False, indent=2).encode("utf-8")
@@ -162,27 +227,7 @@ def generate_apple_pkpass(card_data: Dict[str, Any]) -> bytes:
     files_to_pack["manifest.json"] = manifest_bytes
 
     # 3. Load Apple Developer Signing Certificate and Private Key
-    p12_base64 = config.APPLE_P12_BASE64
-    p12_path = config.APPLE_P12_PATH or os.path.join(os.path.dirname(__file__), "certificates", "Certificates.p12")
-
-    p12_bytes = None
-    if p12_base64:
-        p12_bytes = base64.b64decode(p12_base64)
-    elif os.path.exists(p12_path):
-        with open(p12_path, "rb") as f:
-            p12_bytes = f.read()
-
-    if not p12_bytes:
-        raise ValueError("Apple Pass signing certificate (APPLE_P12_BASE64 or Certificates.p12) is missing")
-
-    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(p12_bytes, p12_password)
-    if private_key is None or certificate is None:
-        raise ValueError("Apple Pass P12 bundle is missing a private key or signing certificate")
-    if not isinstance(private_key, (rsa.RSAPrivateKey, ec.EllipticCurvePrivateKey)):
-        # PKCS7SignatureBuilder.add_signer only accepts these two key types; Apple
-        # issues RSA certificates for pass signing, so anything else means a
-        # bundle that was never meant for this purpose.
-        raise ValueError(f"Apple Pass P12 private key must be RSA or EC, got {type(private_key).__name__}")
+    private_key, certificate, additional_certs = load_pass_certificate()
 
     wwdr_base64 = config.APPLE_WWDR_BASE64
     wwdr_path = config.APPLE_WWDR_PATH or os.path.join(os.path.dirname(__file__), "certificates", "AppleWWDRCAG4.cer")
