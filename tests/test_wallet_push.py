@@ -149,3 +149,33 @@ def test_sentry_events_lose_the_push_token_and_the_authorization():
     assert PUSH not in json.dumps(cleaned) and "secret-token" not in json.dumps(cleaned)
     assert "abc123" not in json.dumps(cleaned)
     assert cleaned["request"]["data"]["pushToken"] == "[Filtered]"
+
+
+def test_sentry_events_lose_the_wallet_device_id_and_the_push_token_in_every_shape():
+    """As Sentry hands them to ``before_send``: frame locals already serialized, strings in their reprs."""
+    device = "6d1c1a6e7f3b4b0f9c1e2d3a4b5c6d7e"
+    frames = [
+        {
+            "module": "app.routers.wallet",
+            "vars": {
+                "device_library_id": f"'{device}'",
+                "body": f"WalletPassRegistrationRequest(pushToken='{PUSH}')",
+                "serial_number": "'GDGQ-ABCD1234'",
+            },
+        },
+        {"module": "app.DB.wallet_passes", "vars": {"values": {"push_token": f"'{PUSH}'", "member_id": "7"}}},
+        {"module": "sqlalchemy.engine.base", "vars": {"parameters": f"('{device}', '{PUSH}')"}},
+        {"module": "pymysql.cursors", "vars": {"query": f"\"INSERT ... VALUES ('{device}', '{PUSH}')\""}},
+    ]
+    event = {
+        "exception": {"values": [{"value": f"{{'device_library_id': '{device}'}}", "stacktrace": {"frames": frames}}]}
+    }
+
+    cleaned = redact.before_send(event)
+
+    assert device not in json.dumps(cleaned) and PUSH not in json.dumps(cleaned)
+    route, queries, *library = cleaned["exception"]["values"][0]["stacktrace"]["frames"]
+    assert route["vars"]["serial_number"] == "'GDGQ-ABCD1234'", "the rest of our frames' locals stay"
+    assert route["vars"]["body"] == "WalletPassRegistrationRequest(pushToken='[Filtered]')"
+    assert queries["vars"]["values"] == {"push_token": "[Filtered]", "member_id": "7"}
+    assert [frame.get("vars") for frame in library] == [None, None], "the database library's frames lose their locals"

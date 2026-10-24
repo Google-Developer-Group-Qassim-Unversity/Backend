@@ -152,9 +152,14 @@ on it.
 
 Logs name the registration row and the member id, never a token. The device
 library id is in the request paths, so the request log line, the error
-handler's and uvicorn's access line read `/v1/devices/[device]`; Sentry events
-lose `pushToken` values and any local named like `token` or `authorization`
-(`app/services/push/redact.py`).
+handler's and uvicorn's access line read `/v1/devices/[device]`. Sentry events
+lose any value under `pushToken`, `push_token` or `device_library_id` (in
+dicts, and in reprs such as `WalletPassRegistrationRequest(pushToken='...')`),
+any stack-frame local named like `token`, `authorization` or `device_library`,
+and every local of the frames inside SQLAlchemy and the MySQL driver, which hold
+the statement's values (`app/services/push/redact.py`). A database error's own
+text never shows them: the engine is built with `hide_parameters`
+(`app/DB/main.py`).
 
 ## Deploying
 

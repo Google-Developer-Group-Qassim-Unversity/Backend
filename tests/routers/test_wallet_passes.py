@@ -8,6 +8,7 @@ pushes go to a fake APNs (``pass_apns``); the clock is frozen at
 
 import asyncio
 import itertools
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
@@ -15,15 +16,19 @@ from email.utils import format_datetime
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sentry_sdk.utils import event_from_exception
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
+import app.DB.main as db_main
 from app.config import config, reload_settings
 from app.DB import members as member_queries
 from app.DB import wallet_passes as pass_queries
 from app.DB.schema import MemberProfiles, Members, MembersGender, WalletPassRegistrations
 from app.DB.wallet import get_or_create_member_profile
 from app.services import wallet_push, wallet_updates
-from app.services.push import apns, clock
+from app.services.push import apns, clock, redact
 from app.wallet_signer import pass_serial_number
 from tests.utils import assert_2xx
 from tests.wallet_support import WEB_SERVICE_URL, pass_json
@@ -682,6 +687,30 @@ def test_request_logs_never_show_the_device_id_or_tokens(client: TestClient, db_
     assert "/wallet/apple/v1/devices/[device]/registrations/" in caplog.text
     for secret in (DEVICE, PUSH, token):
         assert secret not in caplog.text
+
+
+def test_a_database_error_in_sentry_never_shows_the_device_id_or_the_push_token(engine, database_url, monkeypatch):
+    """The engine production builds, a registration the database refuses, the event Sentry would send."""
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    reload_settings()
+    production_engine = db_main.get_engine()
+    try:
+        with Session(production_engine) as session, pytest.raises(IntegrityError) as raised:
+            # No such member: the foreign key refuses the row, the statement's values in hand.
+            pass_queries.register(
+                session, 999_999_999, device_library_id=DEVICE, serial_number="GDGQ-ABCD1234", push_token=PUSH, now=NOW
+            )
+    finally:
+        production_engine.dispose()
+    event, _ = event_from_exception(raised.value)
+    sent = json.dumps(event, default=str)
+    assert DEVICE in sent and PUSH in sent, "the frames' locals carry both, the driver's statement too"
+
+    cleaned = json.dumps(redact.before_send(event), default=str)
+
+    assert DEVICE not in str(raised.value) and PUSH not in str(raised.value)
+    assert DEVICE not in cleaned and PUSH not in cleaned
+    assert "GDGQ-ABCD1234" in cleaned, "only the secrets go"
 
 
 # ====================== account deletion ======================

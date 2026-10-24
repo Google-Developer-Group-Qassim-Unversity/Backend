@@ -160,6 +160,13 @@ Sentry's `LoggingIntegration` is configured explicitly in `app/main.py` at
 So when you open a Sentry issue, the breadcrumbs already contain that request's
 log lines. You often don't need to SSH at all.
 
+A database error names its statement but never the values in it: the engine is
+built with `hide_parameters=True` (`app/DB/main.py`), so where SQLAlchemy would
+print `[parameters: ...]` the log and Sentry read `[SQL parameters hidden due to
+hide_parameters=True]`, and Sentry drops the locals of SQLAlchemy's and the
+driver's stack frames (`app/services/push/redact.py`). Those values are members'
+details, device tokens and Wallet device ids. Reproduce locally to see them.
+
 ## Turning up the volume
 
 Level comes from the `LOG_LEVEL` environment variable, default `INFO`:

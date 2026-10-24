@@ -10,15 +10,20 @@ app/services/wallet_updates.py) has the same problem the other way round: the
 device library id, which Apple treats as a shared secret, is in the path of
 requests we receive, and a pass's ``pushToken`` is in their bodies. The
 request log line, the error handler's and uvicorn's access line get
-``/v1/devices/[device]``, and a ``pushToken`` value anywhere in a Sentry event
-is filtered.
+``/v1/devices/[device]``. In a Sentry event, a value under ``pushToken``,
+``push_token`` or ``device_library_id`` is filtered anywhere, in dicts and in
+the reprs of objects (``WalletPassRegistrationRequest(pushToken='...')``).
 
 Two more places a token could reach: hpack's DEBUG lines print every HTTP/2
 header (the path and the encoded ``authorization`` with the provider token),
 so that logger stays at INFO even when ``LOG_LEVEL=DEBUG``; and a Sentry
 event's stack frames carry each frame's local variables, so any local whose
-name has ``token`` or ``authorization`` in it is filtered (Sentry's own list
-only matches the exact names).
+name has ``token``, ``authorization`` or ``device_library`` in it is filtered
+(Sentry's own list only matches the exact names), and frames inside SQLAlchemy
+and the MySQL driver lose their locals altogether: they hold every statement's
+parameters, and the driver's the statement with its values written in. The
+exception's own text never shows them either: the engine is built with
+``hide_parameters`` (``app/DB/main.py``).
 """
 
 import logging
@@ -30,9 +35,13 @@ _REPLACEMENT = "/3/device/[token]"
 _PASS_DEVICE_PATH = re.compile(r"/v1/devices/[^/\s?#\"']+")
 _PASS_DEVICE_REPLACEMENT = "/v1/devices/[device]"
 _MARKERS = ("/3/device/", "/v1/devices/")
-_FILTERED_KEYS = {"pushToken"}
-_FILTERED_VARS = ("token", "authorization")
+_FILTERED_KEYS = {"pushToken", "push_token", "device_library_id"}
+_FILTERED_VARS = ("token", "authorization", "device_library")
 _FILTERED = "[Filtered]"
+# One of those keys in a repr: ``pushToken='...'``, ``'push_token': '...'``.
+_KEYED_IN_TEXT = re.compile(r"""((?:pushToken|push_token|device_library_id)['"]?\s*[=:]\s*)(['"])[^'"]*\2""")
+# Their frames' locals hold statements' parameters.
+_DATABASE_MODULES = ("sqlalchemy.", "pymysql.")
 
 # Loggers whose lines carry the path of a request we received.
 _REQUEST_LOGGERS = ("app.middleware", "app.error_handlers", "uvicorn.access")
@@ -43,9 +52,10 @@ def _has_marker(value: str) -> bool:
 
 
 def scrub(value: Any) -> Any:
-    """``value`` with any device path rewritten and ``pushToken`` values filtered; inside dicts and lists too."""
+    """``value`` with any device path rewritten and token or device id values filtered; inside dicts and lists too."""
     if isinstance(value, str):
-        return _PASS_DEVICE_PATH.sub(_PASS_DEVICE_REPLACEMENT, _DEVICE_PATH.sub(_REPLACEMENT, value))
+        value = _PASS_DEVICE_PATH.sub(_PASS_DEVICE_REPLACEMENT, _DEVICE_PATH.sub(_REPLACEMENT, value))
+        return _KEYED_IN_TEXT.sub(rf"\1\2{_FILTERED}\2", value)
     if isinstance(value, dict):
         return {key: _FILTERED if key in _FILTERED_KEYS else scrub(item) for key, item in value.items()}
     if isinstance(value, list):
@@ -86,11 +96,20 @@ def _filtered_var(name: Any) -> bool:
     return any(part in lowered for part in _FILTERED_VARS)
 
 
+def _database_frame(frame: dict) -> bool:
+    return str(frame.get("module") or "").startswith(_DATABASE_MODULES)
+
+
 def _filter_frame_vars(value: Any) -> Any:
-    """Every stack frame's ``vars`` with token-named locals filtered, wherever frames sit in the event."""
+    """Every stack frame's ``vars`` with token-named locals filtered, wherever frames sit in the event.
+
+    A database library's frames lose their ``vars``.
+    """
     if isinstance(value, dict):
         out = {}
         for key, item in value.items():
+            if key == "vars" and isinstance(item, dict) and _database_frame(value):
+                continue
             if key == "vars" and isinstance(item, dict):
                 out[key] = {name: _FILTERED if _filtered_var(name) else var for name, var in item.items()}
             else:
