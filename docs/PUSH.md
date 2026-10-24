@@ -196,14 +196,16 @@ a public semester runs (today between its start and end dates; a private
 current semester is skipped, members see an older public one then):
 
 1. **Small board**: fewer than 20 members with points, nothing happens.
-2. **Crowded tie**: more than 5 members sharing one rank in the top 5 (the
-   semester's first event gives every attendee the same points) is not news.
-   Their standing stays as it was, in or out, until the tie breaks.
-3. **First look** at a semester (deploy day, a new semester: standings are
-   per semester, so a new one starts empty) and **mass change** (more than 10
-   standings moving in one look: a catalogue edit, a whole event set back to
-   draft, a bulk import that turns the top 5 over): what it sees is taken as
-   known (`told` = `observed`) and nothing is pushed.
+2. **First look** at a semester (deploy day, a new semester: standings are
+   per semester, so a new one starts empty): every standing in the top 5 is
+   taken as known (`told` = `observed`), a crowded tie's too (it was there at
+   launch, so its breaking later is not news), and nothing is pushed.
+3. **Crowded tie**: after that, more than 5 members sharing one rank in the
+   top 5 (the semester's first event gives every attendee the same points) is
+   not news. Their standing stays as it was, in or out, until the tie breaks.
+   A **mass change** (more than 10 standings moving in one look: a catalogue
+   edit, a whole event set back to draft, a bulk import that turns the top 5
+   over): what it sees is taken as known and nothing is pushed.
 4. Otherwise each standing that moved is recorded (`observed_since`), and one
    that has **held 10 minutes** and differs from `told` is told: out → top 5
    `rank_top5`; out or top 5 → #1 `rank_first` (entering and reaching #1 at

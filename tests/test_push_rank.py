@@ -607,13 +607,36 @@ def test_a_big_tie_at_first_is_not_news(db_session, push_on, apns_mock, frozen, 
         attendees.append(member)
     db_session.commit()
     assert held(db_session, frozen) == 0
-    assert db_session.scalars(select(MemberRankStandings)).all() == []
-    # The tie breaks: that look is the semester's first, and says nothing either.
+    # The first look takes the whole tie as known: each attendee is settled at #1.
+    rows = db_session.scalars(select(MemberRankStandings)).all()
+    assert len(rows) == 25 and {row.told for row in rows} == {RankStanding.FIRST}
+    # The tie breaks: #1 kept, #1 lost inside the top 5, the other 23 still a crowded tie. Nothing.
     give(db_session, season, attendees[0], 5)
     give(db_session, season, attendees[1], 3)
     db_session.commit()
     assert held(db_session, frozen) == 0
+    assert rank_rows(db_session) == []
     assert standing(db_session, attendees[0]).told == RankStanding.FIRST
+    assert standing(db_session, attendees[1]).told == RankStanding.TOP5
+
+
+def test_a_crowded_tie_at_the_first_look_breaking_later_is_not_news(db_session, push_on, apns_mock, frozen, season):
+    """Six members share #4 at launch: in the top 5 before it, so the tie breaking sends none of them anything."""
+    leaders(db_session, season, 120, 110, 100)
+    crowd = []
+    for _ in range(6):
+        member = app_user(db_session)
+        give(db_session, season, member, 90)
+        crowd.append(member)
+    db_session.commit()
+    assert held(db_session, frozen) == 0
+    assert [standing(db_session, member).told for member in crowd] == [RankStanding.TOP5] * 6
+
+    give(db_session, season, crowd[0], 10)  # 100: a shared #3, the other five a shared #5
+    db_session.commit()
+    assert held(db_session, frozen) == 0
+    assert rank_rows(db_session) == []
+    assert [standing(db_session, member).told for member in crowd] == [RankStanding.TOP5] * 6
 
 
 def test_a_mass_change_is_taken_as_known(db_session, push_on, apns_mock, frozen, season):
