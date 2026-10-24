@@ -26,6 +26,9 @@ class PaginationMeta_model(BaseClassModel):
     total_pages: int
 
 
+EventLevel = Literal["beginner", "intermediate", "advanced"]
+
+
 class Events_model(BaseClassModel):
     id: int | None = None
     name: str
@@ -35,6 +38,10 @@ class Events_model(BaseClassModel):
     start_datetime: datetime
     end_datetime: datetime
     status: Literal["draft", "open", "active", "closed"]
+    # Always set on output. On input it is optional: a new event without one is
+    # beginner (the admin form preselects it), and an update without one keeps
+    # the event's level.
+    level: EventLevel | None = None
     image_url: str | None = None
     meeting_url: str | None = None
     is_official: int | None = None

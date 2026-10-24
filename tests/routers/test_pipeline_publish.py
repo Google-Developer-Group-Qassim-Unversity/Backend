@@ -75,6 +75,8 @@ def test_publish_creates_the_event_like_post_events(pipeline, world):
     assert event.start_datetime == datetime(2026, 7, 20, 10, 0)
     assert event.end_datetime == datetime(2026, 7, 21, 12, 0)
     assert event.is_official == 1
+    # Pipeline events start as beginner; staff change it from the event's edit page.
+    assert event.level.value == "beginner"
     form = pipeline.session.scalar(select(Forms).where(Forms.event_id == event.id))
     assert form.form_type.value == "registration"
     logs = pipeline.session.scalars(select(Logs).where(Logs.event_id == event.id)).all()
