@@ -1700,6 +1700,18 @@ class PushKind(str, enum.Enum):
     EVENT_CONTENT = "event_content"
     WEEKLY_SUMMARY = "weekly_summary"
     WELCOME = "welcome"
+    # App 1.0.3 build 6 (app/services/push/rank.py).
+    RANK_TOP5 = "rank_top5"
+    RANK_FIRST = "rank_first"
+    RANK_LEFT = "rank_left"
+
+
+class RankStanding(str, enum.Enum):
+    """Where a member stands on the semester's members leaderboard, as the rank pushes see it."""
+
+    OUT = "out"
+    TOP5 = "top5"
+    FIRST = "first"
 
 
 class PushStatus(str, enum.Enum):
@@ -1838,6 +1850,40 @@ class PushNotifications(Base):
     sent_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     # Apple's reason, or why it was skipped; never a token.
     last_error: Mapped[Optional[str]] = mapped_column(String(100))
+
+
+class MemberRankStandings(Base):
+    """A member's standing on a semester's members leaderboard, for the rank pushes (``app/services/push/rank.py``).
+
+    ``observed`` is what the sweep last saw (``observed_since``: since when);
+    ``told`` is the standing the member's rank news is settled at: what the last
+    rank push queued said, or what was taken as known without one (the
+    semester's first look, a mass change, a member the push cannot reach). A
+    push goes when the two differ and ``observed`` has held 10 minutes.
+    ``pushes`` counts the rank pushes queued for the member this semester and
+    keys their ``dedupe_key``. A row is written the first time the member is in
+    the top 5 that semester, and kept.
+    """
+
+    __tablename__ = "member_rank_standings"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["semester_id"], ["semesters.id"], name="fk_member_rank_standings_semester", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_member_rank_standings_member", ondelete="CASCADE"),
+        Index("uq_member_rank_standings_semester_member", "semester_id", "member_id", unique=True),
+        Index("fk_member_rank_standings_member", "member_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    semester_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    observed: Mapped[RankStanding] = mapped_column(_enum(RankStanding), nullable=False)
+    # UTC, like every push_* and member_* column.
+    observed_since: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    told: Mapped[RankStanding] = mapped_column(_enum(RankStanding), nullable=False)
+    told_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    pushes: Mapped[int] = mapped_column(SMALLINT(unsigned=True), nullable=False, server_default=text("'0'"))
 
 
 # =============================================================================
