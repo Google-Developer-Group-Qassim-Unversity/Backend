@@ -21,7 +21,8 @@ every pipeline sweep, in the three steps of ``app/services/push/delivery.py``:
 claim (``FOR UPDATE SKIP LOCKED`` and a 5-minute lease), send, record. A
 dropped connection is retried at once; other failures back off 2, 4, 8 and 16
 minutes and give up after 5 attempts. A token APNs says is dead deletes its
-registration. Lines name the registration row, never the token.
+registration, unless the device registered again since: that one is retried
+like any failure. Lines name the registration row, never the token.
 """
 
 import logging
@@ -251,10 +252,15 @@ def record(results: list[tuple[Due, apns.ApnsResponse]], now: datetime) -> PassP
                 seen_before = clock.from_epoch_ms(answer.timestamp_ms) if answer.timestamp_ms else None
                 if pass_queries.forget(session, due.id, push_token=due.token, seen_before=seen_before):
                     outcome.registrations_removed += 1
-                logger.warning(
-                    "Wallet pass push: registration %s refused (%s %s)", due.id, answer.status, answer.reason
-                )
-                continue
+                    logger.warning(
+                        "Wallet pass push: registration %s refused (%s %s); deleted",
+                        due.id,
+                        answer.status,
+                        answer.reason,
+                    )
+                    continue
+                # Kept: the device registered again since (a new token, or after APNs says
+                # this one died). Retried like any failure, so it is given up after 5 attempts.
             if kind == "config":
                 config_errors.append(answer.reason or str(answer.status))
             if kind == "permanent" or due.attempts >= MAX_ATTEMPTS:

@@ -23,7 +23,7 @@ from app.DB import wallet_passes as pass_queries
 from app.DB.schema import MemberProfiles, Members, MembersGender, WalletPassRegistrations
 from app.DB.wallet import get_or_create_member_profile
 from app.services import wallet_push, wallet_updates
-from app.services.push import clock
+from app.services.push import apns, clock
 from app.wallet_signer import pass_serial_number
 from tests.utils import assert_2xx
 from tests.wallet_support import WEB_SERVICE_URL, pass_json
@@ -435,6 +435,47 @@ def test_a_dead_push_token_deletes_its_registration(client: TestClient, db_sessi
     assert register(client, profile).status_code == 201
 
     assert registrations(db_session) == []
+
+
+def test_a_token_refused_from_before_the_registration_is_kept_then_given_up(
+    client: TestClient, db_session, web_service, frozen
+):
+    """APNs dates the token's death before the device registered it (Apple's clock a little behind ours)."""
+    profile = make_profile(db_session)
+    died = clock.epoch(NOW - timedelta(seconds=5)) * 1000
+    web_service.answer(PUSH, (410, {"reason": "Unregistered", "timestamp": died}))
+    register(client, profile)
+
+    for _ in range(wallet_push.MAX_ATTEMPTS - 1):
+        frozen.advance(hours=1)
+        deliver()
+
+    [row] = registrations(db_session)
+    assert row.push_attempts == wallet_push.MAX_ATTEMPTS
+    assert row.push_due_at is None, "given up, not pushed again every sweep"
+    frozen.advance(hours=1)
+    assert deliver().claimed == 0
+    assert len(web_service.requests) == wallet_push.MAX_ATTEMPTS
+
+
+def test_a_refused_token_the_device_replaced_is_retried_with_the_new_one(
+    client: TestClient, db_session, web_service, frozen
+):
+    profile = make_profile(db_session)
+    web_service.answer(PUSH, (500, None))
+    register(client, profile)
+    frozen.advance(minutes=3)
+    due = wallet_push.claim(clock.now())
+    register(client, profile, push=PUSH_2)  # Wallet registers again with a new token meanwhile
+
+    outcome = wallet_push.record([(item, apns.ApnsResponse(410, "Unregistered")) for item in due], clock.now())
+
+    assert (outcome.registrations_removed, outcome.retried) == (0, 1)
+    frozen.advance(minutes=5)
+    assert deliver().sent == 1
+    assert web_service.tokens() == [PUSH, PUSH_2]
+    [row] = registrations(db_session)
+    assert row.push_token == PUSH_2 and row.push_due_at is None
 
 
 def test_a_missing_certificate_keeps_the_push_owed(client: TestClient, db_session, web_service, monkeypatch):

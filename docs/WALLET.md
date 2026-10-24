@@ -147,7 +147,7 @@ on it.
 | 200 | nothing owed any more |
 | a dropped connection, a timeout | tried once more at once, then as below |
 | 5xx, 429, 403 / bad certificate or topic, no usable p12 | retried after 2, 4, 8, 16 minutes (the next sweep after that); given up after 5 attempts. Certificate and topic errors are one ERROR per batch |
-| 410 `Unregistered`, 400 `BadDeviceToken` / `DeviceTokenNotForTopic` | the registration is deleted, unless the device registered again since |
+| 410 `Unregistered`, 400 `BadDeviceToken` / `DeviceTokenNotForTopic` | the registration is deleted, unless the device registered again since (a new token, or after the moment APNs gives for a 410): then retried as above, with whatever token it has now, and given up after 5 attempts |
 | other 4xx | given up, with Apple's reason in the log |
 
 Logs name the registration row and the member id, never a token. The device
