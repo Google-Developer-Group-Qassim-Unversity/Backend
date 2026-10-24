@@ -106,6 +106,8 @@ content/event edit or the local Website's cache never refreshes.
 | `APPLE_P12_PATH` | optional | - | falls back to `app/certificates/Certificates.p12` |
 | `APPLE_WWDR_BASE64` | optional | - | or supply the file at `APPLE_WWDR_PATH` |
 | `APPLE_WWDR_PATH` | optional | - | falls back to `app/certificates/AppleWWDRCAG4.cer` |
+| `APPLE_PASS_WEB_SERVICE_URL` | for Wallet pass updates | - | the PassKit web service's base URL, baked into every member pass issued while it is set: `https://<api host>/wallet/apple` (no trailing slash needed; Wallet appends `/v1/...`). With `APPLE_PASS_AUTH_SECRET`, member passes register for updates and get the welcome from the card ([WALLET.md](WALLET.md)). Unset: passes are what they were before and the `/wallet/apple/v1` routes answer 404. Hard to change later: cards already in Wallet keep the URL they were issued with |
+| `APPLE_PASS_AUTH_SECRET` | for Wallet pass updates | - | at least 32 random bytes, a different value per environment (`openssl rand -base64 48`). Makes each member pass's `authenticationToken` (HMAC of the card's uuid; nothing is stored). Never logged. Changing it stops every issued card from updating until it is re-added. Unset: pass updates stay off even with the URL set |
 
 ### Google Wallet
 

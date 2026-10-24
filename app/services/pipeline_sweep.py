@@ -38,6 +38,7 @@ from app.services import event_pipeline_clock as clock
 from app.services import pipeline_calendar
 from app.services import pipeline_history as history
 from app.services import pipeline_notion as notion
+from app.services import wallet_push
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail, send_pipeline_email_job
 from app.services.push import cases as push_cases
@@ -217,4 +218,6 @@ async def sweep_forever() -> None:
             logger.exception("Pipeline sweep failed")
         # Every worker, whether or not it swept: delivery claims its own rows (FOR UPDATE SKIP LOCKED).
         await push_delivery.kick()
+        # Apple Wallet pass update pushes still owed (a retry, or one whose kick never ran), the same way.
+        await wallet_push.kick()
         await asyncio.sleep(SWEEP_EVERY_SECONDS)

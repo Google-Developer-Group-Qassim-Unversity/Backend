@@ -15,7 +15,7 @@ from app.DB.main import get_engine
 from app.error_handlers import register_exception_handlers
 from app.logging_config import configure_logging
 from app.middleware import RequestContextMiddleware
-from app.services import pipeline_sweep
+from app.services import pipeline_sweep, wallet_push
 from app.services.push import apns, redact as push_redact
 from app.routers import (
     attendance,
@@ -89,6 +89,7 @@ async def lifespan(app: FastAPI):
         sweeper.cancel()
     await close_http_client()
     await apns.close_client()
+    await wallet_push.close_client()
 
     # get_engine is lru_cached; calling it here when nothing ever built an
     # engine would create one purely to throw it away.

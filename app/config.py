@@ -160,6 +160,13 @@ class Settings(BaseSettings):
     APPLE_P12_PATH: Optional[str] = None
     APPLE_WWDR_BASE64: Optional[str] = None
     APPLE_WWDR_PATH: Optional[str] = None
+    # Apple Wallet pass updates: Apple's PassKit web service at /wallet/apple/v1
+    # (app/services/wallet_updates.py, docs/WALLET.md). The URL is baked into
+    # every member pass issued while it is set; the secret makes each pass's
+    # authenticationToken. Either unset: off - passes are what they were before,
+    # and the web service routes answer 404.
+    APPLE_PASS_WEB_SERVICE_URL: Optional[str] = None
+    APPLE_PASS_AUTH_SECRET: Optional[str] = None
     GOOGLE_WALLET_ISSUER_ID: str = "BCR2DN6DTK643EAC"
     GOOGLE_WALLET_CLASS_ID: str = ""
     GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL: str = ""
@@ -472,6 +479,21 @@ class Config:
     @property
     def APPLE_WWDR_PATH(self) -> Optional[str]:
         return get_settings().APPLE_WWDR_PATH
+
+    @property
+    def APPLE_PASS_WEB_SERVICE_URL(self) -> Optional[str]:
+        """The pass web service's base URL, without a trailing slash (Wallet appends ``/v1/...``)."""
+        return (get_settings().APPLE_PASS_WEB_SERVICE_URL or "").strip().rstrip("/") or None
+
+    @property
+    def APPLE_PASS_AUTH_SECRET(self) -> Optional[str]:
+        """Signs each member pass's authenticationToken. Never logged."""
+        return get_settings().APPLE_PASS_AUTH_SECRET or None
+
+    @property
+    def apple_pass_updates_enabled(self) -> bool:
+        """Member passes are updatable (and the web service answers) only when its URL and secret are both set."""
+        return bool(self.APPLE_PASS_WEB_SERVICE_URL and self.APPLE_PASS_AUTH_SECRET)
 
     @property
     def GOOGLE_WALLET_ISSUER_ID(self) -> str:
