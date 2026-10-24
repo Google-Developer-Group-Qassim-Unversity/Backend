@@ -101,7 +101,7 @@ content/event edit or the local Website's cache never refreshes.
 |---|---|---|---|
 | `APPLE_TEAM_ID` | optional | `7NN7W24VXR` | ⚠️ **hardcoded production identifier** - see the TODO in `app/config.py` |
 | `APPLE_PASS_TYPE_ID` | optional | `pass.pass.com.gdg-q.wallet` | ⚠️ **hardcoded production identifier** - see the TODO in `app/config.py` |
-| `APPLE_P12_BASE64` | optional | - | the p12 in standard base64 (line breaks are fine; any other character that is not base64 is refused), or supply the file at `APPLE_P12_PATH` |
+| `APPLE_P12_BASE64` | optional | - | the p12 in standard base64 (line breaks, quotes around it and any other ASCII character that is not base64 are skipped; one that is not ASCII is refused), or supply the file at `APPLE_P12_PATH` |
 | `APPLE_P12_PASSWORD` | when the feature runs | - |  |
 | `APPLE_P12_PATH` | optional | - | falls back to `app/certificates/Certificates.p12` |
 | `APPLE_WWDR_BASE64` | optional | - | or supply the file at `APPLE_WWDR_PATH` |

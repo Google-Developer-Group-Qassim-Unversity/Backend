@@ -257,12 +257,13 @@ def _known_start(states: list[dict], local_now: datetime) -> datetime | None:
     """The start of the next day registrants knew, if still ahead; the earliest when they may know more than one.
 
     ``states`` are ``event_state``s; each one's next day is found as ``_next_day`` finds the event's. A day
-    that has started does not count.
+    that has started does not count, nor does a state that ends before it starts (it has no days): the create
+    form lets one through, only the edit form refuses it.
     """
     starts = []
     for state in states:
         start, end = _riyadh(state.get("start_datetime")), _riyadh(state.get("end_datetime"))
-        if start is None or end is None:
+        if start is None or end is None or end < start:
             continue
         _, _, day_starts, _ = _next_day(start, end, local_now)
         if day_starts > local_now:
