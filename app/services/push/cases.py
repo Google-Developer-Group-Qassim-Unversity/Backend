@@ -218,9 +218,10 @@ def _updated(
     session: Session, event: Events, change_id: str, fields: list[str], before: dict, now: datetime, *, back_on: bool
 ) -> int:
     registrations = _accepted(session, event.id)
-    old_start = _riyadh(before.get("start_datetime"))
+    local_now = clock.to_riyadh(now)
     if not back_on:
-        return _queue_updates(session, event, change_id, registrations, fields, old_start, now, back_on=False)
+        known = _known_start([before], local_now)
+        return _queue_updates(session, event, change_id, registrations, fields, known, now, back_on=False)
     # The ones told it was cancelled, or about to be (a cancellation skipped as event_reopened just
     # means one extra, truthful Back on), hear it is on again.
     cancellations = session.scalars(
@@ -233,19 +234,40 @@ def _updated(
         .order_by(PushNotifications.id)
     ).all()
     told = {row.member_id for row in cancellations}
+    known_states = [before]
     # What changed while it was closed (a new link, a new time) counts too: against the event as it was cancelled.
     if cancellations:
         as_cancelled = (cancellations[-1].payload.get("cause") or {}).get("state") or {}
         after = event_state(event)
         fields = sorted(set(fields) | {f for f in WATCHED if f in as_cancelled and as_cancelled[f] != after[f]})
+        # The others knew it as it was cancelled too, not only as ``before`` has it (moved while closed, say).
+        known_states.append(as_cancelled)
+    known = _known_start(known_states, local_now)
     queued = _queue_updates(
-        session, event, change_id, [(s, m) for s, m in registrations if m in told], fields, old_start, now, back_on=True
+        session, event, change_id, [(s, m) for s, m in registrations if m in told], fields, known, now, back_on=True
     )
     # The others never heard it was cancelled; what moved while it was closed is an ordinary update to them.
     if fields and not (fields == ["meeting_url"] and not event.meeting_url):
         others = [(s, m) for s, m in registrations if m not in told]
-        queued += _queue_updates(session, event, change_id, others, fields, old_start, now, back_on=False)
+        queued += _queue_updates(session, event, change_id, others, fields, known, now, back_on=False)
     return queued
+
+
+def _known_start(states: list[dict], local_now: datetime) -> datetime | None:
+    """The start of the next day registrants knew, if still ahead; the earliest when they may know more than one.
+
+    ``states`` are ``event_state``s; each one's next day is found as ``_next_day`` finds the event's. A day
+    that has started does not count.
+    """
+    starts = []
+    for state in states:
+        start, end = _riyadh(state.get("start_datetime")), _riyadh(state.get("end_datetime"))
+        if start is None or end is None:
+            continue
+        _, _, day_starts, _ = _next_day(start, end, local_now)
+        if day_starts > local_now:
+            starts.append(day_starts)
+    return min(starts, default=None)
 
 
 def _queue_updates(
@@ -254,7 +276,7 @@ def _queue_updates(
     change_id: str,
     registrations: list[tuple[int, int]],
     fields: list[str],
-    old_start: datetime | None,
+    known: datetime | None,
     now: datetime,
     *,
     back_on: bool,
@@ -271,12 +293,13 @@ def _queue_updates(
     if not pushes:
         return 0
     local_now = clock.to_riyadh(now)
-    _, _, starts, _ = _next_day(event, local_now)
-    # The start registrants knew counts too: moved at 23:00 from 07:30 to 10:00 tomorrow, they hear it now.
-    if old_start is not None and local_now < old_start < starts:
-        starts = old_start
-    # Quiet hours hold an ordinary update only when it can wait: its next day (or the start it had)
-    # starts at 09:00 or later after the quiet hours end. An event tonight, under way, or early
+    _, _, starts, _ = _next_day(event.start_datetime, event.end_datetime, local_now)
+    # The next day registrants knew counts too (``known``): moved at 23:00 from 07:30 to 10:00 tomorrow,
+    # they hear it now.
+    if known is not None:
+        starts = min(starts, known)
+    # Quiet hours hold an ordinary update only when it can wait: its next day (and the one registrants
+    # knew) starts at 09:00 or later after the quiet hours end. An event tonight, under way, or early
     # tomorrow is told now.
     release = clock.after_quiet_hours(now + DEBOUNCE)
     can_wait = clock.to_utc(starts) >= release + QUIET_MARGIN
@@ -367,12 +390,16 @@ def _cancelled(session: Session, event: Events, change_id: str, before: dict, pl
     )
 
 
-def _next_day(event: Events, local_now: datetime) -> tuple[int, int, datetime, datetime]:
-    """(day, days, its start, its end) of the first day that has not ended; the last day when all have."""
-    total = event_days(event)
+def _next_day(start: datetime, end: datetime, local_now: datetime) -> tuple[int, int, datetime, datetime]:
+    """(day, days, its start, its end) of the first day that has not ended; the last day when all have.
+
+    Of an event from ``start`` to ``end`` (Riyadh wall clock), days counted as ``event_days`` and ``day_start``
+    count them: the event as it is, or as registrants knew it (``_known_start``).
+    """
+    total = (end - start).days + 1
     for day in range(1, total + 1):
-        starts = day_start(event, day)
-        ends = _day_end(event, starts)
+        starts = start + timedelta(days=day - 1)
+        ends = _day_end(starts, end)
         if ends > local_now or day == total:
             return day, total, starts, ends
     raise AssertionError("an event has at least one day")
@@ -380,7 +407,7 @@ def _next_day(event: Events, local_now: datetime) -> tuple[int, int, datetime, d
 
 def _update_text(event: Events, cause: dict, local_now: datetime) -> messages.Text:
     """The event as it is: its next day's date and time and its place (or Online), never a diff."""
-    day, total, starts, ends = _next_day(event, local_now)
+    day, total, starts, ends = _next_day(event.start_datetime, event.end_datetime, local_now)
     return messages.event_updated(
         event.name,
         starts,
@@ -634,9 +661,9 @@ def online_days(session: Session, events) -> dict[int, set[int]]:
     return found
 
 
-def _day_end(event: Events, starts: datetime) -> datetime:
+def _day_end(starts: datetime, end: datetime) -> datetime:
     """That day's end: its date at the event's end time, the next day for an overnight one. Riyadh wall clock."""
-    ends = datetime.combine(starts.date(), event.end_datetime.time())
+    ends = datetime.combine(starts.date(), end.time())
     return ends if ends > starts else ends + timedelta(days=1)
 
 
@@ -663,7 +690,7 @@ def _live(session: Session, event: Events, day: int, total: int, starts: datetim
         url=links.event_url(event.id),
         thread_id=f"event-{event.id}",
         event_id=event.id,
-        expires_at=clock.to_utc(_day_end(event, starts)),
+        expires_at=clock.to_utc(_day_end(starts, event.end_datetime)),
         quiet_hours=False,
         now=now,
     )

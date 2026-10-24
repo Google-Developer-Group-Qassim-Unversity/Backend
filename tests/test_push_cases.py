@@ -464,6 +464,17 @@ def test_a_move_later_at_night_is_told_now_when_the_old_start_cannot_wait(db_ses
     assert row.not_before == ELEVEN_PM + TWO_MINUTES
 
 
+def test_a_multi_day_move_later_at_night_is_told_now_when_the_old_next_day_cannot_wait(db_session, push_on, frozen):
+    """Jul 20-22, 07:30-09:30 daily; 23:00 on day 1 (over) it moves to 10:00-12:00: day 2 at 07:30 cannot wait."""
+    frozen.set(ELEVEN_PM)
+    event = make_event(db_session, start=datetime(2026, 7, 20, 7, 30), end=datetime(2026, 7, 22, 9, 30))
+    register(db_session, event, app_user(db_session))
+    moved = {"start_datetime": datetime(2026, 7, 20, 10, 0), "end_datetime": datetime(2026, 7, 22, 12, 0)}
+    assert change(db_session, event, **moved) == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.not_before == ELEVEN_PM + TWO_MINUTES
+
+
 def test_a_multi_day_event_says_its_next_day_and_hours(db_session, push_on, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 19, 16, 0), end=datetime(2026, 7, 21, 18, 0))
     register(db_session, event, app_user(db_session))
@@ -754,6 +765,31 @@ def test_back_on_keeps_a_new_link_whose_update_the_close_skipped(db_session, pus
         "title": f"Back on: {NAME}",
         "body": "Jul 28 · 4:00 PM – 6:00 PM · Online · New link to join",
     }
+
+
+def test_reopening_at_night_tells_one_never_told_now_when_the_start_they_knew_cannot_wait(
+    db_session, push_on, apns_mock, frozen
+):
+    """22:50 an event at 07:30 tomorrow is closed (only the member with a phone is told); 23:00 it moves to 10:00
+    while closed; 23:05 it is reopened: the other member planned on 07:30 and hears of the move now, not at 08:00."""
+    frozen.set(datetime(2026, 7, 20, 19, 50))  # 22:50 Riyadh
+    event = make_event(db_session, start=datetime(2026, 7, 21, 7, 30), end=datetime(2026, 7, 21, 9, 30))
+    told = app_user(db_session)
+    register(db_session, event, told)
+    phoneless = make_member(db_session)
+    register(db_session, event, phoneless)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    frozen.set(ELEVEN_PM)
+    moved = {"start_datetime": datetime(2026, 7, 21, 10, 0), "end_datetime": datetime(2026, 7, 21, 12, 0)}
+    assert change(db_session, event, **moved) == 0  # closed: no push
+    add_device(db_session, phoneless)
+    frozen.advance(minutes=5)
+    assert change(db_session, event, status=EventsStatus.OPEN) == 2
+    found = {row.member_id: row for row in rows(db_session, PushKind.EVENT_UPDATED)}
+    assert found[told.id].not_before == frozen.now  # Back on
+    assert found[phoneless.id].not_before == frozen.now + TWO_MINUTES  # not 08:00, after the 07:30 they knew
 
 
 def test_deleting_the_draft_right_after_unpublishing_still_sends_the_cancellation(
