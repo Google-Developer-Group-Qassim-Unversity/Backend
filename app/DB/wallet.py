@@ -9,6 +9,26 @@ from app.DB.schema import MemberProfiles, MemberProfilesNameLanguage, Members
 from app.services.permissions.access import resolve_access
 
 
+# A card switch the member never set reads as this: the public card's rule (``GET /wallet/{uuid}``).
+CARD_VISIBILITY_DEFAULTS: dict[str, bool] = {
+    "showPhone": False,
+    "showEmail": False,
+    "showAcademic": True,
+    "showBio": True,
+}
+
+
+def card_visibility(profile: MemberProfiles | None) -> dict[str, bool]:
+    """The member's four card switches (``showPhone``, ``showEmail``, ``showAcademic``, ``showBio``).
+
+    No profile row, or a switch never saved, reads as ``CARD_VISIBILITY_DEFAULTS``.
+    """
+    saved = profile.visibility if profile is not None else None
+    if not isinstance(saved, dict):
+        saved = {}
+    return {key: bool(saved.get(key, default)) for key, default in CARD_VISIBILITY_DEFAULTS.items()}
+
+
 def is_member_staff(session: Session, member: Members) -> bool:
     """Whether the member gets the admin card: staff, i.e. on this semester's roster or a super admin."""
     return resolve_access(session, member).is_staff

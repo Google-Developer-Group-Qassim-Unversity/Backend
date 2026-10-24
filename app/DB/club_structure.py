@@ -79,6 +79,31 @@ def get_memberships(session: Session, semester_id: str, department_id: int | Non
     return session.scalars(statement).all()
 
 
+def get_member_departments(
+    session: Session, semester_id: str, member_id: int
+) -> list[tuple[SemesterDepartments, list[str]]]:
+    """The departments one person is on the roster of in a semester, each with the keys of the roles they hold there.
+
+    Departments in id order, roles in the roles' own order (leader, vp, member).
+    """
+    rows = session.execute(
+        select(SemesterDepartments, ClubRoles.key)
+        .join(
+            ClubMemberships,
+            (ClubMemberships.semester_id == SemesterDepartments.semester_id)
+            & (ClubMemberships.department_id == SemesterDepartments.department_id),
+        )
+        .join(ClubRoles, ClubRoles.id == ClubMemberships.role_id)
+        .where(ClubMemberships.semester_id == semester_id, ClubMemberships.member_id == member_id)
+        .options(selectinload(SemesterDepartments.department))
+        .order_by(SemesterDepartments.department_id, ClubRoles.sort_order)
+    ).all()
+    found: dict[int, tuple[SemesterDepartments, list[str]]] = {}
+    for scope, key in rows:
+        found.setdefault(scope.department_id, (scope, []))[1].append(key)
+    return list(found.values())
+
+
 def get_member_roles(
     session: Session, semester_id: str, department_id: int, member_id: int
 ) -> Sequence[ClubMemberships]:

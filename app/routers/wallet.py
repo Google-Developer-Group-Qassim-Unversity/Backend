@@ -9,6 +9,7 @@ from app.leaderboard_cache import refresh_member_names_cache
 from app.config import config
 from app.DB.schema import Members
 from app.DB.wallet import (
+    card_visibility,
     get_or_create_member_profile,
     get_public_profile_by_uuid,
     is_member_staff,
@@ -502,11 +503,11 @@ def get_public_profile(uuid: str, session: DB):
 
     member, profile, is_admin = result
 
-    vis = profile.visibility or {}
-    show_phone = bool(vis.get("showPhone", False))
-    show_email = bool(vis.get("showEmail", False))
-    show_academic = bool(vis.get("showAcademic", True))
-    show_bio = bool(vis.get("showBio", True))
+    vis = card_visibility(profile)
+    show_phone = vis["showPhone"]
+    show_email = vis["showEmail"]
+    show_academic = vis["showAcademic"]
+    show_bio = vis["showBio"]
 
     effective_name = member.public_name or "Member"
     effective_institution = profile.institution or member.uni_college or "جامعة القصيم"

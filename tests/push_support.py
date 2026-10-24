@@ -171,7 +171,7 @@ def add_device(
 
 
 def set_prefs(session, member: Members, **switches) -> MemberNotificationPrefs:
-    values = {"remind": 1, "accept": 1, "points": 1, "news": 0, **{k: int(v) for k, v in switches.items()}}
+    values = {"remind": 1, "accept": 1, "points": 1, "news": 1, **{k: int(v) for k, v in switches.items()}}
     prefs = MemberNotificationPrefs(member_id=member.id, updated_at=datetime(2026, 7, 1), **values)
     session.add(prefs)
     session.flush()
