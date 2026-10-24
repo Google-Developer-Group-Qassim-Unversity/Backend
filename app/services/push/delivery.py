@@ -153,7 +153,7 @@ def claim(now: datetime, limit: int = BATCH_SIZE) -> tuple[list[Job], int]:
                 continue
             if row.kind == PushKind.NEW_EVENT:
                 sent_today[row.member_id] = sent_today.get(row.member_id, 0) + 1
-            if cases.counts_toward_cap(row.kind, row.payload):
+            if cases.counts_toward_cap(row.kind):
                 capped_today[row.member_id] = capped_today.get(row.member_id, 0) + 1
             row.not_before = now + LEASE
             row.attempts += 1
@@ -199,7 +199,7 @@ def _capped_today(session: Session, member_ids: set[int], batch: set[str], now: 
         return {}
     start, end = clock.riyadh_day_bounds(now)
     rows = session.execute(
-        select(PushNotifications.member_id, PushNotifications.kind, PushNotifications.payload).where(
+        select(PushNotifications.member_id, PushNotifications.kind).where(
             PushNotifications.member_id.in_(member_ids),
             PushNotifications.kind.in_(cases.CAPPED),
             or_(
@@ -217,8 +217,8 @@ def _capped_today(session: Session, member_ids: set[int], batch: set[str], now: 
         )
     ).all()
     counts: dict[int, int] = {}
-    for member_id, kind, payload in rows:
-        if cases.counts_toward_cap(kind, payload):
+    for member_id, kind in rows:
+        if cases.counts_toward_cap(kind):
             counts[member_id] = counts.get(member_id, 0) + 1
     return counts
 
@@ -261,7 +261,7 @@ def _skip_reason(
         return gone
     if row.kind == PushKind.NEW_EVENT and sent_today.get(row.member_id, 0) >= NEW_EVENT_DAILY_CAP:
         return "daily_cap"
-    if cases.counts_toward_cap(row.kind, row.payload) and capped_today.get(row.member_id, 0) >= cases.DAILY_CAP:
+    if cases.counts_toward_cap(row.kind) and capped_today.get(row.member_id, 0) >= cases.DAILY_CAP:
         return "daily_cap"
     if not devices.get(row.member_id):
         return "no_device"

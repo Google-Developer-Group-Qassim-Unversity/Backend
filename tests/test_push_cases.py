@@ -453,6 +453,17 @@ def test_quiet_hours_hold_an_update_only_when_the_event_can_wait(db_session, pus
     assert row.not_before == (now + TWO_MINUTES if due == "now" else EIGHT_AM_TOMORROW)
 
 
+def test_a_move_later_at_night_is_told_now_when_the_old_start_cannot_wait(db_session, push_on, frozen):
+    """23:00, an event at 07:30 tomorrow moves to 10:00: whoever planned on 07:30 hears it now, not at 08:00."""
+    frozen.set(ELEVEN_PM)
+    event = make_event(db_session, start=datetime(2026, 7, 21, 7, 30), end=datetime(2026, 7, 21, 9, 30))
+    register(db_session, event, app_user(db_session))
+    moved = {"start_datetime": datetime(2026, 7, 21, 10, 0), "end_datetime": datetime(2026, 7, 21, 12, 0)}
+    assert change(db_session, event, **moved) == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert row.not_before == ELEVEN_PM + TWO_MINUTES
+
+
 def test_a_multi_day_event_says_its_next_day_and_hours(db_session, push_on, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 19, 16, 0), end=datetime(2026, 7, 21, 18, 0))
     register(db_session, event, app_user(db_session))
@@ -679,7 +690,7 @@ def test_a_real_change_is_never_dropped_by_the_daily_cap(db_session, push_on, ap
     frozen.advance(minutes=2)
     assert deliver().sent == 1
     # And it does not count toward the cap of the capped kinds either.
-    assert not cases.counts_toward_cap(PushKind.EVENT_UPDATED, {})
+    assert not cases.counts_toward_cap(PushKind.EVENT_UPDATED)
 
 
 def test_a_new_link_survives_newest_only(db_session, push_on, apns_mock, frozen):
@@ -715,6 +726,31 @@ def test_back_on_says_a_link_changed_while_the_event_was_closed(db_session, push
     assert deliver().sent == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
     assert row.payload["en"] == {
+        "title": f"Back on: {NAME}",
+        "body": "Jul 28 · 4:00 PM – 6:00 PM · Online · New link to join",
+    }
+
+
+def test_back_on_keeps_a_new_link_whose_update_the_close_skipped(db_session, push_on, apns_mock, frozen):
+    event = make_event(
+        db_session, start=datetime(2026, 7, 28, 16, 0), location_type=EventsLocationType.ONLINE, location="Online"
+    )
+    event.meeting_url = "https://meet.google.com/old-link-xyz"
+    register(db_session, event, app_user(db_session))
+    assert change(db_session, event, meeting_url="https://meet.google.com/new-link-abc") == 1
+    frozen.advance(minutes=1)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    db_session.commit()
+    assert deliver().sent == 1  # the cancellation; the link's update is not due yet
+    frozen.advance(minutes=2)
+    deliver()
+    assert rows(db_session, PushKind.EVENT_UPDATED)[0].last_error == "event_closed"
+    frozen.advance(minutes=5)
+    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    back_on = rows(db_session, PushKind.EVENT_UPDATED)[-1]
+    assert back_on.payload["en"] == {
         "title": f"Back on: {NAME}",
         "body": "Jul 28 · 4:00 PM – 6:00 PM · Online · New link to join",
     }

@@ -181,9 +181,11 @@ def event_changed(session: Session, event: Events, before: dict, change_id: str 
 
     - Public (open, active) and not started -> closed or draft: ``event_cancelled``,
       due at once.
-    - Closed or draft -> public, not started: ``event_updated`` "Back on" to the
+    - Closed or draft -> public, not ended: ``event_updated`` "Back on" to the
       registrants who were sent (or are being sent) its cancellation; urgent like
-      a cancellation: due at once, not held for quiet hours, not capped.
+      a cancellation: due at once, not held for quiet hours, not capped. The other
+      registrants get an ordinary update when its time, place or link moved while
+      it was closed.
     - Public, not ended, a watched field changed: ``event_updated``, held back
       ``DEBOUNCE``.
 
@@ -206,18 +208,19 @@ def event_changed(session: Session, event: Events, before: dict, change_id: str 
     fields = sorted(field for field in WATCHED if before[field] != after[field])
     if not was_public:
         # Back on (also after the start: closed by mistake at 17:59, reopened at 18:00), to those told.
-        return _updated(session, event, change_id, fields, now, back_on=True)
+        return _updated(session, event, change_id, fields, before, now, back_on=True)
     if not fields or (fields == ["meeting_url"] and not after["meeting_url"]):
         return 0  # nothing watched changed, or only the link was taken away
-    return _updated(session, event, change_id, fields, now, back_on=False)
+    return _updated(session, event, change_id, fields, before, now, back_on=False)
 
 
 def _updated(
-    session: Session, event: Events, change_id: str, fields: list[str], now: datetime, *, back_on: bool
+    session: Session, event: Events, change_id: str, fields: list[str], before: dict, now: datetime, *, back_on: bool
 ) -> int:
     registrations = _accepted(session, event.id)
+    old_start = _riyadh(before.get("start_datetime"))
     if not back_on:
-        return _queue_updates(session, event, change_id, registrations, fields, now, back_on=False)
+        return _queue_updates(session, event, change_id, registrations, fields, old_start, now, back_on=False)
     # The ones told it was cancelled, or about to be (a cancellation skipped as event_reopened just
     # means one extra, truthful Back on), hear it is on again.
     cancellations = session.scalars(
@@ -236,12 +239,12 @@ def _updated(
         after = event_state(event)
         fields = sorted(set(fields) | {f for f in WATCHED if f in as_cancelled and as_cancelled[f] != after[f]})
     queued = _queue_updates(
-        session, event, change_id, [(s, m) for s, m in registrations if m in told], fields, now, back_on=True
+        session, event, change_id, [(s, m) for s, m in registrations if m in told], fields, old_start, now, back_on=True
     )
     # The others never heard it was cancelled; what moved while it was closed is an ordinary update to them.
     if fields and not (fields == ["meeting_url"] and not event.meeting_url):
         others = [(s, m) for s, m in registrations if m not in told]
-        queued += _queue_updates(session, event, change_id, others, fields, now, back_on=False)
+        queued += _queue_updates(session, event, change_id, others, fields, old_start, now, back_on=False)
     return queued
 
 
@@ -251,6 +254,7 @@ def _queue_updates(
     change_id: str,
     registrations: list[tuple[int, int]],
     fields: list[str],
+    old_start: datetime | None,
     now: datetime,
     *,
     back_on: bool,
@@ -268,8 +272,12 @@ def _queue_updates(
         return 0
     local_now = clock.to_riyadh(now)
     _, _, starts, _ = _next_day(event, local_now)
-    # Quiet hours hold an ordinary update only when it can wait: its next day starts at 09:00 or later
-    # after the quiet hours end. An event tonight, under way, or early tomorrow is told now.
+    # The start registrants knew counts too: moved at 23:00 from 07:30 to 10:00 tomorrow, they hear it now.
+    if old_start is not None and local_now < old_start < starts:
+        starts = old_start
+    # Quiet hours hold an ordinary update only when it can wait: its next day (or the start it had)
+    # starts at 09:00 or later after the quiet hours end. An event tonight, under way, or early
+    # tomorrow is told now.
     release = clock.after_quiet_hours(now + DEBOUNCE)
     can_wait = clock.to_utc(starts) >= release + QUIET_MARGIN
     return outbox.enqueue(
@@ -292,7 +300,7 @@ def is_back_on(row: PushNotifications) -> bool:
     return row.kind == PushKind.EVENT_UPDATED and bool((row.payload.get("cause") or {}).get("back_on"))
 
 
-def counts_toward_cap(kind: PushKind, payload: dict | None) -> bool:
+def counts_toward_cap(kind: PushKind) -> bool:
     """Whether a push of ``kind`` counts toward (and is held to) the daily cap: never an event_updated."""
     return kind in CAPPED
 
@@ -300,7 +308,9 @@ def counts_toward_cap(kind: PushKind, payload: dict | None) -> bool:
 def _folded(session: Session, row: PushNotifications) -> tuple[bool, set[str]]:
     """What the older rows this one stands for said: whether one was a "Back on", and the fields they changed.
 
-    The older rows are the ones superseded (or about to be) since the last one sent.
+    The older rows are the ones superseded (or about to be) since the last one sent, and the ones
+    skipped because the event was closed or hidden at the time: a link changed just before a close
+    still says "New link to join" in the "Back on".
     """
     same = (
         PushNotifications.kind == row.kind,
@@ -315,7 +325,10 @@ def _folded(session: Session, row: PushNotifications) -> tuple[bool, set[str]]:
         PushNotifications.id < row.id,
         or_(
             PushNotifications.status == PushStatus.PENDING,
-            and_(PushNotifications.status == PushStatus.SKIPPED, PushNotifications.last_error == "superseded"),
+            and_(
+                PushNotifications.status == PushStatus.SKIPPED,
+                PushNotifications.last_error.in_(["superseded", "event_closed", "event_hidden"]),
+            ),
         ),
     )
     if last_sent is not None:
