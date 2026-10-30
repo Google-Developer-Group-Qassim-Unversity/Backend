@@ -117,6 +117,7 @@ def sse_poll_loop(
     initial_last_id: int = 0,
     empty_message: str = "No new logs",
     initial_empty_message: str | None = None,
+    fetch_initial: Callable[[int], Sequence[Any]] | None = None,
 ) -> Iterator[ServerSentEvent]:
     """The long-poll shape shared by the two email-log SSE endpoints below.
 
@@ -124,10 +125,18 @@ def sse_poll_loop(
     for one endpoint's own log shape, returning already-parsed response
     models that expose `.id` and `.model_dump(mode="json")`. This only owns
     the polling itself: a larger initial fetch, then poll-and-sleep forever.
+
+    `fetch_initial(batch_size)`, when given, replaces that first fetch on a
+    fresh connection (no Last-Event-ID). It should return the newest rows in
+    ascending order, so the stream opens on recent history instead of
+    replaying every log from the first one ever sent.
     """
     last_id = initial_last_id
 
-    initial = fetch_batch(last_id, initial_batch_size)
+    if fetch_initial is not None and last_id == 0:
+        initial = fetch_initial(initial_batch_size)
+    else:
+        initial = fetch_batch(last_id, initial_batch_size)
     if not initial:
         yield ServerSentEvent(
             data=json.dumps({"message": initial_empty_message or empty_message}), event="no_logs", id=str(last_id)
@@ -456,7 +465,7 @@ def stream_enriched_email_logs(
     start_date: Annotated[Optional[datetime], Query(description="Filter from date")] = None,
     end_date: Annotated[Optional[datetime], Query(description="Filter to date")] = None,
 ):
-    def fetch_batch(after_id: int, batch_size: int) -> list[EnrichedEmailLog]:
+    def fetch(after_id: int, batch_size: int, *, newest: bool) -> list[EnrichedEmailLog]:
         with db_session() as session:
             rows = email_queries.get_enriched_email_logs(
                 session,
@@ -467,13 +476,17 @@ def stream_enriched_email_logs(
                 end_date=end_date,
                 after_id=after_id,
                 limit=batch_size,
-                order_asc=True,
+                order_asc=not newest,
             )
-            return [EnrichedEmailLog.model_validate(dict(row)) for row in rows]
+            # Newest page comes back newest-first; flip it so the client,
+            # which prepends each log, still ends with the newest on top.
+            ordered = reversed(rows) if newest else rows
+            return [EnrichedEmailLog.model_validate(dict(row)) for row in ordered]
 
     yield from sse_poll_loop(
-        fetch_batch,
-        initial_batch_size=200,
+        lambda after_id, batch_size: fetch(after_id, batch_size, newest=False),
+        fetch_initial=lambda batch_size: fetch(0, batch_size, newest=True),
+        initial_batch_size=100,
         poll_batch_size=50,
         sleep_seconds=1.5,
         initial_last_id=int(last_event_id) if last_event_id else 0,
