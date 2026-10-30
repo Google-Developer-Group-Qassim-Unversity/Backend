@@ -71,7 +71,8 @@ def test_send_blast_job_ses_path_marks_job_failed_when_gateway_errors(db_session
     assert finished is not None
     assert finished.status == EmailJobsStatus.FAILED
     assert finished.succeeded == 0
-    assert finished.failed == 0  # nothing ever entered tracker.recipient() to record a per-recipient failure
+    assert finished.failed == 1
+    assert finished.failures == [{"recipient": seed_refs.sara.email, "error": "BadGateway: 502: gateway is down"}]
 
 
 def test_send_direct_email_job_marks_job_failed_when_body_raises_before_the_loop(db_session, seed_refs, monkeypatch):

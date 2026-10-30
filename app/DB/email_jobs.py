@@ -20,10 +20,23 @@ MAX_ERROR_LENGTH = 2000
 
 
 def create_job(
-    session: Session, job_type: EmailJobsType, created_by: int, total: int, event_id: int | None = None
+    session: Session,
+    job_type: EmailJobsType,
+    created_by: int,
+    total: int,
+    event_id: int | None = None,
+    subject: str | None = None,
 ) -> EmailJobs:
     job = EmailJobs(
-        job_type=job_type, status=EmailJobsStatus.QUEUED, created_by=created_by, event_id=event_id, total=total
+        job_type=job_type,
+        status=EmailJobsStatus.QUEUED,
+        created_by=created_by,
+        event_id=event_id,
+        total=total,
+        subject=subject[:255] if subject is not None else None,
+        # App-local like started_at, finished_at and email_logs.sent_at. The
+        # column's CURRENT_TIMESTAMP default is the database's UTC clock.
+        created_at=datetime.now(),
     )
     session.add(job)
     session.commit()
@@ -48,12 +61,18 @@ def record_success(session: Session, job_id: int, count: int = 1) -> None:
     session.commit()
 
 
-def record_failure(session: Session, job_id: int, error: str) -> None:
+def record_failure(session: Session, job_id: int, error: str, recipients: list[str] | None = None) -> None:
     job = session.get(EmailJobs, job_id)
     if job is None:
         return
-    job.failed += 1
+    job.failed += len(recipients) if recipients is not None else 1
     job.error = error[:MAX_ERROR_LENGTH]
+    failures = list(job.failures or [])
+    for recipient in recipients if recipients is not None else [""]:
+        if len(failures) >= 500:
+            break
+        failures.append({"recipient": recipient, "error": job.error})
+    job.failures = failures
     session.commit()
 
 
