@@ -137,11 +137,15 @@ def backfill(connection: Connection) -> None:
 
 
 def upgrade() -> None:
-    op.add_column("email_logs", sa.Column("job_id", mysql.INTEGER(unsigned=True), nullable=True))
-    op.create_index("ix_email_logs_job_id", "email_logs", ["job_id"])
-    op.create_foreign_key("fk_email_logs_job", "email_logs", "email_jobs", ["job_id"], ["id"], ondelete="SET NULL")
-    op.add_column("email_jobs", sa.Column("subject", sa.String(255), nullable=True))
-    op.add_column("email_jobs", sa.Column("failures", sa.JSON(), nullable=True))
+    bind = op.get_bind()
+    # MySQL commits DDL immediately, so a failed backfill rolls back but leaves
+    # these columns behind. Skip them when the upgrade is run again.
+    if "failures" not in {column["name"] for column in sa.inspect(bind).get_columns("email_jobs")}:
+        op.add_column("email_logs", sa.Column("job_id", mysql.INTEGER(unsigned=True), nullable=True))
+        op.create_index("ix_email_logs_job_id", "email_logs", ["job_id"])
+        op.create_foreign_key("fk_email_logs_job", "email_logs", "email_jobs", ["job_id"], ["id"], ondelete="SET NULL")
+        op.add_column("email_jobs", sa.Column("subject", sa.String(255), nullable=True))
+        op.add_column("email_jobs", sa.Column("failures", sa.JSON(), nullable=True))
     op.alter_column(
         "email_logs",
         "email_type",
@@ -156,7 +160,7 @@ def upgrade() -> None:
         type_=sa.Enum(*JOB_TYPES, "team-notification"),
         nullable=False,
     )
-    backfill(op.get_bind())
+    backfill(bind)
 
 
 def downgrade() -> None:
