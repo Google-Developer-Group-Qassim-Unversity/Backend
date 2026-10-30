@@ -134,6 +134,7 @@ class EmailJobsType(str, enum.Enum):
     DIRECT_EMAIL = "direct-email"
     BLAST = "blast"
     ACCEPTANCE = "acceptance"
+    TEAM_NOTIFICATION = "team-notification"
 
 
 class FormsSubmissionsFormType(str, enum.Enum):
@@ -192,6 +193,7 @@ class EmailLogsEmailType(str, enum.Enum):
     ACCEPTANCE = "acceptance"
     BLAST = "blast"
     DIRECT = "direct"
+    TEAM_NOTIFICATION = "team-notification"
 
 
 class OpenEventsStatus(str, enum.Enum):
@@ -801,12 +803,15 @@ class EmailLogs(Base):
         ForeignKeyConstraint(
             ["sent_by"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_email_logs_sent_by"
         ),
+        ForeignKeyConstraint(["job_id"], ["email_jobs.id"], ondelete="SET NULL", name="fk_email_logs_job"),
+        Index("ix_email_logs_job_id", "job_id"),
         Index("fk_email_logs_member", "member_id"),
         Index("fk_email_logs_event", "event_id"),
         Index("fk_email_logs_sent_by", "sent_by"),
     )
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    job_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     member_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     from_address: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -861,6 +866,8 @@ class EmailJobs(Base):
     succeeded: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, server_default=text("'0'"))
     failed: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, server_default=text("'0'"))
     error: Mapped[Optional[str]] = mapped_column(TEXT)
+    subject: Mapped[Optional[str]] = mapped_column(String(255))
+    failures: Mapped[Optional[list[dict[str, str]]]] = mapped_column(JSON)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )

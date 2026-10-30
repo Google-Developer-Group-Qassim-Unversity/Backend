@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from sqlalchemy import select
 
-from app.DB.schema import EmailJobs, EmailJobsStatus
+from app.DB.schema import EmailJobs, EmailJobsStatus, EmailJobsType, EmailLogs, EmailLogsEmailType
 from tests.pipeline_support import book_complete, submit
 
 
@@ -37,20 +37,25 @@ def test_submitting_emails_every_member_of_design_and_logistics(pipeline, world)
 
     jobs = pipeline.session.scalars(select(EmailJobs).where(EmailJobs.created_by == world["admin"].id)).all()
     assert sorted(j.total for j in jobs) == [1, 2]
+    assert all(j.job_type == EmailJobsType.TEAM_NOTIFICATION and j.subject for j in jobs)
 
 
 def test_the_email_job_records_its_outcome(pipeline, world):
     from app.DB import email_jobs as job_queries
-    from app.DB.schema import EmailJobsType
     from app.services.pipeline_notifications import PendingEmail, send_pipeline_email_job
 
-    job = job_queries.create_job(pipeline.session, EmailJobsType.BLAST, world["admin"].id, total=1)
+    job = job_queries.create_job(
+        pipeline.session, EmailJobsType.TEAM_NOTIFICATION, world["admin"].id, total=1, subject="s"
+    )
     pending = PendingEmail(emails=["a@example.com"], subject="s", html="<p>x</p>", sent_by_id=world["admin"].id)
     asyncio.run(send_pipeline_email_job(pending, job.id))
 
     pipeline.session.expire_all()
     finished = job_queries.get_job(pipeline.session, job.id)
     assert finished is not None and finished.status == EmailJobsStatus.SUCCEEDED
+    logs = pipeline.session.scalars(select(EmailLogs).where(EmailLogs.job_id == job.id)).all()
+    assert len(logs) == 1
+    assert logs[0].email_type == EmailLogsEmailType.TEAM_NOTIFICATION
     assert pipeline.outbound.one("/blasts").params.get_list("emails") == ["a@example.com"]
 
 

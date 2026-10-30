@@ -186,7 +186,13 @@ def sweep_once() -> SweepResult | None:
         result = run_sweep(session)
         session.commit()
         for email in result.emails:
-            job = job_queries.create_job(session, EmailJobsType.BLAST, email.sent_by_id, total=len(email.emails))
+            job = job_queries.create_job(
+                session,
+                EmailJobsType.TEAM_NOTIFICATION,
+                email.sent_by_id,
+                total=len(email.emails),
+                subject=email.subject,
+            )
             email.data["job_id"] = job.id
         session.commit()
     # Outside the sweep's session: each sync has its own, and talks to Notion or Google.

@@ -19,6 +19,9 @@ from app.config import config
 from app.helpers import CurrentMember
 from app.routers.responses import MessageResponse
 from app.routers.email_models import (
+    SendDetail,
+    SendFilter,
+    SendsPage,
     EmailJobModel,
     AcceptanceQueuedResponse,
     BlastEligibleCountResponse,
@@ -51,6 +54,7 @@ from app.services.email_capacity import (
     get_from_address,
     get_total_remaining_send_capacity,
 )
+from app.DB import email_sends as send_queries
 from app.DB import email_jobs as job_queries
 from app.DB.schema import EmailJobsStatus, EmailJobsType
 from app.services.email_recipients import _resolve_member, resolve_ad_hoc_recipients
@@ -211,7 +215,11 @@ def send_manual_certificate(
 ):
 
     job = job_queries.create_job(
-        session, EmailJobsType.MANUAL_CERTIFICATE, requesting_member.id, total=len(request.members)
+        session,
+        EmailJobsType.MANUAL_CERTIFICATE,
+        requesting_member.id,
+        total=len(request.members),
+        event_id=request.event_id,
     )
     background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id, job.id)
     background_tasks.add_task(push_delivery.kick)
@@ -240,7 +248,12 @@ def send_custom_email(
     event = events_queries.get_event_by_id(session, event_id)
     simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
     job = job_queries.create_job(
-        session, EmailJobsType.CUSTOM_EMAIL, requesting_member.id, total=len(request.members), event_id=event_id
+        session,
+        EmailJobsType.CUSTOM_EMAIL,
+        requesting_member.id,
+        total=len(request.members),
+        event_id=event_id,
+        subject=request.subject,
     )
     background_tasks.add_task(
         send_custom_email_job, request.model_copy(deep=True), simple_event, event_id, requesting_member.id, job.id
@@ -319,7 +332,9 @@ def send_direct_email(
 
     from_address = get_from_address() if request.provider == EmailProvider.GOOGLE else None
 
-    job = job_queries.create_job(session, EmailJobsType.DIRECT_EMAIL, requesting_member.id, total=len(recipient_list))
+    job = job_queries.create_job(
+        session, EmailJobsType.DIRECT_EMAIL, requesting_member.id, total=len(recipient_list), subject=request.subject
+    )
     background_tasks.add_task(
         send_direct_email_job, recipient_list, requesting_member.id, request.provider, from_address, request, job.id
     )
@@ -636,7 +651,12 @@ async def send_acceptance_blasts(
         releases the claim if the send fails.
         """
         job = job_queries.create_job(
-            session, EmailJobsType.ACCEPTANCE, requesting_member.id, total=len(emails), event_id=event.id
+            session,
+            EmailJobsType.ACCEPTANCE,
+            requesting_member.id,
+            total=len(emails),
+            event_id=event.id,
+            subject=subject,
         )
         submissions_queries.mark_submissions_as_invited(session, submission_ids)
         # The app's "registration accepted" push, for members who have the app (docs/PUSH.md).
@@ -746,7 +766,9 @@ def send_blast(
     recipients = list(all_recipients.values())
     logger.info(f"Queuing blast to [{len(recipients)}] total recipients")
 
-    job = job_queries.create_job(session, EmailJobsType.BLAST, requesting_member.id, total=len(recipients))
+    job = job_queries.create_job(
+        session, EmailJobsType.BLAST, requesting_member.id, total=len(recipients), subject=request.subject
+    )
     background_tasks.add_task(
         send_blast_job, recipients, guaranteed_list, request.count, requesting_member.id, request, job.id
     )
@@ -918,3 +940,20 @@ def get_email_job(job_id: int, session: DB):
 
 
 # endregion
+
+
+@router.get("/sends", dependencies=[Depends(Require(Perm.EMAILS_LOGS))], response_model=SendsPage)  # noqa: FAST001
+def list_email_sends(
+    session: DB,
+    kind: SendFilter | None = None,
+    member_id: Annotated[int | None, Query(gt=0)] = None,
+    email: str | None = None,
+    before: Annotated[int | None, Query(gt=0)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+) -> SendsPage:
+    return send_queries.get_sends(session, kind=kind, member_id=member_id, email=email, before=before, limit=limit)
+
+
+@router.get("/sends/{id:int}", dependencies=[Depends(Require(Perm.EMAILS_LOGS))], response_model=SendDetail)  # noqa: FAST001
+def get_email_send(id: int, session: DB) -> SendDetail:
+    return send_queries.get_send(session, id)

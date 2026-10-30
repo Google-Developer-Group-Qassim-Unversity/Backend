@@ -239,23 +239,33 @@ def department_email(
 async def send_pipeline_email_job(pending: PendingEmail, job_id: int | None = None) -> None:
     with job_boundary(job_id, EMAIL_JOB_QUERIES) as (tracker, session):
         from_address = get_from_address()
-        await call_blast_api(
-            pending.emails,
-            pending.subject,
-            pending.html,
-            EmailProvider.GOOGLE,
-            from_address,
-            None,
-            [],
-            on_behalf_of=pending.sent_by_id if pending.clicked else None,
-        )
+        try:
+            await call_blast_api(
+                pending.emails,
+                pending.subject,
+                pending.html,
+                EmailProvider.GOOGLE,
+                from_address,
+                None,
+                [],
+                on_behalf_of=pending.sent_by_id if pending.clicked else None,
+            )
+        except Exception as exc:
+            tracker.failure(f"{type(exc).__name__}: {exc}", pending.emails)
+            raise
         email_queries.create_email_log(
             session,
+            job_id=job_id,
             sent_by=pending.sent_by_id,
             from_address=from_address.value,
-            email_type=EmailLogsEmailType.BLAST,
+            email_type=EmailLogsEmailType.TEAM_NOTIFICATION,
             recipient_count=len(pending.emails),
-            data={"subject": pending.subject, "recipients": pending.emails, **pending.data},
+            data={
+                "subject": pending.subject,
+                "html_content": pending.html,
+                "recipients": pending.emails,
+                **pending.data,
+            },
         )
         session.commit()
         tracker.success(len(pending.emails))
@@ -271,7 +281,13 @@ def send_after_commit(session: Session, background_tasks: BackgroundTasks, pendi
         if email is None:
             continue
         try:
-            job = job_queries.create_job(session, EmailJobsType.BLAST, email.sent_by_id, total=len(email.emails))
+            job = job_queries.create_job(
+                session,
+                EmailJobsType.TEAM_NOTIFICATION,
+                email.sent_by_id,
+                total=len(email.emails),
+                subject=email.subject,
+            )
             session.commit()
             background_tasks.add_task(send_pipeline_email_job, email, job.id)
         except Exception:

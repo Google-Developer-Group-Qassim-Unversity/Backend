@@ -1,6 +1,6 @@
 """Request and response shapes for the email endpoints.
 
-Moved out of app/routers/emails.py, which was 1,479 lines. Unchanged otherwise.
+Includes the outbox list and detail contract used by the Mail page.
 """
 
 from datetime import datetime
@@ -294,3 +294,73 @@ class EmailJobModel(BaseModel):
     finished_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+SendKind = Literal[
+    "campaign", "event-certificate", "manual-certificate", "acceptance", "event-message", "direct", "team-notification"
+]
+SendFilter = Literal["campaign", "certificate", "acceptance", "event-message", "direct", "team-notification"]
+
+
+class SendEvent(BaseModel):
+    id: int
+    name: str
+
+
+class SendSender(BaseModel):
+    id: int
+    name: str
+
+
+class SendFromAddress(BaseModel):
+    address: str
+    count: int
+
+
+class Send(BaseModel):
+    id: int
+    kind: SendKind
+    status: EmailJobsStatus
+    subject: str | None
+    event: SendEvent | None
+    sender: SendSender
+    total: int
+    succeeded: int
+    failed: int
+    created_at: datetime
+    finished_at: datetime | None
+    from_addresses: list[SendFromAddress]
+
+
+class SendsPage(BaseModel):
+    items: list[Send]
+    next_before: int | None
+
+
+class SendRecipient(BaseModel):
+    name: str | None
+    email: str
+    member_id: int | None
+
+
+class SendFailure(BaseModel):
+    recipient: str
+    error: str
+
+
+class SendAttachment(BaseModel):
+    filename: str
+    url: str
+
+
+class SendContent(BaseModel):
+    subject: str | None
+    preview_text: str | None
+    html_content: str | None
+    attachments: list[SendAttachment]
+
+
+class SendDetail(Send):
+    recipients: list[SendRecipient]
+    failures: list[SendFailure]
+    content: SendContent | None
