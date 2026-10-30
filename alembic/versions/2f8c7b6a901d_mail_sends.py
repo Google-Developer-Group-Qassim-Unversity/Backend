@@ -61,6 +61,9 @@ def backfill(connection: Connection) -> None:
         candidates = list(jobs.get((job_type, log.event_id, log.sent_by), []))
         if job_type == "team-notification":
             candidates += jobs.get(("blast", log.event_id, log.sent_by), [])
+        elif job_type == "manual-certificate" and log.event_id is not None:
+            # These jobs never stored the event their logs carry.
+            candidates += jobs.get((job_type, None, log.sent_by), [])
         matching = [
             job
             for job in candidates
@@ -121,6 +124,14 @@ def backfill(connection: Connection) -> None:
             FROM email_logs WHERE job_id IS NOT NULL GROUP BY job_id
         ) l ON l.job_id = j.id
         SET j.subject = LEFT(l.subject, 255) WHERE j.subject IS NULL
+    """)
+    )
+    connection.execute(
+        sa.text("""
+        UPDATE email_jobs j JOIN (
+            SELECT job_id, MIN(event_id) AS event_id FROM email_logs WHERE job_id IS NOT NULL GROUP BY job_id
+        ) l ON l.job_id = j.id
+        SET j.event_id = l.event_id WHERE j.event_id IS NULL AND l.event_id IS NOT NULL
     """)
     )
 

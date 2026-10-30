@@ -9,7 +9,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.DB import email_jobs as jobs
-from app.DB.schema import EmailJobs, EmailJobsStatus, EmailJobsType, EmailLogs, EmailLogsEmailType
+from app.DB.semesters import get_semester_by_hijri_code
+from app.DB.schema import EmailJobs, EmailJobsStatus, EmailJobsType, EmailLogs, EmailLogsEmailType, Events
+from tests.factories import make_event
 
 MIGRATION = Path(__file__).parents[1] / "alembic/versions/2f8c7b6a901d_mail_sends.py"
 
@@ -74,6 +76,21 @@ def test_utc_created_at_is_normalised_before_logs_are_linked(db_session: Session
     assert earlier.job_id is not None and earlier.job_id != campaign.id
     history = db_session.get(EmailJobs, earlier.job_id)
     assert history is not None and history.created_at == earlier.sent_at
+
+
+def test_manual_certificate_job_gets_the_event_its_log_carries(db_session: Session, seed_refs: Any) -> None:
+    sender = seed_refs.ahmed.id
+    moment = datetime(2026, 10, 13, 14, 9, 8)
+    job = _old_job(db_session, sender, EmailJobsType.MANUAL_CERTIFICATE, moment, moment, moment)
+    event = Events(**make_event(semester_id=get_semester_by_hijri_code(db_session, 475).id))
+    db_session.add(event)
+    db_session.commit()
+    log = _old_log(db_session, sender, EmailLogsEmailType.MANUAL_CERTIFICATE, moment, event_id=event.id)
+
+    _backfill(db_session)
+
+    assert log.job_id == job.id
+    assert job.event_id == event.id
 
 
 def test_backfill_can_run_twice(db_session: Session, seed_refs: Any) -> None:
