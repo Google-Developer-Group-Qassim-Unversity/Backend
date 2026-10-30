@@ -26,11 +26,15 @@ JOB_TYPE_FOR_LOG = {"event_announcement": "custom-email", "direct": "direct-emai
 def backfill(connection: Connection) -> None:
     """Only unlinked logs create jobs, so rerunning never duplicates a send.
 
-    Read log metadata rather than the potentially large message bodies. Job
-    timestamps historically mixed UTC creation with local finish times. Use
-    the specified time window as stored, with the closest finish as the
-    deterministic tie breaker for overlapping notification jobs.
+    Read log metadata rather than the potentially large message bodies.
+    created_at used to be the database's UTC clock while every other timestamp
+    is app-local, so normalise it before matching or the link window opens 3h
+    early. started_at is the same moment on the right clock, queue delay is
+    negligible. A job that never started has no local time to copy and no logs
+    to link, so it keeps its value. The closest finish is the deterministic tie
+    breaker for overlapping jobs.
     """
+    connection.execute(sa.text("UPDATE email_jobs SET created_at = started_at WHERE started_at IS NOT NULL"))
     connection.execute(
         sa.text("""
         UPDATE email_logs SET email_type = 'team-notification'
@@ -146,7 +150,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Preserve historical jobs and logs. Re-upgrading can relink these jobs,
-    # including synthesized history, without creating duplicate sends.
+    # including synthesized history, without creating duplicate sends. The
+    # original UTC created_at values are not restored: the local ones sort better.
     op.execute("UPDATE email_logs SET email_type = 'blast' WHERE email_type = 'team-notification'")
     op.execute("UPDATE email_jobs SET job_type = 'blast' WHERE job_type = 'team-notification'")
     op.alter_column(

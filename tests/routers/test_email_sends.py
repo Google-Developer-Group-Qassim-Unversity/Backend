@@ -60,6 +60,23 @@ def _log(session: Session, job: EmailJobs, data: dict[str, Any], **kwargs: Any) 
     )
 
 
+def test_job_timestamps_all_come_from_the_app_clock(db_session: Session, seed_refs: Any, monkeypatch: Any) -> None:
+    """created_at used to be the database's UTC clock, 3h behind the rest of the row."""
+    local = datetime(2026, 1, 2, 16, 34, 49)
+
+    class AppClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> "AppClock":
+            return cls(2026, 1, 2, 16, 34, 49)
+
+    monkeypatch.setattr(jobs, "datetime", AppClock)
+    job = _job(db_session, seed_refs.ahmed.id)
+    jobs.mark_running(db_session, job.id)
+    jobs.finish(db_session, job.id)
+    db_session.refresh(job)
+    assert (job.created_at, job.started_at, job.finished_at) == (local, local, local)
+
+
 def test_page_groups_logs_excludes_team_and_uses_one_query(
     admin_client: TestClient, db_session: Session, seed_refs: Any
 ) -> None:

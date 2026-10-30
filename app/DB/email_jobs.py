@@ -34,6 +34,9 @@ def create_job(
         event_id=event_id,
         total=total,
         subject=subject[:255] if subject is not None else None,
+        # App-local like started_at, finished_at and email_logs.sent_at. The
+        # column's CURRENT_TIMESTAMP default is the database's UTC clock.
+        created_at=datetime.now(),
     )
     session.add(job)
     session.commit()
