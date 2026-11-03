@@ -336,3 +336,30 @@ def test_create_member_does_not_fold_already_claimed_email(clerk_client: TestCli
     response = clerk_client.post("/members/")
     assert response.status_code == 409
     assert "email" in response.json()["detail"].lower()
+
+
+def test_create_member_refuses_a_second_record_for_the_same_phone_number(clerk_client: TestClient, db_session):
+    """The same person signing up again under another account: nothing proven matches, but the phone does.
+
+    The phone is typed, so it must not link the sign-in to the record either; the row stays its owner's.
+    """
+    first = Members(
+        name="First Account",
+        email="first@icloud.com",
+        phone_number="501234567",
+        uni_id="999999995",
+        gender=MembersGender.MALE,
+        is_authenticated=True,
+        clerk_user_id="user_first_account",
+    )
+    db_session.add(first)
+    db_session.commit()
+
+    response = clerk_client.post("/members/")
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "member_exists"
+    db_session.expire_all()
+    assert db_session.query(Members).filter(Members.clerk_user_id == "clerk_test_member_sub").count() == 0
+    db_session.refresh(first)
+    assert first.clerk_user_id == "user_first_account"

@@ -236,7 +236,7 @@ def seed_core_data(engine):
                 Members(
                     name="Ahmed Ali",
                     email="ahmed@example.com",
-                    phone_number="0501234567",
+                    phone_number="0501112233",
                     uni_id="111111111",
                     gender=MembersGender.MALE,
                     uni_level=4,
