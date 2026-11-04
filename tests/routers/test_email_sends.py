@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import event, select
@@ -12,7 +13,19 @@ from fastapi import BackgroundTasks
 
 from app.DB import email_jobs as jobs
 from app.DB import emails
-from app.DB.schema import EmailJobs, EmailJobsType, EmailLogs, EmailLogsEmailType, EmailLogsFromAddress, EmailProvider
+from app.DB.schema import (
+    EmailJobs,
+    EmailJobsType,
+    EmailLogs,
+    EmailLogsEmailType,
+    EmailLogsFromAddress,
+    EmailProvider,
+    Events,
+    EventsLocationType,
+    EventsStatus,
+    MembersGender,
+)
+from app.exceptions import BadGateway, GatewayTimeout, ServiceUnavailable
 from app.routers import emails as routes
 from app.routers.email_models import (
     BlastSendRequest,
@@ -24,8 +37,11 @@ from app.routers.email_models import (
     SimpleEvent,
     SimpleMember,
     CertificateLanguage,
+    CertificateFormat,
 )
 from app.services import email_jobs
+from app.services.email_capacity import format_event_date
+from tests.utils import semester_id_on
 
 SEND_KEYS = {
     "id",
@@ -48,13 +64,20 @@ def _job(session: Session, sender: int, kind: EmailJobsType = EmailJobsType.BLAS
     return job
 
 
-def _log(session: Session, job: EmailJobs, data: dict[str, Any], **kwargs: Any) -> EmailLogs:
+def _log(
+    session: Session,
+    job: EmailJobs,
+    data: dict[str, Any],
+    *,
+    email_type: EmailLogsEmailType = EmailLogsEmailType.BLAST,
+    **kwargs: Any,
+) -> EmailLogs:
     return emails.create_email_log(
         session,
         job_id=job.id,
         sent_by=job.created_by,
         from_address="sender@example.com",
-        email_type=EmailLogsEmailType.BLAST,
+        email_type=email_type,
         data=data,
         **kwargs,
     )
@@ -298,6 +321,185 @@ def test_failure_history_appends_and_caps_without_losing_counts(db_session: Sess
 def test_outbox_requires_auth(client: TestClient) -> None:
     assert client.get("/emails/sends").status_code == 403
     assert client.get("/emails/sends/1").status_code == 403
+    assert client.get("/emails/sends/1/certificate-sample").status_code == 403
+
+
+@pytest.fixture
+def certificate_gateway(monkeypatch: pytest.MonkeyPatch) -> Mock:
+    gateway = Mock(return_value="https://example.com/certificate.png")
+    monkeypatch.setattr(routes, "call_certificate_download", gateway)
+    return gateway
+
+
+@pytest.fixture
+def certificate_event(db_session: Session) -> Events:
+    event = Events(
+        name="Current event name",
+        location_type=EventsLocationType.ONLINE,
+        location="Online",
+        start_datetime=datetime(2026, 6, 29, 18),
+        end_datetime=datetime(2026, 6, 30, 18),
+        semester_id=semester_id_on(db_session, "2026-06-30"),
+        status=EventsStatus.OPEN,
+        is_official=0,
+    )
+    db_session.add(event)
+    db_session.flush()
+    return event
+
+
+@pytest.mark.parametrize("snapshot", [True, False])
+def test_event_certificate_sample(
+    admin_client: TestClient,
+    db_session: Session,
+    seed_refs: Any,
+    certificate_event: Events,
+    certificate_gateway: Mock,
+    snapshot: bool,
+) -> None:
+    job = _job(db_session, seed_refs.ahmed.id, EmailJobsType.EVENT_CERTIFICATE, event_id=certificate_event.id)
+    sent_member = {"name": "Sent name", "email": "sent@example.com", "gender": "Male"}
+    sent_event = {"name": "Sent event name", "date": "2026-05-20 - 2026-05-21", "official": True}
+    _log(
+        db_session,
+        job,
+        {"member": sent_member, "event": sent_event} if snapshot else {},
+        email_type=EmailLogsEmailType.EVENT_CERTIFICATE,
+        member_id=seed_refs.sara.id,
+        event_id=certificate_event.id,
+    )
+    jobs.record_failure(db_session, job.id, "Rejected", ["failed@example.com"])
+    db_session.commit()
+
+    response = admin_client.get(f"/emails/sends/{job.id}/certificate-sample")
+    assert response.status_code == 200, response.text
+    certificate_gateway.assert_called_once()
+    request = certificate_gateway.call_args.args[0]
+    assert request.language == CertificateLanguage.ARABIC
+    assert request.format == CertificateFormat.PNG
+    expected_member = (
+        sent_member
+        if snapshot
+        else {"name": seed_refs.sara.name, "email": seed_refs.sara.email, "gender": seed_refs.sara.gender.value}
+    )
+    expected_event = (
+        sent_event
+        if snapshot
+        else {"name": certificate_event.name, "date": format_event_date(certificate_event), "official": False}
+    )
+    assert request.member.model_dump(mode="json") == expected_member
+    assert request.event.model_dump(mode="json") == expected_event
+    assert response.json() == {
+        "recipient": {
+            "name": expected_member["name"],
+            "email": expected_member["email"],
+            "member_id": seed_refs.sara.id,
+        },
+        "subject": f"شهادة حضور {expected_event['name']}",
+        "event_name": expected_event["name"],
+        "image_url": certificate_gateway.return_value,
+    }
+
+
+@pytest.mark.parametrize("linked_member", [True, False])
+def test_manual_certificate_sample_uses_logged_ad_hoc_event(
+    admin_client: TestClient, db_session: Session, seed_refs: Any, certificate_gateway: Mock, linked_member: bool
+) -> None:
+    job = _job(db_session, seed_refs.ahmed.id, EmailJobsType.MANUAL_CERTIFICATE)
+    member_id = seed_refs.sara.id if linked_member else None
+    member = {"name": "Manual name", "email": "manual@example.com", "gender": MembersGender.MALE.value}
+    sent_event = {"name": "ورشة يدوية", "date": "2026-10-30", "official": True}
+    _log(
+        db_session,
+        job,
+        {"member": member, "event": sent_event},
+        email_type=EmailLogsEmailType.MANUAL_CERTIFICATE,
+        member_id=member_id,
+    )
+    db_session.commit()
+    certificate_gateway.return_value = {"url": "https://example.com/manual.png"}
+
+    response = admin_client.get(f"/emails/sends/{job.id}/certificate-sample")
+    assert response.status_code == 200, response.text
+    certificate_gateway.assert_called_once()
+    request = certificate_gateway.call_args.args[0]
+    assert request.model_dump(mode="json") == {"language": "ar", "format": "png", "member": member, "event": sent_event}
+    assert response.json() == {
+        "recipient": {"name": member["name"], "email": member["email"], "member_id": member_id},
+        "subject": "شهادة حضور ورشة يدوية",
+        "event_name": "ورشة يدوية",
+        "image_url": "https://example.com/manual.png",
+    }
+
+
+@pytest.mark.parametrize("kind", [EmailJobsType.EVENT_CERTIFICATE, EmailJobsType.MANUAL_CERTIFICATE])
+def test_certificate_sample_rejects_sends_without_successful_recipients(
+    admin_client: TestClient, db_session: Session, seed_refs: Any, certificate_gateway: Mock, kind: EmailJobsType
+) -> None:
+    job = _job(db_session, seed_refs.ahmed.id, kind)
+    jobs.record_failure(db_session, job.id, "Rejected", ["failed@example.com"])
+    # Neither another send's successful log nor an unrelated message log qualifies.
+    other = _job(db_session, seed_refs.ahmed.id, kind)
+    _log(db_session, other, {}, email_type=EmailLogsEmailType(kind.value))
+    _log(db_session, job, {})
+    db_session.commit()
+    response = admin_client.get(f"/emails/sends/{job.id}/certificate-sample")
+    assert response.status_code == 422, response.text
+    certificate_gateway.assert_not_called()
+
+
+def test_certificate_sample_rejects_wrong_kind_and_missing_send(
+    admin_client: TestClient, db_session: Session, seed_refs: Any, certificate_gateway: Mock
+) -> None:
+    job = _job(db_session, seed_refs.ahmed.id)
+    db_session.commit()
+    assert admin_client.get(f"/emails/sends/{job.id}/certificate-sample").status_code == 422
+    assert admin_client.get("/emails/sends/999999999/certificate-sample").status_code == 404
+    certificate_gateway.assert_not_called()
+
+
+def test_certificate_sample_requires_logs_permission(clerk_client: TestClient, certificate_gateway: Mock) -> None:
+    from app.main import app
+    from app.services.permissions.dependencies import get_access
+    from tests.access_doubles import StaffEverywhere
+
+    app.dependency_overrides[get_access] = lambda: StaffEverywhere()
+    try:
+        response = clerk_client.get("/emails/sends/1/certificate-sample")
+    finally:
+        app.dependency_overrides.pop(get_access, None)
+    assert response.status_code == 403, response.text
+    assert response.json()["code"] == "permission_denied"
+    assert "emails.logs" in response.json()["detail"]
+    certificate_gateway.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error_type, status_code", [(BadGateway, 502), (ServiceUnavailable, 503), (GatewayTimeout, 504)]
+)
+def test_certificate_sample_preserves_gateway_errors(
+    admin_client: TestClient,
+    db_session: Session,
+    seed_refs: Any,
+    certificate_gateway: Mock,
+    error_type: Any,
+    status_code: int,
+) -> None:
+    job = _job(db_session, seed_refs.ahmed.id, EmailJobsType.MANUAL_CERTIFICATE)
+    _log(
+        db_session,
+        job,
+        {
+            "member": {"name": "Name", "email": "name@example.com", "gender": "Female"},
+            "event": {"name": "Event", "date": "2026-10-30", "official": False},
+        },
+        email_type=EmailLogsEmailType.MANUAL_CERTIFICATE,
+    )
+    db_session.commit()
+    certificate_gateway.side_effect = error_type(detail="Generation failed")
+    response = admin_client.get(f"/emails/sends/{job.id}/certificate-sample")
+    assert response.status_code == status_code, response.text
+    assert response.json() == {"detail": "Generation failed"}
 
 
 @pytest.mark.parametrize("kind", ["manual", "custom"])

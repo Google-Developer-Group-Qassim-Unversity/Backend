@@ -343,6 +343,13 @@ class SendRecipient(BaseModel):
     member_id: int | None
 
 
+class CertificateSample(BaseModel):
+    recipient: SendRecipient
+    subject: str
+    event_name: str
+    image_url: str
+
+
 class SendFailure(BaseModel):
     recipient: str
     error: str

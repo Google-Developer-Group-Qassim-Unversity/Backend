@@ -19,8 +19,10 @@ from app.config import config
 from app.helpers import CurrentMember
 from app.routers.responses import MessageResponse
 from app.routers.email_models import (
+    CertificateSample,
     SendDetail,
     SendFilter,
+    SendRecipient,
     SendsPage,
     EmailJobModel,
     AcceptanceQueuedResponse,
@@ -73,7 +75,7 @@ from app.services.email_gateway import (
     call_custom_email_api,
 )
 
-from app.exceptions import NotFound, EmptyBody
+from app.exceptions import BadGateway, NotFound, EmptyBody
 from collections.abc import Callable, Iterator, Sequence
 
 import httpx
@@ -957,3 +959,22 @@ def list_email_sends(
 @router.get("/sends/{id:int}", dependencies=[Depends(Require(Perm.EMAILS_LOGS))], response_model=SendDetail)  # noqa: FAST001
 def get_email_send(id: int, session: DB) -> SendDetail:
     return send_queries.get_send(session, id)
+
+
+@router.get(
+    "/sends/{id:int}/certificate-sample",
+    dependencies=[Depends(Require(Perm.EMAILS_LOGS))],
+    response_model=CertificateSample,  # noqa: FAST001
+)
+def get_certificate_sample(id: int, session: DB) -> CertificateSample:
+    request, member_id = send_queries.get_certificate_sample_request(session, id)
+    data = call_certificate_download(request)
+    image_url = data if isinstance(data, str) else data.get("url")
+    if not isinstance(image_url, str) or not image_url:
+        raise BadGateway(detail="Certificate generation API returned no image URL")
+    return CertificateSample(
+        recipient=SendRecipient(name=request.member.name, email=request.member.email, member_id=member_id),
+        subject=f"شهادة حضور {request.event.name}",
+        event_name=request.event.name,
+        image_url=image_url,
+    )

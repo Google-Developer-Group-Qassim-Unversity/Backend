@@ -125,6 +125,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /emails/logs/member/{member_id:int}": "emails.logs",
     "GET /emails/sends": "emails.logs",
     "GET /emails/sends/{id:int}": "emails.logs",
+    "GET /emails/sends/{id:int}/certificate-sample": "emails.logs",
     "GET /emails/stats": "emails.logs",
     "GET /emails/stats/dashboard": "admin.access",
     "GET /events/": None,

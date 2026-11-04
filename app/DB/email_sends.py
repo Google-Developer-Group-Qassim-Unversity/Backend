@@ -3,14 +3,19 @@
 from collections import defaultdict
 from typing import Any
 
+from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import JSON, Select, and_, func, or_, select
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm import Session
 
-from app.DB.schema import EmailJobs, EmailJobsType, EmailLogs, Events, Members
+from app.DB.schema import EmailJobs, EmailJobsType, EmailLogs, EmailLogsEmailType, Events, Members
 from app.exceptions import NotFound
 from app.routers.email_models import (
+    CertificateFormat,
+    CertificateGenerationRequest,
+    CertificateLanguage,
     Send,
     SendAttachment,
     SendContent,
@@ -24,6 +29,7 @@ from app.routers.email_models import (
     SendSender,
     SendsPage,
 )
+from app.services.email_capacity import format_event_date
 
 KINDS: dict[EmailJobsType, SendKind] = {
     EmailJobsType.BLAST: "campaign",
@@ -34,6 +40,61 @@ KINDS: dict[EmailJobsType, SendKind] = {
     EmailJobsType.DIRECT_EMAIL: "direct",
     EmailJobsType.TEAM_NOTIFICATION: "team-notification",
 }
+
+
+def get_certificate_sample_request(session: Session, job_id: int) -> tuple[CertificateGenerationRequest, int | None]:
+    job = session.get(EmailJobs, job_id)
+    if job is None:
+        raise NotFound("Email send", job_id)
+    if job.job_type not in (EmailJobsType.EVENT_CERTIFICATE, EmailJobsType.MANUAL_CERTIFICATE):
+        raise HTTPException(status_code=422, detail="Email send is not a certificate send")
+
+    # Certificate jobs write a log only after the gateway succeeds. Failures
+    # live on the job and must never be candidates for a sample.
+    log = session.scalar(
+        select(EmailLogs)
+        .where(
+            EmailLogs.job_id == job_id,
+            EmailLogs.email_type == EmailLogsEmailType(job.job_type.value),
+            EmailLogs.recipient_count > 0,
+        )
+        .order_by(func.rand())
+        .limit(1)
+    )
+    if log is None:
+        raise HTTPException(status_code=422, detail="Email send has no successfully sent certificate recipients")
+
+    data = log.data or {}
+    member_data = dict(data.get("member") or {})
+    event_data = dict(data.get("event") or {})
+    # Prefer the snapshots, including manual sends with no member/event row.
+    # Older logs may need fields filled from their linked rows.
+    if not {"name", "email", "gender"} <= member_data.keys() and log.member_id is not None:
+        member = session.get(Members, log.member_id)
+        if member is not None:
+            member_data = {"name": member.name, "email": member.email, "gender": member.gender, **member_data}
+    event_id = log.event_id if log.event_id is not None else job.event_id
+    if not {"name", "date", "official"} <= event_data.keys() and event_id is not None:
+        event = session.get(Events, event_id)
+        if event is not None:
+            event_data = {
+                "name": event.name,
+                "date": format_event_date(event),
+                "official": bool(event.is_official),
+                **event_data,
+            }
+    try:
+        request = CertificateGenerationRequest.model_validate(
+            {
+                "language": CertificateLanguage.ARABIC,
+                "format": CertificateFormat.PNG,
+                "event": event_data,
+                "member": member_data,
+            }
+        )
+    except ValidationError:
+        raise HTTPException(status_code=422, detail="Certificate recipient or event data is unavailable") from None
+    return request, log.member_id
 
 
 def _send_query() -> Select[Any]:
