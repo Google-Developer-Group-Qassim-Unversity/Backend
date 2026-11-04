@@ -34,7 +34,15 @@ from app.DB import pipeline_teams as team_queries
 from app.DB.schema import Members
 from app.exceptions import PermissionDenied
 from app.semesters import current_semester
-from app.services.permissions.catalogue import CATALOGUE, OFFICER_ROLES, STAFF_BASICS, TEAM_PERMISSIONS, Perm, parse
+from app.services.permissions.catalogue import (
+    SUPER_ADMIN_ONLY,
+    CATALOGUE,
+    OFFICER_ROLES,
+    STAFF_BASICS,
+    TEAM_PERMISSIONS,
+    Perm,
+    parse,
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +68,8 @@ class Access:
         """
         if self.is_super_admin:
             return True
+        if perm in SUPER_ADMIN_ONLY:
+            return False
         if not self.is_staff:
             return False
         if perm in STAFF_BASICS:
@@ -90,6 +100,8 @@ class Access:
         """The departments the caller has ``perm`` for, to filter a list by. ``None`` means every department."""
         if self.is_super_admin:
             return None
+        if perm in SUPER_ADMIN_ONLY:
+            return frozenset()
         return frozenset(d for d, perms in self.held.items() if perm in perms)
 
     def holds(self, perm: Perm, department_id: int | None = None) -> bool:
@@ -107,7 +119,7 @@ class Access:
             return frozenset(Perm)
         if not self.is_staff:
             return frozenset()
-        return STAFF_BASICS.union(*self.held.values())
+        return STAFF_BASICS.union(*self.held.values()) - SUPER_ADMIN_ONLY
 
 
 # Why a department's leader, VP or member holds a permission there.
@@ -171,7 +183,8 @@ def explain_access(session: Session, member: Members | None) -> Explanation:
 
         def add(perms, source: Source) -> None:
             for perm in perms:
-                found.setdefault(perm, set()).add(source)
+                if perm not in SUPER_ADMIN_ONLY:
+                    found.setdefault(perm, set()).add(source)
 
         add(parse(grants.get(department_id, ())), "grant")
         if department_id in officer_of:

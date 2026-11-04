@@ -183,8 +183,12 @@ def test_deleting_a_published_event_takes_everything_with_it(pipeline, world):
     assert penalty.applied_log_id in log_ids
 
     pipeline.sign_in(world["admin"], super_admin=True)
-    # Only a draft can be deleted, and a pipeline event is published open.
-    assert pipeline.client.put(f"/events/{event_id}/status", json={"status": "draft"}).status_code == 200
+    preview = pipeline.client.get(f"/events/{event_id}/deletion-impact")
+    assert preview.status_code == 200, preview.text
+    counts = {row["key"]: row["count"] for row in preview.json()["resources"]}
+    assert counts["event_requests"] == 1
+    assert counts["event_request_tasks"] == 3
+    assert counts["pipeline_penalties"] == 1
     response = pipeline.client.delete(f"/events/{event_id}")
     assert response.status_code == 200, response.text
 

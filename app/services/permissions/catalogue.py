@@ -80,7 +80,7 @@ CATALOGUE: dict[Perm, PermInfo] = {
     Perm.CLUB_STRUCTURE_VIEW: PermInfo("club", "See the club structure", "عرض الهيكل التنظيمي"),
     Perm.EVENTS_CREATE: PermInfo("dept", "Create events", "إنشاء الفعاليات"),
     Perm.EVENTS_EDIT: PermInfo("dept", "Edit events", "تعديل الفعاليات"),
-    Perm.EVENTS_DELETE: PermInfo("dept", "Delete draft events", "حذف مسودات الفعاليات"),
+    Perm.EVENTS_DELETE: PermInfo("club", "Delete events (super admins only)", "حذف الفعاليات (المشرف العام فقط)"),
     Perm.ATTENDANCE_TAKE: PermInfo("dept", "Take attendance", "تسجيل الحضور"),
     Perm.ATTENDANCE_BACKFILL: PermInfo("dept", "Import attendance", "استيراد الحضور"),
     Perm.ATTENDANCE_COPY: PermInfo("club", "Copy attendance between events", "نسخ الحضور بين الفعاليات"),
@@ -138,3 +138,7 @@ def parse(keys) -> frozenset[Perm]:
     """The known permissions among ``keys``; unknown ones (e.g. a removed key still in the database) are dropped."""
     known = {p.value for p in Perm}
     return frozenset(Perm(k) for k in keys if k in known)
+
+
+# Kept as a key for old assignments; it can no longer be assigned or granted.
+SUPER_ADMIN_ONLY = frozenset({Perm.EVENTS_DELETE})
