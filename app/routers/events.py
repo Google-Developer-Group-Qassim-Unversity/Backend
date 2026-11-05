@@ -58,7 +58,8 @@ from app.services.push import delivery as push_delivery
 from app.routers.responses import DetailResponse
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.dependencies import CurrentAccess
-from app.services.permissions.guards import Require
+from app.services.permissions.guards import Require, SuperAdmin
+from app.services import event_deletion
 from app.services.permissions.departments import event_departments
 
 
@@ -400,14 +401,37 @@ def update_event(
         logger.debug("request body: %s", event_data.model_dump(mode="json"))
 
 
+@router.get(
+    "/{event_id:int}/deletion-impact",
+    response_model=event_deletion.EventDeletionImpact,
+    dependencies=[Depends(SuperAdmin)],
+)
+def get_event_deletion_impact(event_id: int, session: DB):
+    event = events_queries.get_event_by_id(session, event_id)
+    return event_deletion.impact(session, event)
+
+
+@router.get(
+    "/{event_id:int}/deletion-impact/{resource}",
+    response_model=event_deletion.DeletionResourcePage,
+    dependencies=[Depends(SuperAdmin)],
+)
+def get_event_deletion_resource(
+    event_id: int,
+    resource: str,
+    session: DB,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    events_queries.get_event_by_id(session, event_id)
+    return event_deletion.resource_page(session, event_id, resource, page, page_size)
+
+
 @router.delete(
     "/{event_id:int}",
     status_code=status.HTTP_200_OK,
-    responses={
-        404: {"model": NotFoundResponse, "description": "Event not found"},
-        400: {"description": "Only draft events can be deleted"},
-    },
-    dependencies=[Depends(Require(Perm.EVENTS_DELETE, event_departments))],
+    responses={404: {"model": NotFoundResponse, "description": "Event not found"}},
+    dependencies=[Depends(SuperAdmin)],
     response_model=DetailResponse,
 )
 def delete_event(event_id: int, session: DB, member: CurrentMember, background_tasks: BackgroundTasks):
@@ -417,10 +441,6 @@ def delete_event(event_id: int, session: DB, member: CurrentMember, background_t
     if not event:
         logger.error(f"HTTP 404: Event [{event_id}] not found")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-
-    if event.status != "draft":
-        logger.error(f"HTTP 400: Cannot delete event [{event_id}] with status [{event.status}]")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only draft events can be deleted")
 
     # A pipeline request that published it goes too, through the foreign key:
     # its tasks, penalty and points, and its days are free again. Its history
@@ -441,6 +461,7 @@ def delete_event(event_id: int, session: DB, member: CurrentMember, background_t
     kept = push_cases.event_deleted(session, event_id)
     events_queries.delete_event(session, event_id)
     session.commit()
+    reset_leaderboard_cache_best_effort()
     pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
     if kept:
         background_tasks.add_task(push_delivery.kick)

@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.services.permissions.catalogue import Perm
+from app.services.permissions.catalogue import SUPER_ADMIN_ONLY, Perm
 from tests.access_support import SHARED
 
 GRANTS = "/permissions/departments/{}/grants"
@@ -138,7 +138,7 @@ def test_the_last_super_admin_stays(club):
 def test_the_catalogue_lists_every_permission_with_labels(club, ai):
     _department, _leader, member = ai
     catalogue = club.sign_in(member).get("/permissions/catalogue").json()
-    assert {row["key"] for row in catalogue} == {p.value for p in Perm}
+    assert {row["key"] for row in catalogue} == {p.value for p in Perm if p not in SUPER_ADMIN_ONLY}
     assert all(row["ar_label"] for row in catalogue)
 
 
@@ -211,3 +211,19 @@ def test_member_access_is_for_super_admins_only(club, ai):
 def test_member_access_for_an_unknown_member_is_404(club):
     admin = club.super_admin(club.person())
     assert club.sign_in(admin).get(MEMBER.format(999_999_999)).status_code == 404
+
+
+def test_event_deletion_cannot_be_assigned_or_granted(club, ai):
+    department, leader, member = ai
+    admin = club.sign_in(club.super_admin(club.person()))
+    assert admin.put("/permissions/shared", json={"permissions": ["events.delete"]}).status_code == 422
+    assert (
+        admin.put(f"/permissions/departments/{department.id}", json={"permissions": ["events.delete"]}).status_code
+        == 422
+    )
+    assert (
+        admin.post(
+            GRANTS.format(department.id), json={"member_id": member.id, "permission": "events.delete"}
+        ).status_code
+        == 422
+    )
