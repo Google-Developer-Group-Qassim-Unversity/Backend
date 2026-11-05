@@ -475,6 +475,17 @@ def test_a_multi_day_move_later_at_night_is_told_now_when_the_old_next_day_canno
     assert row.not_before == ELEVEN_PM + TWO_MINUTES
 
 
+def test_fixing_an_event_stored_ending_before_it_starts_tells_its_registrants(db_session, push_on, frozen):
+    """The create form lets an end before the start through; the edit that fixes it is told like any other."""
+    event = make_event(db_session, start=datetime(2026, 7, 28, 18, 0), end=datetime(2026, 7, 28, 16, 0))
+    member = app_user(db_session)
+    register(db_session, event, member)
+    assert change(db_session, event, end_datetime=datetime(2026, 7, 28, 20, 0)) == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert (row.member_id, row.not_before) == (member.id, frozen.now + TWO_MINUTES)
+    assert row.payload["en"]["body"] == "Jul 28 · 6:00 PM – 8:00 PM · \u2068Hall 60\u2069"
+
+
 def test_a_multi_day_event_says_its_next_day_and_hours(db_session, push_on, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 19, 16, 0), end=datetime(2026, 7, 21, 18, 0))
     register(db_session, event, app_user(db_session))
@@ -790,6 +801,24 @@ def test_reopening_at_night_tells_one_never_told_now_when_the_start_they_knew_ca
     found = {row.member_id: row for row in rows(db_session, PushKind.EVENT_UPDATED)}
     assert found[told.id].not_before == frozen.now  # Back on
     assert found[phoneless.id].not_before == frozen.now + TWO_MINUTES  # not 08:00, after the 07:30 they knew
+
+
+def test_back_on_goes_when_the_event_was_cancelled_ending_before_it_started(db_session, push_on, apns_mock, frozen):
+    """Closed while it ended before it started (the create form lets that through), fixed while closed, reopened:
+    the state it was cancelled in has no days, and the Back on still goes."""
+    event = make_event(db_session, start=datetime(2026, 7, 28, 18, 0), end=datetime(2026, 7, 28, 16, 0))
+    told = app_user(db_session)
+    register(db_session, event, told)
+    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    db_session.commit()
+    assert deliver().sent == 1
+    frozen.advance(minutes=5)
+    assert change(db_session, event, end_datetime=datetime(2026, 7, 28, 20, 0)) == 0  # closed: no push
+    frozen.advance(minutes=5)
+    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    [row] = rows(db_session, PushKind.EVENT_UPDATED)
+    assert (row.member_id, row.not_before) == (told.id, frozen.now)
+    assert row.payload["cause"]["fields"] == ["end_datetime"]
 
 
 def test_deleting_the_draft_right_after_unpublishing_still_sends_the_cancellation(

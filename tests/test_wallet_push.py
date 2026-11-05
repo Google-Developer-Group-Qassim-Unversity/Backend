@@ -6,6 +6,7 @@ tests/routers/test_wallet_passes.py.
 """
 
 import asyncio
+import base64
 import json
 import os
 import ssl
@@ -16,6 +17,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app import wallet_signer
 from app.config import config, reload_settings
 from app.services import wallet_push
 from app.services.push import clock, redact
@@ -202,13 +204,13 @@ def test_sentry_events_lose_the_pass_certificate_and_its_passwords():
     assert "<SSLContext>" in cleaned, "other locals stay"
 
 
-@pytest.mark.parametrize("broken", ["cut short", "not base64"])
+@pytest.mark.parametrize("broken", ["cut short", "not ASCII"])
 def test_a_broken_p12_base64_never_sends_the_certificate_to_sentry(signing_certs, monkeypatch, broken):
-    """APPLE_P12_BASE64 cut short or mangled: the event Sentry would send holds no part of the p12 or its key."""
+    """APPLE_P12_BASE64 cut short, or pasted with typographic quotes (not ASCII, so the decoder refuses it):
+    a clean ValueError, and the event Sentry would send holds no part of the p12 or its key."""
     p12_base64 = config.APPLE_P12_BASE64
     assert p12_base64
-    middle = len(p12_base64) // 2
-    value = p12_base64[:-3] if broken == "cut short" else p12_base64[:middle] + "*" + p12_base64[middle:]
+    value = p12_base64[:-3] if broken == "cut short" else "\u201c" + p12_base64 + "\u201d"
     monkeypatch.setenv("APPLE_P12_BASE64", value)
     reload_settings()
 
@@ -217,5 +219,34 @@ def test_a_broken_p12_base64_never_sends_the_certificate_to_sentry(signing_certs
     cleaned = json.dumps(event, default=str)
     for start in range(0, len(value) - 32, 256):
         assert value[start : start + 32] not in cleaned, f"the p12's characters {start}-{start + 32}"
-    assert [error["type"] for error in event["exception"]["values"]] == ["ValueError"], "not binascii's Error"
+    assert [error["type"] for error in event["exception"]["values"]] == ["ValueError"], "not the decoder's error"
     assert str(raised).startswith("APPLE_P12_BASE64 is not valid base64"), "says which setting, not what it holds"
+
+
+@pytest.mark.parametrize(
+    "pasted", ['"{}"', "{}\n", "wrapped"], ids=["in double quotes", "with a trailing newline", "wrapped at 76 columns"]
+)
+def test_a_p12_base64_pasted_with_quotes_or_line_breaks_still_loads_the_same_p12(signing_certs, monkeypatch, pasted):
+    """Decoded as it always was: characters that are not base64 are skipped, so a value that worked keeps working."""
+    p12_base64 = config.APPLE_P12_BASE64
+    assert p12_base64
+    expected = base64.b64decode(p12_base64)
+    if pasted == "wrapped":
+        value = "\n".join(p12_base64[i : i + 76] for i in range(0, len(p12_base64), 76))
+    else:
+        value = pasted.format(p12_base64)
+    loaded: list[bytes] = []
+    load = wallet_signer.pkcs12.load_key_and_certificates
+
+    def spy(data, password):
+        loaded.append(data)
+        return load(data, password)
+
+    monkeypatch.setattr(wallet_signer.pkcs12, "load_key_and_certificates", spy)
+    monkeypatch.setenv("APPLE_P12_BASE64", value)
+    reload_settings()
+
+    _, certificate, _ = wallet_signer.load_pass_certificate()
+
+    assert loaded == [expected], "the same bytes as the value without them"
+    assert certificate.subject.rfc4514_string() == "CN=Pass Type ID: test"
