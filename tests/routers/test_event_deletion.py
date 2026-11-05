@@ -18,7 +18,12 @@ def test_inventory_matches_rows_actually_deleted(super_admin_client, db_session,
     log = db_session.scalar(select(Logs).where(Logs.event_id == event["id"]).order_by(Logs.id))
     db_session.add_all(
         [
-            Submissions(form_id=form.id, member_id=seed_refs.ahmed.id, submission_type="none"),
+            Submissions(
+                form_id=form.id,
+                member_id=seed_refs.ahmed.id,
+                submission_type="none",
+                submitted_at=datetime(2026, 6, 29, 17, 30),
+            ),
             Submissions(
                 form_id=form.id, member_id=seed_refs.sara.id, submission_type="none", cancelled_at=datetime(2026, 7, 1)
             ),
@@ -43,7 +48,10 @@ def test_inventory_matches_rows_actually_deleted(super_admin_client, db_session,
     second = client.get(f"/events/{event['id']}/deletion-impact/submissions?page_size=1&page=2").json()
     assert rows["items"][0]["id"] != second["items"][0]["id"]
     assert {rows["items"][0]["label"], second["items"][0]["label"]} == {seed_refs.ahmed.name, seed_refs.sara.name}
-    assert "cancelled_at" in second["items"][0]["details"]
+    assert rows["items"][0]["details"]["submitted_at"] == "2026-06-29T17:30:00"
+    assert second["items"][0]["details"]["cancelled_at"] == "2026-07-01T00:00:00"
+    attendance = client.get(f"/events/{event['id']}/deletion-impact/members_logs").json()
+    assert attendance["items"][0]["details"]["date"] == "2026-06-29T00:00:00"
     for resource in counts:
         assert_2xx(client.get(f"/events/{event['id']}/deletion-impact/{resource}"))
     assert_2xx(client.delete(f"/events/{event['id']}"))

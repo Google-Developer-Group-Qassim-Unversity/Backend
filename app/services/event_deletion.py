@@ -4,6 +4,7 @@ Use the schema's foreign keys so a newly attached resource cannot silently go
 missing from the review. Row inspection exposes only a small display allowlist.
 """
 
+from datetime import date
 from enum import Enum
 from typing import Any
 
@@ -144,6 +145,8 @@ def resource_page(session: Session, event_id: int, resource: str, page: int, pag
             if key in {"display_name", "name", "label"} or key in table.primary_key.columns or row[key] is None:
                 continue
             value = row[key]
-            details[key] = str(value.value if isinstance(value, Enum) else value)
+            details[key] = (
+                value.isoformat() if isinstance(value, date) else str(value.value if isinstance(value, Enum) else value)
+            )
         items.append(DeletionItem(id=identifier, label=label, details=details))
     return DeletionResourcePage(items=items, total=total, page=page, page_size=page_size)
