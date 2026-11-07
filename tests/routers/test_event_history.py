@@ -54,8 +54,8 @@ def test_saving_without_changes_records_nothing(admin_client: TestClient, seed_r
     assert [i["action"] for i in history(admin_client, event_id)["items"]] == ["created"]
 
 
-def test_the_history_outlives_a_deleted_event(admin_client: TestClient, seed_refs):
-    event_id = admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()["id"]
-    assert_2xx(admin_client.delete(f"/events/{event_id}"))
-    items = history(admin_client, event_id)["items"]
+def test_the_history_outlives_a_deleted_event(super_admin_client: TestClient, seed_refs):
+    event_id = super_admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()["id"]
+    assert_2xx(super_admin_client.delete(f"/events/{event_id}"))
+    items = history(super_admin_client, event_id)["items"]
     assert [i["action"] for i in items] == ["created", "deleted"]

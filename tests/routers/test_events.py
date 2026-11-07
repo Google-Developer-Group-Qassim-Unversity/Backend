@@ -1,3 +1,4 @@
+import pytest
 from datetime import datetime
 
 from fastapi.testclient import TestClient
@@ -274,7 +275,8 @@ def test_unauthorized_update_event(clerk_client: TestClient, db_session):
     assert_forbidden(update_response)
 
 
-def test_delete_event(admin_client: TestClient, seed_refs):
+def test_delete_event(super_admin_client: TestClient, seed_refs):
+    admin_client = super_admin_client
     event = admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
     admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
 
@@ -419,12 +421,21 @@ def test_active_remote_event_requiring_registration_not_in_open_events(admin_cli
     assert event["id"] not in ids, "Registration must close before an active event drops off the open list"
 
 
-def test_delete_non_draft_event(admin_client: TestClient):
+@pytest.mark.parametrize("event_status", ["draft", "open", "active", "closed"])
+def test_delete_event_in_any_status(super_admin_client: TestClient, event_status, db_session):
+    event = super_admin_client.post("/events", json=make_create_event_payload()).json()
+    row = db_session.get(Events, event["id"])
+    row.status = event_status
+    db_session.commit()
+    assert_2xx(super_admin_client.delete(f"/events/{event['id']}"))
+    assert_not_found(super_admin_client.get(f"/events/{event['id']}"))
+
+
+def test_staff_cannot_delete_even_with_old_permission(admin_client: TestClient):
     event = admin_client.post("/events", json=make_create_event_payload()).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
-    delete_response = admin_client.delete(f"/events/{event['id']}")
-    assert_bad_request(delete_response)
-    assert "only draft events" in delete_response.json()["detail"].lower()
+    assert_forbidden(admin_client.get(f"/events/{event['id']}/deletion-impact"))
+    assert_forbidden(admin_client.get(f"/events/{event['id']}/deletion-impact/submissions"))
+    assert_forbidden(admin_client.delete(f"/events/{event['id']}"))
 
 
 def test_update_event_invalid_dates(admin_client: TestClient):
@@ -456,8 +467,8 @@ def test_update_nonexistent_event(admin_client: TestClient, seed_refs):
     assert_not_found(response)
 
 
-def test_delete_nonexistent_event(admin_client: TestClient):
-    assert_not_found(admin_client.delete("/events/9999"))
+def test_delete_nonexistent_event(super_admin_client: TestClient):
+    assert_not_found(super_admin_client.delete("/events/9999"))
 
 
 def test_update_event_meeting_url(admin_client: TestClient):

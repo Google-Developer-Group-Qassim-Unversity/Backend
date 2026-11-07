@@ -443,11 +443,11 @@ def test_two_orm_rows_with_the_same_label_in_one_event_are_a_409(admin_client: T
     assert_conflict(duplicate)
 
 
-def test_deleting_the_event_deletes_its_links(admin_client: TestClient, db_session):
-    event = admin_client.post("/events", json=make_create_event_payload()).json()
-    admin_client.post(f"/events/{event['id']}/content-links", json=make_link_payload())
+def test_deleting_the_event_deletes_its_links(super_admin_client: TestClient, db_session):
+    event = super_admin_client.post("/events", json=make_create_event_payload()).json()
+    super_admin_client.post(f"/events/{event['id']}/content-links", json=make_link_payload())
 
-    response = admin_client.delete(f"/events/{event['id']}")
+    response = super_admin_client.delete(f"/events/{event['id']}")
     assert_2xx(response)
     count = db_session.scalar(
         select(func.count()).select_from(EventContentLinks).where(EventContentLinks.event_id == event["id"])

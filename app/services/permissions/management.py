@@ -24,7 +24,7 @@ from app.DB.schema import Departments, PermissionGrants, Semesters
 from app.exceptions import NotFound, PermissionConflict, PermissionDenied
 from app.semesters import current_semester
 from app.services.permissions.access import Access
-from app.services.permissions.catalogue import OFFICER_ROLES, Perm, parse
+from app.services.permissions.catalogue import SUPER_ADMIN_ONLY, OFFICER_ROLES, Perm, parse
 
 NEVER_GRANTED = frozenset({Perm.PERMISSIONS_GRANT, Perm.PERMISSIONS_MANAGE})
 
@@ -33,6 +33,8 @@ def _parse_all(keys: list[str]) -> set[str]:
     unknown = sorted(set(keys) - {p.value for p in Perm})
     if unknown:
         raise PermissionConflict("unknown_permission", f"Unknown permission(s): {', '.join(unknown)}", 422)
+    if set(keys) & SUPER_ADMIN_ONLY:
+        raise PermissionConflict("super_admin_only", "Event deletion is reserved for super admins", 422)
     return set(keys)
 
 
@@ -64,7 +66,7 @@ def grantable(session: Session, access: Access, department_id: int) -> frozenset
     officers_have = parse(queries.get_shared_permissions(session)) | parse(
         queries.get_department_permissions(session, {department_id}).get(department_id, set())
     )
-    candidates = officers_have - NEVER_GRANTED
+    candidates = officers_have - NEVER_GRANTED - SUPER_ADMIN_ONLY
     if access.is_super_admin:
         return candidates
     return frozenset(p for p in candidates if access.can(p, department_id))

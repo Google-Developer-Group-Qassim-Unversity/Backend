@@ -793,17 +793,20 @@ def test_reopening_at_night_tells_one_never_told_now_when_the_start_they_knew_ca
 
 
 def test_deleting_the_draft_right_after_unpublishing_still_sends_the_cancellation(
-    admin_client, db_session, outbound, push_on, apns_mock, frozen, kicks
+    super_admin_client, db_session, outbound, push_on, apns_mock, frozen, kicks
 ):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     member = app_user(db_session)
     register(db_session, event, member)
     db_session.commit()
-    assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "draft"}))
+    assert_2xx(super_admin_client.put(f"/events/{event.id}/status", json={"status": "draft"}))
     [row] = rows(db_session, PushKind.EVENT_CANCELLED)
     row.attempts, row.not_before = 1, frozen.now + timedelta(minutes=2)  # Apple answered 5xx: waits to retry
     db_session.commit()
-    assert_2xx(admin_client.delete(f"/events/{event.id}"))
+    preview = super_admin_client.get(f"/events/{event.id}/deletion-impact")
+    assert_2xx(preview)
+    assert preview.json()["retained_notifications"] == 1
+    assert_2xx(super_admin_client.delete(f"/events/{event.id}"))
     assert kicks == [1, 1]
     [row] = rows(db_session, PushKind.EVENT_CANCELLED)
     assert (row.event_id, row.payload["url"]) == (None, "gdgq://notifications")
