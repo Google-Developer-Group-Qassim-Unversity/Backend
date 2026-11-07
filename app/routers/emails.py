@@ -19,6 +19,11 @@ from app.config import config
 from app.helpers import CurrentMember
 from app.routers.responses import MessageResponse
 from app.routers.email_models import (
+    CertificateSample,
+    SendDetail,
+    SendFilter,
+    SendRecipient,
+    SendsPage,
     EmailJobModel,
     AcceptanceQueuedResponse,
     BlastEligibleCountResponse,
@@ -51,6 +56,7 @@ from app.services.email_capacity import (
     get_from_address,
     get_total_remaining_send_capacity,
 )
+from app.DB import email_sends as send_queries
 from app.DB import email_jobs as job_queries
 from app.DB.schema import EmailJobsStatus, EmailJobsType
 from app.services.email_recipients import _resolve_member, resolve_ad_hoc_recipients
@@ -69,7 +75,7 @@ from app.services.email_gateway import (
     call_custom_email_api,
 )
 
-from app.exceptions import NotFound, EmptyBody
+from app.exceptions import BadGateway, NotFound, EmptyBody
 from collections.abc import Callable, Iterator, Sequence
 
 import httpx
@@ -117,6 +123,7 @@ def sse_poll_loop(
     initial_last_id: int = 0,
     empty_message: str = "No new logs",
     initial_empty_message: str | None = None,
+    fetch_initial: Callable[[int], Sequence[Any]] | None = None,
 ) -> Iterator[ServerSentEvent]:
     """The long-poll shape shared by the two email-log SSE endpoints below.
 
@@ -124,10 +131,18 @@ def sse_poll_loop(
     for one endpoint's own log shape, returning already-parsed response
     models that expose `.id` and `.model_dump(mode="json")`. This only owns
     the polling itself: a larger initial fetch, then poll-and-sleep forever.
+
+    `fetch_initial(batch_size)`, when given, replaces that first fetch on a
+    fresh connection (no Last-Event-ID). It should return the newest rows in
+    ascending order, so the stream opens on recent history instead of
+    replaying every log from the first one ever sent.
     """
     last_id = initial_last_id
 
-    initial = fetch_batch(last_id, initial_batch_size)
+    if fetch_initial is not None and last_id == 0:
+        initial = fetch_initial(initial_batch_size)
+    else:
+        initial = fetch_batch(last_id, initial_batch_size)
     if not initial:
         yield ServerSentEvent(
             data=json.dumps({"message": initial_empty_message or empty_message}), event="no_logs", id=str(last_id)
@@ -202,7 +217,11 @@ def send_manual_certificate(
 ):
 
     job = job_queries.create_job(
-        session, EmailJobsType.MANUAL_CERTIFICATE, requesting_member.id, total=len(request.members)
+        session,
+        EmailJobsType.MANUAL_CERTIFICATE,
+        requesting_member.id,
+        total=len(request.members),
+        event_id=request.event_id,
     )
     background_tasks.add_task(send_manual_certificates_job, request.model_copy(deep=True), requesting_member.id, job.id)
     background_tasks.add_task(push_delivery.kick)
@@ -231,7 +250,12 @@ def send_custom_email(
     event = events_queries.get_event_by_id(session, event_id)
     simple_event = SimpleEvent(name=event.name, date=format_event_date(event), official=bool(event.is_official))
     job = job_queries.create_job(
-        session, EmailJobsType.CUSTOM_EMAIL, requesting_member.id, total=len(request.members), event_id=event_id
+        session,
+        EmailJobsType.CUSTOM_EMAIL,
+        requesting_member.id,
+        total=len(request.members),
+        event_id=event_id,
+        subject=request.subject,
     )
     background_tasks.add_task(
         send_custom_email_job, request.model_copy(deep=True), simple_event, event_id, requesting_member.id, job.id
@@ -310,7 +334,9 @@ def send_direct_email(
 
     from_address = get_from_address() if request.provider == EmailProvider.GOOGLE else None
 
-    job = job_queries.create_job(session, EmailJobsType.DIRECT_EMAIL, requesting_member.id, total=len(recipient_list))
+    job = job_queries.create_job(
+        session, EmailJobsType.DIRECT_EMAIL, requesting_member.id, total=len(recipient_list), subject=request.subject
+    )
     background_tasks.add_task(
         send_direct_email_job, recipient_list, requesting_member.id, request.provider, from_address, request, job.id
     )
@@ -456,7 +482,7 @@ def stream_enriched_email_logs(
     start_date: Annotated[Optional[datetime], Query(description="Filter from date")] = None,
     end_date: Annotated[Optional[datetime], Query(description="Filter to date")] = None,
 ):
-    def fetch_batch(after_id: int, batch_size: int) -> list[EnrichedEmailLog]:
+    def fetch(after_id: int, batch_size: int, *, newest: bool) -> list[EnrichedEmailLog]:
         with db_session() as session:
             rows = email_queries.get_enriched_email_logs(
                 session,
@@ -467,13 +493,17 @@ def stream_enriched_email_logs(
                 end_date=end_date,
                 after_id=after_id,
                 limit=batch_size,
-                order_asc=True,
+                order_asc=not newest,
             )
-            return [EnrichedEmailLog.model_validate(dict(row)) for row in rows]
+            # Newest page comes back newest-first; flip it so the client,
+            # which prepends each log, still ends with the newest on top.
+            ordered = reversed(rows) if newest else rows
+            return [EnrichedEmailLog.model_validate(dict(row)) for row in ordered]
 
     yield from sse_poll_loop(
-        fetch_batch,
-        initial_batch_size=200,
+        lambda after_id, batch_size: fetch(after_id, batch_size, newest=False),
+        fetch_initial=lambda batch_size: fetch(0, batch_size, newest=True),
+        initial_batch_size=100,
         poll_batch_size=50,
         sleep_seconds=1.5,
         initial_last_id=int(last_event_id) if last_event_id else 0,
@@ -623,7 +653,12 @@ async def send_acceptance_blasts(
         releases the claim if the send fails.
         """
         job = job_queries.create_job(
-            session, EmailJobsType.ACCEPTANCE, requesting_member.id, total=len(emails), event_id=event.id
+            session,
+            EmailJobsType.ACCEPTANCE,
+            requesting_member.id,
+            total=len(emails),
+            event_id=event.id,
+            subject=subject,
         )
         submissions_queries.mark_submissions_as_invited(session, submission_ids)
         # The app's "registration accepted" push, for members who have the app (docs/PUSH.md).
@@ -733,7 +768,9 @@ def send_blast(
     recipients = list(all_recipients.values())
     logger.info(f"Queuing blast to [{len(recipients)}] total recipients")
 
-    job = job_queries.create_job(session, EmailJobsType.BLAST, requesting_member.id, total=len(recipients))
+    job = job_queries.create_job(
+        session, EmailJobsType.BLAST, requesting_member.id, total=len(recipients), subject=request.subject
+    )
     background_tasks.add_task(
         send_blast_job, recipients, guaranteed_list, request.count, requesting_member.id, request, job.id
     )
@@ -905,3 +942,39 @@ def get_email_job(job_id: int, session: DB):
 
 
 # endregion
+
+
+@router.get("/sends", dependencies=[Depends(Require(Perm.EMAILS_LOGS))], response_model=SendsPage)  # noqa: FAST001
+def list_email_sends(
+    session: DB,
+    kind: SendFilter | None = None,
+    member_id: Annotated[int | None, Query(gt=0)] = None,
+    email: str | None = None,
+    before: Annotated[int | None, Query(gt=0)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+) -> SendsPage:
+    return send_queries.get_sends(session, kind=kind, member_id=member_id, email=email, before=before, limit=limit)
+
+
+@router.get("/sends/{id:int}", dependencies=[Depends(Require(Perm.EMAILS_LOGS))], response_model=SendDetail)  # noqa: FAST001
+def get_email_send(id: int, session: DB) -> SendDetail:
+    return send_queries.get_send(session, id)
+
+
+@router.get(
+    "/sends/{id:int}/certificate-sample",
+    dependencies=[Depends(Require(Perm.EMAILS_LOGS))],
+    response_model=CertificateSample,  # noqa: FAST001
+)
+def get_certificate_sample(id: int, session: DB) -> CertificateSample:
+    request, member_id = send_queries.get_certificate_sample_request(session, id)
+    data = call_certificate_download(request)
+    image_url = data if isinstance(data, str) else data.get("url")
+    if not isinstance(image_url, str) or not image_url:
+        raise BadGateway(detail="Certificate generation API returned no image URL")
+    return CertificateSample(
+        recipient=SendRecipient(name=request.member.name, email=request.member.email, member_id=member_id),
+        subject=f"شهادة حضور {request.event.name}",
+        event_name=request.event.name,
+        image_url=image_url,
+    )

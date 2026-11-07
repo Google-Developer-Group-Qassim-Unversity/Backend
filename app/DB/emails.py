@@ -48,6 +48,7 @@ def get_event_certificate_email_log(session: Session, event_id: int, after_id: i
 def create_email_log(
     session: Session,
     *,
+    job_id: int | None = None,
     sent_by: int,
     from_address: str,
     email_type: EmailLogsEmailType,
@@ -57,6 +58,7 @@ def create_email_log(
     data: Optional[dict] = None,
 ) -> EmailLogs:
     log = EmailLogs(
+        job_id=job_id,
         member_id=member_id,
         event_id=event_id,
         from_address=from_address,

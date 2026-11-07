@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 def _member_label(member_item) -> str:
-    """A recipient identifier for the job record, before the member is resolved."""
+    """Fallback identifier for failures before a recipient can be resolved."""
     member = getattr(member_item, "member", None)
     if member is not None and getattr(member, "email", None):
         return str(member.email)
@@ -85,6 +85,7 @@ def send_certificates_by_event_id(
                 logger.info("Certificate API responded with 200 OK")
                 email_queries.create_email_log(
                     session,
+                    job_id=job_id,
                     sent_by=sent_by_id,
                     from_address=from_address.value,
                     email_type=EmailLogsEmailType.EVENT_CERTIFICATE,
@@ -109,8 +110,10 @@ def send_manual_certificates_job(request_data: ManualCertificateRequest, sent_by
         )
 
         for member_item in request_data.members:
-            with tracker.recipient(_member_label(member_item)):
+            recipient_labels = [_member_label(member_item)]
+            with tracker.recipient(recipient_labels):
                 simple_member, member_id = _resolve_member(member_item, session)
+                recipient_labels[0] = simple_member.email
                 logger.info(f"Sending certificate for member [{simple_member.name}] with email [{simple_member.email}]")
                 cert_request = CertificateRequest(
                     event=simple_event,
@@ -123,6 +126,7 @@ def send_manual_certificates_job(request_data: ManualCertificateRequest, sent_by
                 logger.info("Certificate API responded with 200 OK")
                 email_queries.create_email_log(
                     session,
+                    job_id=job_id,
                     sent_by=sent_by_id,
                     from_address=from_address.value if from_address else config.SES_FROM_ADDRESS,
                     email_type=EmailLogsEmailType.MANUAL_CERTIFICATE,
@@ -152,8 +156,10 @@ async def send_custom_email_job(
         )
 
         for member_item in request_data.members:
-            with tracker.recipient(_member_label(member_item)):
+            recipient_labels = [_member_label(member_item)]
+            with tracker.recipient(recipient_labels):
                 simple_member, member_id = _resolve_member(member_item, session)
+                recipient_labels[0] = simple_member.email
                 logger.info(f"Sending custom email to [{simple_member.name}] at [{simple_member.email}]")
                 subject = _personalize(request_data.subject, simple_member.name, simple_event.name)
                 html_content = _personalize(request_data.html_content, simple_member.name, simple_event.name)
@@ -172,6 +178,7 @@ async def send_custom_email_job(
                 logger.info("Custom email API responded with 200 OK")
                 email_queries.create_email_log(
                     session,
+                    job_id=job_id,
                     sent_by=sent_by_id,
                     from_address=from_address.value,
                     email_type=EmailLogsEmailType.EVENT_ANNOUNCEMENT,
@@ -184,7 +191,8 @@ async def send_custom_email_job(
                         "member": simple_member.model_dump(mode="json"),
                         "certificate_attached": True,
                         "attachments": [
-                            {"filename": a.filename, "content_type": a.content_type} for a in request_data.attachments
+                            {"filename": a.filename, "url": a.url, "content_type": a.content_type}
+                            for a in request_data.attachments
                         ],
                     },
                 )
@@ -219,6 +227,7 @@ async def send_direct_email_job(
 
                 email_queries.create_email_log(
                     session,
+                    job_id=job_id,
                     sent_by=sent_by_id,
                     from_address=from_address.value if from_address else config.SES_FROM_ADDRESS,
                     email_type=EmailLogsEmailType.DIRECT,
@@ -267,8 +276,8 @@ async def send_blast_job(
             ):
                 if not chunk:
                     continue
-                with tracker.recipient(f"chunk via {from_addr.value}"):
-                    emails = [r["email"] for r in chunk]
+                emails = [r["email"] for r in chunk]
+                with tracker.recipient(emails):
                     logger.info(f"Sending [{len(emails)}] recipients via [{from_addr.value}]")
 
                     await call_blast_api(
@@ -285,6 +294,7 @@ async def send_blast_job(
 
                     email_queries.create_email_log(
                         session,
+                        job_id=job_id,
                         sent_by=sent_by_id,
                         from_address=from_addr.value,
                         email_type=EmailLogsEmailType.BLAST,
@@ -301,26 +311,30 @@ async def send_blast_job(
                         },
                     )
                     session.commit()
-                    tracker.success(len(emails) - 1)
         else:
             emails = [r["email"] for r in recipients]
             # SES itself caps recipients per raw message and chunks accordingly (see
             # send-certificates' SES_MAX_RECIPIENTS_PER_MESSAGE); this call is one logical
             # blast regardless of how many SES messages it turns into under the hood.
-            await call_blast_api(
-                emails,
-                request.subject,
-                request.html_content,
-                EmailProvider.SES,
-                None,
-                request.preview_text,
-                request.attachments,
-                on_behalf_of=sent_by_id,
-            )
+            try:
+                await call_blast_api(
+                    emails,
+                    request.subject,
+                    request.html_content,
+                    EmailProvider.SES,
+                    None,
+                    request.preview_text,
+                    request.attachments,
+                    on_behalf_of=sent_by_id,
+                )
+            except Exception as exc:
+                tracker.failure(f"{type(exc).__name__}: {exc}", emails)
+                raise
             logger.info(f"Blast API responded successfully for [{len(emails)}] recipients")
 
             email_queries.create_email_log(
                 session,
+                job_id=job_id,
                 sent_by=sent_by_id,
                 from_address=config.SES_FROM_ADDRESS,
                 email_type=EmailLogsEmailType.BLAST,
@@ -337,6 +351,7 @@ async def send_blast_job(
                 },
             )
             session.commit()
+            tracker.success(len(emails))
 
 
 async def send_acceptance_job(
@@ -373,7 +388,8 @@ async def send_acceptance_job(
 
         try:
             await call_acceptance_api(emails, subject, html_content, from_address, on_behalf_of=sent_by_id)
-        except Exception:
+        except Exception as exc:
+            tracker.failure(f"{type(exc).__name__}: {exc}", emails)
             submissions_queries.mark_submissions_as_uninvited(session, submission_ids)
             session.commit()
             logger.warning(
@@ -385,6 +401,7 @@ async def send_acceptance_job(
 
         email_queries.create_email_log(
             session,
+            job_id=job_id,
             sent_by=sent_by_id,
             from_address=from_address.value,
             email_type=EmailLogsEmailType.ACCEPTANCE,

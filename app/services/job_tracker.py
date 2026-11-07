@@ -26,6 +26,7 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable, Iterator, Protocol
+from collections.abc import Sequence
 
 from sqlalchemy.orm import Session
 
@@ -91,24 +92,31 @@ class JobTracker:
     def success(self, count: int = 1) -> None:
         self._queries.record_success(self._session, self.job_id, count)
 
-    def failure(self, error: str) -> None:
-        self._queries.record_failure(self._session, self.job_id, error)
+    def failure(self, error: str, recipients: list[str] | None = None) -> None:
+        if self._queries is EMAIL_JOB_QUERIES:
+            email_jobs.record_failure(self._session, self.job_id, error, recipients)
+        else:
+            if recipients:
+                error = f"{', '.join(recipients)}: {error}"
+            self._queries.record_failure(self._session, self.job_id, error)
 
     @contextmanager
-    def recipient(self, label: str) -> Iterator[None]:
+    def recipient(self, label: str | Sequence[str]) -> Iterator[None]:
         """Wrap one item's work. A failure is recorded, not raised.
 
         The loop continues, so one bad item cannot silently cancel everyone
         after it. Named for its original caller (one email recipient); the
-        item can be anything with a label.
+        item can be anything with a label. A sequence labels an email chunk;
+        success and failure counts then cover every address in that chunk.
         """
         try:
             yield
         except Exception as exc:
             logger.exception("job %s failed for %s", self.job_id, label)
-            self.failure(f"{label}: {type(exc).__name__}: {exc}")
+            recipients = [label] if isinstance(label, str) else list(label)
+            self.failure(f"{type(exc).__name__}: {exc}", recipients)
         else:
-            self.success()
+            self.success(1 if isinstance(label, str) else len(label))
 
 
 class NullTracker(JobTracker):
@@ -120,7 +128,7 @@ class NullTracker(JobTracker):
     def success(self, count: int = 1) -> None:
         return
 
-    def failure(self, error: str) -> None:
+    def failure(self, error: str, recipients: list[str] | None = None) -> None:
         return
 
 
