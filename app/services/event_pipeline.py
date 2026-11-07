@@ -375,7 +375,8 @@ def _check_bookable(
     The length and the lockout bind everyone. A super admin may book a banned
     day, and may book over other requests when ``bumps`` says what happens to
     each one of them (``None``: this change cannot bump, so a taken day is
-    refused). A published event is never bumped.
+    refused). ``keep`` leaves an existing request untouched, allowing both
+    bookings to coexist. A published event may only be kept.
     """
     check_range(start, end, MAX_BOOKING_DAYS)
     if start < first_bookable_day():
@@ -390,13 +391,13 @@ def _check_bookable(
         return []
     if not super_admin or bumps is None:
         raise PipelineConflict("day_taken", "One of these days is already taken")
-    if any(r.stage == EventRequestStage.PUBLISHED for r in taking):
-        raise PipelineConflict("day_published", "A published event is on one of these days")
     if set(bumps) != {r.id for r in taking}:
         raise PipelineConflict(
             "overlap_undecided", "Other requests hold these days; choose what happens to each of them"
         )
-    return taking
+    if any(r.stage == EventRequestStage.PUBLISHED and bumps[r.id] != BumpOutcome.KEEP for r in taking):
+        raise PipelineConflict("day_published", "A published event can only be kept")
+    return [r for r in taking if bumps[r.id] != BumpOutcome.KEEP]
 
 
 def bump(

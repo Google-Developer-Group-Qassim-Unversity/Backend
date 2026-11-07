@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from app.DB.schema import EventRequests, EventRequestStage, EventRequestTasks, PipelineHistory
-from tests.pipeline_support import book_complete, finish, submit
+from tests.pipeline_support import COMPLETE_DESIGN, COMPLETE_DETAILS, COMPLETE_LOGISTICS, book_complete, finish, submit
 
 
 @pytest.fixture
@@ -152,3 +152,84 @@ def test_re_dating_onto_a_request_bumps_it(pipeline, world):
     )
     assert response.status_code == 200, response.text
     assert row(pipeline, world["request_id"]).undated_reason.value == "overridden"
+
+
+@pytest.mark.parametrize("submitted", [False, True])
+def test_keep_leaves_the_existing_request_untouched_and_both_on_the_calendar(pipeline, world, submitted):
+    if submitted:
+        assert submit(pipeline, world["request_id"]).status_code == 200
+    pipeline.sign_in(world["admin"], super_admin=True)
+    before = pipeline.client.get(f"/pipeline/requests/{world['request_id']}").json()
+    pipeline.outbound.calls.clear()
+
+    response = book(pipeline, world["cyber"], {world["request_id"]: "keep"})
+    assert response.status_code == 201, response.text
+    after = pipeline.client.get(f"/pipeline/requests/{world['request_id']}").json()
+    assert after == before
+    assert pipeline.outbound.to("/blasts") == []
+    assert (
+        pipeline.session.scalars(
+            select(PipelineHistory).where(
+                PipelineHistory.request_id == world["request_id"], PipelineHistory.action == "overridden"
+            )
+        ).all()
+        == []
+    )
+    days = pipeline.client.get("/pipeline/calendar", params={"from": "2026-07-21", "to": "2026-07-21"}).json()["days"]
+    assert {r["id"] for r in days[0]["requests"]} == {world["request_id"], response.json()["id"]}
+
+
+def test_a_department_leader_cannot_double_book(pipeline, world):
+    pipeline.sign_in(pipeline.officer(world["cyber"]))
+    response = book(pipeline, world["cyber"], {world["request_id"]: "keep"})
+    assert response.status_code == 409
+    assert response.json()["code"] == "day_taken"
+
+
+@pytest.mark.parametrize("outcome", ["reschedule", "cancel"])
+def test_keep_can_be_mixed_with_displacing_another_request(pipeline, world, outcome):
+    pipeline.sign_in(world["admin"], super_admin=True)
+    third = pipeline.department("Third")
+    other = book(pipeline, world["cyber"], {world["request_id"]: "keep"}).json()["id"]
+    response = book(pipeline, third, {world["request_id"]: "keep", other: outcome})
+    assert response.status_code == 201, response.text
+    assert row(pipeline, world["request_id"]).start_date is not None
+    assert row(pipeline, other).start_date is None
+    assert row(pipeline, other).stage.value == ("draft" if outcome == "reschedule" else "cancelled")
+
+
+def test_re_dating_can_keep_an_existing_booking_and_both_can_publish(pipeline, world):
+    pipeline.sign_in(world["admin"], super_admin=True)
+    other = book(pipeline, world["cyber"], start="2026-07-25", end="2026-07-26").json()["id"]
+    response = pipeline.client.put(
+        f"/pipeline/requests/{other}/dates",
+        json={"start_date": "2026-07-20", "end_date": "2026-07-21", "bumps": {world["request_id"]: "keep"}},
+    )
+    assert response.status_code == 200, response.text
+    url = f"/pipeline/requests/{other}"
+    assert pipeline.client.put(f"{url}/details", json={**COMPLETE_DETAILS, **pipeline.tier}).status_code == 200
+    assert pipeline.client.put(f"{url}/briefs/design", json={"brief": COMPLETE_DESIGN}).status_code == 200
+    assert pipeline.client.put(f"{url}/briefs/logistics", json={"brief": COMPLETE_LOGISTICS}).status_code == 200
+    for request_id in (world["request_id"], other):
+        assert submit(pipeline, request_id).status_code == 200
+        for team in ("design", "logistics", "media"):
+            result = finish(pipeline, request_id, team)
+            assert result.status_code == 200, result.text
+        result = pipeline.client.post(f"/pipeline/requests/{request_id}/publish")
+        assert result.status_code == 200, result.text
+    days = pipeline.client.get("/pipeline/calendar", params={"from": "2026-07-20", "to": "2026-07-21"}).json()["days"]
+    for day in days:
+        assert day["status"] == "published"
+        assert {r["id"] for r in day["requests"]} == {world["request_id"], other}
+
+
+def test_a_super_admin_can_book_alongside_a_published_event(pipeline, world):
+    assert submit(pipeline, world["request_id"]).status_code == 200
+    pipeline.sign_in(world["admin"], super_admin=True)
+    for team in ("design", "logistics", "media"):
+        assert finish(pipeline, world["request_id"], team).status_code == 200
+    assert pipeline.client.post(f"/pipeline/requests/{world['request_id']}/publish").status_code == 200
+    before = pipeline.client.get(f"/pipeline/requests/{world['request_id']}").json()
+    response = book(pipeline, world["cyber"], {world["request_id"]: "keep"})
+    assert response.status_code == 201, response.text
+    assert pipeline.client.get(f"/pipeline/requests/{world['request_id']}").json() == before
