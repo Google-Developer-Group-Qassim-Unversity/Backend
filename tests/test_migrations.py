@@ -37,10 +37,12 @@ def test_the_content_links_downgrade_round_trips(downgrade_drill_database_url):
     script = ScriptDirectory.from_config(config)
     head = script.get_heads()[0]
     target = script.get_revision(head).down_revision
-    # The drill downgrades exactly one revision. A merge migration's parent
-    # would be a tuple of ids - not expressible as a single `downgrade` target;
-    # if a merge ever sits at the head, give the drill an explicit name again.
-    assert isinstance(target, str), f"head [{head}] is not one revision after its parent [{target}]"
+    # At the release merge, exercise both branches back to their common parent.
+    # Alembic cannot take a tuple of revisions as a downgrade target.
+    if isinstance(target, tuple):
+        assert set(target) == {"2f8c7b6a901d", "b3e7c1d9a5f2"}
+        target = "194e7997ddc9"
+    assert isinstance(target, str)
 
     command.upgrade(config, "head")
     command.downgrade(config, target)
