@@ -37,13 +37,19 @@ leader and VPs act for it and can grant that to its members; super admins act
 for every department and may book a banned day, change a request's dates while
 it still holds them, and cancel a request at any stage before publish.
 
-A super admin may also book over other requests (booking or re-dating), never
-over a published event. `GET /pipeline/overlaps?from=&to=` says which requests
-would be bumped and who each email goes to; the booking then says, in `bumps`,
-what happens to each one: `reschedule` sends it back to a draft holding no
-dates (`undated_reason` `overridden`; its details and briefs stay, the teams'
-parts go back to briefs and Logistics' confirmation is dropped), `cancel`
-cancels it. Its department gets a notification and an email either way. Every other rule binds them too: the lockout, the 4-day limit, one
+A super admin may also book over other requests when booking or re-dating.
+`GET /pipeline/overlaps?from=&to=` lists existing bookings and potential email
+recipients. The booking then says what happens to each request in `bumps`:
+
+- `keep` leaves it unchanged, so both bookings coexist. No override email or
+  notification is sent. This is the only choice for a published event.
+- `reschedule` sends it back to a draft holding no dates (`undated_reason`
+  `overridden`). Its details and briefs stay, the teams' parts go back to
+  briefs, and Logistics' confirmation is dropped.
+- `cancel` cancels it.
+
+Rescheduled or cancelled requests get an override notification and email.
+Every other rule binds super admins too: the lockout, the 4-day limit, one
 live hold per department, the 24-hour hold at submit, details frozen after
 submit, Design's one return within two days, and publish only once every team
 is done. Design, Logistics and Media are the

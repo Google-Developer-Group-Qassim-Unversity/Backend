@@ -1211,6 +1211,7 @@ class BumpOutcome(str, enum.Enum):
     # Back to a draft holding no dates; the department picks new ones and submits again.
     RESCHEDULE = "reschedule"
     CANCEL = "cancel"
+    KEEP = "keep"
 
 
 class EventRequestType(str, enum.Enum):
