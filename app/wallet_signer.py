@@ -93,12 +93,13 @@ def load_pass_certificate() -> tuple[
     p12_bytes = None
     if p12_base64:
         try:
-            # Line breaks (base64 wrapped at 76 columns) are fine; any other character that is not
-            # base64 is refused rather than skipped.
-            p12_bytes = base64.b64decode("".join(p12_base64.split()), validate=True)
+            # Decoded as it always was: characters that are not base64 (line breaks, quotes around it)
+            # are skipped, so a value that works today keeps working.
+            p12_bytes = base64.b64decode(p12_base64)
         except (binascii.Error, ValueError):
-            # ``from None``: the decoder's frame holds the whole p12 as ``s``, a name nothing filters,
-            # and Sentry would send it with the chained binascii.Error. Only this error goes.
+            # Cut short (binascii.Error), or a character that is not ASCII (ValueError). ``from None``: the
+            # decoder's frame holds the whole p12 as ``s``, a name nothing filters, and Sentry would send it
+            # with the chained error. Only this error goes.
             raise ValueError("APPLE_P12_BASE64 is not valid base64: cut short, or mangled when it was pasted") from None
     elif os.path.exists(p12_path):
         with open(p12_path, "rb") as f:
