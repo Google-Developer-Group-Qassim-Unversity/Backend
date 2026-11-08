@@ -91,6 +91,12 @@ class EventsStatus(str, enum.Enum):
     CLOSED = "closed"
 
 
+class EventsLevel(str, enum.Enum):
+    BEGINNER = "beginner"
+    INTERMEDIATE = "intermediate"
+    ADVANCED = "advanced"
+
+
 class FormType(str, enum.Enum):
     NONE = "none"
     REGISTRATION = "registration"
@@ -134,6 +140,7 @@ class EmailJobsType(str, enum.Enum):
     DIRECT_EMAIL = "direct-email"
     BLAST = "blast"
     ACCEPTANCE = "acceptance"
+    TEAM_NOTIFICATION = "team-notification"
 
 
 class FormsSubmissionsFormType(str, enum.Enum):
@@ -192,6 +199,7 @@ class EmailLogsEmailType(str, enum.Enum):
     ACCEPTANCE = "acceptance"
     BLAST = "blast"
     DIRECT = "direct"
+    TEAM_NOTIFICATION = "team-notification"
 
 
 class OpenEventsStatus(str, enum.Enum):
@@ -438,6 +446,12 @@ class Events(Base):
     status: Mapped[EventsStatus] = mapped_column(
         Enum(EventsStatus, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
+    # How much prior knowledge the event assumes. Shown on the member app's event cards.
+    level: Mapped[EventsLevel] = mapped_column(
+        Enum(EventsLevel, values_callable=lambda cls: [member.value for member in cls]),
+        nullable=False,
+        server_default=text("'beginner'"),
+    )
     description: Mapped[Optional[str]] = mapped_column(TEXT(charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     image_url: Mapped[Optional[str]] = mapped_column(VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     # Join link for remote events. Owned by PUT /events/{id}/meeting-url, not by the
@@ -641,8 +655,53 @@ class MemberProfiles(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     )
+    # The Apple Wallet pass's web service (app/services/wallet_updates.py), naive UTC.
+    # When one of the member's cards first registered for updates: the welcome, sent once ever.
+    pass_welcomed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    # The pass's update tag: the last time its content changed for Wallet to fetch. Whole seconds.
+    pass_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
     member: Mapped["Members"] = relationship("Members", back_populates="profile")
+
+
+class WalletPassRegistrations(Base):
+    """A device that holds a member's Apple Wallet pass and asked to hear when it changes.
+
+    Wallet registers each pass it holds (``POST /wallet/apple/v1/devices/...``)
+    and unregisters it when the pass is removed. One row per device and serial
+    number: the serial is the member's card (``GDGQ-`` + the first 8 characters
+    of ``member_profiles.uuid``), and ``member_id`` is the member whose pass
+    token the device presented, so two members whose serials collide never
+    share a row. ``push_due_at`` is set while a pass update push is owed to the
+    device (``app/services/wallet_push.py``).
+    """
+
+    __tablename__ = "wallet_pass_registrations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["member_id"], ["members.id"], name="fk_wallet_pass_registrations_member", ondelete="CASCADE"
+        ),
+        Index("uq_wallet_pass_registrations_device_serial", "device_library_id", "serial_number", unique=True),
+        Index("ix_wallet_pass_registrations_member", "member_id", "updated_at"),
+        Index("ix_wallet_pass_registrations_push_due", "push_due_at"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    # Wallet's id for the device's pass library; it also authenticates the list of updated serials. Never logged.
+    device_library_id: Mapped[str] = mapped_column(VARCHAR(100, charset="ascii", collation="ascii_bin"), nullable=False)
+    serial_number: Mapped[str] = mapped_column(VARCHAR(40, charset="ascii", collation="ascii_bin"), nullable=False)
+    # The pass's own APNs token (lowercase hex), for the Pass Type ID topic. Never logged.
+    push_token: Mapped[str] = mapped_column(VARCHAR(200, charset="ascii", collation="ascii_bin"), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    # The last registration: Wallet registers again, with a new push token, after a restore.
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    push_due_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    push_attempts: Mapped[int] = mapped_column(SMALLINT(unsigned=True), nullable=False, server_default=text("'0'"))
 
 
 class DepartmentsLogs(Base):
@@ -756,12 +815,15 @@ class EmailLogs(Base):
         ForeignKeyConstraint(
             ["sent_by"], ["members.id"], ondelete="CASCADE", onupdate="CASCADE", name="fk_email_logs_sent_by"
         ),
+        ForeignKeyConstraint(["job_id"], ["email_jobs.id"], ondelete="SET NULL", name="fk_email_logs_job"),
+        Index("ix_email_logs_job_id", "job_id"),
         Index("fk_email_logs_member", "member_id"),
         Index("fk_email_logs_event", "event_id"),
         Index("fk_email_logs_sent_by", "sent_by"),
     )
 
     id: Mapped[int] = mapped_column(INTEGER(unsigned=True), primary_key=True)
+    job_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     member_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     from_address: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -816,6 +878,8 @@ class EmailJobs(Base):
     succeeded: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, server_default=text("'0'"))
     failed: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False, server_default=text("'0'"))
     error: Mapped[Optional[str]] = mapped_column(TEXT)
+    subject: Mapped[Optional[str]] = mapped_column(String(255))
+    failures: Mapped[Optional[list[dict[str, str]]]] = mapped_column(JSON)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
@@ -1159,6 +1223,7 @@ class BumpOutcome(str, enum.Enum):
     # Back to a draft holding no dates; the department picks new ones and submits again.
     RESCHEDULE = "reschedule"
     CANCEL = "cancel"
+    KEEP = "keep"
 
 
 class EventRequestType(str, enum.Enum):
@@ -1650,6 +1715,8 @@ class EventContentLinks(Base):
         VARCHAR(255, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
     )
     published: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    # When it last became visible to members (UTC); NULL while it is a draft.
+    published_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
@@ -1689,6 +1756,27 @@ class PushKind(str, enum.Enum):
     POINTS = "points"
     NEW_EVENT = "new_event"
     BROADCAST = "broadcast"
+    # App 1.0.3 (app/services/push/cases.py).
+    EVENT_UPDATED = "event_updated"
+    EVENT_CANCELLED = "event_cancelled"
+    EVENT_LIVE = "event_live"
+    REGISTRATION_CLOSING = "registration_closing"
+    CERTIFICATE = "certificate"
+    EVENT_CONTENT = "event_content"
+    WEEKLY_SUMMARY = "weekly_summary"
+    WELCOME = "welcome"
+    # App 1.0.3 build 6 (app/services/push/rank.py).
+    RANK_TOP5 = "rank_top5"
+    RANK_FIRST = "rank_first"
+    RANK_LEFT = "rank_left"
+
+
+class RankStanding(str, enum.Enum):
+    """Where a member stands on the semester's members leaderboard, as the rank pushes see it."""
+
+    OUT = "out"
+    TOP5 = "top5"
+    FIRST = "first"
 
 
 class PushStatus(str, enum.Enum):
@@ -1732,7 +1820,7 @@ class MemberDevices(Base):
 
 
 class MemberNotificationPrefs(Base):
-    """A member's four notification switches (the app's Settings). No row = the defaults: on, on, on, off."""
+    """A member's four notification switches (the app's Settings). No row = the defaults: all four on."""
 
     __tablename__ = "member_notification_prefs"
     __table_args__ = (
@@ -1747,7 +1835,7 @@ class MemberNotificationPrefs(Base):
     remind: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
     accept: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
     points: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
-    news: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'0'"))
+    news: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
@@ -1829,6 +1917,40 @@ class PushNotifications(Base):
     last_error: Mapped[Optional[str]] = mapped_column(String(100))
 
 
+class MemberRankStandings(Base):
+    """A member's standing on a semester's members leaderboard, for the rank pushes (``app/services/push/rank.py``).
+
+    ``observed`` is what the sweep last saw (``observed_since``: since when);
+    ``told`` is the standing the member's rank news is settled at: what the last
+    rank push queued said, or what was taken as known without one (the
+    semester's first look, a member the push cannot reach). A push goes when
+    the two differ and ``observed`` has held 10 minutes.
+    ``pushes`` counts the rank pushes queued for the member this semester and
+    keys their ``dedupe_key``. A row is written the first time the member is in
+    the top 5 that semester, and kept.
+    """
+
+    __tablename__ = "member_rank_standings"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["semester_id"], ["semesters.id"], name="fk_member_rank_standings_semester", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_member_rank_standings_member", ondelete="CASCADE"),
+        Index("uq_member_rank_standings_semester_member", "semester_id", "member_id", unique=True),
+        Index("fk_member_rank_standings_member", "member_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    semester_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    observed: Mapped[RankStanding] = mapped_column(_enum(RankStanding), nullable=False)
+    # UTC, like every push_* and member_* column.
+    observed_since: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    told: Mapped[RankStanding] = mapped_column(_enum(RankStanding), nullable=False)
+    told_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    pushes: Mapped[int] = mapped_column(SMALLINT(unsigned=True), nullable=False, server_default=text("'0'"))
+
+
 # =============================================================================
 # Views (read-only, defined in DB migrations)
 # =============================================================================
@@ -1871,6 +1993,7 @@ t_open_events = Table(
     Column("start_datetime", DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column("end_datetime", DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
     Column("status", Enum(OpenEventsStatus, values_callable=lambda cls: [member.value for member in cls])),
+    Column("level", Enum(EventsLevel, values_callable=lambda cls: [member.value for member in cls])),
     Column("image_url", String(500)),
     Column("meeting_url", String(500)),
     Column("is_official", TINYINT(1), server_default=text("'0'")),

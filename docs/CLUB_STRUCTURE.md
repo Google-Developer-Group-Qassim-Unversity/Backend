@@ -66,6 +66,7 @@ Admin reads take `?semester_id=<uuid>` and default to the current semester
 | `GET /club-structure/roles` | admin |
 | `GET /club-structure/departments/{id}` / `…/roster?semester_id=` | admin |
 | `GET /club-structure/history?semester_id=&department_id=&member_id=` | admin |
+| `GET /club-structure/members/{id}` - one member for the app's staff screens (below) | admin |
 | `POST /club-structure/departments?semester_id=` (joins that semester), `PUT …/{id}`, `POST …/{id}/archive`, `…/restore` | super admin |
 | `POST` / `DELETE /club-structure/semesters/{sid}/departments/{did}` | super admin |
 | `POST …/{sid}/departments/{did}/members`, `DELETE …/members/{mid}` | super admin |
@@ -78,6 +79,19 @@ Leadership department's leaders, which is not listed as a department),
 per-department `leader`, `deputy` (the VP) and `members` (everyone else), plus
 `semester` and `show_in_leaderboard`. `leadership_enabled` is kept for that app
 and is now just "has a leader or VP this semester".
+
+`GET /club-structure/members/{id}` (`club_structure.view`, which every staff
+member has) answers `{member, contact, profile, semester, roles}`: who the
+member is, their card, and their departments and roles in the current semester
+(`roles: []` when they are not staff now). Each private part follows the
+member's own card switches (`member_profiles.visibility`) exactly as the public
+card `GET /wallet/{uuid}` does, a switch never saved reading as its default
+there (`app/DB/wallet.py` `card_visibility`): `contact.email` only with
+`showEmail`, `contact.phone_number` only with `showPhone`, `major`,
+`institution`, `uni_level` and `uni_college` only with `showAcademic`, `bio`
+only with `showBio`; otherwise `null`. `social_links` is always sent. A member
+without a card has `profile.uuid: null`; a deleted account is a 404. Points come
+from `GET /points/members/{id}`.
 
 ## Department ranking
 

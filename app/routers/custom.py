@@ -534,13 +534,9 @@ def update_member_custom_points(log_id: int, body: MemberPointDetails, session: 
         else:
             logger.info(f"No modification to remove - using action points ({action.points})")
 
-    deleted_count = log_queries.delete_member_logs_by_log_id(session, log_id)
-    logger.info(f"Deleted {deleted_count} existing member associations")
-
-    logger.info(f"Creating {len(body.member_ids)} new member associations")
-    for mem_id in body.member_ids:
-        log_queries.create_member_log(session, mem_id, log_id)
-        logger.info(f"Associated member {mem_id} with log {log_id}")
+    # Members who stay keep their rows (and the day they were given the points); see set_member_logs.
+    added = log_queries.set_member_logs(session, log_id, body.member_ids)
+    logger.info(f"Log {log_id} now has {len(set(body.member_ids))} member(s), {len(added)} added")
     if existing_log.event is not None:
         # Only members the edit adds are told: the others already were (docs/PUSH.md).
         push_triggers.custom_points_given(session, existing_log.event, log_id, body.member_ids)

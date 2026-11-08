@@ -1,62 +1,19 @@
-import base64
 import hashlib
-import io
 import json
 import os
 import struct
-import zipfile
-from datetime import datetime, timedelta, timezone
 
 import pytest
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.serialization import BestAvailableEncryption, Encoding, pkcs12
-from cryptography.x509.oid import NameOID
 
-from app.wallet_signer import ASSETS_DIR, generate_apple_pkpass
+from app.wallet_signer import ASSETS_DIR, generate_apple_pkpass, pass_serial_number
+from tests.wallet_support import unpack as _unpack
 
-P12_PASSWORD = "test-password"
 CARD = {
     "uuid": "2b53403d-2248-47d7-90f6-fc1b2ad3429a",
     "fullName": "عضو تجريبي",
     "themeId": "gdg-blue",
     "uniId": "451000000",
 }
-
-
-def _self_signed(common_name: str) -> tuple[rsa.RSAPrivateKey, x509.Certificate]:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
-    now = datetime.now(timezone.utc)
-    certificate = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(days=1))
-        .not_valid_after(now + timedelta(days=1))
-        .sign(key, hashes.SHA256())
-    )
-    return key, certificate
-
-
-@pytest.fixture
-def signing_certs(monkeypatch: pytest.MonkeyPatch) -> None:
-    key, certificate = _self_signed("Pass Type ID: test")
-    _, wwdr = _self_signed("Test WWDR")
-    p12 = pkcs12.serialize_key_and_certificates(
-        b"pass", key, certificate, None, BestAvailableEncryption(P12_PASSWORD.encode())
-    )
-    monkeypatch.setenv("APPLE_P12_BASE64", base64.b64encode(p12).decode())
-    monkeypatch.setenv("APPLE_P12_PASSWORD", P12_PASSWORD)
-    monkeypatch.setenv("APPLE_WWDR_BASE64", base64.b64encode(wwdr.public_bytes(Encoding.DER)).decode())
-
-
-def _unpack(pkpass: bytes) -> dict[str, bytes]:
-    with zipfile.ZipFile(io.BytesIO(pkpass)) as archive:
-        return {name: archive.read(name) for name in archive.namelist()}
 
 
 def _png_size(data: bytes) -> tuple[int, int]:
@@ -131,3 +88,61 @@ def test_a_card_without_a_qr_value_points_at_the_home_page(signing_certs) -> Non
     assert pass_json["barcodes"][0]["message"] == "https://gdg-q.com"
     assert pass_json["barcode"]["message"] == "https://gdg-q.com"
     assert pass_json["serialNumber"] == f"GDGQ-{CARD['uuid'][:8].upper()}"
+
+
+def test_the_serial_number_is_the_uuids_first_eight_characters_uppercased() -> None:
+    """Wallet tells passes apart by it: a new format would put a second card in every member's Wallet."""
+    assert pass_serial_number("2b53403d224847d790f6fc1b2ad3429a") == "GDGQ-2B53403D"
+    assert pass_serial_number(CARD["uuid"]) == "GDGQ-2B53403D"
+
+
+def test_without_the_web_service_the_pass_is_what_it_always_was(signing_certs) -> None:
+    pass_json = json.loads(_unpack(generate_apple_pkpass(CARD))["pass.json"])
+
+    assert "webServiceURL" not in pass_json
+    assert "authenticationToken" not in pass_json
+    assert [field["key"] for field in pass_json["eventTicket"]["backFields"]] == [
+        "email",
+        "major",
+        "level",
+        "club_name",
+    ]
+    assert not any("changeMessage" in field for field in pass_json["eventTicket"]["backFields"])
+
+
+def test_the_web_service_and_the_club_message_go_into_the_pass(signing_certs) -> None:
+    card = {
+        **CARD,
+        "webServiceURL": "https://api.example.test/wallet/apple",
+        "authenticationToken": "a" * 43,
+        "clubMessage": "رسائل النادي تظهر هنا",
+        "clubMessageAnnounce": True,
+    }
+    pass_json = json.loads(_unpack(generate_apple_pkpass(card))["pass.json"])
+
+    assert pass_json["webServiceURL"] == "https://api.example.test/wallet/apple"
+    assert pass_json["authenticationToken"] == "a" * 43
+    message = pass_json["eventTicket"]["backFields"][0]
+    assert message == {
+        "key": "club_message",
+        "label": "رسالة النادي",
+        "value": "رسائل النادي تظهر هنا",
+        "changeMessage": "%@",
+    }
+    assert pass_json["serialNumber"] == "GDGQ-2B53403D"
+
+
+def test_a_club_message_not_announced_changes_silently(signing_certs) -> None:
+    pass_json = json.loads(_unpack(generate_apple_pkpass({**CARD, "clubMessage": "أهلًا"}))["pass.json"])
+
+    assert pass_json["eventTicket"]["backFields"][0] == {
+        "key": "club_message",
+        "label": "رسالة النادي",
+        "value": "أهلًا",
+    }, "no changeMessage: Wallet updates the back without a notification"
+
+
+def test_a_token_without_a_url_is_left_out(signing_certs) -> None:
+    pass_json = json.loads(_unpack(generate_apple_pkpass({**CARD, "authenticationToken": "a" * 43}))["pass.json"])
+
+    assert "webServiceURL" not in pass_json and "authenticationToken" not in pass_json

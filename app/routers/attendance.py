@@ -54,6 +54,7 @@ from app.services.permissions.catalogue import Perm
 from app.services.permissions.dependencies import CurrentAccess
 from app.services.permissions.guards import Require
 from app.services.permissions.departments import event_departments
+from app.services.push import cases as push_cases
 from app.services.push import delivery as push_delivery
 from app.services.push import triggers as push_triggers
 
@@ -268,6 +269,7 @@ def backfill_attendance(
             actor,
             {"day": request.day, "members": marked, "new_members": created_count},
         )
+        push_cases.attendance_added(session, event, [row["member_id"] for row in marked])
     session.commit()
     background_tasks.add_task(push_delivery.kick)
     marked_count = (created_count + existing_count) - already_attended_count
@@ -388,6 +390,7 @@ def mark_attendance_manual(
         event_history.record(
             session, event, EventHistoryAction.ATTENDANCE_MARKED, actor, {"days": days_to_mark, "members": marked}
         )
+        push_cases.attendance_added(session, event, [row["member_id"] for row in marked])
     session.commit()
     background_tasks.add_task(push_delivery.kick)
     return {"success": success_count, "failed": failed_count}
@@ -451,6 +454,7 @@ def scan_attendance(
 
     member_log = log_queries.create_member_log(session, member.id, event_log.id, target_date)
     push_triggers.attendance_recorded(session, event, event_log, member_log)
+    push_cases.attendance_added(session, event, [member_log.member_id])
     event_history.record(
         session,
         event,

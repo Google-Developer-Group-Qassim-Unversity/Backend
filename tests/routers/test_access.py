@@ -236,3 +236,15 @@ def test_access_for_an_event_follows_its_department(club, seed_refs):
     assert Perm.EVENTS_EDIT.value in mine
     assert Perm.EVENTS_EDIT.value not in theirs
     assert Perm.EVENTS_VIEW.value in theirs
+
+
+def test_old_event_deletion_assignment_cannot_authorize_a_leader(club):
+    department = club.department("AI")
+    club.department_permission(department, Perm.EVENTS_DELETE)
+    officer = club.join(club.person(), department, "leader")
+    access = club.access(officer)
+    assert not access.can(Perm.EVENTS_DELETE, department.id)
+    assert Perm.EVENTS_DELETE not in access.permissions()
+    client = club.sign_in(officer)
+    assert client.delete("/events/999999").status_code == 403
+    assert client.get("/events/999999/deletion-impact").status_code == 403

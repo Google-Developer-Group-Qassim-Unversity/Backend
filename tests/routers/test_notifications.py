@@ -5,10 +5,17 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.DB.schema import MemberDevices, PushBroadcasts, PushKind, PushNotifications, PushStatus
+from app.DB.schema import (
+    MemberDevices,
+    MemberNotificationPrefs,
+    PushBroadcasts,
+    PushKind,
+    PushNotifications,
+    PushStatus,
+)
 from app.services.push import outbox
 from app.services.push.outbox import Push
-from tests.push_support import add_device, make_event, make_token, register, set_prefs
+from tests.push_support import add_device, make_event, make_member, make_token, register, set_prefs
 
 TOKEN = "AB" * 32
 
@@ -87,6 +94,45 @@ def test_a_sixth_phone_drops_the_one_seen_longest_ago(club, member, db_session, 
     assert len(tokens) == 5 and make_token(1) not in tokens
 
 
+def _welcomes(session):
+    session.expire_all()
+    return session.scalars(select(PushNotifications).where(PushNotifications.kind == PushKind.WELCOME)).all()
+
+
+def test_a_new_members_first_phone_gets_the_welcome(club, member, db_session, push_on, apns_mock, frozen):
+    member.created_at = frozen.now - timedelta(days=2)
+    db_session.commit()
+    assert club.client.post("/notifications/devices", json=device_body()).status_code == 200
+    [row] = _welcomes(db_session)
+    assert (row.member_id, row.dedupe_key) == (member.id, f"welcome:{member.id}")
+    assert row.payload["url"] == "gdgq://notifications"
+    assert row.payload["en"]["title"] == "Welcome to GDG Qassim"
+    assert row.status == PushStatus.SENT and len(apns_mock.requests) == 1
+    # The same phone again, a second phone, or the first one signed out and back in: no second welcome.
+    club.client.post("/notifications/devices", json=device_body())
+    club.client.post("/notifications/devices", json=device_body(token="CD" * 32))
+    for row in devices(db_session, member_id=member.id):
+        db_session.delete(row)
+    db_session.commit()
+    club.client.post("/notifications/devices", json=device_body())
+    assert len(_welcomes(db_session)) == 1
+
+
+def test_no_welcome_for_a_member_who_joined_over_a_week_ago(club, member, db_session, push_on, apns_mock, frozen):
+    member.created_at = frozen.now - timedelta(days=8)
+    db_session.commit()
+    assert club.client.post("/notifications/devices", json=device_body()).status_code == 200
+    assert _welcomes(db_session) == []
+
+
+def test_no_welcome_for_a_member_who_already_had_a_phone(club, member, db_session, push_on, apns_mock, frozen):
+    member.created_at = frozen.now - timedelta(days=1)
+    add_device(db_session, member, token=make_token())
+    db_session.commit()
+    club.client.post("/notifications/devices", json=device_body())
+    assert _welcomes(db_session) == []
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -132,25 +178,41 @@ def test_nobody_removes_someone_elses_phone(club, member, db_session):
 # ---------------------------------------------------------------- preferences
 
 
-def test_preferences_start_as_the_boards_defaults(club, member):
+def test_preferences_start_with_every_switch_on(club, member):
     assert club.client.get("/notifications/preferences").json() == {
         "remind": True,
         "accept": True,
         "points": True,
-        "news": False,
+        "news": True,
         "updated_at": None,
     }
 
 
 def test_patching_one_switch_keeps_the_others(club, member, frozen):
-    response = club.client.patch("/notifications/preferences", json={"news": True, "points": False})
+    response = club.client.patch("/notifications/preferences", json={"news": False, "points": False})
     assert response.status_code == 200
     body = response.json()
-    assert (body["remind"], body["accept"], body["points"], body["news"]) == (True, True, False, True)
+    assert (body["remind"], body["accept"], body["points"], body["news"]) == (True, True, False, False)
     assert body["updated_at"] == "2026-07-20T09:00:00Z"
     again = club.client.patch("/notifications/preferences", json={"points": True}).json()
-    assert (again["points"], again["news"]) == (True, True)
+    assert (again["points"], again["news"]) == (True, False)
     assert club.client.get("/notifications/preferences").json() == again
+
+
+def test_a_first_save_of_another_switch_leaves_club_news_on(club, member, db_session):
+    body = club.client.patch("/notifications/preferences", json={"remind": False}).json()
+    assert (body["remind"], body["news"]) == (False, True)
+    db_session.expire_all()
+    [row] = db_session.scalars(select(MemberNotificationPrefs).where(MemberNotificationPrefs.member_id == member.id))
+    assert (row.remind, row.accept, row.points, row.news) == (0, 1, 1, 1)
+
+
+def test_members_without_a_saved_row_hear_club_news(db_session, push_on):
+    never_saved, opted_out = make_member(db_session), make_member(db_session)
+    for person in (never_saved, opted_out):
+        add_device(db_session, person)
+    set_prefs(db_session, opted_out, news=False)
+    assert outbox.reachable(db_session, "news", {never_saved.id, opted_out.id}) == {never_saved.id}
 
 
 @pytest.mark.parametrize("body", [{"sound": True}, {"news": "maybe"}, {"member_id": 3, "news": True}])
@@ -209,6 +271,13 @@ def test_the_feed_lists_what_was_sent_newest_first_in_the_asked_language(club, m
     }
     assert club.client.get("/notifications/me").json()[0]["title"] == "عنوان"
     assert len(club.client.get("/notifications/me", params={"limit": 1}).json()) == 1
+
+
+def test_the_feed_lists_the_1_0_3_kinds(club, member, db_session, frozen):
+    for n, kind in enumerate([PushKind.CERTIFICATE, PushKind.WEEKLY_SUMMARY, PushKind.EVENT_CANCELLED]):
+        _sent(db_session, member, kind, key=f"k{n}", sent_at=frozen.now - timedelta(hours=n))
+    kinds = [item["kind"] for item in club.client.get("/notifications/me").json()]
+    assert kinds == ["certificate", "weekly_summary", "event_cancelled"]
 
 
 @pytest.mark.parametrize("params", [{"lang": "fr"}, {"limit": 0}, {"limit": 101}])

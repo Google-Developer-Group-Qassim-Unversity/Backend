@@ -14,6 +14,7 @@ from app.DB.ids import new_id
 from app.DB.schema import (
     MemberDevices,
     MemberNotificationPrefs,
+    MemberRankStandings,
     PushEnvironment,
     PushLocale,
     PushNotifications,
@@ -21,8 +22,8 @@ from app.DB.schema import (
     PushStatus,
 )
 
-# The app's Settings board: reminders, acceptance and points on, club news off.
-DEFAULT_PREFS: dict[str, bool] = {"remind": True, "accept": True, "points": True, "news": False}
+# The app's Settings board: every switch on until the member turns it off (club news too, since 1.0.3).
+DEFAULT_PREFS: dict[str, bool] = {"remind": True, "accept": True, "points": True, "news": True}
 SWITCHES = tuple(DEFAULT_PREFS)
 
 # A member's phones; registering a sixth drops the one seen longest ago.
@@ -197,8 +198,9 @@ def insert_notifications(session: Session, rows: list[dict]) -> None:
 
 
 def delete_member_push_data(session: Session, member_id: int) -> None:
-    """Account deletion: the member's phones, switches and every notification row, sent ones included."""
+    """Account deletion: the member's phones, switches, rank standings and every notification row, sent ones too."""
     session.execute(delete(PushNotifications).where(PushNotifications.member_id == member_id))
+    session.execute(delete(MemberRankStandings).where(MemberRankStandings.member_id == member_id))
     session.execute(delete(MemberNotificationPrefs).where(MemberNotificationPrefs.member_id == member_id))
     session.execute(delete(MemberDevices).where(MemberDevices.member_id == member_id))
     session.flush()

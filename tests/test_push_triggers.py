@@ -335,7 +335,7 @@ def test_a_rescheduled_event_drops_the_old_reminder(db_session, push_on, apns_mo
 
 
 def test_an_event_created_open_is_announced_to_members_with_club_news_on(db_session, push_on, frozen):
-    reader, other = app_user(db_session, news=True), app_user(db_session)
+    reader, other = app_user(db_session), app_user(db_session, news=False)
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), created_at=frozen.now - timedelta(hours=3))
     db_session.commit()
     assert sweep(db_session, frozen.now).push_new_events == 1

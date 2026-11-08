@@ -105,6 +105,70 @@ class RosterEntryResponse(BaseModel):
     added_at: UtcDateTime
 
 
+class StaffMemberInfo(BaseModel):
+    """Who the member is. ``uni_level`` and ``uni_college`` only when the member's card shows academic details."""
+
+    id: int
+    name: str
+    public_name: str
+    gender: str
+    uni_level: int | None
+    uni_college: str | None
+
+
+class StaffMemberContact(BaseModel):
+    """Each only when the member's card shows it (``showEmail``, ``showPhone``); otherwise null."""
+
+    email: str | None
+    phone_number: str | None
+
+
+class StaffMemberSocialLink(BaseModel):
+    id: str
+    platform: str
+    url: str
+    label: str | None
+
+
+class StaffMemberProfile(BaseModel):
+    """The member's card. ``uuid`` is null when the member never opened theirs (no profile row)."""
+
+    uuid: str | None
+    # Only when the card shows academic details (``showAcademic``).
+    major: str | None
+    institution: str | None
+    # Only when the card shows the bio (``showBio``).
+    bio: str | None
+    # Always sent, as on the public card; [] when there are none.
+    social_links: list[StaffMemberSocialLink]
+
+
+class StaffMemberSemester(BaseModel):
+    id: str
+    name: str
+
+
+class StaffMemberDepartment(BaseModel):
+    """A department the member is on the roster of this semester, with every role they hold there."""
+
+    department_id: int
+    name: str
+    ar_name: str
+    roles: list[str]
+
+
+class StaffMemberResponse(BaseModel):
+    """``GET /club-structure/members/{id}``: a member as staff see them in the app."""
+
+    member: StaffMemberInfo
+    contact: StaffMemberContact
+    profile: StaffMemberProfile
+    # The current semester; null only when no semester is defined.
+    semester: StaffMemberSemester | None
+    # The member's departments and roles in the current semester; [] when they are not staff now.
+    roles: list[StaffMemberDepartment]
+
+
 class MembershipResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

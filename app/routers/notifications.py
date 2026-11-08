@@ -9,7 +9,7 @@ from datetime import timedelta
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
 from app.config import config
@@ -19,6 +19,7 @@ from app.DB import push as push_queries
 from app.DB.ids import new_id
 from app.DB.schema import (
     Forms,
+    MemberDevices,
     PushBroadcasts,
     PushEnvironment,
     PushKind,
@@ -41,7 +42,7 @@ from app.routers.notification_models import (
 )
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.guards import Require
-from app.services.push import clock, delivery, links, messages, outbox
+from app.services.push import cases, clock, delivery, links, messages, outbox
 from app.services.push.outbox import Push
 
 logger = logging.getLogger(__name__)
@@ -57,8 +58,14 @@ BROADCAST_TTL = timedelta(days=2)
 
 
 @router.post("/devices", status_code=status.HTTP_200_OK, response_model=DeviceRegisteredResponse)
-def register_device(body: DeviceRegistrationRequest, member: CurrentMember, session: DB):
-    """Register (or refresh) this phone for the signed-in member. A token signed in elsewhere moves here."""
+def register_device(
+    body: DeviceRegistrationRequest, member: CurrentMember, session: DB, background_tasks: BackgroundTasks
+):
+    """Register (or refresh) this phone for the signed-in member. A token signed in elsewhere moves here.
+
+    A new member's first phone gets the welcome push (``cases.first_device``).
+    """
+    had_device = bool(session.scalar(select(exists().where(MemberDevices.member_id == member.id))))
     device = push_queries.register_device(
         session,
         member.id,
@@ -70,8 +77,11 @@ def register_device(body: DeviceRegistrationRequest, member: CurrentMember, sess
         locale=PushLocale(body.locale),
         now=clock.now(),
     )
+    welcomed = cases.first_device(session, member, had_device=had_device)
     session.commit()
     logger.info("Member %s registered device %s (%s, %s)", member.id, device.id, body.environment, body.locale)
+    if welcomed:
+        background_tasks.add_task(delivery.kick)
     return {"id": device.id, "registered": True}
 
 

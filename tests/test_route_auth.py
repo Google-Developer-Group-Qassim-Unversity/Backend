@@ -24,6 +24,13 @@ Authorization header off the request and calling the guard by hand, inside a
 `try/except Exception` - which this test could not see. The token is a
 dependency now, so the table describes what they actually do. Neither route
 rejects an anonymous caller; both still issue a guest card.
+
+The five `/wallet/apple/v1/*` routes are Apple's PassKit web service, called by
+Wallet and never by the apps: no Clerk session there. Three take the pass's
+own `Authorization: ApplePass <token>` (`apple_pass_token`, the
+`apple_pass_holder` dependency in `app/routers/wallet.py`); the list of a
+device's updated serials and the log are public in Apple's design (the device
+library id is the list's secret).
 """
 
 import pytest
@@ -74,6 +81,7 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /club-structure/roles": "club_structure.view",
     "GET /club-structure/departments/{department_id:int}": "club_structure.view",
     "GET /club-structure/departments/{department_id:int}/roster": "club_structure.view",
+    "GET /club-structure/members/{member_id:int}": "club_structure.view",
     "GET /club-structure/history": "club_structure.view",
     "POST /club-structure/departments": "club_structure.manage",
     "PUT /club-structure/departments/{department_id:int}": "club_structure.manage",
@@ -91,7 +99,9 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "DELETE /custom/departments/{log_id}": "points.custom",
     "DELETE /custom/members/{log_id}": "points.custom",
     "DELETE /emails/blast/templates/{template_id:int}": "emails.blast",
-    "DELETE /events/{event_id:int}": "events.delete for event",
+    "DELETE /events/{event_id:int}": "super_admin",
+    "GET /events/{event_id:int}/deletion-impact": "super_admin",
+    "GET /events/{event_id:int}/deletion-impact/{resource}": "super_admin",
     "DELETE /events/{event_id:int}/content-links/{link_id}": "events.edit for event",
     "DELETE /semesters/{semester_id}": "semesters.manage",
     "DELETE /submissions/{form_id:int}": "authenticated_guard",
@@ -115,6 +125,9 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "GET /emails/logs/enriched/stream": "emails.logs",
     "GET /emails/logs/event/{event_id:int}": "emails.event for event",
     "GET /emails/logs/member/{member_id:int}": "emails.logs",
+    "GET /emails/sends": "emails.logs",
+    "GET /emails/sends/{id:int}": "emails.logs",
+    "GET /emails/sends/{id:int}/certificate-sample": "emails.logs",
     "GET /emails/stats": "emails.logs",
     "GET /emails/stats/dashboard": "admin.access",
     "GET /events/": None,
@@ -220,6 +233,16 @@ EXPECTED_AUTH: dict[str, str | None] = {
     "PUT /semesters/{semester_id}": "semesters.manage",
     "PUT /submissions/accept": "submissions.review",
     "PUT /wallet/me": "authenticated_guard",
+    # Apple's PassKit web service (docs/WALLET.md); see the module docstring.
+    "POST /wallet/apple/v1/devices/{device_library_id}/registrations/{pass_type_id}/{serial_number}": (
+        "apple_pass_token"
+    ),
+    "DELETE /wallet/apple/v1/devices/{device_library_id}/registrations/{pass_type_id}/{serial_number}": (
+        "apple_pass_token"
+    ),
+    "GET /wallet/apple/v1/passes/{pass_type_id}/{serial_number}": "apple_pass_token",
+    "GET /wallet/apple/v1/devices/{device_library_id}/registrations/{pass_type_id}": None,
+    "POST /wallet/apple/v1/log": None,
     # Answers "not staff" for anyone signed in who is not; see app/services/permissions.
     "GET /access/me": "authenticated_guard",
     "GET /access/events/{event_id:int}": "admin.access",

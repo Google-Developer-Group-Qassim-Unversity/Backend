@@ -8,6 +8,7 @@ from sqlalchemy import Select, select, func
 
 from app.exceptions import EventNotFound
 from .schema import (
+    EventsLevel,
     Events,
     EventsContentLinkKind,
     EventsLocationType,
@@ -24,6 +25,7 @@ from app.routers.models import Events_model
 from app.config import config
 from app.helpers import get_effective_date
 from app.semesters import semester_for_event
+from app.services import event_pipeline_clock
 from datetime import datetime, timedelta
 
 if TYPE_CHECKING:
@@ -335,6 +337,7 @@ def create_event_content_link(
         url=link_data.url,
         kind=link_data.kind,
         published=link_data.published,
+        published_at=event_pipeline_clock.now() if link_data.published else None,
         drive_file_id=getattr(link_data, "drive_file_id", None),
         created_by=created_by,
     )
@@ -377,6 +380,10 @@ def update_event_content_link(session: Session, existing: EventContentLinks, lin
     if link_data.kind is not None:
         existing.kind = link_data.kind
     if link_data.published is not None:
+        if link_data.published and not existing.published:
+            existing.published_at = event_pipeline_clock.now()
+        elif not link_data.published:
+            existing.published_at = None
         existing.published = link_data.published
     session.flush()
     return existing
@@ -414,6 +421,7 @@ def create_event(session: Session, event_data: Events_model, responsible_member_
         end_datetime=event_data.end_datetime,
         description=event_data.description,
         status=event_data.status,
+        level=EventsLevel(event_data.level or EventsLevel.BEGINNER),
         is_official=event_data.is_official,
         image_url=event_data.image_url,
         meeting_url=event_data.meeting_url,
@@ -452,6 +460,8 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         existing_event.end_datetime = event_data.end_datetime
         existing_event.description = event_data.description
         existing_event.status = EventsStatus(event_data.status)
+        if event_data.level is not None:
+            existing_event.level = EventsLevel(event_data.level)
         existing_event.image_url = event_data.image_url
         # meeting_url is owned by update_event_meeting_url, and the edit form does not
         # carry it, so it otherwise survives untouched here. Except: once the event stops

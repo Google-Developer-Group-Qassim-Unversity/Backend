@@ -30,7 +30,7 @@ from app.routers.permissions_models import (
 from app.routers.responses import DetailResponse
 from app.services.permissions import management
 from app.services.permissions.access import explain_access
-from app.services.permissions.catalogue import CATALOGUE, STAFF_BASICS, Perm
+from app.services.permissions.catalogue import SUPER_ADMIN_ONLY, CATALOGUE, STAFF_BASICS, Perm
 from app.services.permissions.dependencies import CurrentCaller
 from app.services.permissions.departments import path_departments
 from app.services.permissions.guards import Require, Staff, SuperAdmin
@@ -71,6 +71,7 @@ def get_permission_catalogue():
     return [
         CataloguePermission(key=perm.value, scope=info.scope, label=info.label, ar_label=info.ar_label)
         for perm, info in CATALOGUE.items()
+        if perm not in SUPER_ADMIN_ONLY
     ]
 
 
@@ -79,10 +80,13 @@ def get_permission_assignments(session: DB):
     """The shared permissions, and every active department's own."""
     by_department = queries.get_all_department_permissions(session)
     return AssignmentsResponse(
-        shared=sorted(queries.get_shared_permissions(session)),
+        shared=sorted(queries.get_shared_permissions(session) - SUPER_ADMIN_ONLY),
         departments=[
             DepartmentAssignment(
-                department_id=d.id, name=d.name, ar_name=d.ar_name, permissions=sorted(by_department.get(d.id, set()))
+                department_id=d.id,
+                name=d.name,
+                ar_name=d.ar_name,
+                permissions=sorted(by_department.get(d.id, set()) - SUPER_ADMIN_ONLY),
             )
             for d in queries.get_active_departments(session)
         ],

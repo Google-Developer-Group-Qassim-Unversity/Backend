@@ -236,7 +236,7 @@ def seed_core_data(engine):
                 Members(
                     name="Ahmed Ali",
                     email="ahmed@example.com",
-                    phone_number="0501234567",
+                    phone_number="0501112233",
                     uni_id="111111111",
                     gender=MembersGender.MALE,
                     uni_level=4,
@@ -553,3 +553,6 @@ def outbound(monkeypatch) -> Generator:
 
 # The push notification tests' fixtures (tests/push_support.py).
 from tests.push_support import apns_mock, frozen, push_on  # noqa: E402, F401
+
+# The Apple Wallet tests' fixtures (tests/wallet_support.py).
+from tests.wallet_support import pass_apns, pass_updates_on, signing_certs  # noqa: E402, F401

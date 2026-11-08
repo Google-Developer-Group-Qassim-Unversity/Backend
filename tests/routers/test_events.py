@@ -1,3 +1,4 @@
+import pytest
 from datetime import datetime
 
 from fastapi.testclient import TestClient
@@ -274,7 +275,8 @@ def test_unauthorized_update_event(clerk_client: TestClient, db_session):
     assert_forbidden(update_response)
 
 
-def test_delete_event(admin_client: TestClient, seed_refs):
+def test_delete_event(super_admin_client: TestClient, seed_refs):
+    admin_client = super_admin_client
     event = admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
     admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
 
@@ -419,12 +421,21 @@ def test_active_remote_event_requiring_registration_not_in_open_events(admin_cli
     assert event["id"] not in ids, "Registration must close before an active event drops off the open list"
 
 
-def test_delete_non_draft_event(admin_client: TestClient):
+@pytest.mark.parametrize("event_status", ["draft", "open", "active", "closed"])
+def test_delete_event_in_any_status(super_admin_client: TestClient, event_status, db_session):
+    event = super_admin_client.post("/events", json=make_create_event_payload()).json()
+    row = db_session.get(Events, event["id"])
+    row.status = event_status
+    db_session.commit()
+    assert_2xx(super_admin_client.delete(f"/events/{event['id']}"))
+    assert_not_found(super_admin_client.get(f"/events/{event['id']}"))
+
+
+def test_staff_cannot_delete_even_with_old_permission(admin_client: TestClient):
     event = admin_client.post("/events", json=make_create_event_payload()).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
-    delete_response = admin_client.delete(f"/events/{event['id']}")
-    assert_bad_request(delete_response)
-    assert "only draft events" in delete_response.json()["detail"].lower()
+    assert_forbidden(admin_client.get(f"/events/{event['id']}/deletion-impact"))
+    assert_forbidden(admin_client.get(f"/events/{event['id']}/deletion-impact/submissions"))
+    assert_forbidden(admin_client.delete(f"/events/{event['id']}"))
 
 
 def test_update_event_invalid_dates(admin_client: TestClient):
@@ -456,8 +467,8 @@ def test_update_nonexistent_event(admin_client: TestClient, seed_refs):
     assert_not_found(response)
 
 
-def test_delete_nonexistent_event(admin_client: TestClient):
-    assert_not_found(admin_client.delete("/events/9999"))
+def test_delete_nonexistent_event(super_admin_client: TestClient):
+    assert_not_found(super_admin_client.delete("/events/9999"))
 
 
 def test_update_event_meeting_url(admin_client: TestClient):
@@ -670,3 +681,52 @@ def test_paginated_events_without_department_or_attendance(admin_client: TestCli
     assert item["department_name"] is None
     assert item["department_ar_name"] is None
     assert item["attendance_count"] == 0
+
+
+def test_create_event_without_a_level_is_beginner(admin_client: TestClient):
+    event = make_event()
+    del event["level"]
+    response = admin_client.post("/events", json=make_create_event_payload(event=event))
+    assert_2xx(response)
+    assert response.json()["level"] == "beginner"
+
+
+def test_create_event_rejects_an_unknown_level(admin_client: TestClient):
+    response = admin_client.post("/events", json=make_create_event_payload(event=make_event(level="expert")))
+    assert response.status_code == 422
+
+
+def test_create_event_stores_its_level(admin_client: TestClient):
+    created = admin_client.post("/events", json=make_create_event_payload(event=make_event(level="advanced")))
+    assert_2xx(created)
+    assert created.json()["level"] == "advanced"
+    assert admin_client.get(f"/events/{created.json()['id']}").json()["level"] == "advanced"
+
+
+def _update_level(admin_client: TestClient, event_id: int, **level) -> dict:
+    details = admin_client.get(f"/events/{event_id}/details").json()
+    event = {**details["event"], **level}
+    if not level:
+        event.pop("level")
+    response = admin_client.put(f"/events/{event_id}", json={"event": event, "actions": details["actions"]})
+    assert_2xx(response)
+    return response.json()
+
+
+def test_update_without_a_level_keeps_it_and_with_one_changes_it(admin_client: TestClient):
+    event_id = admin_client.post(
+        "/events", json=make_create_event_payload(event=make_event(level="intermediate"))
+    ).json()["id"]
+
+    assert _update_level(admin_client, event_id)["level"] == "intermediate"
+    assert _update_level(admin_client, event_id, level="advanced")["level"] == "advanced"
+
+
+def test_open_events_carry_the_level(admin_client: TestClient):
+    event = admin_client.post(
+        "/events", json=make_create_event_payload(event=make_event(level="advanced"), form_type="registration")
+    ).json()
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+
+    listed = next(e for e in admin_client.get("/events/open").json() if e["id"] == event["id"])
+    assert listed["level"] == "advanced"
