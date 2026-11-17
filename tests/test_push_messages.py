@@ -39,8 +39,57 @@ def test_accepted_and_new_event_texts_carry_the_date_as_the_app_writes_it():
     accepted = messages.accepted("Intro", datetime(2026, 10, 13, 10, 30))
     assert accepted["ar"] == {"title": "تم قبول تسجيلك", "body": "\u2068Intro\u2069 · 13 أكتوبر · 10:30 ص"}
     assert accepted["en"] == {"title": "Registration accepted", "body": "\u2068Intro\u2069 · Oct 13 · 10:30 AM"}
-    new = messages.new_event("Intro", "Discord", datetime(2026, 10, 13, 0, 5))
-    assert new["en"]["body"] == "Oct 13 · 12:05 AM · \u2068Discord\u2069"
+    new = messages.new_event("Intro", True, datetime(2026, 10, 13, 0, 5))
+    assert new["en"]["body"] == "\u2068Intro\u2069 · Online · Oct 13 · 12:05 AM"
+
+
+def test_new_event_title_names_the_type_and_the_body_says_online_or_on_site():
+    course = messages.new_event("الحوكمة", True, datetime(2026, 11, 14, 20, 0), "course")
+    assert course["ar"] == {
+        "title": "دورة جديدة فتح التسجيل!",
+        "body": "\u2068الحوكمة\u2069 · أونلاين · يوم 14 نوفمبر · 8:00 م",
+    }
+    assert course["en"] == {
+        "title": "New course, registration open!",
+        "body": "\u2068الحوكمة\u2069 · Online · Nov 14 · 8:00 PM",
+    }
+    workshop = messages.new_event("Portfolio", False, datetime(2026, 12, 9, 9, 30), "workshop")
+    assert workshop["ar"]["title"] == "ورشة عمل جديدة فتح التسجيل!"
+    assert workshop["ar"]["body"] == "\u2068Portfolio\u2069 · حضوري · يوم 9 ديسمبر · 9:30 ص"
+    assert workshop["en"]["body"] == "\u2068Portfolio\u2069 · On-site · Dec 9 · 9:30 AM"
+
+
+@pytest.mark.parametrize(
+    ("event_type", "ar", "en"),
+    [
+        (None, "حدث جديد", "event"),
+        ("bootcamp", "معسكر جديد", "bootcamp"),
+        ("meetup", "لقاء جديد", "meetup"),
+        ("competition", "مسابقة جديدة", "competition"),
+        ("something_new", "حدث جديد", "event"),
+    ],
+)
+def test_new_event_title_falls_back_to_the_general_word(event_type, ar, en):
+    text = messages.new_event("Intro", True, datetime(2026, 11, 14, 20, 0), event_type)
+    assert text["ar"]["title"] == f"{ar} فتح التسجيل!"
+    assert text["en"]["title"] == f"New {en}, registration open!"
+
+
+def test_a_long_event_name_is_cut_after_the_last_whole_word_that_fits():
+    long = "قيادة الأستراتيجية والحوكمة المؤسسية في عصر الذكاء الأصطناعي"
+    assert messages.short_name(long) == "قيادة الأستراتيجية والحوكمة…"
+    assert (
+        messages.short_name("هندسة الروبوتات: كيف تتكامل التخصصات لصناعة روبوت ذكي؟") == "هندسة الروبوتات: كيف تتكامل…"
+    )
+    assert messages.short_name("Portfolio: Design it, Publish it") == "Portfolio: Design it, Publish it"
+    assert messages.short_name("A" * 50) == "A" * 34 + "…"
+    assert messages.short_name("  Intro \n to   ML ") == "Intro to ML"
+    # A word that ends exactly at the limit is kept whole; punctuation left at the cut goes.
+    assert messages.short_name(f"{'a' * 34} b") == f"{'a' * 34}…"
+    assert messages.short_name("Intro to Machine Learning: Advanced level") == "Intro to Machine Learning…"
+    assert messages.short_name("Workshop: one two three, four five six") == "Workshop: one two three, four five…"
+    text = messages.new_event(long, True, datetime(2026, 11, 14, 20, 0))
+    assert text["ar"]["body"] == "\u2068قيادة الأستراتيجية والحوكمة…\u2069 · أونلاين · يوم 14 نوفمبر · 8:00 م"
 
 
 @pytest.mark.parametrize(

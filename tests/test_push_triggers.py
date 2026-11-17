@@ -12,8 +12,11 @@ from sqlalchemy import select
 from app.DB import logs as log_queries
 from app.DB import members as member_queries
 from app.DB.schema import (
+    Departments,
     EventHistory,
     EventHistoryAction,
+    EventRequests,
+    EventRequestType,
     EventsLocationType,
     EventsStatus,
     FormType,
@@ -342,12 +345,40 @@ def test_an_event_created_open_is_announced_to_members_with_club_news_on(db_sess
     [row] = rows(db_session, PushKind.NEW_EVENT)
     assert (row.member_id, row.dedupe_key) == (reader.id, f"new_event:{event.id}:{reader.id}")
     assert row.payload["en"] == {
-        "title": "New event: \u2068Intro to ML\u2069",
-        "body": "Jul 28 · 4:00 PM · \u2068Hall 60\u2069",
+        "title": "New event, registration open!",
+        "body": "\u2068Intro to ML\u2069 · On-site · Jul 28 · 4:00 PM",
     }
     assert row.expires_at == datetime(2026, 7, 28, 13, 0)
     assert other.id not in {r.member_id for r in rows(db_session)}
     assert sweep(db_session, frozen.now).push_new_events == 0
+
+
+def test_an_event_published_from_the_pipeline_is_announced_by_its_type(db_session, push_on, frozen):
+    app_user(db_session)
+    event = make_event(
+        db_session,
+        start=datetime(2026, 7, 28, 16, 0),
+        location_type=EventsLocationType.ONLINE,
+        created_at=frozen.now - timedelta(hours=3),
+    )
+    department = db_session.scalars(select(Departments).order_by(Departments.id)).first()
+    requester = make_member(db_session, "Requester")
+    db_session.add(
+        EventRequests(
+            department_id=department.id,
+            requested_by=requester.id,
+            event_type=EventRequestType.WORKSHOP,
+            event_id=event.id,
+        )
+    )
+    db_session.commit()
+    sweep(db_session, frozen.now)
+    [row] = rows(db_session, PushKind.NEW_EVENT)
+    assert row.payload["ar"] == {
+        "title": "ورشة عمل جديدة فتح التسجيل!",
+        "body": "\u2068Intro to ML\u2069 · أونلاين · يوم 28 يوليو · 4:00 م",
+    }
+    assert row.payload["en"]["title"] == "New workshop, registration open!"
 
 
 def test_a_draft_opened_today_is_announced_but_an_old_open_event_is_not(db_session, push_on, frozen):

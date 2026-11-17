@@ -115,12 +115,49 @@ def points(name: str | None, count: int) -> Text:
     }
 
 
-def new_event(name: str | None, location: str | None, starts: datetime) -> Text:
-    title = event_name(name)
-    place = isolate(place_label(location))
+# What the new-event title calls the event: the pipeline request's ``event_type``, else the general word.
+# The Arabic carries the word's gender (جديد / جديدة).
+NEW_EVENT_WORDS: dict[str | None, tuple[str, str]] = {
+    None: ("حدث جديد", "event"),
+    "course": ("دورة جديدة", "course"),
+    "bootcamp": ("معسكر جديد", "bootcamp"),
+    "meetup": ("لقاء جديد", "meetup"),
+    "workshop": ("ورشة عمل جديدة", "workshop"),
+    "competition": ("مسابقة جديدة", "competition"),
+}
+# The longest event name the new-event body keeps, so the body stays at about two lines on the lock screen.
+NEW_EVENT_NAME_MAX = 34
+_NAME_TRIM = " :،,-–·"
+
+
+def short_name(name: str | None, limit: int = NEW_EVENT_NAME_MAX) -> str:
+    """``name`` up to ``limit`` characters, cut after the last whole word that fits and ending in "…"."""
+    text = re.sub(r"\s+", " ", (name or "").strip())
+    if len(text) <= limit:
+        return text
+    # One character past the limit: a space there means the word before it ends exactly at the limit.
+    head = text[: limit + 1].rsplit(" ", 1)[0] if " " in text[: limit + 1] else text[:limit]
+    return f"{head.rstrip(_NAME_TRIM)}…"
+
+
+def new_event(name: str | None, online: bool, starts: datetime, event_type: str | None = None) -> Text:
+    """Title "دورة جديدة فتح التسجيل!", body "<name> · أونلاين · يوم 14 نوفمبر · 8:00 م".
+
+    ``event_type`` is the pipeline request's (an event created in Admin has none). The same text goes
+    to every event, one without a registration form too. No hall name: only online or on-site.
+    """
+    ar_word, en_word = NEW_EVENT_WORDS.get(event_type, NEW_EVENT_WORDS[None])
+    shown = isolate(short_name(name))
+    ar_place, en_place = ("أونلاين", "Online") if online else ("حضوري", "On-site")
     return {
-        "ar": {"title": f"فعالية جديدة: {title}", "body": _join(date_time_text(starts, "ar"), place)},
-        "en": {"title": f"New event: {title}", "body": _join(date_time_text(starts, "en"), place)},
+        "ar": {
+            "title": f"{ar_word} فتح التسجيل!",
+            "body": _join(shown, ar_place, f"يوم {date_text(starts, 'ar')}", time_text(starts, "ar")),
+        },
+        "en": {
+            "title": f"New {en_word}, registration open!",
+            "body": _join(shown, en_place, date_time_text(starts, "en")),
+        },
     }
 
 
