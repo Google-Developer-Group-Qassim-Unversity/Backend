@@ -31,6 +31,7 @@ from app.DB.schema import (
     Actions,
     EventHistory,
     EventHistoryAction,
+    EventRequests,
     Events,
     EventsLocationType,
     EventsStatus,
@@ -296,13 +297,16 @@ def enqueue_new_events(session: Session, now: datetime, result) -> None:
     if not fresh:
         return
     readers = outbox.reachable(session, "news")
+    types = event_types(session, [event.id for event in fresh])
     for event in fresh:
         pushes = [Push(member_id=member_id, dedupe_key=f"new_event:{event.id}:{member_id}") for member_id in readers]
         result.push_new_events += outbox.enqueue(
             session,
             PushKind.NEW_EVENT,
             pushes,
-            text=messages.new_event(event.name, event.location, event.start_datetime),
+            text=messages.new_event(
+                event.name, event.location_type == EventsLocationType.ONLINE, event.start_datetime, types.get(event.id)
+            ),
             url=links.event_url(event.id),
             thread_id=f"event-{event.id}",
             event_id=event.id,
@@ -310,6 +314,16 @@ def enqueue_new_events(session: Session, now: datetime, result) -> None:
             now=now,
             reachable_ids=readers,
         )
+
+
+def event_types(session: Session, event_ids: Sequence[int]) -> dict[int, str]:
+    """The ``event_type`` of the pipeline request that published each event; events created in Admin have none."""
+    rows = session.execute(
+        select(EventRequests.event_id, EventRequests.event_type).where(
+            EventRequests.event_id.in_(event_ids), EventRequests.event_type.is_not(None)
+        )
+    ).all()
+    return {event_id: event_type.value for event_id, event_type in rows}
 
 
 def became_open_at(session: Session, event: Events) -> datetime | None:
