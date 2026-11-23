@@ -40,6 +40,7 @@ from app.routers import (
     pipeline,
     pipeline_requests,
     notifications,
+    soob_draw,
 )
 
 # `event_level=ERROR` is the sentry-sdk default, stated here because it is the
@@ -136,3 +137,4 @@ app.include_router(permissions.router)
 app.include_router(pipeline.router)
 app.include_router(pipeline_requests.router)
 app.include_router(notifications.router)
+app.include_router(soob_draw.router)

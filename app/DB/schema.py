@@ -17,6 +17,7 @@ from sqlalchemy import (
     JSON,
     String,
     Time,
+    UniqueConstraint,
     Table,
     Text,
     text,
@@ -2002,3 +2003,17 @@ t_open_events = Table(
     Column("google_responders_url", String(150)),
     info={"is_view": True},
 )
+
+
+class SoobDrawEntries(Base):
+    __tablename__ = "soob_draw_entries"
+    __table_args__ = (
+        ForeignKeyConstraint(["member_id"], ["members.id"], ondelete="CASCADE"),
+        UniqueConstraint("member_id", name="uq_soob_draw_entries_member"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    member_id: Mapped[int] = mapped_column(INTEGER(unsigned=True), nullable=False)
+    entered_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
