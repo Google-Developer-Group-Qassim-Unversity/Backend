@@ -269,6 +269,7 @@ class EventPerson_model(BaseClassModel):
 
 class EventDetailsModel(BaseClassModel):
     event: Events_model
+    attendance_points: int | None = None
     actions: conlist(event_actions_model, min_length=1)  # pyright: ignore[reportInvalidTypeForm]
     # Null on events created before these were recorded, or if the member was deleted.
     responsible: EventPerson_model | None = None
@@ -296,6 +297,7 @@ class EventHistoryResponse(BaseClassModel):
 
 class UpdateEventModel(BaseClassModel):
     event: Events_model
+    attendance_points: int | None = Field(default=None, ge=0, le=2147483647, strict=True)
     actions: conlist(event_actions_model, min_length=1)  # pyright: ignore[reportInvalidTypeForm]
 
 

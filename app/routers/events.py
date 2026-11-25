@@ -39,18 +39,27 @@ from app.routers.models import (
 )
 from app.clients import GDrive
 from app.helpers import CurrentMember
-from app.leaderboard_cache import reset_leaderboard_cache_best_effort
+from app.leaderboard_cache import reset_leaderboard_cache_best_effort, refresh_attendance_points_cache
 from app.services.events import create_full_event
 from app.services.google_client import set_form_publish_state
 from app.semesters import resolve_semester
 from time import perf_counter
 from typing import Annotated, Literal
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 from app.exceptions import DataIntegrityError, DriveIntegrationNotConfigured
 from app.dependencies import DB
 from sqlalchemy.orm import Session
 from app.DB import event_pipeline as pipeline_queries
-from app.DB.schema import EventHistoryAction, EventsLocationType, EventsStatus, FormType, Members, PipelineHistoryAction
+from app.DB.schema import (
+    Events,
+    EventHistoryAction,
+    EventsLocationType,
+    EventsStatus,
+    FormType,
+    Members,
+    PipelineHistoryAction,
+)
 from app.services import event_history, pipeline_calendar, pipeline_history
 from app.services.push import cases as push_cases
 from app.services.push import delivery as push_delivery
@@ -196,8 +205,10 @@ def get_event_details(event_id: int, session: DB):
     # never attached onto the event object, so only a code path that asks for
     # the whole set can ever return it (a serializer reading the event row
     # sees published rows only, or none).
+    attendance_log = log_queries.get_attendable_logs(session, event_id)
     return {
         "event": event,
+        "attendance_points": log_queries.get_log_points(session, attendance_log.id) if attendance_log else None,
         "actions": actions,
         "responsible": _person(event.responsible_member),
         "created_by": _person(event.creator),
@@ -260,10 +271,13 @@ def update_event(
 ):
     try:
         logger.info(f"Updating Event [{event_id}]")
-        existing = events_queries.get_event_by_id(session, event_id)
+        # Serialize edits, including the first adjustment when no row exists yet.
+        existing = session.scalar(select(Events).where(Events.id == event_id).with_for_update())
         before = event_history.snapshot(existing) if existing else {}
         push_before = push_cases.event_state(existing) if existing else {}
         points_before: dict = {}
+        attendance_log = log_queries.get_attendable_logs(session, event_id)
+        attendance_before = log_queries.get_log_points(session, attendance_log.id) if attendance_log else None
 
         # 1. Validate event exists and update event fields
         if event_data.event.end_datetime < event_data.event.start_datetime:
@@ -374,7 +388,17 @@ def update_event(
                     )
                     log_queries.delete_n_department_logs(session, department_log.id, days_to_remove)
 
+        if event_data.attendance_points is not None:
+            attendance_log = log_queries.get_attendable_logs(session, event_id)
+            if updated_event.location_type == "none" or attendance_log is None:
+                raise HTTPException(status_code=400, detail="Event has no attendable log")
+            log_queries.set_log_points(session, attendance_log, event_data.attendance_points)
+
         changed = event_history.changes(before, event_history.snapshot(updated_event))
+        if event_data.attendance_points is not None:
+            changed |= event_history.changes(
+                {"attendance_points": attendance_before}, {"attendance_points": event_data.attendance_points}
+            )
         if points_before:
             points_after = {
                 "department_action_id": event_data.actions[0].action_id,
@@ -391,6 +415,8 @@ def update_event(
         calendar_request = pipeline_calendar.mark_event(session, event_id)
         session.commit()
         pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
+        if event_data.attendance_points is not None:
+            refresh_attendance_points_cache()
         if pushed:
             background_tasks.add_task(push_delivery.kick)
         session.refresh(updated_event)

@@ -9,7 +9,7 @@ refactored to use configurable action IDs (e.g., from config or database).
 
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import jwt
 import pytest
@@ -121,6 +121,86 @@ def get_member_log_id(db_session: Session, event_id: int, member_action_id: int)
 
 
 # === get_event_attendance tests ===
+
+
+@pytest.mark.parametrize("chosen", [0, 1, 25])
+def test_edit_attendance_points_is_absolute_and_event_scoped(admin_client, db_session, seed_refs, monkeypatch, chosen):
+    from app.DB import points as point_queries
+    from app.DB.schema import Modifications
+
+    refresh = Mock()
+    monkeypatch.setattr("app.routers.events.refresh_attendance_points_cache", refresh)
+    event_id = create_attendance_ready_event(admin_client)
+    other_id = create_attendance_ready_event(admin_client, name="Other event")
+    log = log_queries.get_attendable_logs(db_session, event_id)
+    other_log = log_queries.get_attendable_logs(db_session, other_id)
+    department_log = next(row for row in log_queries.get_logs_by_event_id(db_session, event_id) if row.id != log.id)
+    base = seed_refs.member_action.points
+    log_queries.create_member_log(db_session, seed_refs.ahmed.id, log.id)
+    log_queries.create_member_log(db_session, seed_refs.ahmed.id, other_log.id)
+    # Existing adjustments are replaced by the chosen total, not stacked.
+    log_queries.create_modification(db_session, log.id, "bonus", 7)
+    log_queries.create_modification(db_session, log.id, "discount", 2)
+    db_session.flush()
+    details = admin_client.get(f"/events/{event_id}/details").json()
+    assert details["attendance_points"] == base + 5
+    payload = {"event": details["event"], "actions": details["actions"], "attendance_points": chosen}
+    for _ in range(2):
+        assert_2xx(admin_client.put(f"/events/{event_id}", json=payload))
+        assert admin_client.get(f"/events/{event_id}/details").json()["attendance_points"] == chosen
+        modifications = list(db_session.scalars(select(Modifications).where(Modifications.log_id == log.id)))
+        assert len(modifications) == (0 if chosen == base else 1)
+    assert refresh.call_count == 2
+    assert log_queries.get_log_points(db_session, other_log.id) == base
+    assert log_queries.get_log_points(db_session, department_log.id) == seed_refs.dept_action.points
+    semester_id = db_session.get(Events, event_id).semester_id
+    assert (
+        point_queries.get_member_points_by_id_semester(db_session, semester_id, seed_refs.ahmed.id)["total_points"]
+        == chosen + base
+    )
+    # A later check-in reads the same adjusted log.
+    log_queries.create_member_log(db_session, seed_refs.sara.id, log.id)
+    assert (
+        point_queries.get_member_points_by_id_semester(db_session, semester_id, seed_refs.sara.id)["total_points"]
+        == chosen
+    )
+    payload.pop("attendance_points")
+    assert_2xx(admin_client.put(f"/events/{event_id}", json=payload))
+    assert log_queries.get_log_points(db_session, log.id) == chosen
+
+
+def test_edit_attendance_points_back_to_base_removes_adjustment(admin_client, db_session, seed_refs, monkeypatch):
+    from app.DB.schema import Modifications
+
+    monkeypatch.setattr("app.routers.events.refresh_attendance_points_cache", lambda: None)
+    event_id = create_attendance_ready_event(admin_client)
+    details = admin_client.get(f"/events/{event_id}/details").json()
+    payload = {"event": details["event"], "actions": details["actions"], "attendance_points": 25}
+    assert_2xx(admin_client.put(f"/events/{event_id}", json=payload))
+    payload["attendance_points"] = seed_refs.member_action.points
+    assert_2xx(admin_client.put(f"/events/{event_id}", json=payload))
+    log = log_queries.get_attendable_logs(db_session, event_id)
+    assert not list(db_session.scalars(select(Modifications).where(Modifications.log_id == log.id)))
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, "5", True, 2147483648])
+def test_edit_attendance_points_rejects_invalid_values(admin_client, value):
+    event_id = create_attendance_ready_event(admin_client)
+    details = admin_client.get(f"/events/{event_id}/details").json()
+    payload = {"event": details["event"], "actions": details["actions"], "attendance_points": value}
+    assert admin_client.put(f"/events/{event_id}", json=payload).status_code == 422
+
+
+def test_member_cannot_edit_attendance_points(admin_client):
+    from app.main import app
+    from app.services.permissions.access import Access
+    from app.services.permissions.dependencies import get_access
+
+    event_id = create_attendance_ready_event(admin_client)
+    details = admin_client.get(f"/events/{event_id}/details").json()
+    payload = {"event": details["event"], "actions": details["actions"], "attendance_points": 25}
+    app.dependency_overrides[get_access] = lambda: Access()
+    assert_forbidden(admin_client.put(f"/events/{event_id}", json=payload))
 
 
 def test_attendance_count_public(admin_client: TestClient):
