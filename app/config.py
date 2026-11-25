@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: Optional[str] = None
     GOOGLE_CLIENT_SECRET: Optional[str] = None
     GOOGLE_REFRESH_TOKEN: Optional[str] = None
+    GOOGLE_TOKEN_ENCRYPTION_KEY: Optional[str] = None
+    GOOGLE_FORMS_OAUTH_REDIRECT_URI: Optional[str] = None
     GOOGLE_CALENDAR_ID: Optional[str] = None
     GOOGLE_ORGANIZER_EMAIL: Optional[str] = None
     APP_TIMEZONE: Optional[str] = None
@@ -316,6 +318,19 @@ class Config:
     @property
     def GOOGLE_REFRESH_TOKEN(self) -> str:
         return env_or_except("GOOGLE_REFRESH_TOKEN")
+
+    @property
+    def GOOGLE_TOKEN_ENCRYPTION_KEY(self) -> Optional[str]:
+        """Encrypts OAuth refresh tokens stored in MySQL and signs OAuth state tokens. Never logged."""
+        return (get_settings().GOOGLE_TOKEN_ENCRYPTION_KEY or "").strip() or None
+
+    @property
+    def GOOGLE_FORMS_OAUTH_REDIRECT_URI(self) -> str:
+        """OAuth redirect URI for the Admin Settings Google Forms reconnect flow."""
+        configured = (get_settings().GOOGLE_FORMS_OAUTH_REDIRECT_URI or "").strip()
+        if configured:
+            return configured
+        return f"{self.ADMIN_APP_URL}/settings/google-forms/callback"
 
     @property
     def GOOGLE_ORGANIZER_EMAIL(self) -> str:

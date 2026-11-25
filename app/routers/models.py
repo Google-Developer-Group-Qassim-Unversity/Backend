@@ -247,6 +247,11 @@ class AttachFormRequest(BaseModel):
         return value
 
 
+class GoogleFormsOAuthExchangeRequest(BaseModel):
+    code: str = Field(min_length=1)
+    state: str = Field(min_length=1)
+
+
 class createEvent_model(BaseClassModel):
     event: Events_model
     form_type: Literal["google", "none", "registration"]

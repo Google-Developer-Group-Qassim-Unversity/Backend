@@ -10,18 +10,27 @@ template, sharing it, registering/deleting a watch, and publishing.
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from sqlalchemy.orm import Session
 
 from app.config import config
+from app.services.google_oauth import resolve_forms_refresh_token
 
 
-def get_google_credentials() -> Credentials:
+def get_google_credentials(session: Session | None = None) -> Credentials:
     """Build credentials for the one club-owned Google account every form is created and read under.
 
-    See docs/GOOGLE_FORMS.md - there is no per-admin/per-event token anymore.
+    Prefers the encrypted refresh token stored in ``google_oauth_credentials``
+    (set via the Admin Settings reconnect flow), falling back to
+    ``GOOGLE_REFRESH_TOKEN`` from the environment. See docs/GOOGLE_FORMS.md.
     """
+    refresh_token, _ = resolve_forms_refresh_token(session=session)
+    if not refresh_token:
+        # Preserve MissingSettingError("GOOGLE_REFRESH_TOKEN") when neither source is configured.
+        refresh_token = config.GOOGLE_REFRESH_TOKEN
+
     credentials = Credentials(
         None,
-        refresh_token=config.GOOGLE_REFRESH_TOKEN,
+        refresh_token=refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=config.GOOGLE_CLIENT_ID,
         client_secret=config.GOOGLE_CLIENT_SECRET,

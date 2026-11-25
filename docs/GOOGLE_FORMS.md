@@ -185,8 +185,32 @@ OAuth flow are not migrated. Any event still mid-flow when this shipped
 simply gets re-attached through `POST /forms/{event_id}/attach` like any
 other event.
 
+## Reconnecting from Admin Settings (encrypted DB storage)
+
+An admin with `forms.admin` can also reconnect the club Google account directly
+from **Settings → Google Forms** in the admin panel without running
+`scripts/setup_google_oauth.py`, updating Infisical, or restarting PM2:
+
+1. `POST /forms/google-auth/start` returns Google's OAuth consent URL with a
+   short-lived signed `state` token bound to the acting admin.
+2. Google redirects back to `{ADMIN_APP_URL}/settings/google-forms/callback`
+   (register this URL under the OAuth client's **Authorized redirect URIs** in
+   Google Cloud Console; override with `GOOGLE_FORMS_OAUTH_REDIRECT_URI` if needed).
+3. The Admin app posts `{code, state}` to `POST /forms/google-auth/exchange`.
+   The backend verifies `state`, exchanges the code server-to-server, confirms
+   the signed-in Google account owns `TEMPLATE_FORM_FILE_ID` (rejecting personal
+   admin accounts), encrypts the refresh token with `GOOGLE_TOKEN_ENCRYPTION_KEY`
+   (HKDF-SHA256 + Fernet), stores it in `google_oauth_credentials`, and clears
+   the credential health cache.
+
+`get_google_credentials()` prefers the encrypted `google_oauth_credentials` row
+and falls back to `GOOGLE_REFRESH_TOKEN` when no row is stored or
+`GOOGLE_TOKEN_ENCRYPTION_KEY` is unset. Every worker reads MySQL directly, so
+reconnecting takes effect across all workers immediately with no restart.
+
 ## Env vars
 
 See [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) for
-`GOOGLE_REFRESH_TOKEN`, `TEMPLATE_FORM_FILE_ID`, `GOOGLE_FORMS_TOPIC_NAME`,
-and `GOOGLE_ALLOWED_EMAIL_DOMAINS`.
+`GOOGLE_REFRESH_TOKEN`, `GOOGLE_TOKEN_ENCRYPTION_KEY`,
+`GOOGLE_FORMS_OAUTH_REDIRECT_URI`, `TEMPLATE_FORM_FILE_ID`,
+`GOOGLE_FORMS_TOPIC_NAME`, and `GOOGLE_ALLOWED_EMAIL_DOMAINS`.

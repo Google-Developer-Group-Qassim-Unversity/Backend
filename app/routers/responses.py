@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic.types import JsonValue
 
+from app.routers.club_structure_models import UtcDateTime
 from app.routers.models import BaseClassModel
 
 
@@ -46,6 +47,27 @@ class GoogleHealthResponse(BaseClassModel):
     detail: str | None = None
     checked_at: str
     cached: bool = False
+
+
+class GoogleFormsAuthStartResponse(BaseClassModel):
+    """Google OAuth consent URL for reconnecting the club Google Forms account."""
+
+    authorization_url: str
+
+
+class GoogleFormsAuthStatusResponse(BaseClassModel):
+    """Live health and connection metadata for the club Google Forms OAuth account."""
+
+    valid: bool
+    reason: str | None = None
+    detail: str | None = None
+    checked_at: str
+    source: Literal["database", "env", "none"]
+    account_email: str | None = None
+    connected_at: UtcDateTime | None = None
+    connected_by_name: str | None = None
+    can_reconnect: bool
+    reconnect_unavailable_reason: str | None = None
 
 
 class WatchRenewalResponse(BaseClassModel):

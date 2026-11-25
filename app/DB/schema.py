@@ -2017,3 +2017,35 @@ class SoobDrawEntries(Base):
     entered_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+
+
+class GoogleOAuthCredentials(Base):
+    """Encrypted OAuth refresh token for a club-owned Google integration (e.g. ``forms``).
+
+    Reconnected from the Admin Settings UI without touching Infisical or restarting
+    workers. ``encrypted_refresh_token`` holds Fernet ciphertext keyed from
+    ``GOOGLE_TOKEN_ENCRYPTION_KEY``; plaintext tokens never touch the database.
+    """
+
+    __tablename__ = "google_oauth_credentials"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["connected_by"],
+            ["members.id"],
+            ondelete="SET NULL",
+            onupdate="CASCADE",
+            name="fk_google_oauth_credentials_connected_by",
+        ),
+        Index("uq_google_oauth_credentials_service", "service", unique=True),
+        Index("fk_google_oauth_credentials_connected_by", "connected_by"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    service: Mapped[str] = mapped_column(VARCHAR(32, charset="ascii", collation="ascii_bin"), nullable=False)
+    encrypted_refresh_token: Mapped[str] = mapped_column(TEXT, nullable=False)
+    account_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    connected_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True), nullable=True)
+    connected_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
+
+    connector: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[connected_by], passive_deletes=True)
