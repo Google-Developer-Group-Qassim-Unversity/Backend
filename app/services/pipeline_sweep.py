@@ -25,16 +25,20 @@ from starlette.concurrency import run_in_threadpool
 from app.DB import email_jobs as job_queries
 from app.DB import event_pipeline as pipeline_queries
 from app.DB.main import db_session
+from app.leaderboard_cache import reset_leaderboard_cache_best_effort
 from app.DB.schema import (
     EmailJobsType,
     EventRequests,
     EventRequestStage,
     EventRequestUndatedReason,
+    Events,
+    EventsStatus,
     PipelineHistoryAction,
     PipelineNotificationKind,
 )
 from app.services import event_pipeline
 from app.services import event_pipeline_clock as clock
+from app.services import event_status
 from app.services import pipeline_calendar
 from app.services import pipeline_history as history
 from app.services import pipeline_notion as notion
@@ -42,6 +46,7 @@ from app.services import wallet_push
 from app.services import pipeline_notifications as notifications
 from app.services.pipeline_notifications import PendingEmail, send_pipeline_email_job
 from app.services.push import cases as push_cases
+from app.services.push import clock as push_clock
 from app.services.push import delivery as push_delivery
 from app.services.push import rank as push_rank
 from app.services.push import triggers as push_triggers
@@ -54,6 +59,7 @@ LOCK_NAME = "sweep"
 
 @dataclass
 class SweepResult:
+    events_started: int = 0
     expired_holds: int = 0
     penalties_grown: int = 0
     emails: list[PendingEmail] = field(default_factory=list)
@@ -74,6 +80,7 @@ class SweepResult:
 
     def counts(self) -> dict[str, int]:
         return {
+            "events_started": self.events_started,
             "expired_holds": self.expired_holds,
             "penalties_grown": self.penalties_grown,
             "notion_synced": self.notion_synced,
@@ -86,6 +93,22 @@ class SweepResult:
             "push_rank": self.push_rank,
             "push_cleaned": self.push_cleaned,
         }
+
+
+def start_events(session: Session, now: datetime, result: SweepResult) -> None:
+    """An open event whose start time has passed stops taking registrations: it moves to active (GDG-24).
+
+    Closing stays manual - it waits on attendance. Event times are Riyadh wall clock.
+    """
+    rows = session.scalars(
+        select(Events)
+        .where(Events.status == EventsStatus.OPEN, Events.start_datetime <= push_clock.to_riyadh(now))
+        .with_for_update()
+    ).all()
+    for event in rows:
+        event_status.change_status(session, event, EventsStatus.ACTIVE, None)
+        result.events_started += 1
+    session.flush()
 
 
 def expire_holds(session: Session, now: datetime, result: SweepResult) -> None:
@@ -158,6 +181,7 @@ def collect_calendar_entries(session: Session, now: datetime, result: SweepResul
 
 
 RULES = [
+    start_events,
     expire_holds,
     grow_penalties,
     collect_notion_cards,
@@ -195,6 +219,9 @@ def sweep_once() -> SweepResult | None:
             )
             email.data["job_id"] = job.id
         session.commit()
+    if result.events_started:
+        # The leaderboard's open-events view is gated on status = 'open'.
+        reset_leaderboard_cache_best_effort()
     # Outside the sweep's session: each sync has its own, and talks to Notion or Google.
     result.notion_synced = sum(1 for request_id in result.notion_requests if notion.sync_request(request_id))
     result.calendar_synced = sum(

@@ -41,7 +41,6 @@ from app.clients import GDrive
 from app.helpers import CurrentMember
 from app.leaderboard_cache import reset_leaderboard_cache_best_effort
 from app.services.events import create_full_event
-from app.services.google_client import set_form_publish_state
 from app.semesters import resolve_semester
 from time import perf_counter
 from typing import Annotated, Literal
@@ -50,8 +49,8 @@ from app.exceptions import DataIntegrityError, DriveIntegrationNotConfigured
 from app.dependencies import DB
 from sqlalchemy.orm import Session
 from app.DB import event_pipeline as pipeline_queries
-from app.DB.schema import EventHistoryAction, EventsLocationType, EventsStatus, FormType, Members, PipelineHistoryAction
-from app.services import event_history, pipeline_calendar, pipeline_history
+from app.DB.schema import EventHistoryAction, EventsLocationType, EventsStatus, Members, PipelineHistoryAction
+from app.services import event_history, event_status, pipeline_calendar, pipeline_history
 from app.services.push import cases as push_cases
 from app.services.push import delivery as push_delivery
 
@@ -486,49 +485,14 @@ def update_event_status(
     event = events_queries.get_event_by_id(session, event_id)
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-    old_status = event.status
-    push_before = push_cases.event_state(event)
-
-    # Publishing/unpublishing the event also publishes/unpublishes its Google
-    # Form, if it has one - a copied form does not inherit the template's
-    # accepting-responses state, so without this members hit an "unpublished
-    # form" wall the admin has no way to see coming. Best-effort: the event's
-    # own status is the source of truth, so a Google API failure here must not
-    # block it - same reasoning as the leaderboard cache reset below.
-    entering_open = status_data.status == "open" and old_status != EventsStatus.OPEN
-    leaving_open = old_status == EventsStatus.OPEN and status_data.status != "open"
-    if entering_open or leaving_open:
-        form = form_queries.get_form_by_event_id(session, event_id)
-        if form.form_type == FormType.GOOGLE and form.google_form_id:
-            try:
-                set_form_publish_state(form.google_form_id, is_published=entering_open)
-            except Exception:
-                logger.exception(
-                    "Failed to %s Google Form %s for event %s",
-                    "publish" if entering_open else "unpublish",
-                    form.google_form_id,
-                    event_id,
-                )
-
-    event.status = EventsStatus(status_data.status)
-    recorded = None
-    if event.status != old_status:
-        recorded = event_history.record(
-            session,
-            event,
-            EventHistoryAction.STATUS_CHANGED,
-            member,
-            {"status": [old_status.value, event.status.value]},
-        )
-    pushed = push_cases.event_changed(session, event, push_before, recorded.id if recorded else None)
+    change = event_status.change_status(session, event, EventsStatus(status_data.status), member)
     session.commit()
-    if pushed:
+    if change.pushed:
         background_tasks.add_task(push_delivery.kick)
     session.refresh(event)
 
-    # Best-effort: reset the leaderboard cache when entering or leaving the "open" status,
-    # since the leaderboard's open-events view is gated on status = 'open'.
-    if status_data.status == "open" or old_status == "open":
+    # Best-effort: the leaderboard's open-events view is gated on status = 'open'.
+    if change.touches_open:
         reset_leaderboard_cache_best_effort()
 
     return event

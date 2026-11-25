@@ -52,11 +52,11 @@ def test_update_event_status(admin_client: TestClient):
 def test_publishing_event_publishes_its_attached_google_form(admin_client: TestClient, monkeypatch):
     """Copying a form does not carry over "accepting responses" - publishing the
     event must also publish the Google Form, or members hit a dead form."""
-    from app.routers import events as events_router
+    from app.services import event_status
 
     calls: list[tuple[str, bool]] = []
     monkeypatch.setattr(
-        events_router,
+        event_status,
         "set_form_publish_state",
         lambda google_form_id, is_published: calls.append((google_form_id, is_published)),
     )
@@ -77,10 +77,10 @@ def test_publishing_event_publishes_its_attached_google_form(admin_client: TestC
 
 
 def test_publishing_event_without_google_form_does_not_call_forms_api(admin_client: TestClient, monkeypatch):
-    from app.routers import events as events_router
+    from app.services import event_status
 
     calls: list[tuple] = []
-    monkeypatch.setattr(events_router, "set_form_publish_state", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(event_status, "set_form_publish_state", lambda *args, **kwargs: calls.append((args, kwargs)))
 
     event = admin_client.post("/events", json=make_create_event_payload(form_type="registration")).json()
     response = admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
@@ -91,12 +91,12 @@ def test_publishing_event_without_google_form_does_not_call_forms_api(admin_clie
 def test_google_publish_failure_does_not_block_the_status_change(admin_client: TestClient, monkeypatch):
     """The Forms API call is best-effort: the event's own status is the source of truth,
     so a Google API failure must not stop the admin from opening/closing the event."""
-    from app.routers import events as events_router
+    from app.services import event_status
 
     def failing_publish(google_form_id, is_published):
         raise RuntimeError("Google API unavailable")
 
-    monkeypatch.setattr(events_router, "set_form_publish_state", failing_publish)
+    monkeypatch.setattr(event_status, "set_form_publish_state", failing_publish)
 
     event = admin_client.post("/events", json=make_create_event_payload(form_type="google")).json()
     form_id = admin_client.get(f"/events/{event['id']}/form").json()["id"]
@@ -113,10 +113,10 @@ def test_google_publish_failure_does_not_block_the_status_change(admin_client: T
 
 def test_transitions_among_non_open_statuses_do_not_touch_the_form(admin_client: TestClient, monkeypatch):
     """Once already away from "open", moving between active/closed must not call the Forms API again."""
-    from app.routers import events as events_router
+    from app.services import event_status
 
     calls: list[tuple] = []
-    monkeypatch.setattr(events_router, "set_form_publish_state", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(event_status, "set_form_publish_state", lambda *args, **kwargs: calls.append((args, kwargs)))
 
     event = admin_client.post("/events", json=make_create_event_payload(form_type="google")).json()
     form_id = admin_client.get(f"/events/{event['id']}/form").json()["id"]
