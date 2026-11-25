@@ -24,6 +24,7 @@ from app.routers.models import (
     BackfillAttendanceResponse,
 )
 from app.config import config
+from app.leaderboard_cache import refresh_attendance_points_cache
 from app.exceptions import (
     AlreadyCheckedIn,
     AttendanceTokenAbsent,
@@ -194,6 +195,7 @@ def mark_attendance(
 
     points = log_queries.get_log_points(session, event_log.id)
     session.commit()
+    refresh_attendance_points_cache()
     return CheckInResponse(
         status="marked",
         event_id=event.id,
@@ -271,6 +273,8 @@ def backfill_attendance(
         )
         push_cases.attendance_added(session, event, [row["member_id"] for row in marked])
     session.commit()
+    if marked:
+        refresh_attendance_points_cache()
     background_tasks.add_task(push_delivery.kick)
     marked_count = (created_count + existing_count) - already_attended_count
     return BackfillAttendanceResponse(
@@ -392,6 +396,8 @@ def mark_attendance_manual(
         )
         push_cases.attendance_added(session, event, [row["member_id"] for row in marked])
     session.commit()
+    if marked:
+        refresh_attendance_points_cache()
     background_tasks.add_task(push_delivery.kick)
     return {"success": success_count, "failed": failed_count}
 
@@ -463,6 +469,7 @@ def scan_attendance(
         {"day": request.day, "members": [{"member_id": member.id, "name": member.name}]},
     )
     session.commit()
+    refresh_attendance_points_cache()
     background_tasks.add_task(push_delivery.kick)
     logger.info(f"Scan attendance: marked member [{member.name}] for event [{event.name}]")
     return ScanAttendanceResponse(status="marked", member_id=member.id, member_name=member.name, uni_id=member.uni_id)
@@ -513,4 +520,6 @@ def remove_attendance_manual(event_id: int, request: ManualAttendanceRequest, se
             session, event, EventHistoryAction.ATTENDANCE_REMOVED, actor, {"day": request.day, "members": removed}
         )
     session.commit()
+    if removed:
+        refresh_attendance_points_cache()
     return {"success": success_count, "failed": failed_count}
