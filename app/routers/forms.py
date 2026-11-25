@@ -2,10 +2,11 @@ import logging
 from fastapi import APIRouter, Depends, status
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from app.routers.models import Form_model, NotFoundResponse, AttachFormRequest
-from app.routers.responses import WatchRenewalResponse
+from app.routers.models import AttachFormRequest, Form_model, GoogleFormsOAuthExchangeRequest, NotFoundResponse
+from app.routers.responses import GoogleFormsAuthStartResponse, GoogleFormsAuthStatusResponse, WatchRenewalResponse
 from app.services.form_watches import renew_form_watches
 from app.services.google_client import get_google_credentials
+from app.services import google_oauth
 from app.services.form_responses import FormAccess, FormResponsesClient
 from app.DB import forms as form_queries
 from app.DB.schema import EventHistoryAction, Forms, FormType
@@ -286,3 +287,40 @@ def renew_watches(session: DB):
     trap that hid the credential expiry on the webhook path.
     """
     return renew_form_watches(session)
+
+
+@router.get(
+    "/google-auth/status",
+    status_code=status.HTTP_200_OK,
+    response_model=GoogleFormsAuthStatusResponse,
+    dependencies=[Depends(Require(Perm.FORMS_ADMIN))],
+    description="Live health and metadata for the club Google Forms OAuth connection.",
+)
+def get_google_forms_auth_status(session: DB, force: bool = False):
+    return google_oauth.get_forms_auth_status(session, force_check=force)
+
+
+@router.post(
+    "/google-auth/start",
+    status_code=status.HTTP_200_OK,
+    response_model=GoogleFormsAuthStartResponse,
+    dependencies=[Depends(Require(Perm.FORMS_ADMIN))],
+    description="Start the Google OAuth consent flow to reconnect the club Google Forms account.",
+)
+def start_google_forms_auth(actor: CurrentMember):
+    return {"authorization_url": google_oauth.build_authorization_url(actor.id)}
+
+
+@router.post(
+    "/google-auth/exchange",
+    status_code=status.HTTP_200_OK,
+    response_model=GoogleFormsAuthStatusResponse,
+    dependencies=[Depends(Require(Perm.FORMS_ADMIN))],
+    description=(
+        "Exchange the Google OAuth authorization code for a refresh token, verify the signed-in account owns "
+        "the club template form, encrypt and store it in MySQL, and return the refreshed connection status."
+    ),
+)
+def exchange_google_forms_auth(body: GoogleFormsOAuthExchangeRequest, session: DB, actor: CurrentMember):
+    google_oauth.exchange_authorization_code(session, code=body.code, state=body.state, actor_member_id=actor.id)
+    return google_oauth.get_forms_auth_status(session, force_check=True)

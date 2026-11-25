@@ -138,7 +138,66 @@ class GoogleFormAuthExpired(KnownHttpException):
             status_code=502,
             detail=(
                 f"Google rejected the club account's stored credentials while reading form '{google_form_id}'. "
-                "Run scripts/setup_google_oauth.py again and update GOOGLE_REFRESH_TOKEN in Infisical."
+                "Reconnect the club Google account in Admin Settings (or run scripts/setup_google_oauth.py)."
+            ),
+        )
+
+
+class GoogleFormsOAuthNotConfigured(KnownHttpException):
+    """In-app Google Forms OAuth reconnect is unavailable because a required setting is unset."""
+
+    code = "google_oauth_not_configured"
+
+    def __init__(self, reason: str):
+        super().__init__(
+            status_code=503, detail=f"Google Forms OAuth reconnect is not configured on this server ({reason})"
+        )
+
+
+class GoogleFormsOAuthStateInvalid(KnownHttpException):
+    """The OAuth state token was missing, expired, tampered with, or belonged to another admin."""
+
+    code = "invalid_oauth_state"
+
+    def __init__(self, detail: str = "OAuth state is invalid or expired; start the connection again"):
+        super().__init__(status_code=400, detail=detail)
+
+
+class GoogleFormsOAuthExchangeFailed(KnownHttpException):
+    """Google rejected the authorization code exchange or could not be reached."""
+
+    code = "oauth_exchange_failed"
+
+    def __init__(self, detail: str = "Google rejected the authorization code; try connecting again"):
+        super().__init__(status_code=502, detail=detail)
+
+
+class GoogleFormsOAuthMissingRefreshToken(KnownHttpException):
+    """Google returned an access token without a refresh token."""
+
+    code = "missing_refresh_token"
+
+    def __init__(self):
+        super().__init__(
+            status_code=422,
+            detail=(
+                "Google did not return a refresh token. Revoke the app at "
+                "https://myaccount.google.com/permissions on the club account and try again."
+            ),
+        )
+
+
+class GoogleFormsOAuthWrongAccount(KnownHttpException):
+    """The signed-in Google account does not own the club's template form."""
+
+    code = "wrong_google_account"
+
+    def __init__(self, email: str):
+        super().__init__(
+            status_code=422,
+            detail=(
+                f"The signed-in Google account ({email}) does not own the club's template form. "
+                "Sign in with the club Google account instead."
             ),
         )
 

@@ -39,7 +39,9 @@ the boot rather than the first request.
 |---|---|---|---|
 | `GOOGLE_CLIENT_ID` | when the feature runs | - |  |
 | `GOOGLE_CLIENT_SECRET` | when the feature runs | - |  |
-| `GOOGLE_REFRESH_TOKEN` | when the feature runs | - | the club's Google account, minted once by `scripts/setup_google_oauth.py` - see `docs/GOOGLE_FORMS.md` |
+| `GOOGLE_REFRESH_TOKEN` | when the feature runs | - | fallback club Google account refresh token (minted by `scripts/setup_google_oauth.py`); overridden when a token is connected through Admin Settings (`google_oauth_credentials`) - see `docs/GOOGLE_FORMS.md` |
+| `GOOGLE_TOKEN_ENCRYPTION_KEY` | for Admin Settings OAuth reconnect | - | at least 32 random bytes (`openssl rand -base64 48`), different per environment. Encrypts the Google Forms refresh token stored in `google_oauth_credentials` and signs OAuth `state` tokens. Unset: in-app reconnect is disabled and the backend uses `GOOGLE_REFRESH_TOKEN` |
+| `GOOGLE_FORMS_OAUTH_REDIRECT_URI` | optional | `{ADMIN_APP_URL}/settings/google-forms/callback` | OAuth callback URL registered in Google Cloud Console for Admin Settings reconnect |
 | `TEMPLATE_FORM_FILE_ID` | when the feature runs | - | Drive file ID of the template form copied for each event |
 | `GOOGLE_FORMS_TOPIC_NAME` | when the feature runs | - | Pub/Sub topic used for Forms response-change watches |
 | `GOOGLE_ALLOWED_EMAIL_DOMAINS` | optional | `gmail.com,googlemail.com` | comma-separated allow-list checked before inviting an admin to a form |

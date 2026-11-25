@@ -51,10 +51,15 @@ class _CredentialHealth:
     def _cached_ok(self, now: datetime) -> bool:
         return self._valid_until is not None and now < self._valid_until
 
-    def check(self) -> dict[str, object]:
+    def invalidate(self) -> None:
+        with self._lock:
+            self._valid_until = None
+            self._first_failure_logged = False
+
+    def check(self, *, force: bool = False) -> dict[str, object]:
         now = datetime.now(timezone.utc)
         with self._lock:
-            if self._cached_ok(now):
+            if not force and self._cached_ok(now):
                 return {"valid": True, "reason": None, "detail": None, "checked_at": now.isoformat(), "cached": True}
 
         reason, detail = _probe()
@@ -111,5 +116,9 @@ def _probe() -> tuple[str | None, str | None]:
 _health = _CredentialHealth()
 
 
-def credential_status() -> dict[str, object]:
-    return _health.check()
+def credential_status(*, force: bool = False) -> dict[str, object]:
+    return _health.check(force=force)
+
+
+def invalidate_credential_cache() -> None:
+    _health.invalidate()
