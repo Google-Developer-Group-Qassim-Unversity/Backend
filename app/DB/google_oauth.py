@@ -13,6 +13,7 @@ def get_oauth_credential(session: Session, service: str) -> GoogleOAuthCredentia
         select(GoogleOAuthCredentials)
         .options(joinedload(GoogleOAuthCredentials.connector))
         .where(GoogleOAuthCredentials.service == service)
+        .execution_options(populate_existing=True)
     )
     return session.execute(stmt).scalar_one_or_none()
 
@@ -46,4 +47,5 @@ def upsert_oauth_credential(
     existing.connected_at = now
     existing.updated_at = now
     session.flush()
+    session.expire(existing, ["connector"])
     return existing

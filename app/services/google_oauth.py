@@ -321,12 +321,11 @@ def get_forms_auth_status(session: Session, *, force_check: bool = False) -> dic
     row = oauth_queries.get_oauth_credential(session, FORMS_SERVICE)
     can_reconnect, unavailable_reason = reconnect_availability()
 
-    has_db_token = row is not None and bool(config.GOOGLE_TOKEN_ENCRYPTION_KEY)
-    has_env_token = bool((get_settings().GOOGLE_REFRESH_TOKEN or "").strip())
-    source: Literal["database", "env", "none"] = "database" if has_db_token else ("env" if has_env_token else "none")
+    _, source = resolve_forms_refresh_token(session=session)
+    has_db_token = source == "database" and row is not None
 
     health = credential_status(force=force_check)
-    connected_by_name = row.connector.name if row and row.connector else None
+    connected_by_name = row.connector.name if has_db_token and row and row.connector else None
 
     return {
         "valid": bool(health["valid"]),
@@ -336,7 +335,7 @@ def get_forms_auth_status(session: Session, *, force_check: bool = False) -> dic
         "source": source,
         "account_email": row.account_email if has_db_token and row else None,
         "connected_at": row.connected_at if has_db_token and row else None,
-        "connected_by_name": connected_by_name if has_db_token else None,
+        "connected_by_name": connected_by_name,
         "can_reconnect": can_reconnect,
         "reconnect_unavailable_reason": unavailable_reason,
     }

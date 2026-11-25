@@ -253,3 +253,69 @@ def test_exchange_rejects_tampered_expired_or_wrong_actor_state(admin_client: Te
     resp = admin_client.post("/forms/google-auth/exchange", json={"code": "code-1", "state": wrong_actor_state})
     assert resp.status_code == 400
     assert resp.json()["code"] == "invalid_oauth_state"
+
+
+def test_exchange_returns_new_connector_name_when_reconnecting_over_existing_row(
+    admin_client: TestClient, db_session, committed_staff_actor, monkeypatch
+):
+    from app.DB.google_oauth import upsert_oauth_credential
+
+    # Seed an existing row previously connected by a different member (seeded member #1, "Ahmed Ali").
+    upsert_oauth_credential(
+        db_session,
+        service=google_oauth.FORMS_SERVICE,
+        encrypted_refresh_token=google_oauth.encrypt_refresh_token("old-token"),
+        account_email="gdg.qu1@gmail.com",
+        connected_by=1,
+        now=datetime(2026, 1, 1, 0, 0, 0),
+    )
+    db_session.commit()
+
+    start_resp = admin_client.post("/forms/google-auth/start")
+    state = parse_qs(urlparse(start_resp.json()["authorization_url"]).query)["state"][0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "oauth2.googleapis.com":
+            return httpx.Response(200, json={"access_token": "tok", "refresh_token": "new-refresh-token"})
+        if request.url.path == "/drive/v3/about":
+            return httpx.Response(200, json={"user": {"emailAddress": "gdg.qu1@gmail.com"}})
+        if request.url.path == "/drive/v3/files/template-form-123":
+            return httpx.Response(200, json={"id": "template-form-123", "ownedByMe": True})
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    _install_mock_httpx(monkeypatch, handler)
+    monkeypatch.setattr(google_health, "get_google_credentials", lambda: object())
+
+    exchange_resp = admin_client.post("/forms/google-auth/exchange", json={"code": "code-2", "state": state})
+    assert exchange_resp.status_code == 200
+    assert exchange_resp.json()["connected_by_name"] == committed_staff_actor.name
+
+
+def test_status_falls_back_to_env_when_db_ciphertext_uses_different_key(
+    admin_client: TestClient, db_session, monkeypatch
+):
+    from app.DB.google_oauth import upsert_oauth_credential
+
+    # Simulate a staging DB cloned from prod (row encrypted with a different key).
+    upsert_oauth_credential(
+        db_session,
+        service=google_oauth.FORMS_SERVICE,
+        encrypted_refresh_token=google_oauth.encrypt_refresh_token("prod-token"),
+        account_email="gdg.qu1@gmail.com",
+        connected_by=1,
+        now=datetime(2026, 1, 1, 0, 0, 0),
+    )
+    db_session.commit()
+
+    monkeypatch.setenv("GOOGLE_TOKEN_ENCRYPTION_KEY", "different-staging-key-that-cannot-decrypt-prod-row-999999")
+    reload_settings()
+    monkeypatch.setattr(google_health, "get_google_credentials", lambda: object())
+
+    resp = admin_client.get("/forms/google-auth/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is True
+    assert body["source"] == "env"
+    assert body["account_email"] is None
+    assert body["connected_at"] is None
+    assert body["connected_by_name"] is None
