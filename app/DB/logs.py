@@ -66,6 +66,27 @@ def create_log(session: Session, event_id: int, action_id: int):
     return new_log
 
 
+def set_log_points(session: Session, log: Logs, points: int) -> None:
+    """Set an absolute total using the shared log's existing adjustment rows.
+
+    The caller holds the event lock. Replacing the delta from the action's
+    base prevents repeated saves from accumulating bonuses or discounts.
+    """
+    base = session.scalar(select(Actions.points).where(Actions.id == log.action_id))
+    if base is None:
+        raise ActionNotFound(log.action_id)
+    modifications = list(session.scalars(select(Modifications).where(Modifications.log_id == log.id).with_for_update()))
+    delta = points - base
+    if delta:
+        adjustment = modifications.pop(0) if modifications else Modifications(log_id=log.id)
+        adjustment.type = ModificationsType.BONUS if delta > 0 else ModificationsType.DISCOUNT
+        adjustment.value = abs(delta)
+        session.add(adjustment)
+    for modification in modifications:
+        session.delete(modification)
+    session.flush()
+
+
 def create_modification(session: Session, log_id: int, type: Literal["bonus", "discount"], value: int):
     new_modification = Modifications(log_id=log_id, type=type, value=value)
     session.add(new_modification)
