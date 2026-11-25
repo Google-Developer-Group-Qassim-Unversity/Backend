@@ -182,7 +182,7 @@ def test_attendance_day_out_of_range(admin_client: TestClient):
 # === remove_attendance_manual tests ===
 
 
-def test_remove_attendance_success(admin_client: TestClient, db_session: Session, seed_refs):
+def test_remove_attendance_success(admin_client: TestClient, db_session: Session, seed_refs, outbound):
     event_id = create_attendance_ready_event(admin_client)
     log_id = get_member_log_id(db_session, event_id, seed_refs.member_action.id)
     event = db_session.query(Events).filter(Events.id == event_id).first()
@@ -191,6 +191,7 @@ def test_remove_attendance_success(admin_client: TestClient, db_session: Session
     member_log = MembersLogs(member_id=seed_refs.ahmed.id, log_id=log_id, date=target_date)
     db_session.add(member_log)
     db_session.commit()
+    outbound.calls.clear()
     response = admin_client.request(
         "DELETE",
         f"/attendance/{event_id}/manual",
@@ -198,6 +199,7 @@ def test_remove_attendance_success(admin_client: TestClient, db_session: Session
         headers={"Content-Type": "application/json"},
     )
     assert_2xx(response)
+    assert outbound.one("/api/revalidate").params["tag"] == "points"
     data = response.json()
     assert data["success"] == 1
     assert data["failed"] == 0
@@ -230,17 +232,34 @@ def test_remove_attendance_event_not_found(admin_client: TestClient):
 # === mark_attendance_manual tests ===
 
 
-def test_manual_mark_success(admin_client: TestClient, db_session: Session, seed_refs):
+def test_manual_mark_success(admin_client: TestClient, db_session: Session, seed_refs, outbound):
     event_id = create_attendance_ready_event(admin_client)
     log_id = get_member_log_id(db_session, event_id, seed_refs.member_action.id)
     assert log_id is not None, "Event should have a member log"
+    outbound.calls.clear()
     response = admin_client.post(
         f"/attendance/{event_id}/manual", json={"member_ids": [seed_refs.ahmed.id, seed_refs.sara.id], "day": 1}
     )
     assert_2xx(response)
+    assert outbound.one("/api/revalidate").params["tag"] == "points"
     data = response.json()
     assert data["success"] == 2
     assert data["failed"] == 0
+
+
+def test_failed_points_cache_reset_preserves_attendance(admin_client: TestClient, seed_refs, outbound, caplog):
+    event_id = create_attendance_ready_event(admin_client)
+    outbound.calls.clear()
+    outbound.stub("/api/revalidate", status_code=503)
+
+    response = admin_client.post(f"/attendance/{event_id}/manual", json={"member_ids": [seed_refs.ahmed.id], "day": 1})
+
+    assert_2xx(response)
+    assert response.json()["success"] == 1
+    assert outbound.one("/api/revalidate").params["tag"] == "points"
+    assert "Attendance points cache reset failed" in caplog.text
+    attendance = admin_client.get(f"/attendance/{event_id}?type=count")
+    assert attendance.json()["attendance_count"] == 1
 
 
 def test_manual_mark_event_closed(admin_client: TestClient, seed_refs):
@@ -274,7 +293,7 @@ def test_manual_mark_day_out_of_range(admin_client: TestClient, seed_refs):
 # === backfill_attendance tests ===
 
 
-def test_backfill_existing_members(admin_client: TestClient, seed_refs):
+def test_backfill_existing_members(admin_client: TestClient, seed_refs, outbound):
     event_id = create_attendance_ready_event(admin_client)
     members_payload = [
         {
@@ -296,12 +315,19 @@ def test_backfill_existing_members(admin_client: TestClient, seed_refs):
             "uni_college": "Science",
         },
     ]
+    outbound.calls.clear()
     response = admin_client.post(f"/attendance/{event_id}/backfill", json={"members": members_payload, "day": 1})
     assert_2xx(response)
+    assert outbound.one("/api/revalidate").params["tag"] == "points"
     data = response.json()
     assert data["existing_count"] == 2
     assert data["created_count"] == 0
     assert data["marked_count"] == 2
+
+    repeated = admin_client.post(f"/attendance/{event_id}/backfill", json={"members": members_payload, "day": 1})
+    assert_2xx(repeated)
+    assert repeated.json()["marked_count"] == 0
+    assert len(outbound.to("/api/revalidate")) == 1
 
 
 def test_backfill_creates_new_members(admin_client: TestClient):
@@ -365,12 +391,14 @@ def test_tournament_participation_is_attendable(admin_client: TestClient, db_ses
 # === mark_attendance tests ===
 
 
-def test_mark_attendance_success(admin_client: TestClient, clerk_client: TestClient, db_session: Session):
+def test_mark_attendance_success(admin_client: TestClient, clerk_client: TestClient, db_session: Session, outbound):
     event_id = create_ongoing_event(admin_client, form_type="none")
     create_test_member(db_session)
     token = make_attendance_token(event_id)
+    outbound.calls.clear()
     response = clerk_client.post(f"/attendance/{event_id}?token={token}")
     assert_2xx(response)
+    assert outbound.one("/api/revalidate").params["tag"] == "points"
     attendance_response = clerk_client.get(f"/attendance/{event_id}?type=me")
     assert_2xx(attendance_response)
     assert attendance_response.json()["attendance_count"] == 1
@@ -729,16 +757,18 @@ def scan(client: TestClient, event_id: int, uuid: str, **body):
     return client.post(f"/attendance/{event_id}/scan", json={"uuid": uuid, "day": 1, **body})
 
 
-def test_a_signed_card_scans(admin_client: TestClient, db_session, monkeypatch):
+def test_a_signed_card_scans(admin_client: TestClient, db_session, monkeypatch, outbound):
     from app.services.card_qr import card_signature
 
     monkeypatch.setenv("CARD_QR_SECRET", CARD_QR_SECRET)
     event_id = create_attendance_ready_event(admin_client)
     uuid = scannable_member(db_session)
 
+    outbound.calls.clear()
     response = scan(admin_client, event_id, uuid, sig=card_signature(uuid))
 
     assert_2xx(response)
+    assert outbound.one("/api/revalidate").params["tag"] == "points"
     assert response.json()["status"] == "marked"
 
 
