@@ -6,7 +6,8 @@ from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select
 
-from .schema import Submissions, SubmissionsSubmissionType, t_forms_submissions
+from .schema import Events, Forms, Submissions, SubmissionsSubmissionType, t_forms_submissions
+from app.services import event_lifecycle
 
 
 def create_submission(session: Session, form_id: int, submission_type: str, member_id: int):
@@ -50,6 +51,60 @@ def cancel_submission(session: Session, submission: Submissions) -> None:
     """Soft delete: the row stays as a record of the registration and when it was cancelled."""
     submission.cancelled_at = func.now()  # type: ignore[assignment]
     session.flush()
+
+
+def get_member_submissions(session: Session, member_id: int) -> list[dict]:
+    """All non-cancelled submissions for a member, joined with ``Forms`` & ``Events``, newest first."""
+    local_now = event_lifecycle.riyadh_now()
+    rows = session.execute(
+        select(
+            Submissions.id.label("submission_id"),
+            Submissions.form_id,
+            Forms.event_id,
+            Submissions.submission_type,
+            Submissions.submitted_at,
+            Submissions.is_accepted,
+            Submissions.is_invited,
+            Events,
+        )
+        .join(Forms, Forms.id == Submissions.form_id)
+        .join(Events, Events.id == Forms.event_id)
+        .where(Submissions.member_id == member_id, Submissions.cancelled_at.is_(None))
+        .order_by(Submissions.submitted_at.desc(), Submissions.id.desc())
+    ).all()
+    return [
+        {
+            "submission_id": row.submission_id,
+            "form_id": row.form_id,
+            "event_id": row.event_id,
+            "submission_type": row.submission_type.value
+            if hasattr(row.submission_type, "value")
+            else row.submission_type,
+            "submitted_at": row.submitted_at,
+            "is_accepted": bool(row.is_accepted),
+            "is_invited": bool(row.is_invited),
+            "meeting_url": event_lifecycle.accepted_submission_meeting_url(
+                row.Events, is_accepted=bool(row.is_accepted), local_now=local_now
+            ),
+        }
+        for row in rows
+    ]
+
+
+def is_member_accepted_for_event(session: Session, event_id: int, member_id: int) -> bool:
+    """True iff the member holds an active, accepted submission for ``event_id``."""
+    row = session.scalar(
+        select(Submissions.id)
+        .join(Forms, Forms.id == Submissions.form_id)
+        .where(
+            Forms.event_id == event_id,
+            Submissions.member_id == member_id,
+            Submissions.is_accepted == 1,
+            Submissions.cancelled_at.is_(None),
+        )
+        .limit(1)
+    )
+    return row is not None
 
 
 # ====================== Google Sync Functions ======================

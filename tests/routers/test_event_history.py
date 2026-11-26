@@ -29,7 +29,7 @@ def test_every_admin_change_says_who_and_what(admin_client: TestClient, seed_ref
         },
     )
     assert_2xx(edited)
-    admin_client.put(f"/events/{event_id}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event_id}/status", json={"status": "published"})
     admin_client.put(f"/events/{event_id}/meeting-url", json={"meeting_url": "https://meet.google.com/abc"})
 
     body = history(admin_client, event_id)
@@ -42,7 +42,7 @@ def test_every_admin_change_says_who_and_what(admin_client: TestClient, seed_ref
         "name": ["Workshop", "Workshop: part 1"],
         "department_id": [seed_refs.dept_business.id, seed_refs.dept_design.id],
     }
-    assert items[2]["details"] == {"status": ["draft", "open"]}
+    assert items[2]["details"] == {"status": ["draft", "published"]}
     assert items[3]["details"] == {"meeting_url": [None, "https://meet.google.com/abc"]}
 
 

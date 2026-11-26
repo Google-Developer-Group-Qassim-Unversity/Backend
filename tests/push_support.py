@@ -21,6 +21,7 @@ from app.DB.schema import (
     Events,
     EventsLocationType,
     EventsStatus,
+    FormRegistrationStatus,
     Forms,
     FormType,
     Logs,
@@ -183,9 +184,11 @@ def make_event(
     *,
     start: datetime,
     end: datetime | None = None,
-    status: EventsStatus = EventsStatus.OPEN,
+    status: EventsStatus = EventsStatus.PUBLISHED,
     location_type: EventsLocationType = EventsLocationType.ON_SITE,
     form_type: FormType = FormType.REGISTRATION,
+    registration_status: FormRegistrationStatus | None = None,
+    published_at: datetime | None = None,
     name: str = "Intro to ML",
     location: str = "Hall 60",
     created_at: datetime = datetime(2026, 7, 1, 9, 0),
@@ -201,10 +204,20 @@ def make_event(
         status=status,
         semester_id=semester_id_on(session, end.date().isoformat()),
         created_at=created_at,
+        published_at=published_at,
     )
     session.add(event)
     session.flush()
-    session.add(Forms(event_id=event.id, form_type=form_type))
+    if registration_status is None:
+        if form_type == FormType.NONE or status == EventsStatus.DRAFT:
+            reg_status = FormRegistrationStatus.NOT_OPEN
+        elif status == EventsStatus.CANCELLED:
+            reg_status = FormRegistrationStatus.CLOSED
+        else:
+            reg_status = FormRegistrationStatus.OPEN
+    else:
+        reg_status = registration_status
+    session.add(Forms(event_id=event.id, form_type=form_type, registration_status=reg_status))
     session.flush()
     return event
 

@@ -177,7 +177,7 @@ def _award_department_points(db_session, seed_refs, department_id: int, day: str
         location="Hall",
         start_datetime=f"{day} 10:00:00",
         end_datetime=f"{day} 12:00:00",
-        status=EventsStatus.CLOSED,
+        status=EventsStatus.PUBLISHED,
         semester_id=semester_id_on(db_session, day),
     )
     db_session.add(event)
@@ -242,7 +242,7 @@ def _add_history_event(db_session, name: str, location_type: EventsLocationType)
         location="Hall",
         start_datetime="2026-07-01 10:00:00",
         end_datetime="2026-07-01 12:00:00",
-        status=EventsStatus.CLOSED,
+        status=EventsStatus.PUBLISHED,
         semester_id=semester_id_on(db_session, "2026-07-01"),
     )
     db_session.add(event)

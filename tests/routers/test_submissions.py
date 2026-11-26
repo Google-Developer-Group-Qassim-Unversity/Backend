@@ -11,8 +11,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.DB import submissions as submission_queries
-from app.DB.schema import Events, Forms, Members, MembersGender, Submissions
+from app.DB.schema import Events, FormRegistrationStatus, Forms, Members, MembersGender, Submissions
+from app.services import event_pipeline_clock
 from tests.utils import assert_2xx, assert_bad_request, assert_conflict, assert_not_found, semester_id_on
+
+
+@pytest.fixture(autouse=True)
+def _freeze_before_event(monkeypatch):
+    """Pin the clock to 2026-02-20 UTC so the 2026-03-01..02 test events are upcoming."""
+    monkeypatch.setattr(event_pipeline_clock, "now", lambda: datetime(2026, 2, 20, 9, 0))
 
 
 @pytest.fixture
@@ -32,20 +39,27 @@ def member(db_session) -> Members:
     return member
 
 
-def make_form(db_session, status: str = "open") -> Forms:
+def make_form(
+    db_session,
+    status: str = "published",
+    registration_status: FormRegistrationStatus = FormRegistrationStatus.OPEN,
+    form_type: str = "registration",
+    start_datetime: datetime = datetime(2026, 3, 1, 0, 0, 0),
+    end_datetime: datetime = datetime(2026, 3, 2, 0, 0, 0),
+) -> Forms:
     event = Events(
         name="test event",
         description="test description",
-        start_datetime=datetime(2026, 3, 1, 0, 0, 0),
-        end_datetime=datetime(2026, 3, 2, 0, 0),
-        semester_id=semester_id_on(db_session, "2026-03-02"),
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        semester_id=semester_id_on(db_session, end_datetime.date().isoformat()),
         status=status,
         location_type="on-site",
         location="the moon",
     )
     db_session.add(event)
     db_session.flush()
-    form = Forms(event_id=event.id, form_type="registration")
+    form = Forms(event_id=event.id, form_type=form_type, registration_status=registration_status)
     db_session.add(form)
     db_session.commit()
     return form
@@ -145,9 +159,17 @@ def test_cancel_without_registration_is_not_found(clerk_client: TestClient, db_s
     assert active_member_ids(db_session, form) == {seed_refs.sara.id}
 
 
-@pytest.mark.parametrize("status", ["active", "closed", "draft"])
-def test_cancel_after_registration_closes_is_refused(clerk_client: TestClient, db_session, member, status):
-    form = make_form(db_session, status=status)
+@pytest.mark.parametrize(
+    "status,reg_status",
+    [
+        ("published", FormRegistrationStatus.CLOSED),
+        ("published", FormRegistrationStatus.NOT_OPEN),
+        ("cancelled", FormRegistrationStatus.CLOSED),
+        ("draft", FormRegistrationStatus.NOT_OPEN),
+    ],
+)
+def test_cancel_after_registration_closes_is_refused(clerk_client: TestClient, db_session, member, status, reg_status):
+    form = make_form(db_session, status=status, registration_status=reg_status)
     register(db_session, form, member.id)
 
     response = clerk_client.delete(f"/submissions/{form.id}")

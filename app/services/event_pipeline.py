@@ -1302,12 +1302,13 @@ def event_for(request: EventRequests) -> createEvent_model:
             location=(place or "-")[:100] if on_site else "Online",
             start_datetime=datetime.combine(confirmed.start_date, confirmed.daily_start_time or time(0, 0)),  # type: ignore[arg-type]
             end_datetime=datetime.combine(confirmed.end_date, confirmed.daily_end_time or time(23, 59)),  # type: ignore[arg-type]
-            status="open",
+            status="published",
             image_url=poster,
             meeting_url=confirmed.meet_link if "online" in modes else None,
             is_official=int(bool(request.is_official)),
         ),
         form_type="none" if registration == "none" else "registration",
+        registration_status="open" if registration != "none" else "not_open",
         # publish refuses a request without its points tier before getting here.
         department_action_id=request.department_action_id,  # type: ignore[arg-type]
         member_action_id=request.member_action_id,  # type: ignore[arg-type]

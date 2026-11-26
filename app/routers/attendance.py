@@ -11,7 +11,7 @@ from app.DB import (
     members as member_queries,
 )
 
-from app.DB.schema import Events, Logs
+from app.DB.schema import Events, EventsStatus, Logs
 from app.DB.wallet import get_public_profile_by_uuid
 from app.routers.member_account_models import CodedErrorResponse
 from app.routers.models import (
@@ -31,6 +31,7 @@ from app.exceptions import (
     AttendanceTokenError,
     CardSignatureInvalid,
     CardSignatureRequired,
+    CheckInEventNotPublished,
     CheckInNotAccepted,
     CheckInNotRegistered,
     CheckInOutsideEventDates,
@@ -104,7 +105,7 @@ def get_target_date_for_day(event: Events, day: int | None) -> datetime:
         400: {
             "model": CodedErrorResponse,
             "description": "token_absent, token_malformed, token_event_mismatch, token_bad_algorithm, "
-            "token_missing_claim, token_invalid, outside_event_dates, already_checked_in, not_registered, not_accepted",
+            "token_missing_claim, token_invalid, event_not_published, outside_event_dates, already_checked_in, not_registered, not_accepted",
         },
         401: {"model": CodedErrorResponse, "description": "token_expired, token_not_yet_valid, token_bad_signature"},
     },
@@ -142,6 +143,8 @@ def mark_attendance(
     logger.info(f"Marking attendance for member [{member.id}] [{member.name}] with uni_id [{member.uni_id}]")
 
     event, event_log = get_event_with_attendable_log(session, event_id)
+    if event.status != EventsStatus.PUBLISHED:
+        raise CheckInEventNotPublished()
     logger.info(f"Attendace for event [{event.name}] for member [{member.name}]")
     logger.info(f"Attendable log found for event [{event_log.id}]")
 
@@ -222,6 +225,8 @@ def backfill_attendance(
     logger.info(f"Backfill attendance for event [{event_id}], {len(request.members)} members, day [{request.day}]")
 
     event, event_log = get_event_with_attendable_log(session, event_id)
+    if event.status != EventsStatus.PUBLISHED:
+        raise CheckInEventNotPublished()
 
     event_days = get_event_days(event)
     if request.day < 1 or request.day > event_days:
@@ -350,6 +355,8 @@ def mark_attendance_manual(
     logger.info(f"Manual attendance for event [{event_id}], members {request.member_ids}")
 
     event, event_log = get_event_with_attendable_log(session, event_id)
+    if event.status != EventsStatus.PUBLISHED:
+        raise CheckInEventNotPublished()
 
     event_days = get_event_days(event)
     days_to_mark = request.days if request.days else ([request.day] if request.day else [])
@@ -443,6 +450,8 @@ def scan_attendance(
     member, _profile, _is_admin = result
 
     event, event_log = get_event_with_attendable_log(session, event_id)
+    if event.status != EventsStatus.PUBLISHED:
+        raise CheckInEventNotPublished()
     event_days = get_event_days(event)
     if request.day is not None and (request.day < 1 or request.day > event_days):
         raise HTTPException(

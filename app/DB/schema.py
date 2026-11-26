@@ -87,9 +87,8 @@ class EventsContentLinkKind(str, enum.Enum):
 
 class EventsStatus(str, enum.Enum):
     DRAFT = "draft"
-    OPEN = "open"
-    ACTIVE = "active"
-    CLOSED = "closed"
+    PUBLISHED = "published"
+    CANCELLED = "cancelled"
 
 
 class EventsLevel(str, enum.Enum):
@@ -98,10 +97,22 @@ class EventsLevel(str, enum.Enum):
     ADVANCED = "advanced"
 
 
+class EventsMeetingUrlVisibility(str, enum.Enum):
+    PUBLIC = "public"
+    ACCEPTED = "accepted"
+    HIDDEN = "hidden"
+
+
 class FormType(str, enum.Enum):
     NONE = "none"
     REGISTRATION = "registration"
     GOOGLE = "google"
+
+
+class FormRegistrationStatus(str, enum.Enum):
+    NOT_OPEN = "not_open"
+    OPEN = "open"
+    CLOSED = "closed"
 
 
 class MembersGender(str, enum.Enum):
@@ -205,9 +216,8 @@ class EmailLogsEmailType(str, enum.Enum):
 
 class OpenEventsStatus(str, enum.Enum):
     DRAFT = "draft"
-    OPEN = "open"
-    ACTIVE = "active"
-    CLOSED = "closed"
+    PUBLISHED = "published"
+    CANCELLED = "cancelled"
 
 
 class SemesterTerm(str, enum.Enum):
@@ -458,6 +468,11 @@ class Events(Base):
     # Join link for remote events. Owned by PUT /events/{id}/meeting-url, not by the
     # full-event update, so editing an event cannot silently drop it.
     meeting_url: Mapped[Optional[str]] = mapped_column(VARCHAR(500, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    meeting_url_visibility: Mapped[EventsMeetingUrlVisibility] = mapped_column(
+        Enum(EventsMeetingUrlVisibility, values_callable=lambda cls: [member.value for member in cls]),
+        nullable=False,
+        server_default=text("'public'"),
+    )
     is_official: Mapped[Optional[int]] = mapped_column(TINYINT(1), server_default=text("'0'"))
     # The semester the event counts toward. Set from the end date when the event
     # is saved (app/semesters.py), and never moved by editing a semester's dates.
@@ -465,6 +480,8 @@ class Events(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+    published_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    cancelled_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     # Who answers for the event: the member who requested it in the pipeline, or
     # whoever created it directly. Null on events made before this was recorded.
     responsible_member_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
@@ -484,6 +501,17 @@ class Events(Base):
         # before the row is serialized - the published rows of the
         # leaderboard-serving payloads, never the full admin set on an event row.
         content_links: list["EventContentLinks"]
+        phase: str
+        form_id: Optional[int]
+        form_type: Optional["FormType"]
+        registration_status: Optional["FormRegistrationStatus"]
+        effective_registration_status: str
+        is_registration_open: bool
+        google_responders_url: Optional[str]
+        department_id: Optional[int]
+        department_name: Optional[str]
+        department_ar_name: Optional[str]
+        attendance_count: int
 
 
 class Members(Base):
@@ -556,12 +584,21 @@ class Forms(Base):
     admin_google_email: Mapped[Optional[str]] = mapped_column(
         VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
     )
+    registration_status: Mapped[FormRegistrationStatus] = mapped_column(
+        Enum(FormRegistrationStatus, values_callable=lambda cls: [member.value for member in cls]),
+        nullable=False,
+        server_default=text("'not_open'"),
+    )
 
     event: Mapped["Events"] = relationship("Events", back_populates="forms")
     submissions: Mapped[list["Submissions"]] = relationship("Submissions", back_populates="form", passive_deletes=True)
     access_grants: Mapped[list["FormAccessGrants"]] = relationship(
         "FormAccessGrants", back_populates="form", passive_deletes=True
     )
+
+    if TYPE_CHECKING:
+        effective_registration_status: str
+        is_registration_open: bool
 
     @property
     def granted_emails(self) -> list[str]:
@@ -1584,6 +1621,7 @@ class EventHistoryAction(str, enum.Enum):
     CREATED = "created"
     EDITED = "edited"
     STATUS_CHANGED = "status_changed"
+    REGISTRATION_CHANGED = "registration_changed"
     MEETING_URL_CHANGED = "meeting_url_changed"
     CONTENT_LINK_CHANGED = "content_link_changed"
     DELETED = "deleted"
@@ -1997,10 +2035,23 @@ t_open_events = Table(
     Column("level", Enum(EventsLevel, values_callable=lambda cls: [member.value for member in cls])),
     Column("image_url", String(500)),
     Column("meeting_url", String(500)),
+    Column(
+        "meeting_url_visibility",
+        Enum(EventsMeetingUrlVisibility, values_callable=lambda cls: [member.value for member in cls]),
+        server_default=text("'public'"),
+    ),
     Column("is_official", TINYINT(1), server_default=text("'0'")),
+    Column("semester_id", UUID_CHAR),
+    Column("created_at", DateTime, server_default=text("'CURRENT_TIMESTAMP'")),
+    Column("published_at", DateTime),
+    Column("cancelled_at", DateTime),
     Column("form_id", INTEGER(unsigned=True), server_default=text("'0'")),
     Column("form_type", Enum(OpenEventsFormType, values_callable=lambda cls: [member.value for member in cls])),
     Column("google_responders_url", String(150)),
+    Column(
+        "registration_status",
+        Enum(FormRegistrationStatus, values_callable=lambda cls: [member.value for member in cls]),
+    ),
     info={"is_view": True},
 )
 

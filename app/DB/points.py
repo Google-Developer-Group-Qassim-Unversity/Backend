@@ -10,7 +10,7 @@ _MEMBERS_POINTS_BASE_QUERY = """
         FROM members m
         LEFT JOIN members_logs ml ON ml.member_id = m.id
         LEFT JOIN logs l ON l.id = ml.log_id
-        LEFT JOIN events e ON e.id = l.event_id AND e.semester_id = :semester_id AND e.status <> 'draft'
+        LEFT JOIN events e ON e.id = l.event_id AND e.semester_id = :semester_id AND e.status = 'published'
         LEFT JOIN actions a ON a.id = l.action_id
         LEFT JOIN (
             SELECT mo.log_id AS log_id,
@@ -80,7 +80,7 @@ def get_member_points_history_semester(session: Session, semester_id: str, membe
         WHERE m.id = :member_id
             AND m.deleted_at IS NULL
             AND e.semester_id = :semester_id
-            AND e.status <> 'draft'
+            AND e.status = 'published'
             AND e.location_type <> 'hidden'
         GROUP BY m.id, m.public_name, e.id, e.name, e.start_datetime, e.end_datetime
         ORDER BY e.start_datetime DESC
@@ -100,7 +100,7 @@ _DEPARTMENTS_POINTS_BASE_QUERY = """
         LEFT JOIN semester_departments sd ON sd.department_id = d.id AND sd.semester_id = :semester_id
         LEFT JOIN departments_logs dl ON dl.department_id = d.id
         LEFT JOIN logs l ON l.id = dl.log_id
-        LEFT JOIN events e ON e.id = l.event_id AND e.semester_id = :semester_id AND e.status <> 'draft'
+        LEFT JOIN events e ON e.id = l.event_id AND e.semester_id = :semester_id AND e.status = 'published'
         LEFT JOIN actions a ON a.id = l.action_id
         LEFT JOIN (
             SELECT modifications.log_id AS log_id,
@@ -180,7 +180,7 @@ def get_department_points_history_semester(session: Session, semester_id: str, d
         ) mods ON mods.log_id = l.id
         WHERE dl.department_id = :department_id
             AND e.semester_id = :semester_id
-            AND e.status <> 'draft'
+            AND e.status = 'published'
             AND e.location_type <> 'hidden'
         GROUP BY dl.department_id, d.name, d.ar_name, l.event_id, e.name, e.start_datetime, e.end_datetime, l.action_id, a.action_name, a.ar_action_name
         ORDER BY e.start_datetime DESC

@@ -9,9 +9,9 @@ from app.services.google_client import get_google_credentials
 from app.services import google_oauth
 from app.services.form_responses import FormAccess, FormResponsesClient
 from app.DB import forms as form_queries
-from app.DB.schema import EventHistoryAction, Forms, FormType
+from app.DB.schema import EventHistoryAction, EventsMeetingUrlVisibility, Forms, FormType
 from app.helpers import CurrentMember
-from app.services import event_history
+from app.services import event_history, event_lifecycle
 
 
 from app.exceptions import FormNotFoundById, FormNotAttached
@@ -30,6 +30,9 @@ router = APIRouter(prefix="/forms", tags=["Forms"])
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[Form_model])
 def get_all_forms(session: DB):
     forms = form_queries.get_forms(session)
+    local_now = event_lifecycle.riyadh_now()
+    for form in forms:
+        event_lifecycle.attach_form_lifecycle(form, local_now=local_now)
     return forms
 
 
@@ -43,6 +46,7 @@ def get_form_by_id(form_id: int, session: DB):
     form = form_queries.get_form_by_id(session, form_id)
     if not form:
         raise FormNotFoundById(form_id)
+    event_lifecycle.attach_form_lifecycle(form)
     return form
 
 
@@ -71,10 +75,28 @@ def update_form(form_id: int, form: Form_model, session: DB, actor: CurrentMembe
         existing = form_queries.get_form_by_id(session, form_id)
         before = _form_snapshot(existing) if existing else {}
         updated_form = form_queries.update_form(session, form_id, form)
+        owner = updated_form.event
+        if owner is not None:
+            if (
+                updated_form.form_type == FormType.NONE
+                and owner.meeting_url_visibility == EventsMeetingUrlVisibility.ACCEPTED
+            ):
+                # Never accidentally expose a private accepted-only link when switching to open attendance.
+                owner.meeting_url_visibility = (
+                    EventsMeetingUrlVisibility.HIDDEN if owner.meeting_url else EventsMeetingUrlVisibility.PUBLIC
+                )
+            elif (
+                updated_form.form_type != FormType.NONE
+                and not owner.meeting_url
+                and owner.meeting_url_visibility == EventsMeetingUrlVisibility.PUBLIC
+            ):
+                # Smart default when turning registration ON before any meeting link is saved.
+                owner.meeting_url_visibility = EventsMeetingUrlVisibility.ACCEPTED
         changed = event_history.changes(before, _form_snapshot(updated_form))
         if changed:
             event_history.record(session, updated_form.event_id, EventHistoryAction.FORM_UPDATED, actor, changed)
         session.commit()
+        event_lifecycle.attach_form_lifecycle(updated_form)
         return updated_form
     except Exception as e:
         session.rollback()
@@ -169,6 +191,7 @@ def attach_form(event_id: int, body: AttachFormRequest, session: DB, actor: Curr
         {"google_form_id": google_form_id, "admin_google_email": body.admin_google_email},
     )
     session.commit()
+    event_lifecycle.attach_form_lifecycle(updated_form)
     logger.info(f"Attached Google Form {google_form_id} to event {event_id}, shared with {body.admin_google_email}")
     return updated_form
 
@@ -245,6 +268,7 @@ def unattach_form(event_id: int, session: DB, actor: CurrentMember):
         {"google_form_id": form.google_form_id, "revoked": list(granted_emails)},
     )
     session.commit()
+    event_lifecycle.attach_form_lifecycle(updated_form)
     logger.info(f"Unattached Google Form from event {event_id}, revoked {len(granted_emails)} admin(s)")
     return updated_form
 

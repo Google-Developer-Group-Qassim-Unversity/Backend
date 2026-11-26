@@ -89,7 +89,8 @@ def create_event(api: TestClient, seed_refs, **overrides) -> dict:
       events (`e.status <> 'draft'`), so points earned at one are invisible.
     - `member_action_id` has to be an ID `get_attendable_logs` accepts.
     """
-    overrides.setdefault("event", make_event(status="open"))
+    overrides.setdefault("event", make_event(status="published"))
+    overrides.setdefault("form_type", "registration")
     overrides.setdefault("member_action_id", ATTENDABLE_ACTION_ID)
     response = api.post("/events/", json=make_create_event_payload(seed_refs, **overrides))
     assert_2xx(response)
@@ -162,8 +163,12 @@ def give_bonus(api: TestClient, event_id: int, member_id: int, points: int) -> N
 # ---------- the journey ----------
 
 
-def test_member_signs_up_attends_and_ends_up_on_the_leaderboard(api, seed_refs, attendable_action, outbound):
+def test_member_signs_up_attends_and_ends_up_on_the_leaderboard(api, seed_refs, attendable_action, outbound, frozen):
     """Sign up -> register -> accepted -> attended -> points -> certificate -> download."""
+    from datetime import datetime
+
+    # Pin clock before the factory's 2026-06-29 event so registration is open.
+    frozen.set(datetime(2026, 6, 20, 9, 0))
 
     # 1. First sign-in mints the member from Clerk's metadata.
     signup = sign_up(api)

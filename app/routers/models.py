@@ -27,6 +27,11 @@ class PaginationMeta_model(BaseClassModel):
 
 
 EventLevel = Literal["beginner", "intermediate", "advanced"]
+EventStatus = Literal["draft", "published", "cancelled"]
+EventPhase = Literal["upcoming", "live", "ended"]
+RegistrationStatus = Literal["not_open", "open", "closed"]
+EffectiveRegistrationStatus = Literal["none", "not_open", "open", "closed"]
+MeetingUrlVisibility = Literal["public", "accepted", "hidden"]
 
 
 class Events_model(BaseClassModel):
@@ -37,18 +42,22 @@ class Events_model(BaseClassModel):
     location: str
     start_datetime: datetime
     end_datetime: datetime
-    status: Literal["draft", "open", "active", "closed"]
+    status: EventStatus = "draft"
     # Always set on output. On input it is optional: a new event without one is
     # beginner (the admin form preselects it), and an update without one keeps
     # the event's level.
     level: EventLevel | None = None
     image_url: str | None = None
     meeting_url: str | None = None
+    meeting_url_visibility: MeetingUrlVisibility = "public"
     is_official: int | None = None
     # On input: file the event under this semester instead of deriving it from
     # the end date. On output: the semester it is filed under.
     semester_id: str | None = None
     created_at: datetime | None = None
+    published_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    phase: EventPhase | None = None
 
 
 class EventsWithContentLinks_model(Events_model):
@@ -61,6 +70,12 @@ class EventsWithContentLinks_model(Events_model):
     # in app/DB/events.py right before serialization; drafts never leave the
     # guarded admin payloads.
     content_links: list["EventContentLink_model"] = []
+    form_id: int | None = None
+    form_type: Literal["google", "none", "registration"] | None = None
+    registration_status: RegistrationStatus | None = None
+    effective_registration_status: EffectiveRegistrationStatus = "none"
+    is_registration_open: bool = False
+    google_responders_url: str | None = None
 
 
 def _require_present(value) -> str:
@@ -215,12 +230,18 @@ class DriveStorageQuotaResponse_model(BaseClassModel):
 
 class EventListItem_model(Events_model):
     """Extra per-event data for the admin paginated list - department of the
-    event and distinct attendees count."""
+    event, distinct attendees count, and lean registration metadata."""
 
     department_id: int | None = None
     department_name: str | None = None
     department_ar_name: str | None = None
     attendance_count: int = 0
+    form_id: int | None = None
+    form_type: Literal["google", "none", "registration"] | None = None
+    registration_status: RegistrationStatus | None = None
+    effective_registration_status: EffectiveRegistrationStatus = "none"
+    is_registration_open: bool = False
+    google_responders_url: str | None = None
 
 
 class Form_model(BaseClassModel):
@@ -232,6 +253,9 @@ class Form_model(BaseClassModel):
     google_responders_url: str | None = None
     admin_google_email: str | None = None
     granted_emails: list[str] = []
+    registration_status: RegistrationStatus | None = None
+    effective_registration_status: EffectiveRegistrationStatus = "none"
+    is_registration_open: bool = False
 
 
 class AttachFormRequest(BaseModel):
@@ -258,6 +282,7 @@ class createEvent_model(BaseClassModel):
     department_action_id: int
     member_action_id: int
     department_id: int
+    registration_status: RegistrationStatus | None = None
 
 
 class event_actions_model(BaseClassModel):
@@ -274,6 +299,7 @@ class EventPerson_model(BaseClassModel):
 
 class EventDetailsModel(BaseClassModel):
     event: Events_model
+    form: Form_model | None = None
     attendance_points: int | None = None
     actions: conlist(event_actions_model, min_length=1)  # pyright: ignore[reportInvalidTypeForm]
     # Null on events created before these were recorded, or if the member was deleted.
@@ -307,7 +333,12 @@ class UpdateEventModel(BaseClassModel):
 
 
 class UpdateEventStatus_model(BaseClassModel):
-    status: Literal["draft", "open", "active", "closed"]
+    status: EventStatus
+    open_registration: bool | None = None
+
+
+class UpdateEventRegistration_model(BaseClassModel):
+    registration_status: RegistrationStatus
 
 
 class UpdateEventMeetingUrl_model(BaseClassModel):
@@ -319,6 +350,7 @@ class UpdateEventMeetingUrl_model(BaseClassModel):
     """
 
     meeting_url: str | None = None
+    meeting_url_visibility: MeetingUrlVisibility | None = None
 
     @field_validator("meeting_url")
     def normalize(cls, v: str | None):
@@ -344,11 +376,27 @@ class Open_Events_model(Events_model):
     form_type: Literal["google", "none", "registration"]
     form_id: int
     google_responders_url: str | None = None
+    registration_status: RegistrationStatus | None = None
+    effective_registration_status: EffectiveRegistrationStatus = "none"
+    is_registration_open: bool = False
+
+
+class MySubmission_model(BaseClassModel):
+    submission_id: int
+    form_id: int
+    event_id: int
+    submission_type: Literal["none", "partial", "google", "registration"]
+    submitted_at: datetime
+    is_accepted: bool
+    is_invited: bool
+    meeting_url: str | None = None
 
 
 class submission_exists_model(BaseClassModel):
     submission_status: Literal[False, True, "partial"]
     submission_timestamp: datetime | None = None
+    is_accepted: bool = False
+    meeting_url: str | None = None
 
 
 class submission_accept_model(BaseClassModel):

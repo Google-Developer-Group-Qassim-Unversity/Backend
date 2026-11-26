@@ -418,7 +418,7 @@ def test_a_department_with_points_stays_in_the_semester(sign_in, club, db_sessio
         location="Hall",
         start_datetime="2026-07-01 10:00:00",
         end_datetime="2026-07-01 12:00:00",
-        status=EventsStatus.CLOSED,
+        status=EventsStatus.PUBLISHED,
         semester_id=club.semester.id,
     )
     db_session.add(event)

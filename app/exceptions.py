@@ -223,12 +223,23 @@ class SubmissionNotFound(NotFound):
 
 
 class RegistrationClosed(KnownHttpException):
-    """A member tried to cancel a registration after the event stopped taking registrations."""
+    """A member tried to register or cancel a registration while registration is not open."""
 
     code = "registration_closed"
 
     def __init__(self, form_id: int):
-        super().__init__(status_code=409, detail=f"Registration for form {form_id} is closed and can't be cancelled")
+        super().__init__(status_code=409, detail=f"Registration for form {form_id} is closed")
+
+
+class RegistrationNotSupported(KnownHttpException):
+    """An admin tried to update registration settings on an event whose form_type is 'none'."""
+
+    code = "registration_not_supported"
+
+    def __init__(self, event_id: int):
+        super().__init__(
+            status_code=409, detail=f"Event {event_id} does not support registration (form_type is 'none')"
+        )
 
 
 class EventNotFound(NotFound):
@@ -389,6 +400,11 @@ class CheckInNotRegistered(CheckInRefused):
 class CheckInNotAccepted(CheckInRefused):
     def __init__(self):
         super().__init__("not_accepted", "ما انقبلت في الحدث")
+
+
+class CheckInEventNotPublished(CheckInRefused):
+    def __init__(self):
+        super().__init__("event_not_published", "لا يمكنك تسجيل الحضور لحدث غير منشور")
 
 
 class CardSignatureInvalid(KnownHttpException):

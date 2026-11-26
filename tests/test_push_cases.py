@@ -18,6 +18,7 @@ from app.DB.schema import (
     EventsContentLinkKind,
     EventsLocationType,
     EventsStatus,
+    FormRegistrationStatus,
     FormType,
     MembersLogs,
     PushKind,
@@ -297,7 +298,7 @@ def test_the_edit_form_pushes_a_new_time(admin_client, db_session, seed_refs, ou
         "location": "Hall 60",
         "start_datetime": "2026-07-28T16:00:00",
         "end_datetime": "2026-07-28T18:00:00",
-        "status": "open",
+        "status": "published",
     }
     payload = make_create_event_payload(seed_refs=seed_refs, event=event_body(**details), form_type="registration")
     created = admin_client.post("/events", json=payload)
@@ -330,7 +331,7 @@ def test_closing_an_event_before_it_starts_tells_its_registrants_even_at_night(
     register(db_session, event, pending, accepted=False)
     db_session.commit()
 
-    assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "closed"}))
+    assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "cancelled"}))
     assert kicks == [1]
     # Due at once: not debounced, not held until 08:00.
     assert rows(db_session, PushKind.EVENT_CANCELLED)[0].not_before == ELEVEN_PM
@@ -351,12 +352,12 @@ def test_a_double_submitted_status_change_pushes_once(admin_client, db_session, 
     register(db_session, event, app_user(db_session))
     db_session.commit()
     for _ in range(2):
-        assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "closed"}))
+        assert_2xx(admin_client.put(f"/events/{event.id}/status", json={"status": "cancelled"}))
     assert len(rows(db_session, PushKind.EVENT_CANCELLED)) == 1
 
 
 @pytest.mark.parametrize(
-    "before,after", [(EventsStatus.OPEN, EventsStatus.DRAFT), (EventsStatus.ACTIVE, EventsStatus.CLOSED)]
+    "before,after", [(EventsStatus.PUBLISHED, EventsStatus.DRAFT), (EventsStatus.PUBLISHED, EventsStatus.CANCELLED)]
 )
 def test_back_to_draft_or_closing_an_active_event_is_a_cancellation(db_session, push_on, frozen, before, after):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), status=before)
@@ -370,16 +371,16 @@ def test_closing_a_started_or_never_public_event_is_not_a_cancellation(db_sessio
     draft = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), status=EventsStatus.DRAFT)
     for event in (started, draft):
         register(db_session, event, app_user(db_session))
-        assert change(db_session, event, status=EventsStatus.CLOSED) == 0
+        assert change(db_session, event, status=EventsStatus.CANCELLED) == 0
     assert rows(db_session) == []
 
 
 def test_a_cancel_undone_before_it_went_out_ends_as_one_truthful_back_on(db_session, push_on, apns_mock, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     register(db_session, event, app_user(db_session))
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     frozen.advance(seconds=40)
-    assert change(db_session, event, status=EventsStatus.OPEN) == 1  # its cancellation was waiting
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 1  # its cancellation was waiting
     db_session.commit()
     frozen.advance(minutes=2)
     assert deliver().sent == 1
@@ -393,13 +394,13 @@ def test_cancel_reopen_cancel_is_one_push(db_session, push_on, apns_mock, frozen
     """The first cancellation waits to retry (Apple answered 5xx); the second, newer one is the one that goes."""
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     register(db_session, event, app_user(db_session))
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     first = rows(db_session, PushKind.EVENT_CANCELLED)[0]
     first.attempts, first.not_before = 1, frozen.now + timedelta(minutes=4)
     frozen.advance(seconds=30)
-    change(db_session, event, status=EventsStatus.OPEN)
+    change(db_session, event, status=EventsStatus.PUBLISHED)
     frozen.advance(seconds=30)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     db_session.commit()
     frozen.advance(minutes=5)
     assert deliver().sent == 1
@@ -526,8 +527,8 @@ def test_an_event_moved_out_of_the_app_sends_nothing(db_session, push_on, apns_m
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, location="Hall 61") == 1
     assert change(db_session, event, location_type=EventsLocationType.HIDDEN) == 0
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 0  # not even a cancellation
-    event.status = EventsStatus.OPEN
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 0  # not even a cancellation
+    event.status = EventsStatus.PUBLISHED
     db_session.commit()
     frozen.advance(minutes=2)
     deliver()
@@ -539,7 +540,7 @@ def test_a_cancellation_names_the_start_that_was_cancelled(db_session, push_on, 
     event = make_event(db_session, start=datetime(2026, 7, 25, 16, 0))
     register(db_session, event, app_user(db_session))
     postponed = {"start_datetime": datetime(2026, 8, 15, 16, 0), "end_datetime": datetime(2026, 8, 15, 18, 0)}
-    assert change(db_session, event, status=EventsStatus.CLOSED, **postponed) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED, **postponed) == 1
     db_session.commit()
     deliver()
     [row] = rows(db_session, PushKind.EVENT_CANCELLED)
@@ -550,14 +551,14 @@ def test_reopening_tells_the_registrants_who_were_told_it_was_cancelled(db_sessi
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
     told = app_user(db_session)
     register(db_session, event, told)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     db_session.commit()
     assert deliver().sent == 1
     later = app_user(db_session)
     register(db_session, event, later)  # accepted after the cancellation went out
     frozen.advance(minutes=10)
     moved = {"start_datetime": datetime(2026, 7, 29, 16, 0), "end_datetime": datetime(2026, 7, 29, 18, 0)}
-    assert change(db_session, event, status=EventsStatus.OPEN, **moved) == 2
+    assert change(db_session, event, status=EventsStatus.PUBLISHED, **moved) == 2
     found = {row.member_id: row for row in rows(db_session, PushKind.EVENT_UPDATED)}
     assert found[told.id].not_before == frozen.now  # due at once, like the cancellation
     assert found[later.id].not_before == frozen.now + TWO_MINUTES  # never told: an ordinary update of the move
@@ -596,12 +597,12 @@ def test_back_on_is_urgent_at_night_and_over_the_cap(db_session, push_on, apns_m
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     member = app_user(db_session)
     register(db_session, event, member)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     db_session.commit()
     assert deliver().sent == 1
     _fill_the_cap(db_session, member, frozen.now)
     frozen.advance(minutes=5)
-    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
     assert row.not_before == frozen.now  # not held until 08:00
     db_session.commit()
@@ -615,12 +616,12 @@ def test_an_edit_right_after_a_reopen_still_goes_as_back_on(db_session, push_on,
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), location="Hall 60")
     member = app_user(db_session)
     register(db_session, event, member)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     db_session.commit()
     assert deliver().sent == 1
     _fill_the_cap(db_session, member, frozen.now)
     frozen.advance(minutes=5)
-    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 1
     back_on = rows(db_session, PushKind.EVENT_UPDATED)[0]
     back_on.attempts, back_on.not_before = 1, frozen.now + timedelta(minutes=2)
     frozen.advance(seconds=20)
@@ -640,11 +641,11 @@ def test_back_on_also_reaches_a_member_whose_cancellation_has_not_gone_yet(db_se
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     member = app_user(db_session)
     register(db_session, event, member)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     cancellation = rows(db_session, PushKind.EVENT_CANCELLED)[0]
     cancellation.attempts = attempts  # waiting (0) or claimed and not recorded yet (1)
     db_session.flush()
-    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 1
     assert [row.member_id for row in rows(db_session, PushKind.EVENT_UPDATED)] == [member.id]
 
 
@@ -655,7 +656,7 @@ def test_reopening_tells_the_others_what_moved_while_it_was_closed(db_session, p
     register(db_session, event, told)
     phoneless = make_member(db_session)
     register(db_session, event, phoneless)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     db_session.commit()
     assert deliver().sent == 1
     add_device(db_session, phoneless)
@@ -663,7 +664,7 @@ def test_reopening_tells_the_others_what_moved_while_it_was_closed(db_session, p
     moved = {"start_datetime": datetime(2026, 7, 29, 16, 0), "end_datetime": datetime(2026, 7, 29, 18, 0)}
     assert change(db_session, event, **moved) == 0  # closed: no push
     frozen.advance(minutes=5)
-    assert change(db_session, event, status=EventsStatus.OPEN) == 2
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 2
     db_session.commit()
     frozen.advance(minutes=2)
     assert deliver().sent == 2
@@ -675,11 +676,11 @@ def test_reopening_with_nothing_moved_tells_only_the_told(db_session, push_on, f
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     told = app_user(db_session)
     register(db_session, event, told)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     rows(db_session, PushKind.EVENT_CANCELLED)[0].status = PushStatus.SENT
     register(db_session, event, app_user(db_session))  # accepted while it was closed
     db_session.flush()
-    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 1
     assert [row.member_id for row in rows(db_session, PushKind.EVENT_UPDATED)] == [told.id]
 
 
@@ -688,13 +689,13 @@ def test_reopening_after_the_start_tells_only_those_told_it_was_cancelled(db_ses
     event = make_event(db_session, start=datetime(2026, 7, 20, 12, 5), end=datetime(2026, 7, 20, 14, 0))
     told = app_user(db_session)
     register(db_session, event, told)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1  # 12:00, five minutes before the start
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1  # 12:00, five minutes before the start
     db_session.commit()
     assert deliver().sent == 1
     untold = app_user(db_session)
     register(db_session, event, untold)
     frozen.advance(minutes=10)  # 12:10: it has started
-    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
     assert row.member_id == told.id
     db_session.commit()
@@ -737,13 +738,13 @@ def test_back_on_says_a_link_changed_while_the_event_was_closed(db_session, push
     )
     event.meeting_url = "https://meet.google.com/old-link-xyz"
     register(db_session, event, app_user(db_session))
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     db_session.commit()
     assert deliver().sent == 1
     frozen.advance(minutes=5)
     assert change(db_session, event, meeting_url="https://meet.google.com/new-link-abc") == 0  # closed: no push
     frozen.advance(minutes=5)
-    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 1
     db_session.commit()
     assert deliver().sent == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
@@ -761,14 +762,14 @@ def test_back_on_keeps_a_new_link_whose_update_the_close_skipped(db_session, pus
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, meeting_url="https://meet.google.com/new-link-abc") == 1
     frozen.advance(minutes=1)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     db_session.commit()
     assert deliver().sent == 1  # the cancellation; the link's update is not due yet
     frozen.advance(minutes=2)
     deliver()
     assert rows(db_session, PushKind.EVENT_UPDATED)[0].last_error == "event_closed"
     frozen.advance(minutes=5)
-    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 1
     db_session.commit()
     assert deliver().sent == 1
     back_on = rows(db_session, PushKind.EVENT_UPDATED)[-1]
@@ -789,7 +790,7 @@ def test_reopening_at_night_tells_one_never_told_now_when_the_start_they_knew_ca
     register(db_session, event, told)
     phoneless = make_member(db_session)
     register(db_session, event, phoneless)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     db_session.commit()
     assert deliver().sent == 1
     frozen.set(ELEVEN_PM)
@@ -797,7 +798,7 @@ def test_reopening_at_night_tells_one_never_told_now_when_the_start_they_knew_ca
     assert change(db_session, event, **moved) == 0  # closed: no push
     add_device(db_session, phoneless)
     frozen.advance(minutes=5)
-    assert change(db_session, event, status=EventsStatus.OPEN) == 2
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 2
     found = {row.member_id: row for row in rows(db_session, PushKind.EVENT_UPDATED)}
     assert found[told.id].not_before == frozen.now  # Back on
     assert found[phoneless.id].not_before == frozen.now + TWO_MINUTES  # not 08:00, after the 07:30 they knew
@@ -809,13 +810,13 @@ def test_back_on_goes_when_the_event_was_cancelled_ending_before_it_started(db_s
     event = make_event(db_session, start=datetime(2026, 7, 28, 18, 0), end=datetime(2026, 7, 28, 16, 0))
     told = app_user(db_session)
     register(db_session, event, told)
-    assert change(db_session, event, status=EventsStatus.CLOSED) == 1
+    assert change(db_session, event, status=EventsStatus.CANCELLED) == 1
     db_session.commit()
     assert deliver().sent == 1
     frozen.advance(minutes=5)
     assert change(db_session, event, end_datetime=datetime(2026, 7, 28, 20, 0)) == 0  # closed: no push
     frozen.advance(minutes=5)
-    assert change(db_session, event, status=EventsStatus.OPEN) == 1
+    assert change(db_session, event, status=EventsStatus.PUBLISHED) == 1
     [row] = rows(db_session, PushKind.EVENT_UPDATED)
     assert (row.member_id, row.not_before) == (told.id, frozen.now)
     assert row.payload["cause"]["fields"] == ["end_datetime"]
@@ -944,7 +945,7 @@ def test_no_closing_push_for_late_opened_unregistrable_or_long_missed_events(db_
     make_event(db_session, start=datetime(2026, 7, 21, 12, 30), created_at=datetime(2026, 7, 20, 9, 45))
     make_event(db_session, start=datetime(2026, 7, 21, 12, 30), form_type=FormType.NONE)
     make_event(db_session, start=datetime(2026, 7, 21, 12, 30), location_type=EventsLocationType.HIDDEN)
-    make_event(db_session, start=datetime(2026, 7, 21, 12, 30), status=EventsStatus.ACTIVE)
+    make_event(db_session, start=datetime(2026, 7, 21, 12, 30), registration_status=FormRegistrationStatus.CLOSED)
     # Its mark was 6.5 hours ago (a deploy, an outage): too late to say "last chance".
     make_event(db_session, start=datetime(2026, 7, 21, 6, 30))
     db_session.commit()
@@ -1344,7 +1345,7 @@ def test_three_capped_pushes_a_day_but_live_and_cancelled_always_go(db_session, 
     )
     for n in range(3):
         _queue(db_session, PushKind.WEEKLY_SUMMARY, member, f"weekly_summary:test-{n}:{member.id}")
-    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), status=EventsStatus.CLOSED)
+    event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), status=EventsStatus.CANCELLED)
     submission = register(db_session, event, member)
     cause = {"submission_id": submission.id, "status": "closed"}
     key = f"event_cancelled:{event.id}:{member.id}"

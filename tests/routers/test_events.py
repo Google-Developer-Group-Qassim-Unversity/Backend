@@ -44,14 +44,17 @@ def test_unauthorized_create_event(clerk_client: TestClient):
 
 def test_update_event_status(admin_client: TestClient):
     event = admin_client.post("/events", json=make_create_event_payload()).json()
-    update_response = admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    update_response = admin_client.put(f"/events/{event['id']}/status", json={"status": "published"})
     assert_2xx(update_response)
-    assert update_response.json()["status"] == "open"
+    body = update_response.json()
+    assert body["status"] == "published"
+    assert body["published_at"] is not None
+    assert body["cancelled_at"] is None
 
 
 def test_publishing_event_publishes_its_attached_google_form(admin_client: TestClient, monkeypatch):
     """Copying a form does not carry over "accepting responses" - publishing the
-    event must also publish the Google Form, or members hit a dead form."""
+    event with open_registration=True must also publish the Google Form, or members hit a dead form."""
     from app.routers import events as events_router
 
     calls: list[tuple[str, bool]] = []
@@ -67,7 +70,9 @@ def test_publishing_event_publishes_its_attached_google_form(admin_client: TestC
         f"/forms/{form_id}", json={"event_id": event["id"], "form_type": "google", "google_form_id": "gform-123"}
     )
 
-    open_response = admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    open_response = admin_client.put(
+        f"/events/{event['id']}/status", json={"status": "published", "open_registration": True}
+    )
     assert_2xx(open_response)
     assert calls == [("gform-123", True)]
 
@@ -83,7 +88,9 @@ def test_publishing_event_without_google_form_does_not_call_forms_api(admin_clie
     monkeypatch.setattr(events_router, "set_form_publish_state", lambda *args, **kwargs: calls.append((args, kwargs)))
 
     event = admin_client.post("/events", json=make_create_event_payload(form_type="registration")).json()
-    response = admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    response = admin_client.put(
+        f"/events/{event['id']}/status", json={"status": "published", "open_registration": True}
+    )
     assert_2xx(response)
     assert calls == []
 
@@ -104,15 +111,17 @@ def test_google_publish_failure_does_not_block_the_status_change(admin_client: T
         f"/forms/{form_id}", json={"event_id": event["id"], "form_type": "google", "google_form_id": "gform-789"}
     )
 
-    open_response = admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    open_response = admin_client.put(
+        f"/events/{event['id']}/status", json={"status": "published", "open_registration": True}
+    )
     assert_2xx(open_response)
 
     changed = admin_client.get(f"/events/{event['id']}")
-    assert changed.json()["status"] == "open"
+    assert changed.json()["status"] == "published"
 
 
 def test_transitions_among_non_open_statuses_do_not_touch_the_form(admin_client: TestClient, monkeypatch):
-    """Once already away from "open", moving between active/closed must not call the Forms API again."""
+    """Once registration is already closed, cancelling must not call the Forms API again."""
     from app.routers import events as events_router
 
     calls: list[tuple] = []
@@ -123,17 +132,17 @@ def test_transitions_among_non_open_statuses_do_not_touch_the_form(admin_client:
     admin_client.put(
         f"/forms/{form_id}", json={"event_id": event["id"], "form_type": "google", "google_form_id": "gform-456"}
     )
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "active"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "published", "open_registration": True})
+    admin_client.put(f"/events/{event['id']}/registration", json={"registration_status": "closed"})
     calls.clear()
 
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "closed"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "cancelled"})
     assert calls == []
 
 
 def test_points_admin_create_event(admin_client: TestClient, seed_refs):
     event = admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "published"})
 
     points_response = admin_client.get(f"/points/departments/{seed_refs.dept_business.id}")
     assert_2xx(points_response)
@@ -211,7 +220,7 @@ def test_update_event(admin_client: TestClient, seed_refs):
     event = admin_client.post(
         "/events", json=make_create_event_payload(seed_refs=seed_refs, department_id=seed_refs.dept_business.id)
     ).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "published"})
 
     dept1_response = admin_client.get(f"/points/departments/{seed_refs.dept_business.id}")
     assert_2xx(dept1_response)
@@ -222,7 +231,10 @@ def test_update_event(admin_client: TestClient, seed_refs):
 
     update_payload = {
         "event": make_event(
-            name="my event", start_datetime="2026-06-29T00:00:00", end_datetime="2026-07-01T00:00:00", status="open"
+            name="my event",
+            start_datetime="2026-06-29T00:00:00",
+            end_datetime="2026-07-01T00:00:00",
+            status="published",
         ),
         "actions": [
             {
@@ -278,7 +290,7 @@ def test_unauthorized_update_event(clerk_client: TestClient, db_session):
 def test_delete_event(super_admin_client: TestClient, seed_refs):
     admin_client = super_admin_client
     event = admin_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "published"})
 
     points_response = admin_client.get(f"/points/departments/{seed_refs.dept_business.id}")
     assert_2xx(points_response)
@@ -379,49 +391,108 @@ def test_get_registrable_events(admin_client: TestClient):
     assert response.json() == []
 
 
-def test_active_remote_no_registration_event_appears_in_open_events(admin_client: TestClient):
-    """Attendees can join without registering, so it should surface as joinable."""
+def test_published_live_remote_no_registration_event_appears_in_open_events(admin_client: TestClient, frozen):
+    """A published remote event currently live appears in /events/open with phase='live'."""
+    frozen.set(datetime(2026, 6, 29, 9, 0))  # 12:00 Riyadh
     event = admin_client.post(
-        "/events", json=make_create_event_payload(event=make_event(location_type="online"), form_type="none")
+        "/events",
+        json=make_create_event_payload(
+            event=make_event(
+                location_type="online", start_datetime="2026-06-29T10:00:00", end_datetime="2026-06-29T14:00:00"
+            ),
+            form_type="none",
+        ),
     ).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "active"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "published"})
     admin_client.put(f"/events/{event['id']}/meeting-url", json={"meeting_url": "https://meet.google.com/abc"})
 
     response = admin_client.get("/events/open")
     assert_2xx(response)
-    ids = [e["id"] for e in response.json()]
-    assert event["id"] in ids, "Active, remote, no-registration events should be listed as open"
     listed = next(e for e in response.json() if e["id"] == event["id"])
     assert listed["meeting_url"] == "https://meet.google.com/abc"
+    assert listed["phase"] == "live"
+    assert listed["effective_registration_status"] == "none"
+    assert listed["is_registration_open"] is False
 
 
-def test_active_onsite_event_not_in_open_events(admin_client: TestClient):
+def test_published_upcoming_and_live_events_appear_in_open_events_and_ended_or_cancelled_do_not(
+    admin_client: TestClient, frozen
+):
+    frozen.set(datetime(2026, 6, 29, 9, 0))  # 12:00 Riyadh
+    upcoming = admin_client.post(
+        "/events",
+        json=make_create_event_payload(
+            event=make_event(
+                name="upcoming",
+                location_type="on-site",
+                location="room 1",
+                start_datetime="2026-06-30T10:00:00",
+                end_datetime="2026-06-30T12:00:00",
+                status="published",
+            ),
+            form_type="registration",
+        ),
+    ).json()
+    ended = admin_client.post(
+        "/events",
+        json=make_create_event_payload(
+            event=make_event(
+                name="ended",
+                start_datetime="2026-06-28T10:00:00",
+                end_datetime="2026-06-28T12:00:00",
+                status="published",
+            ),
+            form_type="registration",
+        ),
+    ).json()
+    cancelled = admin_client.post(
+        "/events",
+        json=make_create_event_payload(
+            event=make_event(
+                name="cancelled",
+                start_datetime="2026-06-30T14:00:00",
+                end_datetime="2026-06-30T16:00:00",
+                status="cancelled",
+            ),
+            form_type="registration",
+        ),
+    ).json()
+
+    response = admin_client.get("/events/open")
+    assert_2xx(response)
+    ids = [e["id"] for e in response.json()]
+    assert upcoming["id"] in ids
+    assert ended["id"] not in ids
+    assert cancelled["id"] not in ids
+    listed = next(e for e in response.json() if e["id"] == upcoming["id"])
+    assert listed["phase"] == "upcoming"
+    assert listed["effective_registration_status"] == "open"
+    assert listed["is_registration_open"] is True
+
+
+def test_published_closed_registration_upcoming_event_still_in_open_events_with_closed_flag(
+    admin_client: TestClient, frozen
+):
+    frozen.set(datetime(2026, 6, 29, 9, 0))  # 12:00 Riyadh
     event = admin_client.post(
         "/events",
-        json=make_create_event_payload(event=make_event(location_type="on-site", location="room 1"), form_type="none"),
+        json=make_create_event_payload(
+            event=make_event(
+                location_type="online", start_datetime="2026-06-30T10:00:00", end_datetime="2026-06-30T12:00:00"
+            ),
+            form_type="registration",
+        ),
     ).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "active"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "published", "open_registration": True})
+    admin_client.put(f"/events/{event['id']}/registration", json={"registration_status": "closed"})
 
     response = admin_client.get("/events/open")
-    ids = [e["id"] for e in response.json()]
-    assert event["id"] not in ids, "On-site events should not appear as joinable regardless of status"
+    listed = next(e for e in response.json() if e["id"] == event["id"])
+    assert listed["effective_registration_status"] == "closed"
+    assert listed["is_registration_open"] is False
 
 
-def test_active_remote_event_requiring_registration_not_in_open_events(admin_client: TestClient):
-    event = admin_client.post(
-        "/events", json=make_create_event_payload(event=make_event(location_type="online"), form_type="registration")
-    ).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "active"})
-
-    response = admin_client.get("/events/open")
-    ids = [e["id"] for e in response.json()]
-    assert event["id"] not in ids, "Registration must close before an active event drops off the open list"
-
-
-@pytest.mark.parametrize("event_status", ["draft", "open", "active", "closed"])
+@pytest.mark.parametrize("event_status", ["draft", "published", "cancelled"])
 def test_delete_event_in_any_status(super_admin_client: TestClient, event_status, db_session):
     event = super_admin_client.post("/events", json=make_create_event_payload()).json()
     row = db_session.get(Events, event["id"])
@@ -576,7 +647,7 @@ def test_editing_an_event_to_onsite_clears_its_meeting_url(admin_client: TestCli
 
 
 def test_update_status_nonexistent_event(admin_client: TestClient):
-    assert_not_found(admin_client.put("/events/9999/status", json={"status": "open"}))
+    assert_not_found(admin_client.put("/events/9999/status", json={"status": "published"}))
 
 
 def test_get_event_details_nonexistent_event(admin_client: TestClient):
@@ -587,7 +658,7 @@ def test_update_event_days_increase(admin_client: TestClient, seed_refs):
     event = admin_client.post(
         "/events", json=make_create_event_payload(seed_refs=seed_refs, department_id=seed_refs.dept_business.id)
     ).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "published"})
 
     points_response = admin_client.get(f"/points/departments/{seed_refs.dept_business.id}")
     assert points_response.json()["department"]["total_points"] == seed_refs.dept_action.points
@@ -595,7 +666,10 @@ def test_update_event_days_increase(admin_client: TestClient, seed_refs):
     details = admin_client.get(f"/events/{event['id']}/details").json()
     update_payload = {
         "event": make_event(
-            name="my event", start_datetime="2026-06-29T00:00:00", end_datetime="2026-07-01T00:00:00", status="open"
+            name="my event",
+            start_datetime="2026-06-29T00:00:00",
+            end_datetime="2026-07-01T00:00:00",
+            status="published",
         ),
         "actions": details["actions"],
     }
@@ -615,7 +689,7 @@ def test_update_event_days_decrease(admin_client: TestClient, seed_refs):
             event=make_event(start_datetime="2026-06-29T00:00:00", end_datetime="2026-07-01T00:00:00"),
         ),
     ).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "published"})
 
     points_response = admin_client.get(f"/points/departments/{seed_refs.dept_business.id}")
     assert points_response.json()["department"]["total_points"] == seed_refs.dept_action.points * 3
@@ -623,7 +697,10 @@ def test_update_event_days_decrease(admin_client: TestClient, seed_refs):
     details = admin_client.get(f"/events/{event['id']}/details").json()
     update_payload = {
         "event": make_event(
-            name="my event", start_datetime="2026-06-29T00:00:00", end_datetime="2026-06-29T00:00:00", status="open"
+            name="my event",
+            start_datetime="2026-06-29T00:00:00",
+            end_datetime="2026-06-29T00:00:00",
+            status="published",
         ),
         "actions": details["actions"],
     }
@@ -722,11 +799,12 @@ def test_update_without_a_level_keeps_it_and_with_one_changes_it(admin_client: T
     assert _update_level(admin_client, event_id, level="advanced")["level"] == "advanced"
 
 
-def test_open_events_carry_the_level(admin_client: TestClient):
+def test_open_events_carry_the_level(admin_client: TestClient, frozen):
+    frozen.set(datetime(2026, 6, 20, 9, 0))
     event = admin_client.post(
         "/events", json=make_create_event_payload(event=make_event(level="advanced"), form_type="registration")
     ).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "open"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "published"})
 
     listed = next(e for e in admin_client.get("/events/open").json() if e["id"] == event["id"])
     assert listed["level"] == "advanced"

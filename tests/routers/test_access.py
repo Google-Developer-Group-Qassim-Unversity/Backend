@@ -186,15 +186,15 @@ def test_a_leader_edits_their_departments_event_and_not_anothers(club, seed_refs
     ai_event, robotics_event = club.event(ai, seed_refs), club.event(robotics, seed_refs)
     client = club.sign_in(club.join(club.person(), ai, "leader"))
 
-    assert client.put(f"/events/{ai_event}/status", json={"status": "open"}).status_code == 200
-    refused = client.put(f"/events/{robotics_event}/status", json={"status": "open"})
+    assert client.put(f"/events/{ai_event}/status", json={"status": "published"}).status_code == 200
+    refused = client.put(f"/events/{robotics_event}/status", json={"status": "published"})
     assert refused.status_code == 403
     assert refused.json()["code"] == "permission_denied"
 
 
 def test_a_missing_event_is_404_not_403(club):
     client = club.sign_in(club.join(club.person(), club.department("AI"), "leader"))
-    assert client.put("/events/987654/status", json={"status": "open"}).status_code == 404
+    assert client.put("/events/987654/status", json={"status": "published"}).status_code == 404
 
 
 def test_a_leader_cannot_create_an_event_for_another_department(club, seed_refs):

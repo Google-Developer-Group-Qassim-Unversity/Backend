@@ -116,7 +116,7 @@ def give_department_custom_points(body: CustomDepartmentPointsRequest, session: 
                 location_type=body.location_type,
                 start_datetime=body.start_datetime,
                 end_datetime=body.end_datetime,
-                status="closed",
+                status="published",
                 image_url=None,
                 is_official=0,
             )
@@ -327,7 +327,7 @@ def give_member_custom_points(
                 location_type=body.location_type,
                 start_datetime=body.start_datetime,
                 end_datetime=body.end_datetime,
-                status="closed",
+                status="published",
                 image_url=None,
                 is_official=0,
             )

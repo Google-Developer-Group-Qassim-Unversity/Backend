@@ -166,7 +166,7 @@ def department_has_memberships(session: Session, semester_id: str, department_id
 
 
 def department_has_points(session: Session, semester_id: str, department_id: int) -> bool:
-    """Whether the department earned points on a non-draft event of the semester."""
+    """Whether the department earned points on a published event of the semester."""
     return bool(
         session.scalar(
             select(
@@ -174,7 +174,7 @@ def department_has_points(session: Session, semester_id: str, department_id: int
                 .where(DepartmentsLogs.department_id == department_id)
                 .where(Logs.id == DepartmentsLogs.log_id)
                 .where(Events.id == Logs.event_id)
-                .where(Events.semester_id == semester_id, Events.status != EventsStatus.DRAFT)
+                .where(Events.semester_id == semester_id, Events.status == EventsStatus.PUBLISHED)
             )
         )
     )
