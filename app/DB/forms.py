@@ -1,7 +1,7 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import delete, select
-from app.DB.schema import Events, Forms, FormAccessGrants
+from app.DB.schema import Events, FormRegistrationStatus, Forms, FormAccessGrants, FormType
 from app.routers.models import Form_model
 from app.exceptions import EventNotFound, FormNotFound, FormNotFoundById, DataIntegrityError
 
@@ -9,6 +9,14 @@ from app.exceptions import EventNotFound, FormNotFound, FormNotFoundById, DataIn
 def create_form(session: Session, form: Form_model):
     """Create a new form in the database"""
     try:
+        if form.form_type == FormType.NONE:
+            reg_status = FormRegistrationStatus.NOT_OPEN
+        else:
+            reg_status = (
+                FormRegistrationStatus(form.registration_status)
+                if form.registration_status is not None
+                else FormRegistrationStatus.NOT_OPEN
+            )
         new_form = Forms(
             google_form_id=form.google_form_id,
             form_type=form.form_type,
@@ -16,6 +24,7 @@ def create_form(session: Session, form: Form_model):
             google_responders_url=form.google_responders_url,
             admin_google_email=form.admin_google_email,
             event_id=form.event_id,
+            registration_status=reg_status,
         )
         session.add(new_form)
         session.flush()
@@ -37,6 +46,11 @@ def update_form(session: Session, form_id: int, form: Form_model):
     existing_form.google_responders_url = form.google_responders_url
     existing_form.admin_google_email = form.admin_google_email
     existing_form.form_type = form.form_type
+    if form.form_type == FormType.NONE:
+        existing_form.registration_status = FormRegistrationStatus.NOT_OPEN
+    else:
+        if "registration_status" in form.model_fields_set and form.registration_status is not None:
+            existing_form.registration_status = FormRegistrationStatus(form.registration_status)
     # event_id is NOT updatable - forms are permanently bound to their events
 
     session.flush()
@@ -60,7 +74,7 @@ def set_form_watch_id(session: Session, form_id: int, google_watch_id: str):
 
 def get_forms(session: Session):
     """Get all forms from the database"""
-    statement = select(Forms)
+    statement = select(Forms).options(selectinload(Forms.event))
     forms = session.scalars(statement).all()
     return forms
 

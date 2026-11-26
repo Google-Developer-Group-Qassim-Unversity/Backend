@@ -63,7 +63,7 @@ def create_attendance_ready_event(client: TestClient, form_type: str = "none", *
     response = client.post("/events", json=payload)
     assert_2xx(response)
     event_id = response.json()["id"]
-    status_response = client.put(f"/events/{event_id}/status", json={"status": "open"})
+    status_response = client.put(f"/events/{event_id}/status", json={"status": "published"})
     assert_2xx(status_response)
     return event_id
 
@@ -342,12 +342,13 @@ def test_failed_points_cache_reset_preserves_attendance(admin_client: TestClient
     assert attendance.json()["attendance_count"] == 1
 
 
-def test_manual_mark_event_closed(admin_client: TestClient, seed_refs):
+def test_manual_mark_event_cancelled(admin_client: TestClient, seed_refs):
     event_id = create_attendance_ready_event(admin_client)
-    close_response = admin_client.put(f"/events/{event_id}/status", json={"status": "closed"})
+    close_response = admin_client.put(f"/events/{event_id}/status", json={"status": "cancelled"})
     assert_2xx(close_response)
-    response = admin_client.post(f"/attendance/{event_id}/manual", json={"member_ids": [seed_refs.ahmed.id]})
+    response = admin_client.post(f"/attendance/{event_id}/manual", json={"member_ids": [seed_refs.ahmed.id], "day": 1})
     assert_bad_request(response)
+    assert response.json()["code"] == "event_not_published"
 
 
 def test_manual_mark_member_not_found(admin_client: TestClient):

@@ -316,7 +316,7 @@ def _onboarded_member_with_history(sign_in, outbound, db_session) -> tuple[Membe
         location="Hall",
         start_datetime=datetime(2026, 7, 1, 10),
         end_datetime=datetime(2026, 7, 1, 12),
-        status=EventsStatus.CLOSED,
+        status=EventsStatus.PUBLISHED,
         semester_id=semester_id_on(db_session, "2026-07-01"),
     )
     db_session.add(event)

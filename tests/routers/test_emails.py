@@ -193,7 +193,7 @@ def invited_submission(db_session, seed_refs):
         start_datetime="2026-06-29 00:00:00",
         end_datetime="2026-06-29 00:00:00",
         semester_id=semester_id_on(db_session, "2026-06-29"),
-        status=EventsStatus.OPEN,
+        status=EventsStatus.PUBLISHED,
     )
     db_session.add(event)
     db_session.flush()

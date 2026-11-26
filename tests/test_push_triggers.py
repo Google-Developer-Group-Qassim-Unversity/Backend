@@ -13,8 +13,6 @@ from app.DB import logs as log_queries
 from app.DB import members as member_queries
 from app.DB.schema import (
     Departments,
-    EventHistory,
-    EventHistoryAction,
     EventRequests,
     EventRequestType,
     EventsLocationType,
@@ -295,9 +293,9 @@ def test_reminders_skip_pending_registrations_check_ins_and_unattended_events(db
     db_session.add(MembersLogs(member_id=checked_in.id, log_id=log.id, date=datetime(2026, 7, 20, 11, 0)))
     for status, location, form in (
         (EventsStatus.DRAFT, EventsLocationType.ON_SITE, FormType.REGISTRATION),
-        (EventsStatus.CLOSED, EventsLocationType.ON_SITE, FormType.REGISTRATION),
-        (EventsStatus.OPEN, EventsLocationType.HIDDEN, FormType.REGISTRATION),
-        (EventsStatus.OPEN, EventsLocationType.ON_SITE, FormType.NONE),
+        (EventsStatus.CANCELLED, EventsLocationType.ON_SITE, FormType.REGISTRATION),
+        (EventsStatus.PUBLISHED, EventsLocationType.HIDDEN, FormType.REGISTRATION),
+        (EventsStatus.PUBLISHED, EventsLocationType.ON_SITE, FormType.NONE),
     ):
         other = make_event(
             db_session, start=datetime(2026, 7, 20, 13, 0), status=status, location_type=location, form_type=form
@@ -383,22 +381,18 @@ def test_an_event_published_from_the_pipeline_is_announced_by_its_type(db_sessio
 
 def test_a_draft_opened_today_is_announced_but_an_old_open_event_is_not(db_session, push_on, frozen):
     app_user(db_session, news=True)
-    opened_today = make_event(db_session, start=datetime(2026, 7, 28, 16, 0), created_at=datetime(2026, 6, 1))
-    db_session.add(
-        EventHistory(
-            event_id=opened_today.id,
-            action=EventHistoryAction.STATUS_CHANGED,
-            at=frozen.now - timedelta(hours=1),
-            details={"status": ["draft", "open"]},
-            event_name=opened_today.name,
-        )
+    published_today = make_event(
+        db_session,
+        start=datetime(2026, 7, 28, 16, 0),
+        created_at=datetime(2026, 6, 1),
+        published_at=frozen.now - timedelta(hours=1),
     )
-    make_event(db_session, start=datetime(2026, 7, 28, 16, 0), created_at=datetime(2026, 6, 1))  # open for weeks
+    make_event(db_session, start=datetime(2026, 7, 28, 16, 0), created_at=datetime(2026, 6, 1))  # published for weeks
     make_event(db_session, start=datetime(2026, 7, 28, 16, 0), status=EventsStatus.DRAFT, created_at=frozen.now)
     make_event(db_session, start=datetime(2026, 7, 19, 16, 0), created_at=frozen.now)  # already started
     db_session.commit()
     sweep(db_session, frozen.now)
-    assert [r.event_id for r in rows(db_session, PushKind.NEW_EVENT)] == [opened_today.id]
+    assert [r.event_id for r in rows(db_session, PushKind.NEW_EVENT)] == [published_today.id]
 
 
 def test_announcements_wait_for_8am_and_two_a_day_reach_a_member(db_session, push_on, apns_mock, frozen):

@@ -29,8 +29,6 @@ from app.config import config
 from app.DB import push as push_queries
 from app.DB.schema import (
     Actions,
-    EventHistory,
-    EventHistoryAction,
     EventRequests,
     Events,
     EventsLocationType,
@@ -217,7 +215,7 @@ def enqueue_event_reminders(session: Session, now: datetime, result) -> None:
     horizon = local_now + REMINDER_LEAD
     events = session.scalars(
         select(Events).where(
-            Events.status.in_([EventsStatus.OPEN, EventsStatus.ACTIVE]),
+            Events.status == EventsStatus.PUBLISHED,
             Events.location_type.in_(ATTENDED_LOCATIONS),
             Events.start_datetime <= horizon,
             Events.end_datetime >= local_now - timedelta(days=1),
@@ -280,19 +278,21 @@ def _checked_in(session: Session, event_id: int, day) -> set[int]:
 
 
 def enqueue_new_events(session: Session, now: datetime, result) -> None:
-    """An event that became open in the last 48 hours and has not started: members with club news on."""
+    """An event published in the last 48 hours and not yet started: members with club news on."""
     if not config.push_enabled:
         return
     local_now = clock.to_riyadh(now)
     events = session.scalars(
         select(Events).where(
-            Events.status == EventsStatus.OPEN,
+            Events.status == EventsStatus.PUBLISHED,
             Events.location_type.in_(ATTENDED_LOCATIONS),
             Events.start_datetime > local_now,
         )
     ).all()
     fresh = [
-        event for event in events if (opened := became_open_at(session, event)) and opened >= now - NEW_EVENT_WINDOW
+        event
+        for event in events
+        if (published := became_open_at(session, event)) is not None and published >= now - NEW_EVENT_WINDOW
     ]
     if not fresh:
         return
@@ -327,25 +327,8 @@ def event_types(session: Session, event_ids: Sequence[int]) -> dict[int, str]:
 
 
 def became_open_at(session: Session, event: Events) -> datetime | None:
-    """When the event last became open: the newest history entry that set its status to open, else its creation.
-
-    A draft opened later through ``PUT /events/{id}/status`` (or the edit form)
-    has such an entry; an event created open (the pipeline's publish,
-    ``POST /events/``) has none, and ``created_at`` is when it opened.
-    """
-    entries = session.scalars(
-        select(EventHistory)
-        .where(
-            EventHistory.event_id == event.id,
-            EventHistory.action.in_([EventHistoryAction.STATUS_CHANGED, EventHistoryAction.EDITED]),
-        )
-        .order_by(EventHistory.at.desc())
-    ).all()
-    for entry in entries:
-        status = (entry.details or {}).get("status")
-        if isinstance(status, list) and len(status) == 2 and status[1] == EventsStatus.OPEN.value:
-            return entry.at
-    return event.created_at
+    """When the event was published: ``event.published_at``, falling back to ``event.created_at``."""
+    return event.published_at or event.created_at
 
 
 def clean_up(session: Session, now: datetime, result) -> None:
@@ -387,7 +370,7 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
                 return "registration_changed"
             return None
         event = session.get(Events, row.event_id)
-        if event is None or event.status not in (EventsStatus.OPEN, EventsStatus.ACTIVE):
+        if event is None or event.status != EventsStatus.PUBLISHED:
             return "event_closed"
         starts = [day_start(event, day).isoformat() for day in range(1, event_days(event) + 1)]
         return None if cause.get("starts") in starts else "event_changed"
@@ -401,5 +384,5 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
         return None if any(_effective_day(d).isoformat() == cause.get("day") for d in dates) else "points_removed"
     if row.kind == PushKind.NEW_EVENT:
         event = session.get(Events, row.event_id)
-        return None if event is not None and event.status == EventsStatus.OPEN else "event_closed"
+        return None if event is not None and event.status == EventsStatus.PUBLISHED else "event_closed"
     return None

@@ -30,6 +30,7 @@ from app.routers.models import (
     EventContentLink_model,
     InternalServerErrorResponse,
     UpdateEventModel,
+    UpdateEventRegistration_model,
     UpdateEventStatus_model,
     UpdateEventMeetingUrl_model,
     CreateEventContentLink_model,
@@ -38,7 +39,7 @@ from app.routers.models import (
     DriveFileMakePublicResponse_model,
 )
 from app.clients import GDrive
-from app.helpers import CurrentMember
+from app.helpers import CurrentMember, MemberOrGuest
 from app.leaderboard_cache import reset_leaderboard_cache_best_effort, refresh_attendance_points_cache
 from app.services.events import create_full_event
 from app.services.google_client import set_form_publish_state
@@ -47,7 +48,7 @@ from time import perf_counter
 from typing import Annotated, Literal
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
-from app.exceptions import DataIntegrityError, DriveIntegrationNotConfigured
+from app.exceptions import DataIntegrityError, DriveIntegrationNotConfigured, RegistrationNotSupported
 from app.dependencies import DB
 from sqlalchemy.orm import Session
 from app.DB import event_pipeline as pipeline_queries
@@ -55,12 +56,15 @@ from app.DB.schema import (
     Events,
     EventHistoryAction,
     EventsLocationType,
+    EventsMeetingUrlVisibility,
     EventsStatus,
+    FormRegistrationStatus,
+    Forms,
     FormType,
     Members,
     PipelineHistoryAction,
 )
-from app.services import event_history, pipeline_calendar, pipeline_history
+from app.services import event_history, event_lifecycle, pipeline_calendar, pipeline_history
 from app.services.push import cases as push_cases
 from app.services.push import delivery as push_delivery
 
@@ -87,6 +91,18 @@ def _semester_id(session: Session, semester: int | str) -> str:
     return resolve_semester(session, hijri_code).id
 
 
+def _serialize_event_with_meeting_policy(
+    event: Events, *, is_staff: bool = False, is_accepted: bool = False
+) -> EventsWithContentLinks_model:
+    model = EventsWithContentLinks_model.model_validate(event)
+    allowed_url = event_lifecycle.visible_meeting_url(
+        model.meeting_url, model.meeting_url_visibility, is_staff=is_staff, is_accepted=is_accepted
+    )
+    if allowed_url != model.meeting_url:
+        return model.model_copy(update={"meeting_url": allowed_url})
+    return model
+
+
 @router.get("/", status_code=status.HTTP_200_OK, response_model=list[EventsWithContentLinks_model])
 def get_all_events(session: DB, semester: Annotated[int | str, Query()] = "all"):
     logger.info("Fetching all events")
@@ -100,7 +116,7 @@ def get_all_events(session: DB, semester: Annotated[int | str, Query()] = "all")
     logger.info(
         f"fetched [{len(events)}] events DB took [{(end - start) * 1000:.2f}]ms to execute (semester={semester})"
     )
-    return events
+    return [_serialize_event_with_meeting_policy(event) for event in events]
 
 
 @router.get(
@@ -114,7 +130,9 @@ def list_events_paginated(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
     semester: Annotated[int | str, Query()] = "all",
-    status_filter: Annotated[Literal["draft", "open", "active", "closed"] | None, Query(alias="status")] = None,
+    status_filter: Annotated[Literal["draft", "published", "cancelled"] | None, Query(alias="status")] = None,
+    phase: Annotated[Literal["upcoming", "live", "ended"] | None, Query()] = None,
+    registration_status: Annotated[Literal["none", "not_open", "open", "closed"] | None, Query()] = None,
     search: Annotated[str | None, Query()] = None,
     exclude_custom: Annotated[bool, Query()] = False,
 ):
@@ -122,27 +140,60 @@ def list_events_paginated(
     database. The full-array GET / is left intact for the leaderboard app and
     the dashboard aggregates."""
     semester_id = _semester_id(session, semester) if semester != "all" else None
+    local_now = event_lifecycle.riyadh_now()
 
     offset = (page - 1) * page_size
-    total = events_queries.count_events(session, semester_id, status_filter, search)
-    items = events_queries.get_events_paginated(session, page_size, offset, semester_id, status_filter, search)
+    total = events_queries.count_events(
+        session,
+        semester_id=semester_id,
+        status=status_filter,
+        search=search,
+        exclude_custom=exclude_custom,
+        phase=phase,
+        registration_status=registration_status,
+        local_now=local_now,
+    )
+    items = events_queries.get_events_paginated(
+        session,
+        page_size,
+        offset,
+        semester_id=semester_id,
+        status=status_filter,
+        search=search,
+        exclude_custom=exclude_custom,
+        phase=phase,
+        registration_status=registration_status,
+        local_now=local_now,
+    )
     total_pages = (total + page_size - 1) // page_size if page_size else 0
     return {"items": items, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
 
 
 @router.get("/{event_id:int}", status_code=status.HTTP_200_OK, response_model=EventsWithContentLinks_model)
-def get_event_by_id(event_id: int, session: DB):
+def get_event_by_id(event_id: int, session: DB, member: MemberOrGuest, access: CurrentAccess):
     """The event row the leaderboard app and the admin pages read. Published
-    content links ride along; drafts are filtered server-side."""
+    content links ride along; drafts are filtered server-side. Non-public
+    meeting URLs are stripped unless the caller is staff or an accepted registrant."""
     event = events_queries.get_event_by_id(session, event_id)
     events_queries.attach_published_content_links_of_event(session, event)
+    events_queries.attach_form_and_lifecycle_of_event(session, event)
     session.flush()
-    return event
+    is_staff = access.can(Perm.EVENTS_VIEW)
+    is_accepted = False
+    if (
+        not is_staff
+        and member is not None
+        and event.meeting_url
+        and event.meeting_url_visibility == EventsMeetingUrlVisibility.ACCEPTED
+    ):
+        is_accepted = submission_queries.is_member_accepted_for_event(session, event.id, member.id)
+    return _serialize_event_with_meeting_policy(event, is_staff=is_staff, is_accepted=is_accepted)
 
 
 @router.get("/{event_id:int}/form", status_code=status.HTTP_200_OK, response_model=Form_model)
 def get_event_form(event_id: int, session: DB):
     form = form_queries.get_form_by_event_id(session, event_id)
+    event_lifecycle.attach_form_lifecycle(form)
     return form
 
 
@@ -206,8 +257,14 @@ def get_event_details(event_id: int, session: DB):
     # the whole set can ever return it (a serializer reading the event row
     # sees published rows only, or none).
     attendance_log = log_queries.get_attendable_logs(session, event_id)
+    local_now = event_lifecycle.riyadh_now()
+    event_lifecycle.attach_event_phase(event, local_now)
+    form = session.scalar(select(Forms).where(Forms.event_id == event_id))
+    if form is not None:
+        event_lifecycle.attach_form_lifecycle(form, event, local_now)
     return {
         "event": event,
+        "form": form,
         "attendance_points": log_queries.get_log_points(session, attendance_log.id) if attendance_log else None,
         "actions": actions,
         "responsible": _person(event.responsible_member),
@@ -245,6 +302,7 @@ def create_event(event_data: createEvent_model, session: DB, member: CurrentMemb
         )
         session.commit()
         session.refresh(new_event)
+        event_lifecycle.attach_event_phase(new_event)
 
         # Best-effort: reset the leaderboard app's data cache so the new event is visible immediately.
         reset_leaderboard_cache_best_effort()
@@ -420,6 +478,7 @@ def update_event(
         if pushed:
             background_tasks.add_task(push_delivery.kick)
         session.refresh(updated_event)
+        event_lifecycle.attach_event_phase(updated_event)
         logger.info(f"Event [{event_id}] updated successfully")
         return updated_event
 
@@ -513,30 +572,49 @@ def update_event_status(
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     old_status = event.status
+    new_status = EventsStatus(status_data.status)
     push_before = push_cases.event_state(event)
+    form = session.scalar(select(Forms).where(Forms.event_id == event_id))
+    old_reg_status = form.registration_status if form is not None else None
+    was_google_published = event_lifecycle.should_google_form_be_published(event, form)
 
-    # Publishing/unpublishing the event also publishes/unpublishes its Google
-    # Form, if it has one - a copied form does not inherit the template's
-    # accepting-responses state, so without this members hit an "unpublished
-    # form" wall the admin has no way to see coming. Best-effort: the event's
-    # own status is the source of truth, so a Google API failure here must not
-    # block it - same reasoning as the leaderboard cache reset below.
-    entering_open = status_data.status == "open" and old_status != EventsStatus.OPEN
-    leaving_open = old_status == EventsStatus.OPEN and status_data.status != "open"
-    if entering_open or leaving_open:
-        form = form_queries.get_form_by_event_id(session, event_id)
-        if form.form_type == FormType.GOOGLE and form.google_form_id:
-            try:
-                set_form_publish_state(form.google_form_id, is_published=entering_open)
-            except Exception:
-                logger.exception(
-                    "Failed to %s Google Form %s for event %s",
-                    "publish" if entering_open else "unpublish",
-                    form.google_form_id,
-                    event_id,
-                )
+    event.status = new_status
+    if new_status != old_status:
+        now = event_lifecycle.utc_now()
+        if new_status == EventsStatus.PUBLISHED:
+            if event.published_at is None:
+                event.published_at = now
+            event.cancelled_at = None
+        elif new_status == EventsStatus.CANCELLED:
+            event.cancelled_at = now
+        elif new_status == EventsStatus.DRAFT:
+            event.cancelled_at = None
 
-    event.status = EventsStatus(status_data.status)
+    if form is not None and form.form_type != FormType.NONE:
+        if new_status == EventsStatus.CANCELLED:
+            form.registration_status = FormRegistrationStatus.CLOSED
+        elif new_status == EventsStatus.DRAFT:
+            form.registration_status = FormRegistrationStatus.NOT_OPEN
+        elif new_status == EventsStatus.PUBLISHED:
+            if status_data.open_registration is True:
+                form.registration_status = FormRegistrationStatus.OPEN
+            elif status_data.open_registration is False and form.registration_status == FormRegistrationStatus.OPEN:
+                form.registration_status = FormRegistrationStatus.NOT_OPEN
+
+    # Sync attached Google Form publish state when effective Google Form publishing flips.
+    # Best-effort: the event and form state in MySQL is the source of truth.
+    is_google_published = event_lifecycle.should_google_form_be_published(event, form)
+    if form is not None and form.google_form_id and is_google_published != was_google_published:
+        try:
+            set_form_publish_state(form.google_form_id, is_published=is_google_published)
+        except Exception:
+            logger.exception(
+                "Failed to %s Google Form %s for event %s",
+                "publish" if is_google_published else "unpublish",
+                form.google_form_id,
+                event_id,
+            )
+
     recorded = None
     if event.status != old_status:
         recorded = event_history.record(
@@ -546,18 +624,73 @@ def update_event_status(
             member,
             {"status": [old_status.value, event.status.value]},
         )
+    elif form is not None and old_reg_status is not None and form.registration_status != old_reg_status:
+        event_history.record(
+            session,
+            event,
+            EventHistoryAction.REGISTRATION_CHANGED,
+            member,
+            {"registration_status": [old_reg_status.value, form.registration_status.value]},
+        )
     pushed = push_cases.event_changed(session, event, push_before, recorded.id if recorded else None)
     session.commit()
     if pushed:
         background_tasks.add_task(push_delivery.kick)
     session.refresh(event)
+    event_lifecycle.attach_event_phase(event)
 
-    # Best-effort: reset the leaderboard cache when entering or leaving the "open" status,
-    # since the leaderboard's open-events view is gated on status = 'open'.
-    if status_data.status == "open" or old_status == "open":
+    if event.status != old_status or (form is not None and form.registration_status != old_reg_status):
         reset_leaderboard_cache_best_effort()
 
     return event
+
+
+@router.put(
+    "/{event_id:int}/registration",
+    status_code=status.HTTP_200_OK,
+    response_model=Form_model,
+    responses={
+        404: {"model": NotFoundResponse, "description": "Event or form not found"},
+        409: {"model": ConflictResponse, "description": "Event does not support registration"},
+    },
+    dependencies=[Depends(Require(Perm.EVENTS_EDIT, event_departments))],
+)
+def update_event_registration(
+    event_id: int, reg_data: UpdateEventRegistration_model, session: DB, member: CurrentMember
+):
+    """Manage an event's registration status (not_open | open | closed)."""
+    event = events_queries.get_event_by_id(session, event_id)
+    form = form_queries.get_form_by_event_id(session, event_id)
+    if form.form_type == FormType.NONE:
+        raise RegistrationNotSupported(event_id)
+
+    was_google_published = event_lifecycle.should_google_form_be_published(event, form)
+    before = {"registration_status": form.registration_status.value}
+
+    form.registration_status = FormRegistrationStatus(reg_data.registration_status)
+
+    is_google_published = event_lifecycle.should_google_form_be_published(event, form)
+    if form.google_form_id and is_google_published != was_google_published:
+        try:
+            set_form_publish_state(form.google_form_id, is_published=is_google_published)
+        except Exception:
+            logger.exception(
+                "Failed to %s Google Form %s for event %s",
+                "publish" if is_google_published else "unpublish",
+                form.google_form_id,
+                event_id,
+            )
+
+    after = {"registration_status": form.registration_status.value}
+    changed = event_history.changes(before, after)
+    if changed:
+        event_history.record(session, event, EventHistoryAction.REGISTRATION_CHANGED, member, changed)
+
+    session.commit()
+    session.refresh(form)
+    event_lifecycle.attach_form_lifecycle(form, event)
+    reset_leaderboard_cache_best_effort()
+    return form
 
 
 @router.put(
@@ -574,27 +707,40 @@ def update_event_meeting_url(
     member: CurrentMember,
     background_tasks: BackgroundTasks,
 ):
-    """Set or clear the join link shown to members on a remote event."""
+    """Set or clear the join link (and its visibility policy) on a remote event."""
     existing_event = events_queries.get_event_by_id(session, event_id)
     if existing_event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
-    if meeting_url_data.meeting_url and existing_event.location_type != EventsLocationType.ONLINE:
+    next_url = (
+        meeting_url_data.meeting_url
+        if "meeting_url" in meeting_url_data.model_fields_set
+        else existing_event.meeting_url
+    )
+    if next_url and existing_event.location_type != EventsLocationType.ONLINE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="meeting_url can only be set on an online event"
         )
+    if meeting_url_data.meeting_url_visibility == "accepted":
+        form = session.scalar(select(Forms).where(Forms.event_id == event_id))
+        if form is None or form.form_type == FormType.NONE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="meeting_url_visibility='accepted' requires registration",
+            )
     old_url = existing_event.meeting_url
+    old_visibility = existing_event.meeting_url_visibility.value
     push_before = push_cases.event_state(existing_event)
-    events_queries.update_event_meeting_url(session, event_id, meeting_url_data.meeting_url)
+    events_queries.update_event_meeting_url(session, event_id, next_url, meeting_url_data.meeting_url_visibility)
     event = existing_event
+    new_visibility = event.meeting_url_visibility.value
     recorded = None
+    history_diff: dict[str, list[str | None]] = {}
     if old_url != event.meeting_url:
-        recorded = event_history.record(
-            session,
-            event,
-            EventHistoryAction.MEETING_URL_CHANGED,
-            member,
-            {"meeting_url": [old_url, event.meeting_url]},
-        )
+        history_diff["meeting_url"] = [old_url, event.meeting_url]
+    if old_visibility != new_visibility:
+        history_diff["meeting_url_visibility"] = [old_visibility, new_visibility]
+    if history_diff:
+        recorded = event_history.record(session, event, EventHistoryAction.MEETING_URL_CHANGED, member, history_diff)
     pushed = push_cases.event_changed(session, event, push_before, recorded.id if recorded else None)
     calendar_request = pipeline_calendar.mark_event(session, event_id)
     session.commit()
@@ -602,7 +748,8 @@ def update_event_meeting_url(
     if pushed:
         background_tasks.add_task(push_delivery.kick)
     session.refresh(event)
-    logger.info(f"Event [{event_id}] meeting url {'set' if meeting_url_data.meeting_url else 'cleared'}")
+    event_lifecycle.attach_event_phase(event)
+    logger.info(f"Event [{event_id}] meeting url {'set' if next_url else 'cleared'} (visibility={new_visibility})")
 
     # Best-effort: the leaderboard app caches event data, so the link would otherwise
     # not appear until the next revalidation.

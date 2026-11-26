@@ -48,7 +48,7 @@ def season(db_session) -> Events:
     return make_event(
         db_session,
         start=datetime(2026, 7, 10, 16, 0),
-        status=EventsStatus.CLOSED,
+        status=EventsStatus.PUBLISHED,
         location_type=EventsLocationType.NONE,
         name="Points",
     )
@@ -515,7 +515,7 @@ def test_a_new_semester_starts_silently(db_session, push_on, apns_mock, frozen, 
     first_event = make_event(
         db_session,
         start=datetime(2026, 8, 24, 16, 0),
-        status=EventsStatus.CLOSED,
+        status=EventsStatus.PUBLISHED,
         location_type=EventsLocationType.NONE,
     )
     assert first_event.semester_id == fall.id

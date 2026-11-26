@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlsplit
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import Select, select, func
+from sqlalchemy import Select, and_, func, or_, select
 
 from app.exceptions import EventNotFound
 from .schema import (
@@ -12,8 +12,13 @@ from .schema import (
     Events,
     EventsContentLinkKind,
     EventsLocationType,
+    EventsMeetingUrlVisibility,
     EventsStatus,
+    FormRegistrationStatus,
+    Forms,
+    FormType,
     MembersLogs,
+    Submissions,
     t_open_events,
     Logs,
     DepartmentsLogs,
@@ -25,7 +30,7 @@ from app.routers.models import Events_model
 from app.config import config
 from app.helpers import get_effective_date
 from app.semesters import semester_for_event
-from app.services import event_pipeline_clock
+from app.services import event_lifecycle, event_pipeline_clock
 from datetime import datetime, timedelta
 
 if TYPE_CHECKING:
@@ -34,59 +39,193 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _attach_forms_and_lifecycle(
+    session: Session, events: list[Events], local_now: datetime | None = None
+) -> list[Events]:
+    """Attach derived ``phase`` and lean form/registration metadata in one batched query (zero N+1)."""
+    if not events:
+        return events
+    now = event_lifecycle.riyadh_now() if local_now is None else local_now
+    event_ids = [event.id for event in events if event.id is not None]
+    forms_by_event: dict[int, Forms] = {}
+    if event_ids:
+        forms = session.scalars(select(Forms).where(Forms.event_id.in_(event_ids))).all()
+        forms_by_event = {form.event_id: form for form in forms}
+    for event in events:
+        event_lifecycle.attach_event_form_lifecycle(event, forms_by_event.get(event.id), now)
+    return events
+
+
+def attach_form_and_lifecycle_of_event(session: Session, event: Events, local_now: datetime | None = None) -> Events:
+    """Attach derived ``phase`` and lean form/registration metadata for a single event."""
+    _attach_forms_and_lifecycle(session, [event], local_now)
+    return event
+
+
 def get_events(session: Session):
     """The whole events table, newest first - the leaderboard app's full array."""
     statement = select(Events)
     statement = statement.order_by(Events.start_datetime.desc())
     events = list(session.scalars(statement).all())
     attach_published_content_links_of_all_events(session, events)
+    _attach_forms_and_lifecycle(session, events)
     return events
 
 
 def get_open_events(session: Session):
-    statement = select(t_open_events)
+    local_now = event_lifecycle.riyadh_now()
+    statement = (
+        select(t_open_events)
+        .where(t_open_events.c.end_datetime >= local_now)
+        .order_by(t_open_events.c.start_datetime.asc(), t_open_events.c.id.asc())
+    )
     results = session.execute(statement).all()
-    return [dict(row._mapping) for row in results]
+    rows = []
+    for row in results:
+        item = dict(row._mapping)
+        item["phase"] = event_lifecycle.compute_phase(item["start_datetime"], item["end_datetime"], local_now)
+        eff = event_lifecycle.effective_registration_status_from_values(
+            event_status=item["status"],
+            end_datetime=item["end_datetime"],
+            form_type=item["form_type"],
+            registration_status=item["registration_status"],
+            local_now=local_now,
+        )
+        item["effective_registration_status"] = eff
+        item["is_registration_open"] = eff == "open"
+        vis = item.get("meeting_url_visibility")
+        item["meeting_url"] = event_lifecycle.visible_meeting_url(item.get("meeting_url"), vis)
+        rows.append(item)
+    return rows
 
 
 def get_events_by_semester(session: Session, semester_id: str):
     statement = select(Events).where(Events.semester_id == semester_id).order_by(Events.start_datetime.desc())
     events = list(session.scalars(statement).all())
     attach_published_content_links_of_semester(session, events, semester_id)
+    _attach_forms_and_lifecycle(session, events)
     return events
 
 
-def _apply_event_filters(stmt, semester_id=None, status=None, search=None, exclude_custom=False):
+def _apply_event_filters(
+    stmt,
+    semester_id=None,
+    status=None,
+    search=None,
+    exclude_custom=False,
+    phase=None,
+    registration_status=None,
+    local_now: datetime | None = None,
+):
     """Shared WHERE clauses for the paginated list: optional semester, status,
-    and a name search. Applied to both the page query and its count."""
+    schedule phase, effective registration status, custom exclusion, and name search.
+    Applied to both the page query and its count."""
+    now = event_lifecycle.riyadh_now() if local_now is None else local_now
     if semester_id is not None:
         stmt = stmt.where(Events.semester_id == semester_id)
     if status is not None:
-        stmt = stmt.where(Events.status == status)
+        stmt = stmt.where(Events.status == EventsStatus(status))
     if search and search.strip():
         stmt = stmt.where(Events.name.like(f"%{search.strip()}%"))
     if exclude_custom:
         # "none"/"hidden" location types are custom point activities - they live
         # on the points page, not the events list.
         stmt = stmt.where(Events.location_type.notin_([EventsLocationType.NONE, EventsLocationType.HIDDEN]))
+    if phase == "upcoming":
+        stmt = stmt.where(Events.start_datetime > now)
+    elif phase == "live":
+        stmt = stmt.where(and_(Events.start_datetime <= now, Events.end_datetime >= now))
+    elif phase == "ended":
+        stmt = stmt.where(Events.end_datetime < now)
+    if registration_status is not None:
+        stmt = stmt.outerjoin(Forms, Forms.event_id == Events.id)
+        has_form = and_(Forms.id.is_not(None), Forms.form_type != FormType.NONE)
+        if registration_status == "none":
+            stmt = stmt.where(or_(Forms.id.is_(None), Forms.form_type == FormType.NONE))
+        elif registration_status == "closed":
+            stmt = stmt.where(
+                has_form,
+                or_(
+                    Events.status == EventsStatus.CANCELLED,
+                    and_(
+                        Events.status != EventsStatus.DRAFT,
+                        or_(Events.end_datetime < now, Forms.registration_status == FormRegistrationStatus.CLOSED),
+                    ),
+                ),
+            )
+        elif registration_status == "not_open":
+            stmt = stmt.where(
+                has_form,
+                Events.status != EventsStatus.CANCELLED,
+                or_(
+                    Events.status == EventsStatus.DRAFT,
+                    and_(Events.end_datetime >= now, Forms.registration_status == FormRegistrationStatus.NOT_OPEN),
+                ),
+            )
+        elif registration_status == "open":
+            stmt = stmt.where(
+                has_form,
+                Events.status == EventsStatus.PUBLISHED,
+                Events.end_datetime >= now,
+                Forms.registration_status == FormRegistrationStatus.OPEN,
+            )
     return stmt
 
 
-def count_events(session: Session, semester_id=None, status=None, search=None) -> int:
-    stmt = _apply_event_filters(select(func.count()).select_from(Events), semester_id, status, search)
+def count_events(
+    session: Session,
+    semester_id=None,
+    status=None,
+    search=None,
+    exclude_custom=False,
+    phase=None,
+    registration_status=None,
+    local_now: datetime | None = None,
+) -> int:
+    stmt = _apply_event_filters(
+        select(func.count()).select_from(Events),
+        semester_id=semester_id,
+        status=status,
+        search=search,
+        exclude_custom=exclude_custom,
+        phase=phase,
+        registration_status=registration_status,
+        local_now=local_now,
+    )
     return session.scalar(stmt) or 0
 
 
 def get_events_paginated(
-    session: Session, limit: int, offset: int, semester_id=None, status=None, search=None, exclude_custom=False
+    session: Session,
+    limit: int,
+    offset: int,
+    semester_id=None,
+    status=None,
+    search=None,
+    exclude_custom=False,
+    phase=None,
+    registration_status=None,
+    local_now: datetime | None = None,
 ):
-    stmt = _apply_event_filters(select(Events), semester_id, status, search, exclude_custom)
+    now = event_lifecycle.riyadh_now() if local_now is None else local_now
+    stmt = _apply_event_filters(
+        select(Events),
+        semester_id=semester_id,
+        status=status,
+        search=search,
+        exclude_custom=exclude_custom,
+        phase=phase,
+        registration_status=registration_status,
+        local_now=now,
+    )
     # newest first, id as the deterministic tiebreaker for stable page edges.
     stmt = stmt.order_by(Events.start_datetime.desc(), Events.id.desc()).offset(offset).limit(limit)
-    events = session.scalars(stmt).all()
+    events = list(session.scalars(stmt).all())
     if not events:
         return events
-    return _attach_department_and_attendance(session, events)
+    _attach_department_and_attendance(session, events)
+    _attach_forms_and_lifecycle(session, events, now)
+    return events
 
 
 def _attach_department_and_attendance(session: Session, events: list[Events]) -> list[Events]:
@@ -413,6 +552,8 @@ def is_duplicate_label_error(exc: IntegrityError) -> bool:
 
 
 def create_event(session: Session, event_data: Events_model, responsible_member_id: int, created_by: int):
+    now = event_lifecycle.utc_now()
+    status_enum = EventsStatus(event_data.status)
     new_event = Events(
         name=event_data.name,
         location_type=event_data.location_type,
@@ -420,13 +561,16 @@ def create_event(session: Session, event_data: Events_model, responsible_member_
         start_datetime=event_data.start_datetime,
         end_datetime=event_data.end_datetime,
         description=event_data.description,
-        status=event_data.status,
+        status=status_enum,
         level=EventsLevel(event_data.level or EventsLevel.BEGINNER),
         is_official=event_data.is_official,
         image_url=event_data.image_url,
         meeting_url=event_data.meeting_url,
+        meeting_url_visibility=EventsMeetingUrlVisibility(event_data.meeting_url_visibility),
         semester_id=semester_for_event(session, event_data.end_datetime, event_data.semester_id).id,
-        created_at=datetime.now(),
+        created_at=now,
+        published_at=now if status_enum == EventsStatus.PUBLISHED else None,
+        cancelled_at=now if status_enum == EventsStatus.CANCELLED else None,
         responsible_member_id=responsible_member_id,
         created_by=created_by,
     )
@@ -459,7 +603,19 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         existing_event.start_datetime = event_data.start_datetime
         existing_event.end_datetime = event_data.end_datetime
         existing_event.description = event_data.description
-        existing_event.status = EventsStatus(event_data.status)
+        old_status = existing_event.status
+        new_status = EventsStatus(event_data.status)
+        existing_event.status = new_status
+        if new_status != old_status:
+            now = event_lifecycle.utc_now()
+            if new_status == EventsStatus.PUBLISHED:
+                if existing_event.published_at is None:
+                    existing_event.published_at = now
+                existing_event.cancelled_at = None
+            elif new_status == EventsStatus.CANCELLED:
+                existing_event.cancelled_at = now
+            elif new_status == EventsStatus.DRAFT:
+                existing_event.cancelled_at = None
         if event_data.level is not None:
             existing_event.level = EventsLevel(event_data.level)
         existing_event.image_url = event_data.image_url
@@ -476,23 +632,28 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         return -1
 
 
-def update_event_meeting_url(session: Session, event_id: int, meeting_url: str | None):
+def update_event_meeting_url(
+    session: Session, event_id: int, meeting_url: str | None, meeting_url_visibility: str | None = None
+):
     event = session.scalar(select(Events).where(Events.id == event_id))
     if not event:
         return None
     event.meeting_url = meeting_url
+    if meeting_url_visibility is not None:
+        event.meeting_url_visibility = EventsMeetingUrlVisibility(meeting_url_visibility)
     session.flush()
     return event
 
 
 def get_member_events(session: Session, member_id: int):
+    local_now = event_lifecycle.riyadh_now()
     stmt = (
         select(Events, MembersLogs.date)
         .join(Logs, Events.id == Logs.event_id)
         .join(MembersLogs, MembersLogs.log_id == Logs.id)
         .where(
             MembersLogs.member_id == member_id,
-            Events.status != EventsStatus.DRAFT,
+            Events.status == EventsStatus.PUBLISHED,
             Events.location_type != EventsLocationType.HIDDEN,
         )
         .order_by(Events.start_datetime.desc(), MembersLogs.date)
@@ -505,6 +666,14 @@ def get_member_events(session: Session, member_id: int):
             events_map[event.id] = {"event": event, "dates": []}
         events_map[event.id]["dates"].append(att_date)
 
+    accepted_event_ids = set(
+        session.scalars(
+            select(Forms.event_id)
+            .join(Submissions, Submissions.form_id == Forms.id)
+            .where(Submissions.member_id == member_id, Submissions.is_accepted == 1, Submissions.cancelled_at.is_(None))
+        ).all()
+    )
+
     threshold = config.ATTENDANCE_EARLY_HOURS_THRESHOLD
     attended = []
     participated = []
@@ -512,6 +681,10 @@ def get_member_events(session: Session, member_id: int):
         event = data["event"]
         raw_dates = data["dates"]
         event_dict = {col.name: getattr(event, col.name) for col in event.__table__.columns}
+        event_dict["meeting_url"] = event_lifecycle.visible_meeting_url(
+            event.meeting_url, event.meeting_url_visibility, is_accepted=event.id in accepted_event_ids
+        )
+        event_dict["phase"] = event_lifecycle.compute_phase(event.start_datetime, event.end_datetime, local_now)
 
         if event.location_type == EventsLocationType.NONE:
             participated.append(event_dict)

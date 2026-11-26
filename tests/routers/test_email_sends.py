@@ -340,7 +340,7 @@ def certificate_event(db_session: Session) -> Events:
         start_datetime=datetime(2026, 6, 29, 18),
         end_datetime=datetime(2026, 6, 30, 18),
         semester_id=semester_id_on(db_session, "2026-06-30"),
-        status=EventsStatus.OPEN,
+        status=EventsStatus.PUBLISHED,
         is_official=0,
     )
     db_session.add(event)

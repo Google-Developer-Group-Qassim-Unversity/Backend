@@ -62,8 +62,9 @@ def test_publish_creates_the_event_like_post_events(pipeline, world):
 
     event = pipeline.session.get(Events, body["event_id"])
     assert event.name == "Intro to ML"
-    # Publishing is the team's decision: the event opens straight away.
-    assert event.status.value == "open"
+    # Publishing is the team's decision: the event is published straight away.
+    assert event.status.value == "published"
+    assert event.published_at is not None
     # One on-site day, so on-site at the venue Logistics confirmed, with the Meet link for the online day.
     assert event.location_type.value == "on-site"
     assert event.location == "التيك فالي (60)"
@@ -327,7 +328,7 @@ def test_an_edit_clears_a_mixed_events_link_and_with_it_the_live_push(pipeline, 
         "location": event.location,
         "start_datetime": "2026-07-27T10:00:00",
         "end_datetime": "2026-07-28T12:00:00",
-        "status": "open",
+        "status": "published",
         "image_url": event.image_url,
         "is_official": event.is_official,
     }

@@ -57,7 +57,9 @@ from app.DB.schema import (
     Events,
     EventsContentLinkKind,
     EventsLocationType,
+    EventsMeetingUrlVisibility,
     EventsStatus,
+    FormRegistrationStatus,
     Forms,
     Logs,
     Members,
@@ -110,7 +112,7 @@ DAILY_CAP = 3
 # One push per registrant and event: delivery sends only the newest row of these (``_superseded``).
 NEWEST_ONLY = frozenset({PushKind.EVENT_UPDATED, PushKind.EVENT_CANCELLED})
 
-PUBLIC = (EventsStatus.OPEN, EventsStatus.ACTIVE)
+PUBLIC = (EventsStatus.PUBLISHED,)
 PUBLIC_VALUES = frozenset(status.value for status in PUBLIC)
 # What a registrant is told about when it changes. The edit form also sends the status.
 WATCHED = ("start_datetime", "end_datetime", "location_type", "location", "meeting_url")
@@ -160,7 +162,10 @@ def _still_accepted(session: Session, cause: dict) -> bool:
 
 def event_state(event: Events) -> dict:
     """The status and the watched fields, as plain values: taken before a route changes the event."""
-    return event_history.snapshot(event, ("status", *WATCHED))
+    state = event_history.snapshot(event, ("status", *WATCHED))
+    if event.meeting_url_visibility == EventsMeetingUrlVisibility.HIDDEN:
+        state["meeting_url"] = None
+    return state
 
 
 def _riyadh(value: str | None) -> datetime | None:
@@ -698,41 +703,42 @@ def _live(session: Session, event: Events, day: int, total: int, starts: datetim
 
 
 def enqueue_registration_closing(session: Session, now: datetime, result) -> None:
-    """24 hours before an open event with registration starts: members with club news on who have not registered.
+    """24 hours before a published event starts: members with club news on who have not registered.
 
-    Only an event that was already open at the 24-hour mark: one opened later
-    has just been announced (``new_event``).
+    Only fires for events that were already published at the 24-hour mark:
+    one published later has just been announced (``new_event``).
     """
     if not config.push_enabled:
         return
     local_now = clock.to_riyadh(now)
     rows = session.execute(
-        select(Events, Forms.id)
+        select(Events, Forms)
         .join(Forms, Forms.event_id == Events.id)
         .where(
-            Events.status == EventsStatus.OPEN,
+            Events.status == EventsStatus.PUBLISHED,
             Events.location_type.in_(ATTENDED_LOCATIONS),
             Forms.form_type.in_(REGISTRATION_FORMS),
+            Forms.registration_status == FormRegistrationStatus.OPEN,
             Events.start_datetime > local_now + CLOSING_LEAD - CLOSING_WINDOW,
             Events.start_datetime <= local_now + CLOSING_LEAD,
         )
     ).all()
     readers: set[int] | None = None
-    for event, form_id in rows:
-        mark = clock.to_utc(event.start_datetime - CLOSING_LEAD)
+    for event, form in rows:
+        closes_at = event.start_datetime
+        mark = clock.to_utc(closes_at - CLOSING_LEAD)
         opened = became_open_at(session, event)
         if opened is None or opened > mark:
             continue
         if readers is None:
             readers = outbox.reachable(session, "news")
         # Any row counts as registered: cancelled (they chose to) and partial (a Google Form response on its way).
-        registered = set(session.scalars(select(Submissions.member_id).where(Submissions.form_id == form_id)).all())
-        starts = event.start_datetime.isoformat()
+        registered = set(session.scalars(select(Submissions.member_id).where(Submissions.form_id == form.id)).all())
         pushes = [
             Push(
                 member_id=member_id,
                 dedupe_key=f"registration_closing:{event.id}:{member_id}",
-                cause={"form_id": form_id, "starts": starts},
+                cause={"form_id": form.id, "starts": event.start_datetime.isoformat()},
             )
             for member_id in sorted(readers - registered)
         ]
@@ -744,7 +750,7 @@ def enqueue_registration_closing(session: Session, now: datetime, result) -> Non
             url=links.event_url(event.id),
             thread_id=f"event-{event.id}",
             event_id=event.id,
-            expires_at=clock.to_utc(event.start_datetime),
+            expires_at=clock.to_utc(closes_at),
             now=now,
             reachable_ids=readers,
         )
@@ -829,7 +835,7 @@ def semester_points(
         .outerjoin(modifiers, modifiers.c.log_id == Logs.id)
         .where(
             Events.semester_id == semester_id,
-            Events.status != EventsStatus.DRAFT,
+            Events.status == EventsStatus.PUBLISHED,
             MembersLogs.member_id.in_(member_ids),
         )
     ).all()
@@ -908,7 +914,14 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
         day = datetime.fromisoformat(cause["starts"]).date()
         return "checked_in" if row.member_id in _checked_in(session, event.id, day) else None
     if row.kind == PushKind.REGISTRATION_CLOSING:
-        if event is None or event.status != EventsStatus.OPEN:
+        if event is None or event.status != EventsStatus.PUBLISHED:
+            return "event_closed"
+        form = session.get(Forms, cause.get("form_id"))
+        if (
+            form is None
+            or form.form_type not in REGISTRATION_FORMS
+            or form.registration_status != FormRegistrationStatus.OPEN
+        ):
             return "event_closed"
         if event.start_datetime.isoformat() != cause.get("starts"):
             return "event_changed"

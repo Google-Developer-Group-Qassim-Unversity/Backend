@@ -4,16 +4,17 @@ from time import perf_counter
 from typing import Literal, Annotated
 from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
+from app.DB import forms as form_queries
 from app.DB import submissions as submission_queries
 from app.DB import form_sync_jobs as job_queries
 from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from app.helpers import authenticated_guard, CurrentMember, resolve_member
 from sqlalchemy import select
 
-from app.DB.schema import EventHistoryAction, EventsStatus, Forms
-from app.services import event_history
-from app.exceptions import NotFound, RegistrationClosed, SubmissionNotFound
-from app.routers.models import submission_exists_model, submission_accept_model
+from app.DB.schema import EventHistoryAction, Forms
+from app.services import event_history, event_lifecycle
+from app.exceptions import FormNotFoundById, NotFound, RegistrationClosed, SubmissionNotFound
+from app.routers.models import MySubmission_model, submission_exists_model, submission_accept_model
 from app.services.form_responses import FormResponsesClient
 from app.services.form_sync import resolve_form_access, sync_form_submissions
 from app.dependencies import DB
@@ -31,6 +32,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/submissions", tags=["Submissions"])
 
 
+@router.get("/me", status_code=status.HTTP_200_OK, response_model=list[MySubmission_model])
+def get_my_submissions(member: CurrentMember, session: DB):
+    return submission_queries.get_member_submissions(session, member.id)
+
+
 @router.post("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=SubmissionResponse)
 def create_submission(
     form_id: int,
@@ -39,6 +45,11 @@ def create_submission(
     session: DB,
 ):
     member_id = resolve_member(session, credentials).id
+    form = form_queries.get_form_by_id(session, form_id)
+    if form is None:
+        raise FormNotFoundById(form_id)
+    if not event_lifecycle.is_registration_open(form.event, form):
+        raise RegistrationClosed(form_id)
     new_submission = submission_queries.create_submission(session, form_id, submission_type, member_id)
     if not new_submission:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Submission already exists")
@@ -59,22 +70,34 @@ def check_submission_exists(form_id: int, member: CurrentMember, session: DB):
             f"got member [{member_id}], found submission [{submission}]  DB took [{(end - start) * 1000:.2f}]ms to execute"
         )
         if submission is None:
-            return {"submission_status": False}
+            return {"submission_status": False, "is_accepted": False, "meeting_url": None}
+        accepted = bool(submission.is_accepted)
+        meeting_url = event_lifecycle.accepted_submission_meeting_url(submission.form.event, is_accepted=accepted)
         submission_type = submission.submission_type
         if submission_type == "partial":
-            return {"submission_status": "partial", "submission_timestamp": submission.submitted_at}
-        return {"submission_status": True, "submission_timestamp": submission.submitted_at}
+            return {
+                "submission_status": "partial",
+                "submission_timestamp": submission.submitted_at,
+                "is_accepted": accepted,
+                "meeting_url": meeting_url,
+            }
+        return {
+            "submission_status": True,
+            "submission_timestamp": submission.submitted_at,
+            "is_accepted": accepted,
+            "meeting_url": meeting_url,
+        }
     except Exception:
         raise
 
 
 @router.delete("/{form_id:int}", status_code=status.HTTP_200_OK, response_model=StatusResponse)
 def cancel_submission(form_id: int, member: CurrentMember, session: DB):
-    """Cancel the caller's own registration, while the event is still taking registrations.
+    """Cancel the caller's own registration while registration is still open.
 
-    Accepted registrations can be cancelled too - that frees the seat. Once the
-    event leaves `open` (it is running or over) the registration is part of the
-    record and stays.
+    Accepted registrations can be cancelled too - that frees the seat. Once
+    registration closes (manually, by schedule, or because the event ended or
+    was unpublished/cancelled) the registration is part of the record and stays.
 
     A soft delete: the row is kept with `cancelled_at` set. Registering again
     brings it back (see `create_submission`).
@@ -82,7 +105,7 @@ def cancel_submission(form_id: int, member: CurrentMember, session: DB):
     submission = submission_queries.get_submission_by_form_and_member(session, form_id, member.id)
     if submission is None:
         raise SubmissionNotFound(form_id)
-    if submission.form.event.status != EventsStatus.OPEN:
+    if not event_lifecycle.is_registration_open(submission.form.event, submission.form):
         raise RegistrationClosed(form_id)
     submission_queries.cancel_submission(session, submission)
     session.commit()

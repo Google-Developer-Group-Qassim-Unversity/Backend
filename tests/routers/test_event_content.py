@@ -73,7 +73,7 @@ def test_an_event_without_links_returns_an_empty_array(admin_client: TestClient)
 
 def test_the_my_events_route_never_gains_content_links(admin_client: TestClient):
     event = admin_client.post("/events", json=make_create_event_payload()).json()
-    admin_client.put(f"/events/{event['id']}/status", json={"status": "active"})
+    admin_client.put(f"/events/{event['id']}/status", json={"status": "published"})
     admin_client.post(f"/events/{event['id']}/content-links", json=make_link_payload())
 
     mine = admin_client.get("/events/me").json()
