@@ -326,3 +326,219 @@ def test_legacy_ios_award_can_be_read_by_numeric_id(admin_points_client, seed_re
     assert isinstance(row["log_id"], int)
     assert row["points"] == 8
     assert row["member_ids"] == [seed_refs.ahmed.id]
+
+
+def test_deleting_action_used_by_bonus_grant_requires_replacement(admin_points_client, db_session, seed_refs):
+    template = Actions(action_name="Judge", ar_action_name="محكم", action_type=ActionsActionType.BONUS, points=10)
+    replacement = Actions(action_name="Mentor", ar_action_name="مرشد", action_type=ActionsActionType.BONUS, points=10)
+    db_session.add_all([template, replacement])
+    db_session.commit()
+
+    assert_2xx(
+        admin_points_client.post(
+            "/bonuses",
+            json={
+                "title": "Hackathon",
+                "given_at": "2026-07-05T10:00:00",
+                "is_public": True,
+                "grants": [
+                    {
+                        "recipient_type": "member",
+                        "points": 10,
+                        "source_action_id": template.id,
+                        "member_ids": [seed_refs.ahmed.id],
+                    }
+                ],
+            },
+        )
+    )
+
+    blocked = admin_points_client.delete(f"/actions/{template.id}")
+    assert blocked.status_code == 400
+
+    assert_2xx(admin_points_client.delete(f"/actions/{template.id}", params={"replacement_id": replacement.id}))
+
+
+def test_event_deletion_preview_shows_member_and_department_bonus_recipients(
+    admin_points_client, db_session, seed_refs
+):
+    from app.services import event_deletion
+
+    event = admin_points_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
+    assert_2xx(
+        admin_points_client.put(
+            f"/bonuses/by-event/{event['id']}",
+            json={
+                "grants": [
+                    {"recipient_type": "member", "points": 5, "member_ids": [seed_refs.ahmed.id]},
+                    {"recipient_type": "department", "points": -3, "department_ids": [seed_refs.dept_business.id]},
+                ]
+            },
+        )
+    )
+
+    page = event_deletion.resource_page(db_session, event["id"], "bonus_grant_recipients", page=1, page_size=20)
+    labels = {item.label for item in page.items}
+    assert seed_refs.ahmed.name in labels
+    assert seed_refs.dept_business.name in labels
+
+
+def test_bonus_validation_and_label_normalization(admin_points_client, seed_refs):
+    # Whitespace-only title is rejected.
+    bad_title = admin_points_client.post(
+        "/bonuses",
+        json={
+            "title": "   ",
+            "given_at": "2026-07-05T10:00:00",
+            "is_public": True,
+            "grants": [{"recipient_type": "member", "points": 5, "member_ids": [seed_refs.ahmed.id]}],
+        },
+    )
+    assert bad_title.status_code == 422
+
+    # Aware UTC timestamp normalizes cleanly to Riyadh naive time (+3h).
+    created = admin_points_client.post(
+        "/bonuses",
+        json={
+            "title": "  Spring Award  ",
+            "given_at": "2026-07-05T07:00:00Z",
+            "is_public": True,
+            "grants": [
+                {
+                    "recipient_type": "member",
+                    "points": 5,
+                    "label_en": "Alpha",
+                    "label_ar": "ألفا",
+                    "member_ids": [seed_refs.ahmed.id],
+                },
+                {
+                    "recipient_type": "member",
+                    "points": 3,
+                    "label_en": "Beta",
+                    "label_ar": "بيتا",
+                    "member_ids": [seed_refs.ahmed.id],
+                },
+            ],
+        },
+    )
+    assert_2xx(created)
+    bonus = created.json()
+    assert bonus["title"] == "Spring Award"
+    assert bonus["given_at"] == "2026-07-05T10:00:00"
+
+    # PUT /bonuses/{id} rejects empty grants list and whitespace-only title.
+    assert admin_points_client.put(f"/bonuses/{bonus['id']}", json={"grants": []}).status_code == 422
+    assert admin_points_client.put(f"/bonuses/{bonus['id']}", json={"title": "   "}).status_code == 422
+
+
+def test_custom_delete_prunes_empty_bonus_container(admin_points_client, db_session, seed_refs):
+    created = admin_points_client.post(
+        "/custom/members",
+        json={
+            "event_name": "One-off bonus",
+            "start_datetime": "2026-07-07T10:00:00",
+            "end_datetime": "2026-07-07T11:00:00",
+            "location_type": "none",
+            "point_deatils": [{"points": 4, "member_ids": [seed_refs.ahmed.id]}],
+        },
+    )
+    assert_2xx(created)
+    bonus_id = created.json()["bonus_id"]
+    event_id = created.json()["event_id"]
+    [row] = admin_points_client.get(f"/custom/members/{event_id}").json()["point_details"]
+
+    assert_2xx(admin_points_client.delete(f"/custom/members/{row['log_id']}"))
+    assert db_session.get(Bonuses, bonus_id) is None
+
+
+def test_draft_event_bonus_does_not_queue_push(admin_points_client, db_session, seed_refs, monkeypatch):
+    from app.config import config
+    from app.DB.schema import PushKind, PushNotifications
+    from tests.push_support import add_device
+
+    monkeypatch.setattr(type(config), "push_enabled", property(lambda self: True))
+    add_device(db_session, seed_refs.ahmed)
+    db_session.commit()
+
+    event = admin_points_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
+    assert event["status"] == "draft"
+
+    assert_2xx(
+        admin_points_client.put(
+            f"/bonuses/by-event/{event['id']}",
+            json={"grants": [{"recipient_type": "member", "points": 5, "member_ids": [seed_refs.ahmed.id]}]},
+        )
+    )
+    queued = db_session.scalars(
+        select(PushNotifications).where(
+            PushNotifications.kind == PushKind.POINTS, PushNotifications.event_id == event["id"]
+        )
+    ).all()
+    assert queued == []
+
+
+def test_events_me_joins_multiple_bonus_labels_with_comma_space(admin_points_client, clerk_client, seed_refs):
+    me_id = clerk_client.get("/members/me").json()["id"]
+    assert_2xx(
+        admin_points_client.post(
+            "/bonuses",
+            json={
+                "title": "Multi-grant Award",
+                "given_at": "2026-07-05T10:00:00",
+                "is_public": True,
+                "grants": [
+                    {
+                        "recipient_type": "member",
+                        "points": 5,
+                        "label_en": "Beta",
+                        "label_ar": "ب",
+                        "member_ids": [me_id],
+                    },
+                    {
+                        "recipient_type": "member",
+                        "points": 3,
+                        "label_en": "Alpha",
+                        "label_ar": "أ",
+                        "member_ids": [me_id],
+                    },
+                ],
+            },
+        )
+    )
+    bonuses = clerk_client.get("/events/me").json()["bonuses"]
+    assert bonuses[0]["label_en"] == "Alpha, Beta"
+    assert bonuses[0]["label_ar"] == "أ, ب"
+
+
+def test_updating_event_syncs_attached_bonus_title_and_given_at(admin_points_client, db_session, seed_refs):
+    payload = make_create_event_payload(seed_refs=seed_refs)
+    event = admin_points_client.post("/events", json=payload).json()
+    assert_2xx(
+        admin_points_client.put(
+            f"/bonuses/by-event/{event['id']}",
+            json={"grants": [{"recipient_type": "member", "points": 5, "member_ids": [seed_refs.ahmed.id]}]},
+        )
+    )
+
+    ev = payload["event"]
+    actions = admin_points_client.get(f"/events/{event['id']}/details").json()["actions"]
+    update_payload = {
+        "event": {
+            "name": "Renamed Workshop",
+            "description": ev["description"],
+            "location_type": ev["location_type"],
+            "location": ev["location"],
+            "start_datetime": "2026-07-10T14:00:00",
+            "end_datetime": "2026-07-10T16:00:00",
+            "status": "draft",
+            "level": "beginner",
+        },
+        "actions": actions,
+    }
+    assert_2xx(admin_points_client.put(f"/events/{event['id']}", json=update_payload))
+
+    db_session.expire_all()
+    bonus = db_session.scalar(select(Bonuses).where(Bonuses.event_id == event["id"]))
+    assert bonus is not None
+    assert bonus.title == "Renamed Workshop"
+    assert bonus.given_at == datetime(2026, 7, 10, 14, 0)

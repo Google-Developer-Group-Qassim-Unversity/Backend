@@ -11,7 +11,7 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, literal_column, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.DB.schema import Bonuses, BonusGrantRecipients, BonusGrants, BonusRecipientType, Events, EventsStatus
@@ -146,6 +146,7 @@ def set_grant_recipients(
     for the weekly summary push.
     """
     wanted = list(dict.fromkeys(recipient_ids))
+    wanted_set = set(wanted)
     existing_rows = list(
         session.scalars(select(BonusGrantRecipients).where(BonusGrantRecipients.bonus_grant_id == grant.id)).all()
     )
@@ -154,7 +155,7 @@ def set_grant_recipients(
     kept: set[int] = set()
     for row in existing_rows:
         rid = row.member_id if is_member else row.department_id
-        if rid is not None and rid in wanted:
+        if rid is not None and rid in wanted_set:
             kept.add(rid)
         else:
             session.delete(row)
@@ -205,8 +206,12 @@ def get_member_public_bonuses(session: Session, member_id: int) -> list[dict[str
             Bonuses.given_at.label("given_at"),
             Bonuses.semester_id.label("semester_id"),
             func.sum(BonusGrants.points).label("points"),
-            func.group_concat(func.distinct(BonusGrants.label_en)).label("label_en"),
-            func.group_concat(func.distinct(BonusGrants.label_ar)).label("label_ar"),
+            literal_column(
+                "GROUP_CONCAT(DISTINCT bonus_grants.label_en ORDER BY bonus_grants.label_en ASC SEPARATOR ', ')"
+            ).label("label_en"),
+            literal_column(
+                "GROUP_CONCAT(DISTINCT bonus_grants.label_ar ORDER BY bonus_grants.label_ar ASC SEPARATOR ', ')"
+            ).label("label_ar"),
         )
         .select_from(BonusGrantRecipients)
         .join(BonusGrants, BonusGrants.id == BonusGrantRecipients.bonus_grant_id)
@@ -217,7 +222,15 @@ def get_member_public_bonuses(session: Session, member_id: int) -> list[dict[str
             Bonuses.is_public == 1,
             Bonuses.legacy_status == EventsStatus.PUBLISHED,
         )
-        .group_by(Bonuses.id, Bonuses.title, Bonuses.given_at, Bonuses.semester_id)
+        .group_by(
+            Bonuses.id,
+            Bonuses.legacy_id,
+            Bonuses.legacy_end_datetime,
+            Bonuses.created_at,
+            Bonuses.title,
+            Bonuses.given_at,
+            Bonuses.semester_id,
+        )
         .order_by(Bonuses.given_at.desc(), Bonuses.id.desc())
     )
     return [dict(row._mapping) for row in session.execute(stmt).all()]

@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -28,7 +28,7 @@ from app.helpers import CurrentMember
 from app.leaderboard_cache import refresh_attendance_points_cache
 from app.routers.models import BaseClassModel
 from app.routers.responses import MessageResponse
-from app.semesters import resolve_semester, semester_for_event
+from app.semesters import CLUB_TIMEZONE, resolve_semester, semester_for_event
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.guards import Require
 from app.services.push import delivery as push_delivery
@@ -73,6 +73,21 @@ class BonusGrantInput(BaseClassModel):
         return self
 
 
+def _normalize_local_datetime(value: datetime | None) -> datetime | None:
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(CLUB_TIMEZONE).replace(tzinfo=None)
+
+
+def _strip_required_title(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("title must not be empty")
+    return stripped
+
+
 class CreateBonusRequest(BaseClassModel):
     title: str = Field(min_length=1, max_length=150)
     given_at: datetime
@@ -81,13 +96,37 @@ class CreateBonusRequest(BaseClassModel):
     semester_id: str | None = None
     grants: list[BonusGrantInput] = Field(min_length=1)
 
+    @field_validator("title")
+    @classmethod
+    def _validate_title(cls, value: str) -> str:
+        stripped = _strip_required_title(value)
+        assert stripped is not None
+        return stripped
+
+    @field_validator("given_at")
+    @classmethod
+    def _validate_given_at(cls, value: datetime) -> datetime:
+        normalized = _normalize_local_datetime(value)
+        assert normalized is not None
+        return normalized
+
 
 class UpdateBonusRequest(BaseClassModel):
     title: str | None = Field(default=None, min_length=1, max_length=150)
     given_at: datetime | None = None
     is_public: bool | None = None
     semester_id: str | None = None
-    grants: list[BonusGrantInput] | None = None
+    grants: list[BonusGrantInput] | None = Field(default=None, min_length=1)
+
+    @field_validator("title")
+    @classmethod
+    def _validate_title(cls, value: str | None) -> str | None:
+        return _strip_required_title(value)
+
+    @field_validator("given_at")
+    @classmethod
+    def _validate_given_at(cls, value: datetime | None) -> datetime | None:
+        return _normalize_local_datetime(value)
 
 
 class UpsertEventBonusRequest(BaseClassModel):
@@ -208,8 +247,10 @@ def _sync_grants(session: Session, bonus: Bonuses, grant_inputs: list[BonusGrant
         ):
             points = existing.points
             source_action_id = existing.source_action_id
-            label_en = item.label_en if item.label_en is not None else existing.label_en
-            label_ar = item.label_ar if item.label_ar is not None else existing.label_ar
+            cleaned_en = item.label_en.strip() if item.label_en is not None else None
+            cleaned_ar = item.label_ar.strip() if item.label_ar is not None else None
+            label_en = cleaned_en if cleaned_en else existing.label_en
+            label_ar = cleaned_ar if cleaned_ar else existing.label_ar
         else:
             points, source_action_id, label_en, label_ar = _resolve_grant_fields(session, item)
         recipient_type = BonusRecipientType(item.recipient_type)

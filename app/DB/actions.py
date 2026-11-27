@@ -136,8 +136,11 @@ def update_actions_order(session: Session, action_orders: list[dict]):
 
 
 def get_action_usage_count(session: Session, action_id: int) -> int:
-    statement = select(func.count(Logs.id)).where(Logs.action_id == action_id)
-    return session.scalar(statement) or 0
+    log_count = session.scalar(select(func.count(Logs.id)).where(Logs.action_id == action_id)) or 0
+    bonus_count = (
+        session.scalar(select(func.count(BonusGrants.id)).where(BonusGrants.source_action_id == action_id)) or 0
+    )
+    return int(log_count) + int(bonus_count)
 
 
 def update_logs_action(session: Session, old_action_id: int, new_action_id: int):

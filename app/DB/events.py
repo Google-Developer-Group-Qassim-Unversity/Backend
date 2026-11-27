@@ -595,13 +595,20 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
     if not existing_event:
         return None
     try:
+        bonus_updates: dict[str, object] = {}
         # An explicit semester wins. Otherwise a new end date re-derives it, and
         # an unchanged one keeps whatever the event is already filed under.
         if event_data.semester_id is not None or event_data.end_datetime.date() != existing_event.end_datetime.date():
             semester_id = semester_for_event(session, event_data.end_datetime, event_data.semester_id).id
             if semester_id != existing_event.semester_id:
                 existing_event.semester_id = semester_id
-                session.execute(update(Bonuses).where(Bonuses.event_id == event_id).values(semester_id=semester_id))
+                bonus_updates["semester_id"] = semester_id
+        if event_data.name != existing_event.name:
+            bonus_updates["title"] = event_data.name
+        if event_data.start_datetime != existing_event.start_datetime:
+            bonus_updates["given_at"] = event_data.start_datetime
+        if bonus_updates:
+            session.execute(update(Bonuses).where(Bonuses.event_id == event_id).values(**bonus_updates))
         existing_event.name = event_data.name
         existing_event.location_type = event_data.location_type
         existing_event.location = event_data.location

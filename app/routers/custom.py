@@ -254,12 +254,20 @@ def update_department_custom_points(log_id: str, body: DepartmentPointDetails, s
     return {"message": "Successfully updated custom department points"}
 
 
+def _delete_grant_and_prune_empty_bonus(session: DB, grant) -> None:
+    bonus_id = grant.bonus_id
+    bonuses_queries.delete_bonus_grant(session, grant.id)
+    remaining = bonuses_queries.get_bonus_by_id(session, bonus_id)
+    if remaining is not None and not remaining.grants:
+        bonuses_queries.delete_bonus(session, bonus_id)
+
+
 @router.delete("/departments/{log_id}", response_model=MessageResponse)
 def delete_department_custom_points(log_id: str, session: DB):
     grant = bonuses_queries.get_bonus_grant_by_id(session, log_id)
     if grant is None or grant.recipient_type != BonusRecipientType.DEPARTMENT:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
-    bonuses_queries.delete_bonus_grant(session, grant.id)
+    _delete_grant_and_prune_empty_bonus(session, grant)
     session.commit()
     refresh_attendance_points_cache()
     return {"message": "Successfully deleted custom department points"}
@@ -294,8 +302,8 @@ def give_member_custom_points(
             label_en=label_en,
             label_ar=label_ar,
         )
-        bonuses_queries.set_grant_recipients(session, grant, detail.member_ids)
-        if push_triggers.bonus_points_given(session, bonus, grant, detail.member_ids) > 0:
+        added = bonuses_queries.set_grant_recipients(session, grant, detail.member_ids)
+        if added and push_triggers.bonus_points_given(session, bonus, grant, added) > 0:
             pushed = True
 
     session.commit()
@@ -346,11 +354,11 @@ def update_member_custom_points(log_id: str, body: MemberPointDetails, session: 
     grant.source_action_id = source_action_id
     grant.label_en = label_en
     grant.label_ar = label_ar
-    bonuses_queries.set_grant_recipients(session, grant, body.member_ids)
+    added = bonuses_queries.set_grant_recipients(session, grant, body.member_ids)
 
     pushed = False
-    if grant.bonus is not None:
-        if push_triggers.bonus_points_given(session, grant.bonus, grant, body.member_ids) > 0:
+    if grant.bonus is not None and added:
+        if push_triggers.bonus_points_given(session, grant.bonus, grant, added) > 0:
             pushed = True
 
     session.commit()
@@ -365,7 +373,7 @@ def delete_member_custom_points(log_id: str, session: DB):
     grant = bonuses_queries.get_bonus_grant_by_id(session, log_id)
     if grant is None or grant.recipient_type != BonusRecipientType.MEMBER:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
-    bonuses_queries.delete_bonus_grant(session, grant.id)
+    _delete_grant_and_prune_empty_bonus(session, grant)
     session.commit()
     refresh_attendance_points_cache()
     return {"message": "Successfully deleted custom member points"}

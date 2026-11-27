@@ -180,6 +180,12 @@ def bonus_points_given(session: Session, bonus: Bonuses, grant: BonusGrants, mem
     """
     if not config.push_enabled:
         return 0
+    if bonus.event_id is not None:
+        event_status = session.scalar(select(Events.status).where(Events.id == bonus.event_id))
+        if event_status != EventsStatus.PUBLISHED:
+            return 0
+    elif bonus.legacy_status != EventsStatus.PUBLISHED:
+        return 0
     count = int(grant.points)
     if count <= 0:
         return 0

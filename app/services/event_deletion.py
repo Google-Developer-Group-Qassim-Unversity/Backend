@@ -129,10 +129,15 @@ def resource_page(session: Session, event_id: int, resource: str, page: int, pag
     ):
         if name in table.c and name not in {column.name for column in columns}:
             columns.append(table.c[name])
-    for field, model in (("member_id", Members), ("department_id", Departments)):
-        if field in table.c:
-            columns.append(select(model.name).where(model.id == table.c[field]).scalar_subquery().label("display_name"))
-            break
+    display_subqueries = [
+        select(model.name).where(model.id == table.c[field]).scalar_subquery()
+        for field, model in (("member_id", Members), ("department_id", Departments))
+        if field in table.c
+    ]
+    if len(display_subqueries) == 1:
+        columns.append(display_subqueries[0].label("display_name"))
+    elif len(display_subqueries) > 1:
+        columns.append(func.coalesce(*display_subqueries).label("display_name"))
     rows = session.execute(
         select(*columns)
         .where(where)
