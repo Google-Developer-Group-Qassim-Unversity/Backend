@@ -44,12 +44,12 @@ EIGHT_AM_TOMORROW = datetime(2026, 7, 21, 5, 0)  # 08:00 Riyadh on 2026-07-21
 
 @pytest.fixture
 def season(db_session) -> Events:
-    """A closed custom-points event of Summer 2026: every point in these tests is recorded on it."""
+    """A published event of Summer 2026: every point in these tests is recorded on it."""
     return make_event(
         db_session,
         start=datetime(2026, 7, 10, 16, 0),
         status=EventsStatus.PUBLISHED,
-        location_type=EventsLocationType.NONE,
+        location_type=EventsLocationType.ONLINE,
         name="Points",
     )
 
@@ -516,7 +516,7 @@ def test_a_new_semester_starts_silently(db_session, push_on, apns_mock, frozen, 
         db_session,
         start=datetime(2026, 8, 24, 16, 0),
         status=EventsStatus.PUBLISHED,
-        location_type=EventsLocationType.NONE,
+        location_type=EventsLocationType.ONLINE,
     )
     assert first_event.semester_id == fall.id
     newcomers = leaders(db_session, first_event, 40, 30, 20, 15, 12)

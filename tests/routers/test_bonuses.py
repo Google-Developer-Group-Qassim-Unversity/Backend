@@ -1,0 +1,267 @@
+"""Tests for first-class /bonuses API, leaderboard aggregation, visibility, and snapshot immutability."""
+
+from datetime import datetime
+
+from sqlalchemy import select
+
+from app.DB.schema import (
+    Actions,
+    ActionsActionType,
+    Bonuses,
+    Events,
+    EventsLocationType,
+    EventsStatus,
+    Logs,
+    MembersLogs,
+)
+from tests.factories import make_create_event_payload
+from tests.utils import assert_2xx, assert_forbidden, assert_not_found, semester_id_on
+
+
+def test_standalone_bonus_crud_and_totals(admin_points_client, client, db_session, seed_refs):
+    # Create a standalone bonus with both member and department grants in one atomic call.
+    create_res = admin_points_client.post(
+        "/bonuses",
+        json={
+            "title": "Coding Competition",
+            "given_at": "2026-07-05T10:00:00",
+            "is_public": True,
+            "grants": [
+                {
+                    "recipient_type": "member",
+                    "points": 12,
+                    "label_en": "First Place",
+                    "label_ar": "المركز الأول",
+                    "member_ids": [seed_refs.ahmed.id, seed_refs.sara.id],
+                },
+                {
+                    "recipient_type": "department",
+                    "points": -4,
+                    "label_en": "Late Report",
+                    "label_ar": "تأخير التقرير",
+                    "department_ids": [seed_refs.dept_business.id],
+                },
+            ],
+        },
+    )
+    assert_2xx(create_res)
+    bonus = create_res.json()
+    assert bonus["event_id"] is None
+    assert bonus["is_public"] is True
+    assert len(bonus["grants"]) == 2
+
+    # Never creates a fake event row.
+    fake = db_session.scalars(select(Events).where(Events.name == "Coding Competition")).all()
+    assert fake == []
+
+    # Listed in GET /bonuses?standalone_only=true.
+    listed = admin_points_client.get("/bonuses", params={"standalone_only": True, "semester": 475}).json()
+    assert any(row["id"] == bonus["id"] and row["member_count"] == 2 and row["department_count"] == 1 for row in listed)
+
+    # Reflected on public leaderboard totals & history.
+    member_hist = client.get(f"/points/members/{seed_refs.ahmed.id}", params={"semester": 475}).json()
+    assert member_hist["member"]["total_points"] == 12
+    assert any(
+        item["kind"] == "bonus"
+        and item["bonus_id"] == bonus["id"]
+        and item["event_id"] is None
+        and item["label_ar"] == "المركز الأول"
+        and item["points"] == 12
+        for item in member_hist["history"]
+    )
+
+    dept_hist = client.get(f"/points/departments/{seed_refs.dept_business.id}", params={"semester": 475}).json()
+    assert dept_hist["department"]["total_points"] == -4
+    assert any(item["kind"] == "bonus" and item["points"] == -4 for item in dept_hist["history"])
+
+    # Update bonus: change title, keep member grant in place (add only Sara -> verify Ahmed removed).
+    member_grant_id = next(g["id"] for g in bonus["grants"] if g["recipient_type"] == "member")
+    update_res = admin_points_client.put(
+        f"/bonuses/{bonus['id']}",
+        json={
+            "title": "Coding Competition Final",
+            "is_public": False,
+            "grants": [
+                {
+                    "id": member_grant_id,
+                    "recipient_type": "member",
+                    "points": 15,
+                    "label_en": "Winner",
+                    "label_ar": "فائز",
+                    "member_ids": [seed_refs.sara.id],
+                }
+            ],
+        },
+    )
+    assert_2xx(update_res)
+    updated = update_res.json()
+    assert updated["title"] == "Coding Competition Final"
+    assert updated["is_public"] is False
+    assert len(updated["grants"]) == 1
+
+    # Hidden bonus still counts in total_points, but is omitted from public history.
+    sara_hist = client.get(f"/points/members/{seed_refs.sara.id}", params={"semester": 475}).json()
+    assert sara_hist["member"]["total_points"] == 15
+    assert not any(item["bonus_id"] == bonus["id"] for item in sara_hist["history"])
+
+    # Delete bonus: points return to 0.
+    assert_2xx(admin_points_client.delete(f"/bonuses/{bonus['id']}"))
+    assert_not_found(admin_points_client.get(f"/bonuses/{bonus['id']}"))
+    sara_after = client.get(f"/points/members/{seed_refs.sara.id}", params={"semester": 475}).json()
+    assert sara_after["member"]["total_points"] == 0
+
+
+def test_leaderboard_does_not_cartesian_multiply_events_and_bonuses(admin_points_client, client, db_session, seed_refs):
+    """A member with multiple events AND multiple bonuses must get their exact sum, never a product."""
+    sem_id = semester_id_on(db_session, "2026-07-05")
+    for idx in range(3):
+        ev = Events(
+            name=f"Workshop {idx}",
+            location_type=EventsLocationType.ON_SITE,
+            location="Hall",
+            start_datetime=f"2026-07-0{idx + 1} 10:00:00",
+            end_datetime=f"2026-07-0{idx + 1} 12:00:00",
+            status=EventsStatus.PUBLISHED,
+            semester_id=sem_id,
+        )
+        db_session.add(ev)
+        db_session.flush()
+        log = Logs(action_id=seed_refs.member_action.id, event_id=ev.id)
+        db_session.add(log)
+        db_session.flush()
+        db_session.add(MembersLogs(member_id=seed_refs.ahmed.id, log_id=log.id, date=datetime(2026, 7, idx + 1, 10, 0)))
+    db_session.commit()
+
+    for idx in range(2):
+        assert_2xx(
+            admin_points_client.post(
+                "/bonuses",
+                json={
+                    "title": f"Bonus {idx}",
+                    "given_at": f"2026-07-1{idx}T10:00:00",
+                    "is_public": True,
+                    "grants": [{"recipient_type": "member", "points": 5, "member_ids": [seed_refs.ahmed.id]}],
+                },
+            )
+        )
+
+    expected = 3 * seed_refs.member_action.points + 2 * 5
+    totals = {
+        r["member_id"]: r["total_points"] for r in client.get("/points/members/total", params={"semester": 475}).json()
+    }
+    assert totals[seed_refs.ahmed.id] == expected
+
+
+def test_bonus_grant_snapshots_template_action_points(admin_points_client, client, db_session, seed_refs):
+    """Editing a template action's points later must NOT rewrite existing bonus grants."""
+    template = Actions(action_name="Speaker", ar_action_name="متحدث", action_type=ActionsActionType.BONUS, points=8)
+    db_session.add(template)
+    db_session.commit()
+
+    res = admin_points_client.post(
+        "/bonuses",
+        json={
+            "title": "Tech Talk",
+            "given_at": "2026-07-05T10:00:00",
+            "is_public": True,
+            "grants": [
+                {
+                    "recipient_type": "member",
+                    "points": 999,  # overridden by template's 8
+                    "source_action_id": template.id,
+                    "member_ids": [seed_refs.ahmed.id],
+                }
+            ],
+        },
+    )
+    assert_2xx(res)
+    bonus = res.json()
+    assert bonus["grants"][0]["points"] == 8
+    assert bonus["grants"][0]["label_ar"] == "متحدث"
+
+    # Change the template action's value to 20.
+    assert_2xx(admin_points_client.put(f"/actions/{template.id}", json={"points": 20}))
+    hist = client.get(f"/points/members/{seed_refs.ahmed.id}", params={"semester": 475}).json()
+    assert hist["member"]["total_points"] == 8
+
+
+def test_event_attached_bonuses_upsert_and_visibility(admin_points_client, client, db_session, seed_refs):
+    event = admin_points_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
+
+    # Empty initially.
+    initial = admin_points_client.get(f"/bonuses/by-event/{event['id']}").json()
+    assert initial["bonus_id"] is None
+    assert initial["grants"] == []
+
+    # Upsert grants on the event.
+    upserted = admin_points_client.put(
+        f"/bonuses/by-event/{event['id']}",
+        json={
+            "grants": [
+                {
+                    "recipient_type": "member",
+                    "points": 6,
+                    "label_en": "Host",
+                    "label_ar": "مقدم",
+                    "member_ids": [seed_refs.ahmed.id],
+                }
+            ]
+        },
+    ).json()
+    assert upserted["bonus_id"] is not None
+    assert len(upserted["grants"]) == 1
+
+    # Because the event is still draft, its attached bonus doesn't count yet.
+    assert (
+        client.get(f"/points/members/{seed_refs.ahmed.id}", params={"semester": 475}).json()["member"]["total_points"]
+        == 0
+    )
+
+    # Publish the event -> attached bonus now counts and links to event_id.
+    assert_2xx(admin_points_client.put(f"/events/{event['id']}/status", json={"status": "published"}))
+    hist = client.get(f"/points/members/{seed_refs.ahmed.id}", params={"semester": 475}).json()
+    assert hist["member"]["total_points"] == 6
+    assert any(item["kind"] == "bonus" and item["event_id"] == event["id"] for item in hist["history"])
+
+    # Clearing grants removes the bonus container cleanly.
+    cleared = admin_points_client.put(f"/bonuses/by-event/{event['id']}", json={"grants": []}).json()
+    assert cleared["bonus_id"] is None
+    assert cleared["grants"] == []
+    assert db_session.scalars(select(Bonuses).where(Bonuses.event_id == event["id"])).all() == []
+
+
+def test_bonuses_routes_require_points_custom_permission(clerk_client):
+    assert_forbidden(clerk_client.get("/bonuses"))
+
+
+def test_events_me_includes_public_standalone_bonuses(admin_points_client, clerk_client, db_session, seed_refs):
+    """GET /events/me surfaces public standalone bonuses under `bonuses` and leaves hidden ones out."""
+    me_id = clerk_client.get("/members/me").json()["id"]
+    assert_2xx(
+        admin_points_client.post(
+            "/bonuses",
+            json={
+                "title": "Public Hackathon",
+                "given_at": "2026-07-05T10:00:00",
+                "is_public": True,
+                "grants": [{"recipient_type": "member", "points": 10, "member_ids": [me_id]}],
+            },
+        )
+    )
+    assert_2xx(
+        admin_points_client.post(
+            "/bonuses",
+            json={
+                "title": "Secret Adjustment",
+                "given_at": "2026-07-06T10:00:00",
+                "is_public": False,
+                "grants": [{"recipient_type": "member", "points": 5, "member_ids": [me_id]}],
+            },
+        )
+    )
+    res = clerk_client.get("/events/me")
+    assert_2xx(res)
+    body = res.json()
+    assert [b["title"] for b in body["bonuses"]] == ["Public Hackathon"]
+    assert body["bonuses"][0]["points"] == 10
+    assert body["participated"] == []

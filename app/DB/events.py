@@ -127,10 +127,9 @@ def _apply_event_filters(
         stmt = stmt.where(Events.status == EventsStatus(status))
     if search and search.strip():
         stmt = stmt.where(Events.name.like(f"%{search.strip()}%"))
-    if exclude_custom:
-        # "none"/"hidden" location types are custom point activities - they live
-        # on the points page, not the events list.
-        stmt = stmt.where(Events.location_type.notin_([EventsLocationType.NONE, EventsLocationType.HIDDEN]))
+    # ``exclude_custom`` is kept as an accepted parameter for backward compatibility;
+    # custom bonuses now live in ``bonuses`` so ``events`` only holds real events.
+    _ = exclude_custom
     if phase == "upcoming":
         stmt = stmt.where(Events.start_datetime > now)
     elif phase == "live":
@@ -646,16 +645,14 @@ def update_event_meeting_url(
 
 
 def get_member_events(session: Session, member_id: int):
+    from app.DB import bonuses as bonuses_queries
+
     local_now = event_lifecycle.riyadh_now()
     stmt = (
         select(Events, MembersLogs.date)
         .join(Logs, Events.id == Logs.event_id)
         .join(MembersLogs, MembersLogs.log_id == Logs.id)
-        .where(
-            MembersLogs.member_id == member_id,
-            Events.status == EventsStatus.PUBLISHED,
-            Events.location_type != EventsLocationType.HIDDEN,
-        )
+        .where(MembersLogs.member_id == member_id, Events.status == EventsStatus.PUBLISHED)
         .order_by(Events.start_datetime.desc(), MembersLogs.date)
     )
     results = session.execute(stmt).all()
@@ -676,7 +673,6 @@ def get_member_events(session: Session, member_id: int):
 
     threshold = config.ATTENDANCE_EARLY_HOURS_THRESHOLD
     attended = []
-    participated = []
     for data in events_map.values():
         event = data["event"]
         raw_dates = data["dates"]
@@ -686,18 +682,16 @@ def get_member_events(session: Session, member_id: int):
         )
         event_dict["phase"] = event_lifecycle.compute_phase(event.start_datetime, event.end_datetime, local_now)
 
-        if event.location_type == EventsLocationType.NONE:
-            participated.append(event_dict)
-        else:
-            total_days = max((event.end_datetime - event.start_datetime).days + 1, 1)
-            attended_set = {get_effective_date(d, threshold) for d in raw_dates}
-            attendance_dates = []
-            for day_offset in range(total_days):
-                day = event.start_datetime.date() + timedelta(days=day_offset)
-                attendance_dates.append(
-                    {"date": datetime.combine(day, datetime.min.time()), "attended": day in attended_set}
-                )
-            event_dict["attendance_dates"] = attendance_dates
-            attended.append(event_dict)
+        total_days = max((event.end_datetime - event.start_datetime).days + 1, 1)
+        attended_set = {get_effective_date(d, threshold) for d in raw_dates}
+        attendance_dates = []
+        for day_offset in range(total_days):
+            day = event.start_datetime.date() + timedelta(days=day_offset)
+            attendance_dates.append(
+                {"date": datetime.combine(day, datetime.min.time()), "attended": day in attended_set}
+            )
+        event_dict["attendance_dates"] = attendance_dates
+        attended.append(event_dict)
 
-    return attended, participated
+    bonuses = bonuses_queries.get_member_public_bonuses(session, member_id)
+    return attended, [], bonuses

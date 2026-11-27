@@ -24,7 +24,6 @@ from app.DB import pipeline_teams as team_queries
 from app.DB import departments as department_queries
 from app.DB import event_pipeline as queries
 from app.DB import actions as action_queries
-from app.DB import logs as log_queries
 from app.DB.schema import (
     BookingBlocks,
     BumpOutcome,
@@ -928,7 +927,7 @@ def record_penalty(session: Session, request: EventRequests, now: datetime) -> P
             reason=f"Returned request {request.id} fixed {days} day(s) late",
         )
         session.add(penalty)
-    elif penalty.late_days < days and penalty.applied_log_id is None:
+    elif penalty.late_days < days and penalty.applied_bonus_grant_id is None:
         penalty.late_days = days
         penalty.points = days * PENALTY_POINTS_PER_LATE_DAY
         penalty.reason = f"Returned request {request.id} fixed {days} day(s) late"
@@ -1339,11 +1338,32 @@ def publish(session: Session, caller: Caller, request: EventRequests) -> int:
         session, event_for(request), responsible_member_id=request.requested_by, created_by=caller.member.id
     )
     penalty = get_penalty(session, request)
-    if penalty is not None and penalty.applied_log_id is None and penalty.points > 0:
-        penalty_log = log_queries.create_log(session, event.id, action_queries.get_discount_action(session).id)
-        log_queries.create_modification(session, penalty_log.id, "discount", penalty.points)
-        log_queries.create_department_log(session, request.department_id, penalty_log.id)
-        penalty.applied_log_id = penalty_log.id
+    if penalty is not None and penalty.applied_bonus_grant_id is None and penalty.points > 0:
+        from app.DB import bonuses as bonuses_queries
+        from app.DB.schema import BonusRecipientType
+
+        bonus = bonuses_queries.get_bonus_by_event_id(session, event.id)
+        if bonus is None:
+            bonus = bonuses_queries.create_bonus(
+                session,
+                title=event.name,
+                semester_id=event.semester_id,
+                given_at=event.start_datetime,
+                is_public=True,
+                event_id=event.id,
+                created_by=caller.member.id,
+            )
+        penalty_grant = bonuses_queries.create_bonus_grant(
+            session,
+            bonus_id=bonus.id,
+            recipient_type=BonusRecipientType.DEPARTMENT,
+            points=-int(penalty.points),
+            source_action_id=None,
+            label_en="Late fix penalty",
+            label_ar="خصم تأخير تعديل الفعالية",
+        )
+        bonuses_queries.set_grant_recipients(session, penalty_grant, [request.department_id])
+        penalty.applied_bonus_grant_id = penalty_grant.id
     request.event_id = event.id
     request.stage = EventRequestStage.PUBLISHED
     request.published_at = clock.now()

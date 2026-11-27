@@ -25,6 +25,7 @@ from app.routers import (
     events,
     departments,
     action,
+    bonuses,
     custom,
     forms,
     submissions,
@@ -124,6 +125,7 @@ app.include_router(attendance.router)
 app.include_router(emails.router)
 app.include_router(departments.router)
 app.include_router(action.router)
+app.include_router(bonuses.router)
 app.include_router(custom.router)
 app.include_router(forms.router)
 app.include_router(submissions.router)

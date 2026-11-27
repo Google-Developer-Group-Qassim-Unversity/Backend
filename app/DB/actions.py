@@ -1,7 +1,7 @@
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, delete, update
-from .schema import Actions, ActionsActionType, Logs
+from .schema import Actions, ActionsActionType, BonusGrants, Logs
 
 
 def get_actions(session: Session):
@@ -87,9 +87,16 @@ def get_all_actions(session: Session):
 
 
 def get_action_usage_counts(session: Session) -> dict[int, int]:
-    statement = select(Logs.action_id, func.count(Logs.id)).group_by(Logs.action_id)
-    results = session.execute(statement).all()
-    return {row[0]: row[1] for row in results}
+    log_counts = session.execute(select(Logs.action_id, func.count(Logs.id)).group_by(Logs.action_id)).all()
+    counts: dict[int, int] = {int(row[0]): int(row[1]) for row in log_counts}
+    bonus_counts = session.execute(
+        select(BonusGrants.source_action_id, func.count(BonusGrants.id))
+        .where(BonusGrants.source_action_id.is_not(None))
+        .group_by(BonusGrants.source_action_id)
+    ).all()
+    for action_id, cnt in bonus_counts:
+        counts[int(action_id)] = counts.get(int(action_id), 0) + int(cnt)
+    return counts
 
 
 def update_action(
@@ -136,6 +143,9 @@ def get_action_usage_count(session: Session, action_id: int) -> int:
 def update_logs_action(session: Session, old_action_id: int, new_action_id: int):
     statement = update(Logs).where(Logs.action_id == old_action_id).values(action_id=new_action_id)
     session.execute(statement)
+    session.execute(
+        update(BonusGrants).where(BonusGrants.source_action_id == old_action_id).values(source_action_id=new_action_id)
+    )
     session.flush()
 
 

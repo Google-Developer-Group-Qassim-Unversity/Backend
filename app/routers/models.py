@@ -752,9 +752,20 @@ class EventWithAttendance_model(Events_model):
     attendance_dates: list[AttendanceDateEntry]
 
 
+class MemberBonus_model(BaseClassModel):
+    bonus_id: str
+    title: str
+    given_at: datetime
+    semester_id: str
+    points: int
+    label_en: str | None = None
+    label_ar: str | None = None
+
+
 class MemberEvents_model(BaseClassModel):
     attended: list[EventWithAttendance_model]
     participated: list[Events_model]
+    bonuses: list[MemberBonus_model] = []
 
 
 class PaginatedEvents_model(PaginationMeta_model):

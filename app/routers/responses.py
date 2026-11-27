@@ -116,6 +116,7 @@ class CacheResetResponse(BaseClassModel):
 
 class CustomPointsCreatedResponse(BaseClassModel):
     event_id: int
+    bonus_id: str | None = None
     message: str
 
 

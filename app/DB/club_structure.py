@@ -166,8 +166,10 @@ def department_has_memberships(session: Session, semester_id: str, department_id
 
 
 def department_has_points(session: Session, semester_id: str, department_id: int) -> bool:
-    """Whether the department earned points on a published event of the semester."""
-    return bool(
+    """Whether the department earned points on a published event or bonus of the semester."""
+    from app.DB import bonuses as bonuses_queries
+
+    has_event_points = bool(
         session.scalar(
             select(
                 exists()
@@ -178,6 +180,7 @@ def department_has_points(session: Session, semester_id: str, department_id: int
             )
         )
     )
+    return has_event_points or bonuses_queries.department_has_bonus_points(session, semester_id, department_id)
 
 
 def get_changes(

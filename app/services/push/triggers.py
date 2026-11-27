@@ -29,6 +29,9 @@ from app.config import config
 from app.DB import push as push_queries
 from app.DB.schema import (
     Actions,
+    Bonuses,
+    BonusGrantRecipients,
+    BonusGrants,
     EventRequests,
     Events,
     EventsLocationType,
@@ -165,6 +168,40 @@ def attendance_recorded(session: Session, event: Events, log: Logs, member_log: 
         cause={"type": "attendance", "log_id": log.id, "day": day},
     )
     return _points(session, event, [push], count)
+
+
+@never_blocks
+def bonus_points_given(session: Session, bonus: Bonuses, grant: BonusGrants, member_ids: Iterable[int]) -> int:
+    """Staff gave bonus points. Editing the grant later notifies only the members it adds.
+
+    Keyed by grant and member, not by the recipient row: a member taken off the
+    grant and put back gets a new row, and must not hear of it twice. A
+    deduction (zero or fewer points) sends nothing.
+    """
+    if not config.push_enabled:
+        return 0
+    count = int(grant.points)
+    if count <= 0:
+        return 0
+    pushes = [
+        Push(
+            member_id=member_id,
+            dedupe_key=f"points:bonus:{grant.id}:{member_id}",
+            cause={"type": "bonus", "bonus_id": bonus.id, "grant_id": grant.id},
+        )
+        for member_id in dict.fromkeys(member_ids)
+    ]
+    return outbox.enqueue(
+        session,
+        PushKind.POINTS,
+        pushes,
+        text=messages.points(bonus.title, count),
+        url=links.POINTS_URL,
+        thread_id="points",
+        event_id=bonus.event_id,
+        bonus_id=bonus.id,
+        expires_at=clock.now() + POINTS_TTL,
+    )
 
 
 @never_blocks
@@ -375,6 +412,14 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
         starts = [day_start(event, day).isoformat() for day in range(1, event_days(event) + 1)]
         return None if cause.get("starts") in starts else "event_changed"
     if row.kind == PushKind.POINTS:
+        if cause.get("type") == "bonus":
+            grant_id = cause.get("grant_id")
+            recipient_id = session.scalar(
+                select(BonusGrantRecipients.id).where(
+                    BonusGrantRecipients.member_id == row.member_id, BonusGrantRecipients.bonus_grant_id == grant_id
+                )
+            )
+            return None if recipient_id is not None else "points_removed"
         log_id = cause.get("log_id")
         dates = session.scalars(
             select(MembersLogs.date).where(MembersLogs.member_id == row.member_id, MembersLogs.log_id == log_id)

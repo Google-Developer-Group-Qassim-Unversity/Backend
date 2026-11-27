@@ -107,15 +107,20 @@ def resource_page(session: Session, event_id: int, resource: str, page: int, pag
     # Never expose payloads, answers, tokens, email contents or integration errors.
     for name in (
         "name",
+        "title",
         "label",
+        "label_en",
+        "label_ar",
         "status",
         "team",
         "kind",
+        "recipient_type",
         "form_type",
         "submission_type",
         "is_accepted",
         "is_invited",
         "date",
+        "given_at",
         "submitted_at",
         "cancelled_at",
         "type",
@@ -138,7 +143,14 @@ def resource_page(session: Session, event_id: int, resource: str, page: int, pag
     items = []
     for row in rows:
         identifier = " / ".join(str(row[c.name]) for c in table.primary_key.columns)
-        label = row.get("display_name") or row.get("label") or row.get("name") or f"#{identifier}"
+        label = (
+            row.get("display_name")
+            or row.get("title")
+            or row.get("label")
+            or row.get("label_en")
+            or row.get("name")
+            or f"#{identifier}"
+        )
         details = {}
         for column in columns:
             key = column.name

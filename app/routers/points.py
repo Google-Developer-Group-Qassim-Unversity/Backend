@@ -1,11 +1,12 @@
-from fastapi import APIRouter, status, HTTPException, Query
-from app.DB import points as points_queries, semesters as semesters_queries
-
-from app.routers.models import BaseClassModel
 from datetime import date, datetime
-from app.semesters import current_semester, resolve_semester_for_caller
-from typing import Annotated
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, HTTPException, Query, status
+
+from app.DB import points as points_queries, semesters as semesters_queries
 from app.dependencies import DB
+from app.routers.models import BaseClassModel
+from app.semesters import current_semester, resolve_semester_for_caller
 from app.services.permissions.dependencies import CurrentAccess
 
 router = APIRouter(prefix="/points", tags=["Points"])
@@ -19,7 +20,33 @@ class Member_points_model(BaseClassModel):
     total_points: int | None = None
 
 
+class PointsHistoryItem_model(BaseClassModel):
+    """One chronological row in a member's or department's points history.
+
+    ``kind == "event"`` is attendance/organization on a real event.
+    ``kind == "bonus"`` is a standalone bonus (``event_id = None``) or an
+    event-attached bonus/penalty (``event_id`` set, clickable to the event).
+    """
+
+    kind: Literal["event", "bonus"]
+    id: str
+    title: str
+    label_en: str | None = None
+    label_ar: str | None = None
+    points: int
+    occurred_at: datetime
+    end_datetime: datetime | None = None
+    event_id: int | None = None
+    bonus_id: str | None = None
+    location_type: Literal["online", "on-site"] | None = None
+
+
 class Event_model(BaseClassModel):
+    """Deprecated compatibility shape for shipped TestFlight iOS builds.
+
+    New callers (Website, next iOS build) should read ``history`` instead.
+    """
+
     event_name: str
     event_id: int
     start_datetime: datetime
@@ -28,12 +55,14 @@ class Event_model(BaseClassModel):
     action_name: str
     ar_action_name: str | None = None
     location_type: str
-    # true when every action in this history row is a bonus action
     bonus_row: bool
 
 
 class Member_event_history_model(BaseClassModel):
     member: Member_points_model
+    history: list[PointsHistoryItem_model]
+    # Deprecated compatibility list (events + public bonuses mapped into Event_model)
+    # kept until TestFlight iOS builds migrate to `history`.
     events: list[Event_model]
 
 
@@ -52,6 +81,8 @@ class Response_department_points_model(BaseClassModel):
 
 class Department_points_history_model(BaseClassModel):
     department: Department_points_model
+    history: list[PointsHistoryItem_model]
+    # Deprecated compatibility list kept until TestFlight iOS builds migrate to `history`.
     events: list[Event_model]
 
 
@@ -70,6 +101,27 @@ class Semesters_model(BaseClassModel):
     current_semester: int | None
     semesters: list[int]
     details: list[Semester_summary_model]
+
+
+# ============ helpers ============
+
+
+def _to_legacy_event_row(row: dict) -> Event_model:
+    is_bonus = row["kind"] == "bonus"
+    points = int(row["points"] or 0)
+    default_en = "Discount" if points < 0 else "Bonus"
+    default_ar = "خصم" if points < 0 else "مكافأة"
+    return Event_model(
+        event_name=row["title"],
+        event_id=int(row["event_id"]) if row["event_id"] is not None else 0,
+        start_datetime=row["occurred_at"],
+        end_datetime=row["end_datetime"] or row["occurred_at"],
+        points=points,
+        action_name=row["label_en"] or (default_en if is_bonus else ""),
+        ar_action_name=row["label_ar"] or (default_ar if is_bonus else None),
+        location_type=row["location_type"] or "none",
+        bonus_row=is_bonus,
+    )
 
 
 # ============ routes ============
@@ -115,11 +167,12 @@ def get_member_points(
     member_points = points_queries.get_member_points_by_id_semester(session, resolved.id, member_id)
     if member_points is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Member with id {member_id} does not exist")
-    member_points_history = points_queries.get_member_points_history_semester(session, resolved.id, member_id)
+    rows = points_queries.get_member_points_history_semester(session, resolved.id, member_id)
 
     return Member_event_history_model(
         member=Member_points_model.model_validate(member_points),
-        events=[Event_model.model_validate(row) for row in member_points_history],
+        history=[PointsHistoryItem_model.model_validate(row) for row in rows],
+        events=[_to_legacy_event_row(row) for row in rows],
     )
 
 
@@ -154,11 +207,10 @@ def get_department_points(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {department_id} does not exist"
         )
-    department_points_history = points_queries.get_department_points_history_semester(
-        session, resolved.id, department_id
-    )
+    rows = points_queries.get_department_points_history_semester(session, resolved.id, department_id)
 
     return Department_points_history_model(
         department=Department_points_model.model_validate(department_points),
-        events=[Event_model.model_validate(row) for row in department_points_history],
+        history=[PointsHistoryItem_model.model_validate(row) for row in rows],
+        events=[_to_legacy_event_row(row) for row in rows],
     )

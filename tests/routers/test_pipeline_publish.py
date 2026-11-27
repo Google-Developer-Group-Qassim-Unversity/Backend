@@ -96,6 +96,8 @@ def test_the_published_event_shows_up_in_events(pipeline, world):
 
 
 def test_a_late_penalty_is_taken_off_once(pipeline, world):
+    from app.DB.schema import Bonuses, BonusGrantRecipients, BonusGrants
+
     pipeline.sign_in(world["admin"], super_admin=True)
     url = f"/pipeline/requests/{world['request_id']}"
     pipeline.client.post(f"{url}/return", json={"notes": "fix"})
@@ -108,15 +110,19 @@ def test_a_late_penalty_is_taken_off_once(pipeline, world):
         select(PipelinePenalties).where(PipelinePenalties.request_id == world["request_id"])
     )
     pipeline.session.refresh(penalty)
-    mods = pipeline.session.scalars(select(Modifications).where(Modifications.log_id == penalty.applied_log_id)).all()
-    assert [(m.type.value, m.value) for m in mods] == [("discount", 2)]
-    assert pipeline.session.get(Logs, penalty.applied_log_id).event_id == event_id
-    # Bug #4: the event lasts two days, so its department log has a row per day.
-    # The penalty sits on its own log with one row, so it counts once, not twice.
-    penalty_rows = pipeline.session.scalars(
-        select(DepartmentsLogs).where(DepartmentsLogs.log_id == penalty.applied_log_id)
+    assert penalty.applied_bonus_grant_id is not None
+    grant = pipeline.session.get(BonusGrants, penalty.applied_bonus_grant_id)
+    assert grant is not None
+    assert grant.points == -2
+    bonus = pipeline.session.get(Bonuses, grant.bonus_id)
+    assert bonus is not None
+    assert bonus.event_id == event_id
+    # The event lasts two days, so its department log has a row per day.
+    # The penalty sits on its own bonus grant with one recipient row, so it counts once, not twice.
+    recipients = pipeline.session.scalars(
+        select(BonusGrantRecipients).where(BonusGrantRecipients.bonus_grant_id == grant.id)
     ).all()
-    assert [row.department_id for row in penalty_rows] == [world["ai"].id]
+    assert [row.department_id for row in recipients] == [world["ai"].id]
     department_log = pipeline.session.scalar(
         select(Logs).where(Logs.event_id == event_id, Logs.action_id == world["actions"]["department_action_id"])
     )
@@ -178,12 +184,20 @@ def test_deleting_a_published_event_takes_everything_with_it(pipeline, world):
     pipeline.client.post(f"{url}/resubmit")
     finish_all(pipeline, world)
     event_id = publish(pipeline, world).json()["event_id"]
+    from app.DB.schema import Bonuses, BonusGrants
+
     penalty = pipeline.session.scalar(
         select(PipelinePenalties).where(PipelinePenalties.request_id == world["request_id"])
     )
     pipeline.session.refresh(penalty)
+    assert penalty.applied_bonus_grant_id is not None
+    grant = pipeline.session.get(BonusGrants, penalty.applied_bonus_grant_id)
+    assert grant is not None
+    bonus = pipeline.session.get(Bonuses, grant.bonus_id)
+    assert bonus is not None and bonus.event_id == event_id
     log_ids = pipeline.session.scalars(select(Logs.id).where(Logs.event_id == event_id)).all()
-    assert penalty.applied_log_id in log_ids
+    bonus_id = bonus.id
+    grant_id = grant.id
 
     pipeline.sign_in(world["admin"], super_admin=True)
     preview = pipeline.client.get(f"/events/{event_id}/deletion-impact")
@@ -192,6 +206,9 @@ def test_deleting_a_published_event_takes_everything_with_it(pipeline, world):
     assert counts["event_requests"] == 1
     assert counts["event_request_tasks"] == 3
     assert counts["pipeline_penalties"] == 1
+    assert counts["bonuses"] == 1
+    assert counts["bonus_grants"] == 1
+    assert counts["bonus_grant_recipients"] == 1
     response = pipeline.client.delete(f"/events/{event_id}")
     assert response.status_code == 200, response.text
 
@@ -210,9 +227,10 @@ def test_deleting_a_published_event_takes_everything_with_it(pipeline, world):
         ).all()
         == []
     )
-    # Points: the event's department and member rows, and the penalty's discount.
+    # Points: the event's department and member rows, and the penalty's bonus grant.
     assert pipeline.session.scalars(select(DepartmentsLogs).where(DepartmentsLogs.log_id.in_(log_ids))).all() == []
-    assert pipeline.session.scalars(select(Modifications).where(Modifications.log_id.in_(log_ids))).all() == []
+    assert pipeline.session.get(Bonuses, bonus_id) is None
+    assert pipeline.session.get(BonusGrants, grant_id) is None
     assert pipeline.client.get(url).status_code == 404
 
     # Back to before the late resubmit, when those days were past the lockout.

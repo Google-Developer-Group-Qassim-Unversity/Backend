@@ -75,8 +75,11 @@ class DepartmentsType(str, enum.Enum):
 class EventsLocationType(str, enum.Enum):
     ONLINE = "online"
     ON_SITE = "on-site"
-    NONE = "none"
-    HIDDEN = "hidden"
+
+
+class BonusRecipientType(str, enum.Enum):
+    MEMBER = "member"
+    DEPARTMENT = "department"
 
 
 class EventsContentLinkKind(str, enum.Enum):
@@ -190,8 +193,6 @@ class OpenEventsFormType(str, enum.Enum):
 class OpenEventsLocationType(str, enum.Enum):
     ONLINE = "online"
     ON_SITE = "on-site"
-    NONE = "none"
-    HIDDEN = "hidden"
 
 
 class EmailLogsFromAddress(str, enum.Enum):
@@ -494,6 +495,7 @@ class Events(Base):
     creator: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[created_by])
     forms: Mapped[list["Forms"]] = relationship("Forms", back_populates="event", passive_deletes=True)
     logs: Mapped[list["Logs"]] = relationship("Logs", back_populates="event", passive_deletes=True)
+    bonuses: Mapped[list["Bonuses"]] = relationship("Bonuses", back_populates="event", passive_deletes=True)
     email_logs: Mapped[list["EmailLogs"]] = relationship("EmailLogs", back_populates="event", passive_deletes=True)
 
     if TYPE_CHECKING:
@@ -786,6 +788,128 @@ class MembersLogs(Base):
 
     log: Mapped["Logs"] = relationship("Logs", back_populates="members_logs")
     member: Mapped["Members"] = relationship("Members", back_populates="members_logs")
+
+
+class Bonuses(Base):
+    """A standalone or event-attached points bonus / deduction group.
+
+    Replaces the legacy pattern of creating fake ``events`` rows with
+    ``location_type`` of ``none`` or ``hidden``. When ``event_id`` is NULL the
+    bonus is standalone; when set, the grants are attached to a real event
+    (extra rewards for speakers/winners, or a pipeline late-fix penalty).
+    ``is_public = 0`` hides the bonus from public history pages while still
+    counting its points toward semester totals.
+    """
+
+    __tablename__ = "bonuses"
+    __table_args__ = (
+        ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_bonuses_event", ondelete="CASCADE"),
+        ForeignKeyConstraint(["semester_id"], ["semesters.id"], name="fk_bonuses_semester", ondelete="RESTRICT"),
+        ForeignKeyConstraint(["created_by"], ["members.id"], name="fk_bonuses_created_by", ondelete="SET NULL"),
+        Index("ix_bonuses_semester_given", "semester_id", "given_at"),
+        Index("fk_bonuses_event", "event_id"),
+        Index("fk_bonuses_created_by", "created_by"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    title: Mapped[str] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
+    event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    semester_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    given_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    is_public: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    created_by: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+    )
+
+    event: Mapped[Optional["Events"]] = relationship("Events", back_populates="bonuses")
+    semester: Mapped["Semesters"] = relationship("Semesters")
+    creator: Mapped[Optional["Members"]] = relationship("Members", foreign_keys=[created_by])
+    grants: Mapped[list["BonusGrants"]] = relationship(
+        "BonusGrants",
+        back_populates="bonus",
+        passive_deletes=True,
+        cascade="all, delete-orphan",
+        order_by="BonusGrants.id",
+    )
+
+
+class BonusGrants(Base):
+    """One signed points grant line inside a ``bonuses`` record.
+
+    ``points`` is a signed integer snapshotted at grant time (positive for a
+    bonus, negative for a deduction/penalty). ``source_action_id`` is optional
+    origin metadata pointing at the template ``actions`` row; it is never
+    joined to compute points.
+    """
+
+    __tablename__ = "bonus_grants"
+    __table_args__ = (
+        ForeignKeyConstraint(["bonus_id"], ["bonuses.id"], name="fk_bonus_grants_bonus", ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["source_action_id"], ["actions.id"], name="fk_bonus_grants_source_action", ondelete="SET NULL"
+        ),
+        Index("fk_bonus_grants_bonus", "bonus_id"),
+        Index("fk_bonus_grants_source_action", "source_action_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    bonus_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    recipient_type: Mapped[BonusRecipientType] = mapped_column(
+        Enum(BonusRecipientType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
+    )
+    points: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_action_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    label_en: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    label_ar: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    bonus: Mapped["Bonuses"] = relationship("Bonuses", back_populates="grants")
+    source_action: Mapped[Optional["Actions"]] = relationship("Actions")
+    recipients: Mapped[list["BonusGrantRecipients"]] = relationship(
+        "BonusGrantRecipients", back_populates="grant", passive_deletes=True, cascade="all, delete-orphan"
+    )
+
+
+class BonusGrantRecipients(Base):
+    """One recipient (either a member OR a department, never both) of a ``bonus_grants`` row."""
+
+    __tablename__ = "bonus_grant_recipients"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["bonus_grant_id"], ["bonus_grants.id"], name="fk_bonus_grant_recipients_grant", ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["member_id"], ["members.id"], name="fk_bonus_grant_recipients_member", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["department_id"], ["departments.id"], name="fk_bonus_grant_recipients_department", ondelete="CASCADE"
+        ),
+        CheckConstraint("(member_id IS NOT NULL) <> (department_id IS NOT NULL)", name="ck_bonus_grant_recipients_xor"),
+        Index("uq_bonus_grant_recipients_grant_member", "bonus_grant_id", "member_id", unique=True),
+        Index("uq_bonus_grant_recipients_grant_department", "bonus_grant_id", "department_id", unique=True),
+        Index("ix_bonus_grant_recipients_member", "member_id", "bonus_grant_id"),
+        Index("ix_bonus_grant_recipients_department", "department_id", "bonus_grant_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    bonus_grant_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
+    member_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    department_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    given_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    grant: Mapped["BonusGrants"] = relationship("BonusGrants", back_populates="recipients")
+    member: Mapped[Optional["Members"]] = relationship("Members")
+    department: Mapped[Optional["Departments"]] = relationship("Departments")
 
 
 class Modifications(Base):
@@ -1666,8 +1790,8 @@ class PipelinePenalties(Base):
     """Points a department loses for fixing a returned request late.
 
     One row per request; the sweep grows ``late_days`` while the request stays
-    late. It is applied as a discount on the department's log for the real
-    event when the request is published (``applied_log_id``), not before.
+    late. It is applied as a negative bonus grant attached to the published
+    event (``applied_bonus_grant_id``), not before.
     """
 
     __tablename__ = "pipeline_penalties"
@@ -1678,8 +1802,14 @@ class PipelinePenalties(Base):
         ForeignKeyConstraint(
             ["department_id"], ["departments.id"], name="fk_pipeline_penalties_department", ondelete="CASCADE"
         ),
-        ForeignKeyConstraint(["applied_log_id"], ["logs.id"], name="fk_pipeline_penalties_log", ondelete="SET NULL"),
+        ForeignKeyConstraint(
+            ["applied_bonus_grant_id"],
+            ["bonus_grants.id"],
+            name="fk_pipeline_penalties_bonus_grant",
+            ondelete="SET NULL",
+        ),
         Index("uq_pipeline_penalties_request", "request_id", unique=True),
+        Index("fk_pipeline_penalties_bonus_grant", "applied_bonus_grant_id"),
     )
 
     id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
@@ -1694,7 +1824,7 @@ class PipelinePenalties(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     )
-    applied_log_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    applied_bonus_grant_id: Mapped[Optional[str]] = mapped_column(UUID_CHAR)
 
 
 class PipelineCalendarEntries(Base):
@@ -1925,6 +2055,7 @@ class PushNotifications(Base):
     __table_args__ = (
         ForeignKeyConstraint(["member_id"], ["members.id"], name="fk_push_notifications_member", ondelete="CASCADE"),
         ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_push_notifications_event", ondelete="CASCADE"),
+        ForeignKeyConstraint(["bonus_id"], ["bonuses.id"], name="fk_push_notifications_bonus", ondelete="CASCADE"),
         ForeignKeyConstraint(
             ["broadcast_id"], ["push_broadcasts.id"], name="fk_push_notifications_broadcast", ondelete="CASCADE"
         ),
@@ -1932,6 +2063,7 @@ class PushNotifications(Base):
         Index("ix_push_notifications_member", "member_id", "created_at"),
         Index("ix_push_notifications_status", "status", "not_before"),
         Index("fk_push_notifications_event", "event_id"),
+        Index("fk_push_notifications_bonus", "bonus_id"),
         Index("fk_push_notifications_broadcast", "broadcast_id"),
     )
 
@@ -1940,6 +2072,7 @@ class PushNotifications(Base):
     kind: Mapped[PushKind] = mapped_column(_enum(PushKind), nullable=False)
     dedupe_key: Mapped[str] = mapped_column(VARCHAR(191, charset="ascii", collation="ascii_bin"), nullable=False)
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
+    bonus_id: Mapped[Optional[str]] = mapped_column(UUID_CHAR)
     broadcast_id: Mapped[Optional[str]] = mapped_column(UUID_CHAR)
     # {"ar": {"title", "body"}, "en": {"title", "body"}, "url", "thread_id", "cause": {...}}
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
