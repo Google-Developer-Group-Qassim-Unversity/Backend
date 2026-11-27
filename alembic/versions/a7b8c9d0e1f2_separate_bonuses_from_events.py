@@ -23,6 +23,8 @@ depends_on: Union[str, Sequence[str], None] = None
 UUID_CHAR = mysql.CHAR(36, charset="ascii", collation="ascii_bin")
 UTF8_150 = mysql.VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci")
 
+LEGACY_ID_START = 2**32
+
 OLD_LOCATION_TYPES = ("online", "on-site", "none", "hidden")
 NEW_LOCATION_TYPES = ("online", "on-site")
 
@@ -101,6 +103,19 @@ def _migrate_log_to_grants(
     created_at = log_row["event_created_at"] or log_row["event_start"]
     grant_ids: list[str] = []
 
+    def grant_params(grant_id: str) -> dict:
+        return {
+            "id": grant_id,
+            "bonus_id": bonus_id,
+            "points": total_points,
+            "source_action_id": source_action_id,
+            "label_en": label_en,
+            "label_ar": label_ar,
+            "created_at": created_at,
+            # Split grants get new compatibility IDs beyond the old INT range.
+            "legacy_id": log_row["log_id"] if not grant_ids else None,
+        }
+
     if member_rows:
         # Group by member_id preserving earliest/latest timestamps; if a member appeared
         # multiple times on the same custom log, split into separate grant rows so total
@@ -113,18 +128,10 @@ def _migrate_log_to_grants(
             grant_id = new_id()
             bind.execute(
                 sa.text(
-                    "INSERT INTO bonus_grants (id, bonus_id, recipient_type, points, source_action_id, label_en, label_ar, created_at) "
-                    "VALUES (:id, :bonus_id, 'member', :points, :source_action_id, :label_en, :label_ar, :created_at)"
+                    "INSERT INTO bonus_grants (id, bonus_id, recipient_type, points, source_action_id, label_en, label_ar, created_at, legacy_id) "
+                    "VALUES (:id, :bonus_id, 'member', :points, :source_action_id, :label_en, :label_ar, :created_at, :legacy_id)"
                 ),
-                {
-                    "id": grant_id,
-                    "bonus_id": bonus_id,
-                    "points": total_points,
-                    "source_action_id": source_action_id,
-                    "label_en": label_en,
-                    "label_ar": label_ar,
-                    "created_at": created_at,
-                },
+                grant_params(grant_id),
             )
             grant_ids.append(grant_id)
             for member_id, dts in by_member.items():
@@ -146,18 +153,10 @@ def _migrate_log_to_grants(
             grant_id = new_id()
             bind.execute(
                 sa.text(
-                    "INSERT INTO bonus_grants (id, bonus_id, recipient_type, points, source_action_id, label_en, label_ar, created_at) "
-                    "VALUES (:id, :bonus_id, 'department', :points, :source_action_id, :label_en, :label_ar, :created_at)"
+                    "INSERT INTO bonus_grants (id, bonus_id, recipient_type, points, source_action_id, label_en, label_ar, created_at, legacy_id) "
+                    "VALUES (:id, :bonus_id, 'department', :points, :source_action_id, :label_en, :label_ar, :created_at, :legacy_id)"
                 ),
-                {
-                    "id": grant_id,
-                    "bonus_id": bonus_id,
-                    "points": total_points,
-                    "source_action_id": source_action_id,
-                    "label_en": label_en,
-                    "label_ar": label_ar,
-                    "created_at": created_at,
-                },
+                grant_params(grant_id),
             )
             grant_ids.append(grant_id)
             for dept_id, count in by_dept.items():
@@ -176,6 +175,35 @@ def _migrate_log_to_grants(
                     )
 
     return grant_ids
+
+
+def _remap_log_references(bind: sa.Connection, log_id: int, bonus_id: str, grant_ids: list[str]) -> None:
+    # Duplicate legacy recipients can span grants. Use the first matching grant
+    # for each referenced recipient so the old push stays deduplicated.
+    for grant_id in grant_ids:
+        bind.execute(
+            sa.text("""
+            UPDATE pipeline_penalties p
+            JOIN bonus_grant_recipients r ON r.bonus_grant_id = :grant_id
+                AND r.department_id = p.department_id
+            SET p.applied_bonus_grant_id = :grant_id
+            WHERE p.applied_log_id = :log_id AND p.applied_bonus_grant_id IS NULL
+        """),
+            {"log_id": log_id, "grant_id": grant_id},
+        )
+        bind.execute(
+            sa.text("""
+            UPDATE push_notifications p
+            JOIN bonus_grant_recipients r ON r.bonus_grant_id = :grant_id AND r.member_id = p.member_id
+            SET p.bonus_id = :bonus_id,
+                p.dedupe_key = CONCAT('points:bonus:', :grant_id, ':', p.member_id),
+                p.payload = JSON_SET(p.payload, '$.cause',
+                    JSON_OBJECT('type', 'bonus', 'bonus_id', :bonus_id, 'grant_id', :grant_id))
+            WHERE p.kind = 'points'
+                AND p.dedupe_key = CONCAT('points:custom:', :log_id, ':', p.member_id)
+        """),
+            {"log_id": log_id, "grant_id": grant_id, "bonus_id": bonus_id},
+        )
 
 
 def _migrate_existing_data() -> None:
@@ -199,11 +227,11 @@ def _migrate_existing_data() -> None:
 
     # Load all pipeline penalties that have an applied_log_id.
     penalty_rows = (
-        bind.execute(sa.text("SELECT id, applied_log_id FROM pipeline_penalties WHERE applied_log_id IS NOT NULL"))
+        bind.execute(sa.text("SELECT applied_log_id FROM pipeline_penalties WHERE applied_log_id IS NOT NULL"))
         .mappings()
         .all()
     )
-    penalty_by_log = {int(r["applied_log_id"]): str(r["id"]) for r in penalty_rows}
+    penalty_log_ids = {int(r["applied_log_id"]) for r in penalty_rows}
 
     # Pre-fetch member_logs and department_logs grouped by log_id.
     ml_rows = bind.execute(sa.text("SELECT log_id, member_id, date FROM members_logs ORDER BY id ASC")).all()
@@ -220,7 +248,7 @@ def _migrate_existing_data() -> None:
     fake_events = (
         bind.execute(
             sa.text(
-                "SELECT id, name, location_type, start_datetime, semester_id, created_by, created_at "
+                "SELECT id, name, location_type, start_datetime, end_datetime, status, semester_id, created_by, created_at "
                 "FROM events WHERE location_type IN ('none', 'hidden') ORDER BY id ASC"
             )
         )
@@ -236,12 +264,17 @@ def _migrate_existing_data() -> None:
         is_public = 0 if ev["location_type"] == "hidden" else 1
         bind.execute(
             sa.text(
-                "INSERT INTO bonuses (id, title, event_id, semester_id, given_at, is_public, created_by, created_at, updated_at) "
-                "VALUES (:id, :title, NULL, :semester_id, :given_at, :is_public, :created_by, :created_at, :updated_at)"
+                "INSERT INTO bonuses (id, title, semester_id, given_at, is_public, created_by, created_at, updated_at, "
+                "legacy_id, legacy_status, legacy_end_datetime) "
+                "VALUES (:id, :title, :semester_id, :given_at, :is_public, :created_by, :created_at, :updated_at, "
+                ":legacy_id, :legacy_status, :legacy_end_datetime)"
             ),
             {
                 "id": bonus_id,
                 "title": ev["name"],
+                "legacy_id": ev_id,
+                "legacy_status": ev["status"],
+                "legacy_end_datetime": ev["end_datetime"],
                 "semester_id": ev["semester_id"],
                 "given_at": ev["start_datetime"],
                 "is_public": is_public,
@@ -257,35 +290,31 @@ def _migrate_existing_data() -> None:
             {"bonus_id": bonus_id, "event_id": ev_id},
         )
 
-        ev_logs = (
+        fake_logs = (
             bind.execute(
                 sa.text(
                     "SELECT l.id AS log_id, l.action_id, a.action_name, a.ar_action_name, a.points AS action_points, "
-                    "       a.action_type, :ev_start AS event_start, :ev_created AS event_created_at "
-                    "FROM logs l LEFT JOIN actions a ON a.id = l.action_id "
+                    "       a.action_type, e.start_datetime AS event_start, e.created_at AS event_created_at "
+                    "FROM logs l JOIN events e ON e.id = l.event_id LEFT JOIN actions a ON a.id = l.action_id "
                     "WHERE l.event_id = :event_id ORDER BY l.id ASC"
                 ),
-                {"event_id": ev_id, "ev_start": ev["start_datetime"], "ev_created": ev["created_at"]},
+                {"event_id": ev_id},
             )
             .mappings()
             .all()
         )
 
-        for log in ev_logs:
-            log_id = int(log["log_id"])
+        for fake_log in fake_logs:
+            log_id = int(fake_log["log_id"])
             grant_ids = _migrate_log_to_grants(
                 bind,
                 bonus_id,
-                dict(log),
+                dict(fake_log),
                 mod_by_log.get(log_id, 0),
                 members_by_log.get(log_id, []),
                 depts_by_log.get(log_id, []),
             )
-            if log_id in penalty_by_log and grant_ids:
-                bind.execute(
-                    sa.text("UPDATE pipeline_penalties SET applied_bonus_grant_id = :grant_id WHERE id = :penalty_id"),
-                    {"grant_id": grant_ids[0], "penalty_id": penalty_by_log[log_id]},
-                )
+            _remap_log_references(bind, log_id, bonus_id, grant_ids)
 
     if fake_event_ids:
         bind.execute(
@@ -325,7 +354,7 @@ def _migrate_existing_data() -> None:
         for log in ev_logs:
             lid = int(log["log_id"])
             aid = int(log["action_id"]) if log["action_id"] is not None else -1
-            if lid in penalty_by_log:
+            if lid in penalty_log_ids:
                 continue
             if primary_dept_log_id is None and aid in COMPOSITE_DEPT_ACTION_IDS:
                 primary_dept_log_id = lid
@@ -335,7 +364,7 @@ def _migrate_existing_data() -> None:
         # Fallback for non-prod/seeded databases whose action IDs aren't the hardcoded prod IDs.
         for log in ev_logs:
             lid = int(log["log_id"])
-            if lid in penalty_by_log:
+            if lid in penalty_log_ids:
                 continue
             atype = log["action_type"]
             if primary_dept_log_id is None and atype in ("composite", "department") and depts_by_log.get(lid):
@@ -349,7 +378,7 @@ def _migrate_existing_data() -> None:
             aid = int(log["action_id"]) if log["action_id"] is not None else -1
             if lid == primary_dept_log_id or lid == primary_member_log_id:
                 continue
-            is_penalty = lid in penalty_by_log
+            is_penalty = lid in penalty_log_ids
             is_bonus_action = log["action_type"] == "bonus" and aid not in ATTENDABLE_ACTION_IDS
             is_extra_with_recipients = bool(members_by_log.get(lid) or depts_by_log.get(lid))
             if is_penalty or is_bonus_action or is_extra_with_recipients:
@@ -387,11 +416,7 @@ def _migrate_existing_data() -> None:
                 members_by_log.get(log_id, []),
                 depts_by_log.get(log_id, []),
             )
-            if log_id in penalty_by_log and grant_ids:
-                bind.execute(
-                    sa.text("UPDATE pipeline_penalties SET applied_bonus_grant_id = :grant_id WHERE id = :penalty_id"),
-                    {"grant_id": grant_ids[0], "penalty_id": penalty_by_log[log_id]},
-                )
+            _remap_log_references(bind, log_id, bonus_id, grant_ids)
             custom_log_ids_to_delete.append(log_id)
 
     if custom_log_ids_to_delete:
@@ -401,12 +426,62 @@ def _migrate_existing_data() -> None:
         )
 
 
+def _add_legacy_sequence(table: str) -> None:
+    # Only compatibility IDs use the sequence. UUIDs remain the primary keys.
+    op.create_index(f"uq_{table}_legacy_id", table, ["legacy_id"], unique=True)
+    op.execute(f"ALTER TABLE {table} MODIFY legacy_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT")
+    op.execute(f"ALTER TABLE {table} AUTO_INCREMENT = {LEGACY_ID_START}")
+
+
+def _check_fake_event_dependencies() -> None:
+    # A points-only event has no event workflow. Fail before MySQL's implicit
+    # DDL commit if deleting one would also delete an unrelated record.
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    quote = bind.dialect.identifier_preparer.quote
+    broken_penalty = bind.execute(
+        sa.text("""
+        SELECT p.id
+        FROM pipeline_penalties p
+        JOIN logs l ON l.id = p.applied_log_id
+        WHERE l.event_id IS NULL OR NOT EXISTS (
+            SELECT 1 FROM departments_logs dl WHERE dl.log_id = l.id AND dl.department_id = p.department_id
+        )
+        LIMIT 1
+    """)
+    ).scalar()
+    if broken_penalty is not None:
+        raise RuntimeError(f"Applied pipeline penalty {broken_penalty} has no matching event and department award")
+
+    for table in inspector.get_table_names():
+        if table in {"logs", "push_notifications"}:
+            continue
+        for fk in inspector.get_foreign_keys(table):
+            if fk["referred_table"] != "events":
+                continue
+            column = quote(fk["constrained_columns"][0])
+            event_id = bind.execute(
+                sa.text(
+                    f"SELECT e.id FROM {quote(table)} child JOIN events e ON child.{column} = e.id "
+                    "WHERE e.location_type IN ('none', 'hidden') LIMIT 1"
+                )
+            ).scalar()
+            if event_id is not None:
+                raise RuntimeError(f"Legacy bonus event {event_id} has dependent rows in {table}")
+
+
 def upgrade() -> None:
+    _check_fake_event_dependencies()
     # 1. Create bonuses, bonus_grants, and bonus_grant_recipients tables.
     op.create_table(
         "bonuses",
         sa.Column("id", UUID_CHAR, primary_key=True),
         sa.Column("title", UTF8_150, nullable=False),
+        sa.Column("legacy_id", mysql.BIGINT(unsigned=True), nullable=False),
+        sa.Column(
+            "legacy_status", sa.Enum("draft", "published", "cancelled"), nullable=False, server_default="published"
+        ),
+        sa.Column("legacy_end_datetime", sa.DateTime(), nullable=True),
         sa.Column("event_id", mysql.INTEGER(unsigned=True), nullable=True),
         sa.Column("semester_id", UUID_CHAR, nullable=False),
         sa.Column("given_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
@@ -423,6 +498,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["semester_id"], ["semesters.id"], name="fk_bonuses_semester", ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["created_by"], ["members.id"], name="fk_bonuses_created_by", ondelete="SET NULL"),
     )
+    _add_legacy_sequence("bonuses")
     op.create_index("ix_bonuses_semester_given", "bonuses", ["semester_id", "given_at"])
     op.create_index("fk_bonuses_event", "bonuses", ["event_id"])
     op.create_index("fk_bonuses_created_by", "bonuses", ["created_by"])
@@ -431,8 +507,9 @@ def upgrade() -> None:
         "bonus_grants",
         sa.Column("id", UUID_CHAR, primary_key=True),
         sa.Column("bonus_id", UUID_CHAR, nullable=False),
+        sa.Column("legacy_id", mysql.BIGINT(unsigned=True), nullable=False),
         sa.Column("recipient_type", sa.Enum("member", "department"), nullable=False),
-        sa.Column("points", sa.Integer(), nullable=False),
+        sa.Column("points", sa.BigInteger(), nullable=False),
         sa.Column("source_action_id", mysql.INTEGER(unsigned=True), nullable=True),
         sa.Column("label_en", UTF8_150, nullable=True),
         sa.Column("label_ar", UTF8_150, nullable=True),
@@ -442,6 +519,7 @@ def upgrade() -> None:
             ["source_action_id"], ["actions.id"], name="fk_bonus_grants_source_action", ondelete="SET NULL"
         ),
     )
+    _add_legacy_sequence("bonus_grants")
     op.create_index("fk_bonus_grants_bonus", "bonus_grants", ["bonus_id"])
     op.create_index("fk_bonus_grants_source_action", "bonus_grants", ["source_action_id"])
 
@@ -516,6 +594,116 @@ def upgrade() -> None:
     _create_open_events_view()
 
 
+def _restore_legacy_points() -> None:
+    """Translate the current ledger back to legacy events, logs, and modifications."""
+    bind = op.get_bind()
+    restored_events: dict[str, int] = {}
+    for row in bind.execute(sa.text("SELECT * FROM bonuses ORDER BY legacy_id")).mappings().all():
+        event_id = row["event_id"]
+        if event_id is None:
+            result = bind.execute(
+                sa.text("""
+                INSERT INTO events (id, name, location_type, location, start_datetime, end_datetime,
+                                    status, semester_id, created_by, created_at)
+                VALUES (:old_id, :title, :location_type, 'none', :given_at, :end_datetime,
+                        :legacy_status, :semester_id, :created_by, :created_at)
+            """),
+                {
+                    **row,
+                    "old_id": row["legacy_id"] if row["legacy_id"] < LEGACY_ID_START else None,
+                    "location_type": "none" if row["is_public"] else "hidden",
+                    "end_datetime": row["legacy_end_datetime"] or row["given_at"],
+                },
+            )
+            event_id = row["legacy_id"] if row["legacy_id"] < LEGACY_ID_START else result.lastrowid
+        restored_events[row["id"]] = event_id
+        bind.execute(
+            sa.text("""
+            UPDATE push_notifications SET event_id = :event_id WHERE bonus_id = :bonus_id
+        """),
+            {"event_id": event_id, "bonus_id": row["id"]},
+        )
+
+    actions: dict[tuple[str, str], int] = {}
+    for grant in bind.execute(sa.text("SELECT * FROM bonus_grants ORDER BY legacy_id")).mappings().all():
+        fallback = ("Discount", "خصم") if grant["points"] < 0 else ("Bonus", "مكافأة")
+        labels = ((grant["label_en"] or fallback[0])[:60], (grant["label_ar"] or fallback[1])[:100])
+        if labels not in actions:
+            params = {"en": labels[0], "ar": labels[1]}
+            action_id = bind.execute(
+                sa.text("""
+                SELECT id FROM actions WHERE action_name = :en AND ar_action_name = :ar
+                    AND action_type = 'bonus' AND points = 0 ORDER BY id LIMIT 1
+            """),
+                params,
+            ).scalar()
+            if action_id is None:
+                action_id = bind.execute(
+                    sa.text("""
+                    INSERT INTO actions (action_name, ar_action_name, action_type, points, is_hidden)
+                    VALUES (:en, :ar, 'bonus', 0, 1)
+                """),
+                    params,
+                ).lastrowid
+            actions[labels] = action_id
+
+        inserted = bind.execute(
+            sa.text("""
+            INSERT INTO logs (id, event_id, action_id) VALUES (:old_id, :event_id, :action_id)
+        """),
+            {
+                "old_id": grant["legacy_id"] if grant["legacy_id"] < LEGACY_ID_START else None,
+                "event_id": restored_events[grant["bonus_id"]],
+                "action_id": actions[labels],
+            },
+        )
+        log_id = grant["legacy_id"] if grant["legacy_id"] < LEGACY_ID_START else inserted.lastrowid
+
+        remaining = abs(grant["points"])
+        while remaining:
+            chunk = min(remaining, LEGACY_ID_START - 1)
+            bind.execute(
+                sa.text("""
+                INSERT INTO modifications (log_id, type, value) VALUES (:id, :type, :value)
+            """),
+                {"id": log_id, "type": "discount" if grant["points"] < 0 else "bonus", "value": chunk},
+            )
+            remaining -= chunk
+        params = {"log_id": log_id, "grant_id": grant["id"]}
+        bind.execute(
+            sa.text("""
+            INSERT INTO members_logs (log_id, member_id, date)
+            SELECT :log_id, member_id, given_at FROM bonus_grant_recipients
+            WHERE bonus_grant_id = :grant_id AND member_id IS NOT NULL
+        """),
+            params,
+        )
+        bind.execute(
+            sa.text("""
+            INSERT INTO departments_logs (log_id, department_id)
+            SELECT :log_id, department_id FROM bonus_grant_recipients
+            WHERE bonus_grant_id = :grant_id AND department_id IS NOT NULL
+        """),
+            params,
+        )
+        bind.execute(
+            sa.text("""
+            UPDATE pipeline_penalties SET applied_log_id = :log_id WHERE applied_bonus_grant_id = :grant_id
+        """),
+            params,
+        )
+        bind.execute(
+            sa.text("""
+            UPDATE push_notifications
+            SET dedupe_key = CONCAT('points:custom:', :log_id, ':', member_id),
+                payload = JSON_SET(payload, '$.cause', JSON_OBJECT('type', 'custom', 'log_id', :log_id))
+            WHERE kind = 'points'
+                AND dedupe_key = CONCAT('points:bonus:', :grant_id, ':', member_id)
+        """),
+            params,
+        )
+
+
 def downgrade() -> None:
     op.execute("DROP VIEW IF EXISTS open_events")
     op.alter_column(
@@ -531,6 +719,8 @@ def downgrade() -> None:
     op.create_foreign_key(
         "fk_pipeline_penalties_log", "pipeline_penalties", "logs", ["applied_log_id"], ["id"], ondelete="SET NULL"
     )
+
+    _restore_legacy_points()
 
     op.drop_constraint("fk_push_notifications_bonus", "push_notifications", type_="foreignkey")
     op.drop_index("fk_push_notifications_bonus", table_name="push_notifications")

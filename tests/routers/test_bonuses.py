@@ -12,6 +12,7 @@ from app.DB.schema import (
     EventsLocationType,
     EventsStatus,
     Logs,
+    Semesters,
     MembersLogs,
 )
 from tests.factories import make_create_event_payload
@@ -184,6 +185,27 @@ def test_bonus_grant_snapshots_template_action_points(admin_points_client, clien
     hist = client.get(f"/points/members/{seed_refs.ahmed.id}", params={"semester": 475}).json()
     assert hist["member"]["total_points"] == 8
 
+    assert_2xx(
+        admin_points_client.put(
+            f"/bonuses/{bonus['id']}",
+            json={
+                "grants": [
+                    {
+                        "id": bonus["grants"][0]["id"],
+                        "recipient_type": "member",
+                        "source_action_id": template.id,
+                        "points": 8,
+                        "member_ids": [seed_refs.ahmed.id, seed_refs.sara.id],
+                    }
+                ]
+            },
+        )
+    )
+    assert (
+        client.get(f"/points/members/{seed_refs.sara.id}", params={"semester": 475}).json()["member"]["total_points"]
+        == 8
+    )
+
 
 def test_event_attached_bonuses_upsert_and_visibility(admin_points_client, client, db_session, seed_refs):
     event = admin_points_client.post("/events", json=make_create_event_payload(seed_refs=seed_refs)).json()
@@ -222,6 +244,17 @@ def test_event_attached_bonuses_upsert_and_visibility(admin_points_client, clien
     hist = client.get(f"/points/members/{seed_refs.ahmed.id}", params={"semester": 475}).json()
     assert hist["member"]["total_points"] == 6
     assert any(item["kind"] == "bonus" and item["event_id"] == event["id"] for item in hist["history"])
+
+    # Explicitly filing the event in a different semester moves the attached grant too.
+    target = db_session.scalar(select(Semesters).where(Semesters.is_public == 1, Semesters.hijri_code != 475))
+    assert target is not None
+    event_row = db_session.get(Events, event["id"])
+    assert event_row is not None
+    event_row.semester_id = target.id
+    db_session.commit()
+    path = f"/points/members/{seed_refs.ahmed.id}"
+    assert client.get(path, params={"semester": 475}).json()["member"]["total_points"] == 0
+    assert client.get(path, params={"semester": target.hijri_code}).json()["member"]["total_points"] == 6
 
     # Clearing grants removes the bonus container cleanly.
     cleared = admin_points_client.put(f"/bonuses/by-event/{event['id']}", json={"grants": []}).json()
@@ -264,4 +297,32 @@ def test_events_me_includes_public_standalone_bonuses(admin_points_client, clerk
     body = res.json()
     assert [b["title"] for b in body["bonuses"]] == ["Public Hackathon"]
     assert body["bonuses"][0]["points"] == 10
-    assert body["participated"] == []
+    assert [p["name"] for p in body["participated"]] == ["Public Hackathon"]
+    legacy = body["participated"][0]
+    assert legacy["location_type"] == "none"
+    assert legacy["id"] > 0
+    history = clerk_client.get(f"/points/members/{me_id}", params={"semester": 475}).json()
+    assert [row["event_id"] for row in history["events"]] == [legacy["id"]]
+
+
+def test_legacy_ios_award_can_be_read_by_numeric_id(admin_points_client, seed_refs):
+    created = admin_points_client.post(
+        "/custom/members",
+        json={
+            "event_name": "Volunteer hours",
+            "start_datetime": "2026-07-07T10:00:00",
+            "end_datetime": "2026-07-08T10:00:00",
+            "location_type": "none",
+            "point_deatils": [{"points": 8, "member_ids": [seed_refs.ahmed.id]}],
+        },
+    )
+    assert_2xx(created)
+    event_id = created.json()["event_id"]
+    assert isinstance(event_id, int) and event_id > 0
+    read = admin_points_client.get(f"/custom/members/{event_id}")
+    assert_2xx(read)
+    assert read.json()["end_datetime"] == "2026-07-08T10:00:00"
+    [row] = read.json()["point_details"]
+    assert isinstance(row["log_id"], int)
+    assert row["points"] == 8
+    assert row["member_ids"] == [seed_refs.ahmed.id]

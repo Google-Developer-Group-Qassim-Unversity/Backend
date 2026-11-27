@@ -106,6 +106,31 @@ class Semesters_model(BaseClassModel):
 # ============ helpers ============
 
 
+def _legacy_event_rows(rows: list[dict], *, group_member_events: bool = False) -> list[Event_model]:
+    grouped: dict[tuple, Event_model] = {}
+    for row in rows:
+        legacy = _to_legacy_event_row(row)
+        # The old member history grouped every action on one event into
+        # one row. Department history grouped by event and action.
+        key = (legacy.event_id,) if group_member_events else (legacy.event_id, legacy.action_name)
+        first = grouped.get(key)
+        if first is None:
+            grouped[key] = legacy
+        else:
+            first.points += legacy.points
+            first.bonus_row = first.bonus_row and legacy.bonus_row
+            for field in ("action_name", "ar_action_name"):
+                labels = dict.fromkeys(
+                    label
+                    for value in (getattr(first, field), getattr(legacy, field))
+                    if value
+                    for label in value.split(", ")
+                )
+                if labels:
+                    setattr(first, field, ", ".join(labels))
+    return list(grouped.values())
+
+
 def _to_legacy_event_row(row: dict) -> Event_model:
     is_bonus = row["kind"] == "bonus"
     points = int(row["points"] or 0)
@@ -113,7 +138,7 @@ def _to_legacy_event_row(row: dict) -> Event_model:
     default_ar = "خصم" if points < 0 else "مكافأة"
     return Event_model(
         event_name=row["title"],
-        event_id=int(row["event_id"]) if row["event_id"] is not None else 0,
+        event_id=int(row["legacy_event_id"]),
         start_datetime=row["occurred_at"],
         end_datetime=row["end_datetime"] or row["occurred_at"],
         points=points,
@@ -172,7 +197,7 @@ def get_member_points(
     return Member_event_history_model(
         member=Member_points_model.model_validate(member_points),
         history=[PointsHistoryItem_model.model_validate(row) for row in rows],
-        events=[_to_legacy_event_row(row) for row in rows],
+        events=_legacy_event_rows(rows, group_member_events=True),
     )
 
 
@@ -212,5 +237,5 @@ def get_department_points(
     return Department_points_history_model(
         department=Department_points_model.model_validate(department_points),
         history=[PointsHistoryItem_model.model_validate(row) for row in rows],
-        events=[_to_legacy_event_row(row) for row in rows],
+        events=_legacy_event_rows(rows),
     )

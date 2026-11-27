@@ -6,6 +6,7 @@ Standalone bonuses (``event_id = None``) and event-attached bonuses
 """
 
 import logging
+from collections import defaultdict
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -92,7 +93,7 @@ class UpdateBonusRequest(BaseClassModel):
 class UpsertEventBonusRequest(BaseClassModel):
     """Sync all bonus grants attached to a real event in one atomic call."""
 
-    grants: list[BonusGrantInput] = Field(default_factory=list)
+    grants: list[BonusGrantInput]
 
 
 class BonusGrantResponse(BaseClassModel):
@@ -197,12 +198,25 @@ def _sync_grants(session: Session, bonus: Bonuses, grant_inputs: list[BonusGrant
 
     for item in grant_inputs:
         _validate_recipients_exist(session, item)
-        points, source_action_id, label_en, label_ar = _resolve_grant_fields(session, item)
+        existing = existing_by_id.get(item.id) if item.id is not None else None
+        if item.id is not None and (existing is None or item.id in kept_ids):
+            raise HTTPException(status_code=422, detail="Invalid or duplicate grant ID")
+        if (
+            existing is not None
+            and item.source_action_id == existing.source_action_id
+            and item.source_action_id is not None
+        ):
+            points = existing.points
+            source_action_id = existing.source_action_id
+            label_en = item.label_en if item.label_en is not None else existing.label_en
+            label_ar = item.label_ar if item.label_ar is not None else existing.label_ar
+        else:
+            points, source_action_id, label_en, label_ar = _resolve_grant_fields(session, item)
         recipient_type = BonusRecipientType(item.recipient_type)
         recipient_ids = item.member_ids if recipient_type == BonusRecipientType.MEMBER else item.department_ids
 
-        if item.id and item.id in existing_by_id:
-            grant = existing_by_id[item.id]
+        if existing is not None:
+            grant = existing
             grant.recipient_type = recipient_type
             grant.points = points
             grant.source_action_id = source_action_id
@@ -222,9 +236,9 @@ def _sync_grants(session: Session, bonus: Bonuses, grant_inputs: list[BonusGrant
             )
             kept_ids.add(grant.id)
 
-        bonuses_queries.set_grant_recipients(session, grant, recipient_ids)
-        if recipient_type == BonusRecipientType.MEMBER:
-            if push_triggers.bonus_points_given(session, bonus, grant, recipient_ids) > 0:
+        added = bonuses_queries.set_grant_recipients(session, grant, recipient_ids)
+        if recipient_type == BonusRecipientType.MEMBER and added:
+            if push_triggers.bonus_points_given(session, bonus, grant, added) > 0:
                 pushed = True
 
     for gid, grant in existing_by_id.items():
@@ -265,7 +279,7 @@ def list_bonuses(
 def create_bonus(body: CreateBonusRequest, session: DB, member: CurrentMember, background_tasks: BackgroundTasks):
     event = None
     if body.event_id is not None:
-        event = events_queries.get_event_by_id(session, body.event_id)
+        event = events_queries.get_event_by_id(session, body.event_id, for_update=True)
         semester_id = event.semester_id
         title = event.name
         given_at = event.start_datetime
@@ -314,60 +328,44 @@ def get_event_bonuses(event_id: int, session: DB):
 def upsert_event_bonuses(
     event_id: int, body: UpsertEventBonusRequest, session: DB, member: CurrentMember, background_tasks: BackgroundTasks
 ):
-    event = events_queries.get_event_by_id(session, event_id)
-    existing_bonuses = bonuses_queries.get_bonuses_by_event_id(session, event_id)
+    event = events_queries.get_event_by_id(session, event_id, for_update=True)
+    containers = bonuses_queries.get_bonuses_by_event_id(session, event_id)
+    if body.grants and not containers:
+        containers = [
+            bonuses_queries.create_bonus(
+                session,
+                title=event.name,
+                semester_id=event.semester_id,
+                given_at=event.start_datetime,
+                is_public=True,
+                event_id=event.id,
+                created_by=member.id,
+            )
+        ]
 
-    if not body.grants:
-        for b in existing_bonuses:
-            session.delete(b)
-        session.commit()
-        refresh_attendance_points_cache()
-        return EventBonusResponse(
-            event_id=event.id,
-            event_name=event.name,
-            start_datetime=event.start_datetime,
-            end_datetime=event.end_datetime,
-            bonus_id=None,
-            grants=[],
-        )
+    # Keep each grant in its original container. Moving grants and deleting
+    # their containers would cascade-delete push history.
+    container_by_grant = {grant.id: bonus.id for bonus in containers for grant in bonus.grants}
+    inputs_by_container: dict[str, list[BonusGrantInput]] = defaultdict(list)
+    for item in body.grants:
+        if item.id is not None and item.id not in container_by_grant:
+            raise HTTPException(status_code=422, detail="Invalid grant ID for this event")
+        container_id = container_by_grant[item.id] if item.id is not None else containers[0].id
+        inputs_by_container[container_id].append(item)
 
-    if existing_bonuses:
-        bonus = existing_bonuses[0]
-        # Fold any extra bonus containers on this event into the primary one so
-        # all event-attached grants live under a single parent cleanly.
-        for extra in existing_bonuses[1:]:
-            for grant in list(extra.grants):
-                grant.bonus_id = bonus.id
-            session.flush()
-            session.delete(extra)
-        session.flush()
-    else:
-        bonus = bonuses_queries.create_bonus(
-            session,
-            title=event.name,
-            semester_id=event.semester_id,
-            given_at=event.start_datetime,
-            is_public=True,
-            event_id=event.id,
-            created_by=member.id,
-        )
-
-    pushed = _sync_grants(session, bonus, body.grants)
+    pushed = False
+    for bonus in containers:
+        inputs = inputs_by_container[bonus.id]
+        if inputs:
+            pushed = _sync_grants(session, bonus, inputs) or pushed
+        else:
+            session.delete(bonus)
     session.commit()
     refresh_attendance_points_cache()
     if pushed:
         background_tasks.add_task(push_delivery.kick)
 
-    reloaded = bonuses_queries.get_bonus_by_id(session, bonus.id)
-    assert reloaded is not None
-    return EventBonusResponse(
-        event_id=event.id,
-        event_name=event.name,
-        start_datetime=event.start_datetime,
-        end_datetime=event.end_datetime,
-        bonus_id=reloaded.id,
-        grants=[BonusGrantResponse.model_validate(bonuses_queries.serialize_grant(g)) for g in reloaded.grants],
-    )
+    return get_event_bonuses(event_id, session)
 
 
 @router.get("/{bonus_id}", status_code=status.HTTP_200_OK, response_model=BonusDetailResponse)
@@ -388,10 +386,12 @@ def update_bonus(bonus_id: str, body: UpdateBonusRequest, session: DB, backgroun
         bonus.title = body.title.strip()
     if body.is_public is not None and bonus.event_id is None:
         bonus.is_public = 1 if body.is_public else 0
-    if body.given_at is not None and bonus.event_id is None:
+    if body.given_at is not None and bonus.event_id is None and body.given_at != bonus.given_at:
+        if body.given_at.date() != bonus.given_at.date():
+            bonus.legacy_end_datetime = None
+            if body.semester_id is None:
+                bonus.semester_id = semester_for_event(session, body.given_at).id
         bonus.given_at = body.given_at
-        if body.semester_id is None:
-            bonus.semester_id = semester_for_event(session, body.given_at).id
     if body.semester_id is not None and bonus.event_id is None:
         bonus.semester_id = semester_for_event(session, bonus.given_at, body.semester_id).id
     session.flush()

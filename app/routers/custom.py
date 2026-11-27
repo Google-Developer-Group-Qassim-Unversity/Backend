@@ -69,7 +69,7 @@ class CustomMemberPointsRequest(BaseClassModel):
 
 
 class DepartmentPointDetailsWithLogId(BaseClassModel):
-    log_id: str
+    log_id: int
     departments_id: list[int]
     points: int
     action_id: int | None = None
@@ -77,7 +77,7 @@ class DepartmentPointDetailsWithLogId(BaseClassModel):
 
 
 class MemberPointDetailsWithLogId(BaseClassModel):
-    log_id: str
+    log_id: int
     member_ids: list[int]
     points: int
     action_id: int | None = None
@@ -115,10 +115,20 @@ def _resolve_legacy_grant(
 
 
 def _get_or_create_target_bonus(
-    session: DB, *, event_id: int | None, event_name: str, start_datetime: datetime, location_type: str, actor_id: int
+    session: DB,
+    *,
+    event_id: int | None,
+    event_name: str,
+    start_datetime: datetime,
+    end_datetime: datetime,
+    location_type: str,
+    actor_id: int,
 ):
     if event_id:
-        event = events_queries.get_event_by_id(session, event_id)
+        legacy = bonuses_queries.get_standalone_bonus_by_legacy_id(session, event_id)
+        if legacy is not None:
+            return legacy, legacy.legacy_id
+        event = events_queries.get_event_by_id(session, event_id, for_update=True)
         bonus = bonuses_queries.get_bonus_by_event_id(session, event.id)
         if bonus is None:
             bonus = bonuses_queries.create_bonus(
@@ -132,7 +142,7 @@ def _get_or_create_target_bonus(
             )
         return bonus, event.id
 
-    semester = semester_for_event(session, start_datetime)
+    semester = semester_for_event(session, end_datetime)
     bonus = bonuses_queries.create_bonus(
         session,
         title=event_name.strip(),
@@ -141,8 +151,23 @@ def _get_or_create_target_bonus(
         is_public=location_type != "hidden",
         event_id=None,
         created_by=actor_id,
+        legacy_end_datetime=end_datetime,
     )
-    return bonus, 0
+    return bonus, bonus.legacy_id
+
+
+def _legacy_event_details(session: DB, event_id: int):
+    standalone = bonuses_queries.get_standalone_bonus_by_legacy_id(session, event_id)
+    if standalone is not None:
+        return (
+            standalone.title,
+            standalone.given_at,
+            standalone.legacy_end_datetime or standalone.given_at,
+            standalone.grants,
+        )
+    event = events_queries.get_event_by_id(session, event_id)
+    bonuses = bonuses_queries.get_bonuses_by_event_id(session, event_id)
+    return event.name, event.start_datetime, event.end_datetime, bonuses_queries.collect_grants(bonuses)
 
 
 @router.post("/departments", status_code=status.HTTP_201_CREATED, response_model=CustomPointsCreatedResponse)
@@ -152,6 +177,7 @@ def give_department_custom_points(body: CustomDepartmentPointsRequest, session: 
         event_id=body.event_id,
         event_name=body.event_name,
         start_datetime=body.start_datetime,
+        end_datetime=body.end_datetime,
         location_type=body.location_type,
         actor_id=member.id,
     )
@@ -186,17 +212,16 @@ def give_department_custom_points(body: CustomDepartmentPointsRequest, session: 
 
 @router.get("/departments/{event_id:int}", response_model=CustomDepartmentPointsResponse)
 def get_department_custom_points(event_id: int, session: DB):
-    event = events_queries.get_event_by_id(session, event_id)
-    bonuses = bonuses_queries.get_bonuses_by_event_id(session, event_id)
-    grants = [g for g in bonuses_queries.collect_grants(bonuses) if g.recipient_type == BonusRecipientType.DEPARTMENT]
+    name, start, end, all_grants = _legacy_event_details(session, event_id)
+    grants = [g for g in all_grants if g.recipient_type == BonusRecipientType.DEPARTMENT]
     return CustomDepartmentPointsResponse(
-        event_id=event.id,
-        start_datetime=event.start_datetime,
-        end_datetime=event.end_datetime,
-        event_name=event.name,
+        event_id=event_id,
+        start_datetime=start,
+        end_datetime=end,
+        event_name=name,
         point_details=[
             DepartmentPointDetailsWithLogId(
-                log_id=g.id,
+                log_id=g.legacy_id,
                 departments_id=sorted(r.department_id for r in g.recipients if r.department_id is not None),
                 points=g.points,
                 action_id=g.source_action_id,
@@ -218,7 +243,8 @@ def update_department_custom_points(log_id: str, body: DepartmentPointDetails, s
     points, source_action_id, label_en, label_ar = _resolve_legacy_grant(
         session, body.action_id, body.action_name, body.points
     )
-    grant.points = points
+    if source_action_id is None or source_action_id != grant.source_action_id:
+        grant.points = points
     grant.source_action_id = source_action_id
     grant.label_en = label_en
     grant.label_ar = label_ar
@@ -233,7 +259,7 @@ def delete_department_custom_points(log_id: str, session: DB):
     grant = bonuses_queries.get_bonus_grant_by_id(session, log_id)
     if grant is None or grant.recipient_type != BonusRecipientType.DEPARTMENT:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
-    bonuses_queries.delete_bonus_grant(session, log_id)
+    bonuses_queries.delete_bonus_grant(session, grant.id)
     session.commit()
     refresh_attendance_points_cache()
     return {"message": "Successfully deleted custom department points"}
@@ -248,6 +274,7 @@ def give_member_custom_points(
         event_id=body.event_id,
         event_name=body.event_name,
         start_datetime=body.start_datetime,
+        end_datetime=body.end_datetime,
         location_type=body.location_type,
         actor_id=member.id,
     )
@@ -284,17 +311,16 @@ def give_member_custom_points(
 
 @router.get("/members/{event_id:int}", response_model=CustomMemberPointsResponse)
 def get_member_custom_points(event_id: int, session: DB):
-    event = events_queries.get_event_by_id(session, event_id)
-    bonuses = bonuses_queries.get_bonuses_by_event_id(session, event_id)
-    grants = [g for g in bonuses_queries.collect_grants(bonuses) if g.recipient_type == BonusRecipientType.MEMBER]
+    name, start, end, all_grants = _legacy_event_details(session, event_id)
+    grants = [g for g in all_grants if g.recipient_type == BonusRecipientType.MEMBER]
     return CustomMemberPointsResponse(
-        event_id=event.id,
-        start_datetime=event.start_datetime,
-        end_datetime=event.end_datetime,
-        event_name=event.name,
+        event_id=event_id,
+        start_datetime=start,
+        end_datetime=end,
+        event_name=name,
         point_details=[
             MemberPointDetailsWithLogId(
-                log_id=g.id,
+                log_id=g.legacy_id,
                 member_ids=sorted(r.member_id for r in g.recipients if r.member_id is not None),
                 points=g.points,
                 action_id=g.source_action_id,
@@ -315,7 +341,8 @@ def update_member_custom_points(log_id: str, body: MemberPointDetails, session: 
     points, source_action_id, label_en, label_ar = _resolve_legacy_grant(
         session, body.action_id, body.action_name, body.points
     )
-    grant.points = points
+    if source_action_id is None or source_action_id != grant.source_action_id:
+        grant.points = points
     grant.source_action_id = source_action_id
     grant.label_en = label_en
     grant.label_ar = label_ar
@@ -338,7 +365,7 @@ def delete_member_custom_points(log_id: str, session: DB):
     grant = bonuses_queries.get_bonus_grant_by_id(session, log_id)
     if grant is None or grant.recipient_type != BonusRecipientType.MEMBER:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
-    bonuses_queries.delete_bonus_grant(session, log_id)
+    bonuses_queries.delete_bonus_grant(session, grant.id)
     session.commit()
     refresh_attendance_points_cache()
     return {"message": "Successfully deleted custom member points"}

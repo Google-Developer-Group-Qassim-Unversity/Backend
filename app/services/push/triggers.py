@@ -415,8 +415,15 @@ def cause_gone(session: Session, row: PushNotifications) -> str | None:
         if cause.get("type") == "bonus":
             grant_id = cause.get("grant_id")
             recipient_id = session.scalar(
-                select(BonusGrantRecipients.id).where(
-                    BonusGrantRecipients.member_id == row.member_id, BonusGrantRecipients.bonus_grant_id == grant_id
+                select(BonusGrantRecipients.id)
+                .join(BonusGrants, BonusGrants.id == BonusGrantRecipients.bonus_grant_id)
+                .join(Bonuses, Bonuses.id == BonusGrants.bonus_id)
+                .outerjoin(Events, Events.id == Bonuses.event_id)
+                .where(
+                    BonusGrantRecipients.member_id == row.member_id,
+                    BonusGrantRecipients.bonus_grant_id == grant_id,
+                    BonusGrants.points > 0,
+                    func.coalesce(Events.status, Bonuses.legacy_status) == EventsStatus.PUBLISHED,
                 )
             )
             return None if recipient_id is not None else "points_removed"

@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKeyConstraint,
+    FetchedValue,
     Index,
     Integer,
     JSON,
@@ -22,7 +23,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.mysql import CHAR, DATETIME, INTEGER, LONGTEXT, SMALLINT, TEXT, TINYINT, VARCHAR
+from sqlalchemy.dialects.mysql import BIGINT, CHAR, DATETIME, INTEGER, LONGTEXT, SMALLINT, TEXT, TINYINT, VARCHAR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from app.DB.ids import new_id
@@ -806,12 +807,20 @@ class Bonuses(Base):
         ForeignKeyConstraint(["event_id"], ["events.id"], name="fk_bonuses_event", ondelete="CASCADE"),
         ForeignKeyConstraint(["semester_id"], ["semesters.id"], name="fk_bonuses_semester", ondelete="RESTRICT"),
         ForeignKeyConstraint(["created_by"], ["members.id"], name="fk_bonuses_created_by", ondelete="SET NULL"),
+        Index("uq_bonuses_legacy_id", "legacy_id", unique=True),
         Index("ix_bonuses_semester_given", "semester_id", "given_at"),
         Index("fk_bonuses_event", "event_id"),
         Index("fk_bonuses_created_by", "created_by"),
     )
 
     id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    legacy_id: Mapped[int] = mapped_column(BIGINT(unsigned=True), nullable=False, server_default=FetchedValue())
+    legacy_status: Mapped[EventsStatus] = mapped_column(
+        Enum(EventsStatus, values_callable=lambda cls: [member.value for member in cls]),
+        nullable=False,
+        server_default="published",
+    )
+    legacy_end_datetime: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     title: Mapped[str] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"), nullable=False)
     event_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     semester_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
@@ -854,16 +863,18 @@ class BonusGrants(Base):
         ForeignKeyConstraint(
             ["source_action_id"], ["actions.id"], name="fk_bonus_grants_source_action", ondelete="SET NULL"
         ),
+        Index("uq_bonus_grants_legacy_id", "legacy_id", unique=True),
         Index("fk_bonus_grants_bonus", "bonus_id"),
         Index("fk_bonus_grants_source_action", "source_action_id"),
     )
 
     id: Mapped[str] = mapped_column(UUID_CHAR, primary_key=True, default=new_id)
+    legacy_id: Mapped[int] = mapped_column(BIGINT(unsigned=True), nullable=False, server_default=FetchedValue())
     bonus_id: Mapped[str] = mapped_column(UUID_CHAR, nullable=False)
     recipient_type: Mapped[BonusRecipientType] = mapped_column(
         Enum(BonusRecipientType, values_callable=lambda cls: [member.value for member in cls]), nullable=False
     )
-    points: Mapped[int] = mapped_column(Integer, nullable=False)
+    points: Mapped[int] = mapped_column(BIGINT, nullable=False)
     source_action_id: Mapped[Optional[int]] = mapped_column(INTEGER(unsigned=True))
     label_en: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))
     label_ar: Mapped[Optional[str]] = mapped_column(VARCHAR(150, charset="utf8mb4", collation="utf8mb4_0900_ai_ci"))

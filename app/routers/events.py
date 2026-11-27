@@ -26,6 +26,7 @@ from app.routers.models import (
     Member_model,
     MemberBonus_model,
     MemberEvents_model,
+    LegacyParticipation_model,
     EventWithAttendance_model,
     EventDetailsModel,
     EventContentLink_model,
@@ -214,7 +215,7 @@ def get_my_events(member: CurrentMember, session: DB):
     attended_raw, participated_raw, bonuses_raw = events_queries.get_member_events(session, member.id)
     return MemberEvents_model(
         attended=[EventWithAttendance_model(**e) for e in attended_raw],
-        participated=[Events_model(**e) for e in participated_raw],
+        participated=[LegacyParticipation_model(**e) for e in participated_raw],
         bonuses=[MemberBonus_model(**b) for b in bonuses_raw],
     )
 
@@ -467,7 +468,7 @@ def update_event(
         calendar_request = pipeline_calendar.mark_event(session, event_id)
         session.commit()
         pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
-        if event_data.attendance_points is not None:
+        if event_data.attendance_points is not None or "semester_id" in changed:
             refresh_attendance_points_cache()
         if pushed:
             background_tasks.add_task(push_delivery.kick)

@@ -31,8 +31,8 @@ _MEMBERS_POINTS_BASE_QUERY = """
             JOIN bonuses b ON b.id = bg.bonus_id
             LEFT JOIN events e ON e.id = b.event_id
             WHERE bgr.member_id IS NOT NULL
-              AND b.semester_id = :semester_id
-              AND (b.event_id IS NULL OR e.status = 'published')
+              AND COALESCE(e.semester_id, b.semester_id) = :semester_id
+              AND COALESCE(e.status, b.legacy_status) = 'published'
             GROUP BY bgr.member_id
         )
         SELECT
@@ -90,6 +90,7 @@ def get_member_points_history_semester(session: Session, semester_id: str, membe
                 e.start_datetime AS occurred_at,
                 e.end_datetime AS end_datetime,
                 e.id AS event_id,
+                e.id AS legacy_event_id,
                 CAST(NULL AS CHAR(36)) COLLATE utf8mb4_0900_ai_ci AS bonus_id,
                 CAST(e.location_type AS CHAR(16)) COLLATE utf8mb4_0900_ai_ci AS location_type
             FROM members m
@@ -113,8 +114,9 @@ def get_member_points_history_semester(session: Session, semester_id: str, membe
                 bg.label_ar AS label_ar,
                 bg.points AS points,
                 COALESCE(e.start_datetime, b.given_at) AS occurred_at,
-                e.end_datetime AS end_datetime,
+                COALESCE(e.end_datetime, b.legacy_end_datetime) AS end_datetime,
                 b.event_id AS event_id,
+                COALESCE(b.event_id, b.legacy_id) AS legacy_event_id,
                 CONVERT(b.id USING utf8mb4) COLLATE utf8mb4_0900_ai_ci AS bonus_id,
                 CAST(e.location_type AS CHAR(16)) COLLATE utf8mb4_0900_ai_ci AS location_type
             FROM members m
@@ -124,9 +126,9 @@ def get_member_points_history_semester(session: Session, semester_id: str, membe
             LEFT JOIN events e ON e.id = b.event_id
             WHERE m.id = :member_id
                 AND m.deleted_at IS NULL
-                AND b.semester_id = :semester_id
+                AND COALESCE(e.semester_id, b.semester_id) = :semester_id
                 AND b.is_public = 1
-                AND (b.event_id IS NULL OR e.status = 'published')
+                AND COALESCE(e.status, b.legacy_status) = 'published'
         )
         SELECT *
         FROM (
@@ -168,8 +170,8 @@ _DEPARTMENTS_POINTS_BASE_QUERY = """
             JOIN bonuses b ON b.id = bg.bonus_id
             LEFT JOIN events e ON e.id = b.event_id
             WHERE bgr.department_id IS NOT NULL
-              AND b.semester_id = :semester_id
-              AND (b.event_id IS NULL OR e.status = 'published')
+              AND COALESCE(e.semester_id, b.semester_id) = :semester_id
+              AND COALESCE(e.status, b.legacy_status) = 'published'
             GROUP BY bgr.department_id
         )
         SELECT
@@ -242,6 +244,7 @@ def get_department_points_history_semester(session: Session, semester_id: str, d
                 e.start_datetime AS occurred_at,
                 e.end_datetime AS end_datetime,
                 e.id AS event_id,
+                e.id AS legacy_event_id,
                 CAST(NULL AS CHAR(36)) COLLATE utf8mb4_0900_ai_ci AS bonus_id,
                 CAST(e.location_type AS CHAR(16)) COLLATE utf8mb4_0900_ai_ci AS location_type
             FROM departments_logs dl
@@ -263,8 +266,9 @@ def get_department_points_history_semester(session: Session, semester_id: str, d
                 bg.label_ar AS label_ar,
                 bg.points AS points,
                 COALESCE(e.start_datetime, b.given_at) AS occurred_at,
-                e.end_datetime AS end_datetime,
+                COALESCE(e.end_datetime, b.legacy_end_datetime) AS end_datetime,
                 b.event_id AS event_id,
+                COALESCE(b.event_id, b.legacy_id) AS legacy_event_id,
                 CONVERT(b.id USING utf8mb4) COLLATE utf8mb4_0900_ai_ci AS bonus_id,
                 CAST(e.location_type AS CHAR(16)) COLLATE utf8mb4_0900_ai_ci AS location_type
             FROM bonus_grant_recipients bgr
@@ -272,9 +276,9 @@ def get_department_points_history_semester(session: Session, semester_id: str, d
             JOIN bonuses b ON b.id = bg.bonus_id
             LEFT JOIN events e ON e.id = b.event_id
             WHERE bgr.department_id = :department_id
-                AND b.semester_id = :semester_id
+                AND COALESCE(e.semester_id, b.semester_id) = :semester_id
                 AND b.is_public = 1
-                AND (b.event_id IS NULL OR e.status = 'published')
+                AND COALESCE(e.status, b.legacy_status) = 'published'
         )
         SELECT *
         FROM (

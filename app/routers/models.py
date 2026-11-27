@@ -34,11 +34,10 @@ EffectiveRegistrationStatus = Literal["none", "not_open", "open", "closed"]
 MeetingUrlVisibility = Literal["public", "accepted", "hidden"]
 
 
-class Events_model(BaseClassModel):
+class EventFields_model(BaseClassModel):
     id: int | None = None
     name: str
     description: str | None = None
-    location_type: EventsLocationType
     location: str
     start_datetime: datetime
     end_datetime: datetime
@@ -58,6 +57,10 @@ class Events_model(BaseClassModel):
     published_at: datetime | None = None
     cancelled_at: datetime | None = None
     phase: EventPhase | None = None
+
+
+class Events_model(EventFields_model):
+    location_type: EventsLocationType
 
 
 class EventsWithContentLinks_model(Events_model):
@@ -762,9 +765,13 @@ class MemberBonus_model(BaseClassModel):
     label_ar: str | None = None
 
 
+class LegacyParticipation_model(EventFields_model):
+    location_type: Literal["none"]
+
+
 class MemberEvents_model(BaseClassModel):
     attended: list[EventWithAttendance_model]
-    participated: list[Events_model]
+    participated: list[LegacyParticipation_model]
     bonuses: list[MemberBonus_model] = []
 
 

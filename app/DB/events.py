@@ -4,13 +4,14 @@ from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlsplit
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, func, or_, select, update
 
 from app.exceptions import EventNotFound
 from .schema import (
     EventsLevel,
     Events,
     EventsContentLinkKind,
+    Bonuses,
     EventsLocationType,
     EventsMeetingUrlVisibility,
     EventsStatus,
@@ -305,11 +306,13 @@ def get_event_department_ids(session: Session, event_id: int) -> set[int]:
     )
 
 
-def get_event_by_id(session: Session, event_id: int):
+def get_event_by_id(session: Session, event_id: int, *, for_update: bool = False):
     """The plain event row, for the ~15 internal callers that only read its
     fields - no content-link query. Serializing payloads attach them at the
     route layer (see attach_published_content_links_of_event)."""
     statement = select(Events).where(Events.id == event_id)
+    if for_update:
+        statement = statement.with_for_update()
     event = session.scalars(statement).first()
     if not event:
         raise EventNotFound(event_id)
@@ -595,7 +598,10 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
         # An explicit semester wins. Otherwise a new end date re-derives it, and
         # an unchanged one keeps whatever the event is already filed under.
         if event_data.semester_id is not None or event_data.end_datetime.date() != existing_event.end_datetime.date():
-            existing_event.semester_id = semester_for_event(session, event_data.end_datetime, event_data.semester_id).id
+            semester_id = semester_for_event(session, event_data.end_datetime, event_data.semester_id).id
+            if semester_id != existing_event.semester_id:
+                existing_event.semester_id = semester_id
+                session.execute(update(Bonuses).where(Bonuses.event_id == event_id).values(semester_id=semester_id))
         existing_event.name = event_data.name
         existing_event.location_type = event_data.location_type
         existing_event.location = event_data.location
@@ -694,4 +700,21 @@ def get_member_events(session: Session, member_id: int):
         attended.append(event_dict)
 
     bonuses = bonuses_queries.get_member_public_bonuses(session, member_id)
-    return attended, [], bonuses
+    participated = [
+        {
+            "id": row["legacy_id"],
+            "name": row["title"],
+            "location_type": "none",
+            "location": "none",
+            "status": "published",
+            "start_datetime": row["given_at"],
+            "end_datetime": row["legacy_end_datetime"] or row["given_at"],
+            "semester_id": row["semester_id"],
+            "created_at": row["created_at"],
+            "phase": event_lifecycle.compute_phase(
+                row["given_at"], row["legacy_end_datetime"] or row["given_at"], local_now
+            ),
+        }
+        for row in bonuses
+    ]
+    return attended, participated, bonuses

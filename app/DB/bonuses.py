@@ -27,11 +27,23 @@ def get_bonus_by_id(session: Session, bonus_id: str) -> Bonuses | None:
     return session.scalar(stmt)
 
 
+def get_standalone_bonus_by_legacy_id(session: Session, event_id: int) -> Bonuses | None:
+    return session.scalar(
+        select(Bonuses)
+        .where(Bonuses.legacy_id == event_id, Bonuses.event_id.is_(None))
+        .options(selectinload(Bonuses.grants).selectinload(BonusGrants.recipients))
+    )
+
+
 def get_bonus_grant_by_id(session: Session, grant_id: str) -> BonusGrants | None:
     stmt = (
         select(BonusGrants)
         .options(selectinload(BonusGrants.bonus), selectinload(BonusGrants.recipients))
-        .where(BonusGrants.id == grant_id)
+        .where(
+            BonusGrants.legacy_id == int(grant_id)
+            if grant_id.isascii() and grant_id.isdecimal()
+            else BonusGrants.id == grant_id
+        )
     )
     return session.scalar(stmt)
 
@@ -43,6 +55,7 @@ def get_bonus_by_event_id(session: Session, event_id: int) -> Bonuses | None:
         .options(selectinload(Bonuses.grants).selectinload(BonusGrants.recipients))
         .where(Bonuses.event_id == event_id)
         .order_by(Bonuses.created_at.asc(), Bonuses.id.asc())
+        .execution_options(populate_existing=True)
     )
     return session.scalars(stmt).first()
 
@@ -53,6 +66,7 @@ def get_bonuses_by_event_id(session: Session, event_id: int) -> list[Bonuses]:
         .options(selectinload(Bonuses.grants).selectinload(BonusGrants.recipients))
         .where(Bonuses.event_id == event_id)
         .order_by(Bonuses.created_at.asc(), Bonuses.id.asc())
+        .execution_options(populate_existing=True)
     )
     return list(session.scalars(stmt).all())
 
@@ -62,7 +76,9 @@ def list_bonuses(
 ) -> list[Bonuses]:
     stmt = select(Bonuses).options(selectinload(Bonuses.grants).selectinload(BonusGrants.recipients))
     if semester_id is not None:
-        stmt = stmt.where(Bonuses.semester_id == semester_id)
+        stmt = stmt.outerjoin(Events, Events.id == Bonuses.event_id).where(
+            func.coalesce(Events.semester_id, Bonuses.semester_id) == semester_id
+        )
     if standalone_only:
         stmt = stmt.where(Bonuses.event_id.is_(None))
     if event_id is not None:
@@ -80,6 +96,7 @@ def create_bonus(
     is_public: bool = True,
     event_id: int | None = None,
     created_by: int | None = None,
+    legacy_end_datetime: datetime | None = None,
 ) -> Bonuses:
     bonus = Bonuses(
         title=title,
@@ -88,6 +105,7 @@ def create_bonus(
         given_at=given_at,
         is_public=1 if is_public else 0,
         created_by=created_by,
+        legacy_end_datetime=legacy_end_datetime,
     )
     session.add(bonus)
     session.flush()
@@ -180,6 +198,9 @@ def get_member_public_bonuses(session: Session, member_id: int) -> list[dict[str
     stmt = (
         select(
             Bonuses.id.label("bonus_id"),
+            Bonuses.legacy_id,
+            Bonuses.legacy_end_datetime,
+            Bonuses.created_at,
             Bonuses.title.label("title"),
             Bonuses.given_at.label("given_at"),
             Bonuses.semester_id.label("semester_id"),
@@ -190,7 +211,12 @@ def get_member_public_bonuses(session: Session, member_id: int) -> list[dict[str
         .select_from(BonusGrantRecipients)
         .join(BonusGrants, BonusGrants.id == BonusGrantRecipients.bonus_grant_id)
         .join(Bonuses, Bonuses.id == BonusGrants.bonus_id)
-        .where(BonusGrantRecipients.member_id == member_id, Bonuses.event_id.is_(None), Bonuses.is_public == 1)
+        .where(
+            BonusGrantRecipients.member_id == member_id,
+            Bonuses.event_id.is_(None),
+            Bonuses.is_public == 1,
+            Bonuses.legacy_status == EventsStatus.PUBLISHED,
+        )
         .group_by(Bonuses.id, Bonuses.title, Bonuses.given_at, Bonuses.semester_id)
         .order_by(Bonuses.given_at.desc(), Bonuses.id.desc())
     )
@@ -206,8 +232,8 @@ def department_has_bonus_points(session: Session, semester_id: str, department_i
         .outerjoin(Events, Events.id == Bonuses.event_id)
         .where(
             BonusGrantRecipients.department_id == department_id,
-            Bonuses.semester_id == semester_id,
-            (Bonuses.event_id.is_(None)) | (Events.status == EventsStatus.PUBLISHED),
+            func.coalesce(Events.semester_id, Bonuses.semester_id) == semester_id,
+            func.coalesce(Events.status, Bonuses.legacy_status) == EventsStatus.PUBLISHED,
         )
         .limit(1)
     )

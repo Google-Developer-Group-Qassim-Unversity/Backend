@@ -848,8 +848,8 @@ def semester_points(
         .join(Bonuses, Bonuses.id == BonusGrants.bonus_id)
         .outerjoin(Events, Events.id == Bonuses.event_id)
         .where(
-            Bonuses.semester_id == semester_id,
-            (Bonuses.event_id.is_(None)) | (Events.status == EventsStatus.PUBLISHED),
+            func.coalesce(Events.semester_id, Bonuses.semester_id) == semester_id,
+            func.coalesce(Events.status, Bonuses.legacy_status) == EventsStatus.PUBLISHED,
             BonusGrantRecipients.member_id.in_(member_ids),
         )
     ).all()
