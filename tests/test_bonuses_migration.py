@@ -5,7 +5,8 @@ import json
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, text
+import pytest
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
@@ -288,6 +289,209 @@ def test_bonuses_migration_preserves_points_pushes_and_penalties(downgrade_drill
         with engine.connect() as conn:
             assert _current_totals(conn) == before
         command.check(config)
+    finally:
+        engine.dispose()
+        with root_engine.begin() as conn:
+            conn.execute(text(f"DROP DATABASE IF EXISTS `{scratch_db}`"))
+        root_engine.dispose()
+
+
+def test_bonuses_migration_handles_email_jobs_real_none_events_and_detached_requests(
+    downgrade_drill_database_url, monkeypatch
+):
+    """Covers the three real-data edge cases discovered before staging/prod rollout:
+    1) email_jobs + email_logs on a legacy none bonus (event_id nulled, data.event backfilled)
+    2) real events created through POST /events with location_type='none' (reclassified to 'online')
+    3) repurposed pipeline request with location_type='none' + empty form (detached & migrated to bonus)
+    """
+    root_url = _drill_server_root["server_url"]
+    scratch_db = "gdg_bonuses_migration_deps_drill"
+    root_engine = create_engine(root_url, connect_args=_build_connect_args(root_url))
+    with root_engine.begin() as conn:
+        conn.execute(text(f"DROP DATABASE IF EXISTS `{scratch_db}`"))
+        conn.execute(text(f"CREATE DATABASE `{scratch_db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"))
+
+    url = make_url(root_url).set(database=scratch_db).render_as_string(hide_password=False)
+    monkeypatch.setenv("DATABASE_URL", url)
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+    command.upgrade(config, BEFORE)
+    engine = create_engine(url, connect_args=_build_connect_args(url))
+    try:
+        with engine.begin() as conn:
+            sem_id = conn.execute(text("SELECT id FROM semesters ORDER BY start_date LIMIT 1")).scalar_one()
+            conn.execute(text("INSERT INTO members (id, name, public_name, gender) VALUES (91, 'Ali', 'Ali', 'Male')"))
+            conn.execute(
+                text(
+                    "INSERT INTO departments (id, name, type, ar_name) VALUES "
+                    "(91, 'Tech', 'practical', 'التقنية'), (92, 'AI', 'practical', 'الذكاء')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO actions (id, action_name, points, action_type, ar_action_name) VALUES "
+                    "(88, 'Organized massive', 50, 'composite', 'تنظيم ضخم'), "
+                    "(89, 'Massive attendance', 15, 'composite', 'حضور ضخم'), "
+                    "(90, 'Organized space', 10, 'composite', 'تنظيم مساحة'), "
+                    "(91, 'Attend space', 0, 'composite', 'حضور مساحة'), "
+                    "(200, 'Bonus', 0, 'bonus', 'مكافأة')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO events (id, name, location_type, location, start_datetime, end_datetime, status, is_official, semester_id) VALUES "
+                    "(282, 'AI Competition', 'none', 'none', '2026-04-16 10:00:00', '2026-04-16 12:00:00', 'published', 0, :sem), "
+                    "(436, 'Loyalty Bonus', 'none', 'none', '2026-10-01 10:00:00', '2026-10-01 12:00:00', 'published', 0, :sem), "
+                    "(516, 'Quality Space', 'none', 'none', '2026-11-08 19:00:00', '2026-11-08 20:30:00', 'published', 1, :sem)"
+                ),
+                {"sem": sem_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO logs (id, action_id, event_id) VALUES "
+                    "(494, 200, 282), (862, 88, 436), (863, 89, 436), (1060, 90, 516), (1061, 91, 516)"
+                )
+            )
+            conn.execute(text("INSERT INTO modifications (log_id, type, value) VALUES (494, 'bonus', 7)"))
+            conn.execute(
+                text("INSERT INTO members_logs (member_id, log_id, date) VALUES (91, 494, '2026-04-16 11:00:00')")
+            )
+            conn.execute(text("INSERT INTO departments_logs (department_id, log_id) VALUES (91, 862), (92, 1060)"))
+
+            # Case 1: manual-certificate email_job + email_logs (one with snapshot, one missing data.event) on 282.
+            conn.execute(
+                text(
+                    "INSERT INTO email_jobs (id, job_type, status, created_by, event_id, total, succeeded, failed) "
+                    "VALUES (256, 'manual-certificate', 'succeeded', 91, 282, 2, 2, 0)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO email_logs (id, job_id, member_id, event_id, from_address, sent_by, recipient_count, email_type, data) VALUES "
+                    "(1, 256, 91, 282, 'gdg.qu1@gmail.com', 91, 1, 'manual-certificate', "
+                    " JSON_OBJECT('event', JSON_OBJECT('name', 'Existing Snapshot', 'date', '2026-04-16', 'official', false), 'member', JSON_OBJECT('name', 'Ali'))), "
+                    "(2, 256, 91, 282, 'gdg.qu1@gmail.com', 91, 1, 'manual-certificate', "
+                    " JSON_OBJECT('member', JSON_OBJECT('name', 'Ali')))"
+                )
+            )
+
+            # Case 2: real POST /events event 516 has a form (no event_requests row).
+            conn.execute(
+                text(
+                    "INSERT INTO forms (id, event_id, form_type, registration_status) VALUES (304, 516, 'none', 'closed')"
+                )
+            )
+
+            # Case 3: repurposed pipeline test event 436 has an event_requests row + empty registration form.
+            conn.execute(
+                text(
+                    "INSERT INTO event_requests (id, department_id, stage, requested_by, event_id, title) "
+                    "VALUES ('00000000-0000-7000-8000-000000000436', 91, 'published', 91, 436, 'test')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO forms (id, event_id, form_type, registration_status) "
+                    "VALUES (248, 436, 'registration', 'closed')"
+                )
+            )
+
+            before = _legacy_totals(conn)
+            assert before == {("member", sem_id, 91): 7, ("department", sem_id, 91): 50, ("department", sem_id, 92): 10}
+
+        command.upgrade(config, AFTER)
+
+        with engine.connect() as conn:
+            assert _current_totals(conn) == before
+
+            # 516 stayed a real event reclassified to 'online' with its form and logs intact; 282 & 436 deleted.
+            remaining_events = conn.execute(text("SELECT id, location_type FROM events ORDER BY id")).all()
+            assert remaining_events == [(516, "online")]
+            remaining_forms = conn.execute(text("SELECT id, event_id FROM forms ORDER BY id")).all()
+            assert remaining_forms == [(304, 516)]
+
+            # 282 & 436 migrated into bonuses.
+            bonuses = conn.execute(text("SELECT legacy_id, title FROM bonuses ORDER BY legacy_id")).all()
+            assert bonuses == [(282, "AI Competition"), (436, "Loyalty Bonus")]
+
+            # email_jobs + email_logs survived with event_id = NULL, and missing data.event was backfilled.
+            job = conn.execute(text("SELECT id, event_id FROM email_jobs WHERE id = 256")).one()
+            assert job == (256, None)
+            elogs = conn.execute(text("SELECT id, event_id, data FROM email_logs ORDER BY id")).all()
+            assert [(r.id, r.event_id) for r in elogs] == [(1, None), (2, None)]
+            assert json.loads(elogs[0].data)["event"]["name"] == "Existing Snapshot"
+            assert json.loads(elogs[1].data)["event"] == {
+                "name": "AI Competition",
+                "date": "2026-04-16",
+                "official": False,
+            }
+
+            # Pipeline request row survived with event_id = NULL.
+            req = conn.execute(
+                text("SELECT id, event_id FROM event_requests WHERE id = '00000000-0000-7000-8000-000000000436'")
+            ).one()
+            assert req == ("00000000-0000-7000-8000-000000000436", None)
+
+        command.downgrade(config, BEFORE)
+        with engine.connect() as conn:
+            assert _legacy_totals(conn) == before
+    finally:
+        engine.dispose()
+        with root_engine.begin() as conn:
+            conn.execute(text(f"DROP DATABASE IF EXISTS `{scratch_db}`"))
+        root_engine.dispose()
+
+
+def test_bonuses_migration_guard_blocks_when_fake_event_form_has_submissions(downgrade_drill_database_url, monkeypatch):
+    """A none/hidden event slated for deletion whose form has submissions must fail before any DDL runs."""
+    root_url = _drill_server_root["server_url"]
+    scratch_db = "gdg_bonuses_migration_guard_drill"
+    root_engine = create_engine(root_url, connect_args=_build_connect_args(root_url))
+    with root_engine.begin() as conn:
+        conn.execute(text(f"DROP DATABASE IF EXISTS `{scratch_db}`"))
+        conn.execute(text(f"CREATE DATABASE `{scratch_db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"))
+
+    url = make_url(root_url).set(database=scratch_db).render_as_string(hide_password=False)
+    monkeypatch.setenv("DATABASE_URL", url)
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+    command.upgrade(config, BEFORE)
+    engine = create_engine(url, connect_args=_build_connect_args(url))
+    try:
+        with engine.begin() as conn:
+            sem_id = conn.execute(text("SELECT id FROM semesters ORDER BY start_date LIMIT 1")).scalar_one()
+            conn.execute(text("INSERT INTO members (id, name, public_name, gender) VALUES (91, 'Ali', 'Ali', 'Male')"))
+            conn.execute(
+                text("INSERT INTO departments (id, name, type, ar_name) VALUES (91, 'Tech', 'practical', 'التقنية')")
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO events (id, name, location_type, location, start_datetime, end_datetime, status, semester_id) "
+                    "VALUES (436, 'Has Submissions', 'none', 'none', '2026-10-01 10:00:00', '2026-10-01 12:00:00', 'published', :sem)"
+                ),
+                {"sem": sem_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO event_requests (id, department_id, stage, requested_by, event_id, title) "
+                    "VALUES ('00000000-0000-7000-8000-000000000436', 91, 'published', 91, 436, 'test')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO forms (id, event_id, form_type, registration_status) "
+                    "VALUES (248, 436, 'registration', 'closed')"
+                )
+            )
+            conn.execute(
+                text("INSERT INTO submissions (form_id, member_id, submission_type) VALUES (248, 91, 'registration')")
+            )
+
+        with pytest.raises(RuntimeError, match="has form submissions"):
+            command.upgrade(config, AFTER)
+
+        with engine.connect() as conn:
+            assert "bonuses" not in inspect(conn).get_table_names()
     finally:
         engine.dispose()
         with root_engine.begin() as conn:

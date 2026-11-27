@@ -6,7 +6,8 @@ Create Date: 2026-11-26 20:45:00.000000
 """
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
+import json
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -206,8 +207,87 @@ def _remap_log_references(bind: sa.Connection, log_id: int, bonus_id: str, grant
         )
 
 
+HANDLED_FAKE_EVENT_FK_TABLES = {"logs", "push_notifications", "email_jobs", "email_logs", "event_requests", "forms"}
+
+
+def _format_event_date(start_dt: datetime, end_dt: datetime) -> str:
+    start_day = (start_dt - timedelta(days=1)).date() if start_dt.hour < 4 else start_dt.date()
+    end_day = (end_dt - timedelta(days=1)).date() if end_dt.hour < 4 else end_dt.date()
+    if start_day == end_day:
+        return start_day.strftime("%Y-%m-%d")
+    return f"{start_day.strftime('%Y-%m-%d')} - {end_day.strftime('%Y-%m-%d')}"
+
+
+def _reclassifiable_real_event_ids(bind: sa.Connection) -> list[int]:
+    """Return ``none``/``hidden`` events created through the real event flow.
+
+    ``POST /events`` always inserts a ``forms`` row (even with ``form_type='none'``)
+    and never creates an ``event_requests`` row; ``/custom/*`` never inserts a
+    ``forms`` row. Events matching this rule (e.g. Twitter Spaces / competitions
+    saved with ``location_type='none'``) are real events and must be reclassified
+    to ``online`` rather than turned into bonuses.
+    """
+    rows = bind.execute(
+        sa.text("""
+            SELECT e.id
+            FROM events e
+            WHERE e.location_type IN ('none', 'hidden')
+              AND EXISTS (SELECT 1 FROM forms f WHERE f.event_id = e.id)
+              AND NOT EXISTS (SELECT 1 FROM event_requests er WHERE er.event_id = e.id)
+            ORDER BY e.id ASC
+        """)
+    ).scalars()
+    return [int(event_id) for event_id in rows]
+
+
+def _detach_fake_event_email_history(bind: sa.Connection, ev: dict) -> None:
+    """Preserve email_jobs and email_logs pointing at a migrated fake event."""
+    ev_id = int(ev["id"])
+    fallback_event = {
+        "name": ev["name"],
+        "date": _format_event_date(ev["start_datetime"], ev["end_datetime"]),
+        "official": bool(ev["is_official"]),
+    }
+    log_rows = (
+        bind.execute(sa.text("SELECT id, data FROM email_logs WHERE event_id = :event_id"), {"event_id": ev_id})
+        .mappings()
+        .all()
+    )
+    for row in log_rows:
+        raw = row["data"]
+        if isinstance(raw, str):
+            payload = json.loads(raw)
+        elif isinstance(raw, dict):
+            payload = dict(raw)
+        else:
+            payload = {}
+        raw_event = payload.get("event")
+        existing_event = raw_event if isinstance(raw_event, dict) else {}
+        if not {"name", "date", "official"} <= existing_event.keys():
+            payload["event"] = {**fallback_event, **existing_event}
+            bind.execute(
+                sa.text("UPDATE email_logs SET data = :data, event_id = NULL WHERE id = :id"),
+                {"data": json.dumps(payload, ensure_ascii=False), "id": row["id"]},
+            )
+        else:
+            bind.execute(sa.text("UPDATE email_logs SET event_id = NULL WHERE id = :id"), {"id": row["id"]})
+
+    bind.execute(sa.text("UPDATE email_jobs SET event_id = NULL WHERE event_id = :event_id"), {"event_id": ev_id})
+
+
 def _migrate_existing_data() -> None:
     bind = op.get_bind()
+
+    # 0. Reclassify real events created via POST /events with location_type='none'/'hidden'
+    #    so they stay in `events` with their forms and composite logs intact.
+    reclassify_ids = _reclassifiable_real_event_ids(bind)
+    if reclassify_ids:
+        bind.execute(
+            sa.text("UPDATE events SET location_type = 'online' WHERE id IN :ids").bindparams(
+                sa.bindparam("ids", expanding=True)
+            ),
+            {"ids": reclassify_ids},
+        )
 
     # Load all modification deltas keyed by log_id.
     mod_rows = (
@@ -248,7 +328,8 @@ def _migrate_existing_data() -> None:
     fake_events = (
         bind.execute(
             sa.text(
-                "SELECT id, name, location_type, start_datetime, end_datetime, status, semester_id, created_by, created_at "
+                "SELECT id, name, location_type, start_datetime, end_datetime, status, is_official, "
+                "       semester_id, created_by, created_at "
                 "FROM events WHERE location_type IN ('none', 'hidden') ORDER BY id ASC"
             )
         )
@@ -284,10 +365,22 @@ def _migrate_existing_data() -> None:
             },
         )
 
-        # Preserve push notification history before deleting the fake event.
+        # Preserve push notification history, email history, and detached pipeline requests
+        # before deleting the fake event. Empty forms (already verified 0 submissions) are dropped.
         bind.execute(
             sa.text("UPDATE push_notifications SET bonus_id = :bonus_id, event_id = NULL WHERE event_id = :event_id"),
             {"bonus_id": bonus_id, "event_id": ev_id},
+        )
+        _detach_fake_event_email_history(bind, dict(ev))
+        bind.execute(
+            sa.text("UPDATE event_requests SET event_id = NULL WHERE event_id = :event_id"), {"event_id": ev_id}
+        )
+        bind.execute(
+            sa.text(
+                "DELETE FROM forms WHERE event_id = :event_id "
+                "AND NOT EXISTS (SELECT 1 FROM submissions s WHERE s.form_id = forms.id)"
+            ),
+            {"event_id": ev_id},
         )
 
         fake_logs = (
@@ -453,19 +546,43 @@ def _check_fake_event_dependencies() -> None:
     if broken_penalty is not None:
         raise RuntimeError(f"Applied pipeline penalty {broken_penalty} has no matching event and department award")
 
+    reclassify_ids = _reclassifiable_real_event_ids(bind)
+
+    # Never drop a form that actually holds submissions.
+    sub_query = (
+        "SELECT e.id FROM submissions s "
+        "JOIN forms f ON f.id = s.form_id "
+        "JOIN events e ON e.id = f.event_id "
+        "WHERE e.location_type IN ('none', 'hidden')"
+    )
+    if reclassify_ids:
+        stmt = sa.text(f"{sub_query} AND e.id NOT IN :reclassify_ids LIMIT 1").bindparams(
+            sa.bindparam("reclassify_ids", expanding=True)
+        )
+        event_with_subs = bind.execute(stmt, {"reclassify_ids": reclassify_ids}).scalar()
+    else:
+        event_with_subs = bind.execute(sa.text(f"{sub_query} LIMIT 1")).scalar()
+    if event_with_subs is not None:
+        raise RuntimeError(f"Legacy bonus event {event_with_subs} has form submissions")
+
     for table in inspector.get_table_names():
-        if table in {"logs", "push_notifications"}:
+        if table in HANDLED_FAKE_EVENT_FK_TABLES:
             continue
         for fk in inspector.get_foreign_keys(table):
             if fk["referred_table"] != "events":
                 continue
             column = quote(fk["constrained_columns"][0])
-            event_id = bind.execute(
-                sa.text(
-                    f"SELECT e.id FROM {quote(table)} child JOIN events e ON child.{column} = e.id "
-                    "WHERE e.location_type IN ('none', 'hidden') LIMIT 1"
+            base = (
+                f"SELECT e.id FROM {quote(table)} child JOIN events e ON child.{column} = e.id "
+                "WHERE e.location_type IN ('none', 'hidden')"
+            )
+            if reclassify_ids:
+                stmt = sa.text(f"{base} AND e.id NOT IN :reclassify_ids LIMIT 1").bindparams(
+                    sa.bindparam("reclassify_ids", expanding=True)
                 )
-            ).scalar()
+                event_id = bind.execute(stmt, {"reclassify_ids": reclassify_ids}).scalar()
+            else:
+                event_id = bind.execute(sa.text(f"{base} LIMIT 1")).scalar()
             if event_id is not None:
                 raise RuntimeError(f"Legacy bonus event {event_id} has dependent rows in {table}")
 
