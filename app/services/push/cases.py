@@ -50,6 +50,9 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import config
 from app.DB.schema import (
     Actions,
+    Bonuses,
+    BonusGrantRecipients,
+    BonusGrants,
     EmailLogs,
     EmailLogsEmailType,
     EventContentLinks,
@@ -839,8 +842,21 @@ def semester_points(
             MembersLogs.member_id.in_(member_ids),
         )
     ).all()
+    bonus_rows = session.execute(
+        select(BonusGrantRecipients.member_id, BonusGrantRecipients.given_at, BonusGrants.points)
+        .join(BonusGrants, BonusGrants.id == BonusGrantRecipients.bonus_grant_id)
+        .join(Bonuses, Bonuses.id == BonusGrants.bonus_id)
+        .outerjoin(Events, Events.id == Bonuses.event_id)
+        .where(
+            func.coalesce(Events.semester_id, Bonuses.semester_id) == semester_id,
+            func.coalesce(Events.status, Bonuses.legacy_status) == EventsStatus.PUBLISHED,
+            BonusGrantRecipients.member_id.in_(member_ids),
+        )
+    ).all()
     found: dict[int, tuple[int, int]] = {}
-    for member_id, logged, value in rows:
+    for member_id, logged, value in (*rows, *bonus_rows):
+        if member_id is None:
+            continue
         total, week = found.get(member_id, (0, 0))
         value = int(value or 0)
         found[member_id] = (total + value, week + (value if _effective_day(logged) >= week_from else 0))

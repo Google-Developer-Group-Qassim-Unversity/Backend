@@ -24,7 +24,9 @@ from app.routers.models import (
     Get_Submission_model,
     createEvent_model,
     Member_model,
+    MemberBonus_model,
     MemberEvents_model,
+    LegacyParticipation_model,
     EventWithAttendance_model,
     EventDetailsModel,
     EventContentLink_model,
@@ -210,10 +212,11 @@ def get_registrable_events(session: DB):
 
 @router.get("/me", status_code=status.HTTP_200_OK, response_model=MemberEvents_model)
 def get_my_events(member: CurrentMember, session: DB):
-    attended_raw, participated_raw = events_queries.get_member_events(session, member.id)
+    attended_raw, participated_raw, bonuses_raw = events_queries.get_member_events(session, member.id)
     return MemberEvents_model(
         attended=[EventWithAttendance_model(**e) for e in attended_raw],
-        participated=[Events_model(**e) for e in participated_raw],
+        participated=[LegacyParticipation_model(**e) for e in participated_raw],
+        bonuses=[MemberBonus_model(**b) for b in bonuses_raw],
     )
 
 
@@ -351,104 +354,96 @@ def update_event(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
         logger.info(f"Updated Event [{event_id}]: {updated_event.name}")
 
-        # ignore this step if event is custom, we only need to do this for "Full Events"
-        if updated_event.location_type != "none":
-            # 2. Get all logs for this event
-            logs = log_queries.get_logs_by_event_id(session, event_id)
-            if not logs or len(logs) < 2:
-                logger.error(f"HTTP 500: Event [{event_id}] does not have expected logs")
-                raise DataIntegrityError("Event logs not found")
-            logger.info(f"Found [{len(logs)}] logs for event [{event_id}]")
+        # 2. Get all logs for this event
+        logs = log_queries.get_logs_by_event_id(session, event_id)
+        if not logs or len(logs) < 2:
+            logger.error(f"HTTP 500: Event [{event_id}] does not have expected logs")
+            raise DataIntegrityError("Event logs not found")
+        logger.info(f"Found [{len(logs)}] logs for event [{event_id}]")
 
-            # 3. Identify department log and member log
-            # Department log has DepartmentsLogs entries, member log doesn't
-            department_log = None
-            member_log = None
-            # TODO: This WRONG logs that don't havea department_id should not be assumed to be member logs
-            for log_entry in logs:
-                current_dept_id = log_queries.get_department_id_from_log(session, log_entry.id)
-                if current_dept_id is not None:
-                    department_log = log_entry
-                else:
-                    member_log = log_entry
+        # 3. Identify department log and member log
+        # Department log has DepartmentsLogs entries, member log doesn't
+        department_log = None
+        member_log = None
+        for log_entry in logs:
+            current_dept_id = log_queries.get_department_id_from_log(session, log_entry.id)
+            if current_dept_id is not None:
+                department_log = log_entry
+            else:
+                member_log = log_entry
 
-            if not department_log or not member_log:
-                logger.error(f"HTTP 500: Could not identify department and member logs for event [{event_id}]")
-                raise DataIntegrityError("Could not identify logs")
+        if not department_log or not member_log:
+            logger.error(f"HTTP 500: Could not identify department and member logs for event [{event_id}]")
+            raise DataIntegrityError("Could not identify logs")
 
-            points_before = {
-                "department_action_id": department_log.action_id,
-                "member_action_id": member_log.action_id,
-                "department_id": log_queries.get_department_id_from_log(session, department_log.id),
-            }
+        points_before = {
+            "department_action_id": department_log.action_id,
+            "member_action_id": member_log.action_id,
+            "department_id": log_queries.get_department_id_from_log(session, department_log.id),
+        }
 
-            # 4. Actions list: first = department action, second = member action
-            department_action = event_data.actions[0]
-            member_action = event_data.actions[1]
-            logger.info(
-                f"Department action: [{department_action.action_id}], Member action: [{member_action.action_id}]"
-            )
+        # 4. Actions list: first = department action, second = member action
+        department_action = event_data.actions[0]
+        member_action = event_data.actions[1]
+        logger.info(f"Department action: [{department_action.action_id}], Member action: [{member_action.action_id}]")
 
-            # 5. Update department log action_id
-            log_queries.update_log_action_id(session, department_log.id, department_action.action_id)
-            logger.info(f"Updated department log [{department_log.id}] action_id to [{department_action.action_id}]")
+        # 5. Update department log action_id
+        log_queries.update_log_action_id(session, department_log.id, department_action.action_id)
+        logger.info(f"Updated department log [{department_log.id}] action_id to [{department_action.action_id}]")
 
-            # 6. Update member log action_id
-            log_queries.update_log_action_id(session, member_log.id, member_action.action_id)
-            logger.info(f"Updated member log [{member_log.id}] action_id to [{member_action.action_id}]")
+        # 6. Update member log action_id
+        log_queries.update_log_action_id(session, member_log.id, member_action.action_id)
+        logger.info(f"Updated member log [{member_log.id}] action_id to [{member_action.action_id}]")
 
-            # 7. Handle department_id and/or days change
-            current_dept_id = log_queries.get_department_id_from_log(session, department_log.id)
-            new_dept_id = department_action.department_id
-            current_dept_logs_count = log_queries.get_department_logs_count(session, department_log.id)
+        # 7. Handle department_id and/or days change
+        current_dept_id = log_queries.get_department_id_from_log(session, department_log.id)
+        new_dept_id = department_action.department_id
+        current_dept_logs_count = log_queries.get_department_logs_count(session, department_log.id)
 
-            # there is a bug here, where if the start-end difference corsses the 12AM lines.
-            # e.g start 2026-01-01 10:00 PM, end 2026-01-02 2:00 AM => this will be counted as 2 days instead of 1 day
-            # UPDATE: there actually is NO bug, the timedelta here calculates the difference in days by looking at the date part of the datetime, so in the above example it will correctly calculate it as 1 day, not 2 days, because the date part of both datetimes is different, even though the time difference is only 4 hours. So this works correctly for overnight events as well.
-            new_days = (updated_event.end_datetime - updated_event.start_datetime).days + 1
+        new_days = (updated_event.end_datetime - updated_event.start_datetime).days + 1
 
-            logger.info(
-                f"Current: dept_id=[{current_dept_id}], days=[{current_dept_logs_count}]. New: dept_id=[{new_dept_id}], days=[{new_days}]"
-            )
+        logger.info(
+            f"Current: dept_id=[{current_dept_id}], days=[{current_dept_logs_count}]. New: dept_id=[{new_dept_id}], days=[{new_days}]"
+        )
 
-            # if Department changed - delete all and recreate
-            if new_dept_id is not None and current_dept_id != new_dept_id:
-                logger.info(f"Department changed from [{current_dept_id}] to [{new_dept_id}]")
+        # if Department changed - delete all and recreate
+        if new_dept_id is not None and current_dept_id != new_dept_id:
+            logger.info(f"Department changed from [{current_dept_id}] to [{new_dept_id}]")
 
-                deleted_count = log_queries.delete_department_logs_by_log_id(session, department_log.id)
-                logger.info(f"Deleted [{deleted_count}] old department logs for log [{department_log.id}]")
+            deleted_count = log_queries.delete_department_logs_by_log_id(session, department_log.id)
+            logger.info(f"Deleted [{deleted_count}] old department logs for log [{department_log.id}]")
 
-                for day in range(new_days):
-                    log_queries.create_department_log(session, new_dept_id, department_log.id)
-                logger.info(f"Created [{new_days}] department logs for new department [{new_dept_id}]")
+            for day in range(new_days):
+                log_queries.create_department_log(session, new_dept_id, department_log.id)
+            logger.info(f"Created [{new_days}] department logs for new department [{new_dept_id}]")
 
-            # if Same department but days changed
-            elif current_dept_logs_count != new_days:
-                dept_id_to_use = new_dept_id if new_dept_id is not None else current_dept_id
-                if dept_id_to_use is None:
-                    raise DataIntegrityError(
-                        f"Log [{department_log.id}] has no department id and none was provided in the update"
-                    )
+        # if Same department but days changed
+        elif current_dept_logs_count != new_days:
+            dept_id_to_use = new_dept_id if new_dept_id is not None else current_dept_id
+            if dept_id_to_use is None:
+                raise DataIntegrityError(
+                    f"Log [{department_log.id}] has no department id and none was provided in the update"
+                )
 
-                # if days increased - add more department logs
-                if new_days > current_dept_logs_count:
-                    days_to_add = new_days - current_dept_logs_count
-                    logger.info(
-                        f"Days increased from [{current_dept_logs_count}] to [{new_days}], adding [{days_to_add}] department logs"
-                    )
-                    for _ in range(days_to_add):
-                        log_queries.create_department_log(session, dept_id_to_use, department_log.id)
-                # if Days decreased - remove some department logs
-                else:
-                    days_to_remove = current_dept_logs_count - new_days
-                    logger.info(
-                        f"Days decreased from [{current_dept_logs_count}] to [{new_days}], removing [{days_to_remove}] department logs"
-                    )
-                    log_queries.delete_n_department_logs(session, department_log.id, days_to_remove)
+            # if days increased - add more department logs
+            if new_days > current_dept_logs_count:
+                days_to_add = new_days - current_dept_logs_count
+                logger.info(
+                    f"Days increased from [{current_dept_logs_count}] to [{new_days}], adding [{days_to_add}] department logs"
+                )
+                for _ in range(days_to_add):
+                    log_queries.create_department_log(session, dept_id_to_use, department_log.id)
+            # if Days decreased - remove some department logs
+            else:
+                days_to_remove = current_dept_logs_count - new_days
+                logger.info(
+                    f"Days decreased from [{current_dept_logs_count}] to [{new_days}], removing [{days_to_remove}] department logs"
+                )
+                log_queries.delete_n_department_logs(session, department_log.id, days_to_remove)
 
         if event_data.attendance_points is not None:
             attendance_log = log_queries.get_attendable_logs(session, event_id)
-            if updated_event.location_type == "none" or attendance_log is None:
+            if attendance_log is None:
                 raise HTTPException(status_code=400, detail="Event has no attendable log")
             log_queries.set_log_points(session, attendance_log, event_data.attendance_points)
 
@@ -473,7 +468,7 @@ def update_event(
         calendar_request = pipeline_calendar.mark_event(session, event_id)
         session.commit()
         pipeline_calendar.sync_after_commit(background_tasks, calendar_request)
-        if event_data.attendance_points is not None:
+        if event_data.attendance_points is not None or "semester_id" in changed:
             refresh_attendance_points_cache()
         if pushed:
             background_tasks.add_task(push_delivery.kick)

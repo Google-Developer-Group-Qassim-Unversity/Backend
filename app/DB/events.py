@@ -4,13 +4,14 @@ from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlsplit
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, func, or_, select, update
 
 from app.exceptions import EventNotFound
 from .schema import (
     EventsLevel,
     Events,
     EventsContentLinkKind,
+    Bonuses,
     EventsLocationType,
     EventsMeetingUrlVisibility,
     EventsStatus,
@@ -127,10 +128,9 @@ def _apply_event_filters(
         stmt = stmt.where(Events.status == EventsStatus(status))
     if search and search.strip():
         stmt = stmt.where(Events.name.like(f"%{search.strip()}%"))
-    if exclude_custom:
-        # "none"/"hidden" location types are custom point activities - they live
-        # on the points page, not the events list.
-        stmt = stmt.where(Events.location_type.notin_([EventsLocationType.NONE, EventsLocationType.HIDDEN]))
+    # ``exclude_custom`` is kept as an accepted parameter for backward compatibility;
+    # custom bonuses now live in ``bonuses`` so ``events`` only holds real events.
+    _ = exclude_custom
     if phase == "upcoming":
         stmt = stmt.where(Events.start_datetime > now)
     elif phase == "live":
@@ -306,11 +306,13 @@ def get_event_department_ids(session: Session, event_id: int) -> set[int]:
     )
 
 
-def get_event_by_id(session: Session, event_id: int):
+def get_event_by_id(session: Session, event_id: int, *, for_update: bool = False):
     """The plain event row, for the ~15 internal callers that only read its
     fields - no content-link query. Serializing payloads attach them at the
     route layer (see attach_published_content_links_of_event)."""
     statement = select(Events).where(Events.id == event_id)
+    if for_update:
+        statement = statement.with_for_update()
     event = session.scalars(statement).first()
     if not event:
         raise EventNotFound(event_id)
@@ -593,10 +595,20 @@ def update_event(session: Session, event_id: int, event_data: Events_model):
     if not existing_event:
         return None
     try:
+        bonus_updates: dict[str, object] = {}
         # An explicit semester wins. Otherwise a new end date re-derives it, and
         # an unchanged one keeps whatever the event is already filed under.
         if event_data.semester_id is not None or event_data.end_datetime.date() != existing_event.end_datetime.date():
-            existing_event.semester_id = semester_for_event(session, event_data.end_datetime, event_data.semester_id).id
+            semester_id = semester_for_event(session, event_data.end_datetime, event_data.semester_id).id
+            if semester_id != existing_event.semester_id:
+                existing_event.semester_id = semester_id
+                bonus_updates["semester_id"] = semester_id
+        if event_data.name != existing_event.name:
+            bonus_updates["title"] = event_data.name
+        if event_data.start_datetime != existing_event.start_datetime:
+            bonus_updates["given_at"] = event_data.start_datetime
+        if bonus_updates:
+            session.execute(update(Bonuses).where(Bonuses.event_id == event_id).values(**bonus_updates))
         existing_event.name = event_data.name
         existing_event.location_type = event_data.location_type
         existing_event.location = event_data.location
@@ -646,16 +658,14 @@ def update_event_meeting_url(
 
 
 def get_member_events(session: Session, member_id: int):
+    from app.DB import bonuses as bonuses_queries
+
     local_now = event_lifecycle.riyadh_now()
     stmt = (
         select(Events, MembersLogs.date)
         .join(Logs, Events.id == Logs.event_id)
         .join(MembersLogs, MembersLogs.log_id == Logs.id)
-        .where(
-            MembersLogs.member_id == member_id,
-            Events.status == EventsStatus.PUBLISHED,
-            Events.location_type != EventsLocationType.HIDDEN,
-        )
+        .where(MembersLogs.member_id == member_id, Events.status == EventsStatus.PUBLISHED)
         .order_by(Events.start_datetime.desc(), MembersLogs.date)
     )
     results = session.execute(stmt).all()
@@ -676,7 +686,6 @@ def get_member_events(session: Session, member_id: int):
 
     threshold = config.ATTENDANCE_EARLY_HOURS_THRESHOLD
     attended = []
-    participated = []
     for data in events_map.values():
         event = data["event"]
         raw_dates = data["dates"]
@@ -686,18 +695,33 @@ def get_member_events(session: Session, member_id: int):
         )
         event_dict["phase"] = event_lifecycle.compute_phase(event.start_datetime, event.end_datetime, local_now)
 
-        if event.location_type == EventsLocationType.NONE:
-            participated.append(event_dict)
-        else:
-            total_days = max((event.end_datetime - event.start_datetime).days + 1, 1)
-            attended_set = {get_effective_date(d, threshold) for d in raw_dates}
-            attendance_dates = []
-            for day_offset in range(total_days):
-                day = event.start_datetime.date() + timedelta(days=day_offset)
-                attendance_dates.append(
-                    {"date": datetime.combine(day, datetime.min.time()), "attended": day in attended_set}
-                )
-            event_dict["attendance_dates"] = attendance_dates
-            attended.append(event_dict)
+        total_days = max((event.end_datetime - event.start_datetime).days + 1, 1)
+        attended_set = {get_effective_date(d, threshold) for d in raw_dates}
+        attendance_dates = []
+        for day_offset in range(total_days):
+            day = event.start_datetime.date() + timedelta(days=day_offset)
+            attendance_dates.append(
+                {"date": datetime.combine(day, datetime.min.time()), "attended": day in attended_set}
+            )
+        event_dict["attendance_dates"] = attendance_dates
+        attended.append(event_dict)
 
-    return attended, participated
+    bonuses = bonuses_queries.get_member_public_bonuses(session, member_id)
+    participated = [
+        {
+            "id": row["legacy_id"],
+            "name": row["title"],
+            "location_type": "none",
+            "location": "none",
+            "status": "published",
+            "start_datetime": row["given_at"],
+            "end_datetime": row["legacy_end_datetime"] or row["given_at"],
+            "semester_id": row["semester_id"],
+            "created_at": row["created_at"],
+            "phase": event_lifecycle.compute_phase(
+                row["given_at"], row["legacy_end_datetime"] or row["given_at"], local_now
+            ),
+        }
+        for row in bonuses
+    ]
+    return attended, participated, bonuses

@@ -11,7 +11,10 @@ from fastapi.testclient import TestClient
 import app.semesters
 from app.DB.schema import (
     Actions,
-    ActionsActionType,
+    Bonuses,
+    BonusGrantRecipients,
+    BonusGrants,
+    BonusRecipientType,
     DepartmentsLogs,
     Events,
     EventsLocationType,
@@ -65,6 +68,7 @@ def test_member_history_has_member_and_events(client: TestClient, seed_refs):
     assert_2xx(response)
     body = response.json()
     assert body["member"]["member_id"] == seed_refs.ahmed.id
+    assert isinstance(body["history"], list)
     assert isinstance(body["events"], list)
 
 
@@ -74,6 +78,7 @@ def test_department_history_has_department_and_events(client: TestClient, seed_r
     assert_2xx(response)
     body = response.json()
     assert body["department"]["department_id"] == seed_refs.dept_business.id
+    assert isinstance(body["history"], list)
     assert isinstance(body["events"], list)
 
 
@@ -229,11 +234,6 @@ def test_ranking_uses_the_name_a_department_had_that_semester(client, db_session
 
 # ---------- bonus rows and clickability on the history pages ----------
 
-# The behavior matrix: real events (online / on-site) are clickable, points-page
-# entries (location_type 'none') are not. ``bonus_row`` marks pure-bonus rows so
-# the frontend can give them the sparkles icon without resurrecting the reverted
-# bonus-only heuristic.
-
 
 def _add_history_event(db_session, name: str, location_type: EventsLocationType) -> Events:
     event = Events(
@@ -263,97 +263,139 @@ def _add_log(db_session, seed_refs, event: Events, action: Actions, department_i
     return log
 
 
-def _add_bonus_action(db_session) -> Actions:
-    bonus_action = Actions(action_name="bonus", points=3, action_type=ActionsActionType.BONUS, ar_action_name="مكافأة")
-    db_session.add(bonus_action)
+def _add_bonus(
+    db_session,
+    *,
+    title: str,
+    points: int = 3,
+    event: Events | None = None,
+    is_public: bool = True,
+    member_id: int | None = None,
+    department_id: int | None = None,
+    label_en: str | None = "Volunteering",
+    label_ar: str | None = "تطوع",
+) -> Bonuses:
+    bonus = Bonuses(
+        title=event.name if event is not None else title,
+        event_id=event.id if event is not None else None,
+        semester_id=event.semester_id if event is not None else semester_id_on(db_session, "2026-07-01"),
+        given_at="2026-07-01 10:00:00",
+        is_public=1 if is_public else 0,
+    )
+    db_session.add(bonus)
     db_session.flush()
-    return bonus_action
+    grant = BonusGrants(
+        bonus_id=bonus.id,
+        recipient_type=BonusRecipientType.MEMBER if member_id is not None else BonusRecipientType.DEPARTMENT,
+        points=points,
+        label_en=label_en,
+        label_ar=label_ar,
+    )
+    db_session.add(grant)
+    db_session.flush()
+    db_session.add(BonusGrantRecipients(bonus_grant_id=grant.id, member_id=member_id, department_id=department_id))
+    db_session.flush()
+    return bonus
 
 
-def _member_history(client: TestClient, member_id: int) -> list[dict]:
+def _member_history(client: TestClient, member_id: int) -> dict:
     response = client.get(f"/points/members/{member_id}", params={"semester": 475})
     assert_2xx(response)
-    return response.json()["events"]
+    return response.json()
 
 
-def _department_history(client: TestClient, department_id: int) -> list[dict]:
+def _department_history(client: TestClient, department_id: int) -> dict:
     response = client.get(f"/points/departments/{department_id}", params={"semester": 475})
     assert_2xx(response)
-    return response.json()["events"]
+    return response.json()
 
 
 def test_member_history_real_event_row_is_clickable_and_not_bonus(client, db_session, seed_refs):
     event = _add_history_event(db_session, "Real on-site event", EventsLocationType.ON_SITE)
     _add_log(db_session, seed_refs, event, seed_refs.member_action, None, seed_refs.ahmed.id)
 
-    rows = [row for row in _member_history(client, seed_refs.ahmed.id) if row["event_id"] == event.id]
+    payload = _member_history(client, seed_refs.ahmed.id)
+    h_rows = [row for row in payload["history"] if row["event_id"] == event.id]
+    assert len(h_rows) == 1
+    assert h_rows[0]["kind"] == "event"
+    assert h_rows[0]["location_type"] == "on-site"
 
-    assert len(rows) == 1
-    assert rows[0]["location_type"] == "on-site"
-    assert rows[0]["bonus_row"] is False
+    legacy = [row for row in payload["events"] if row["event_id"] == event.id]
+    assert len(legacy) == 1
+    assert legacy[0]["location_type"] == "on-site"
+    assert legacy[0]["bonus_row"] is False
 
 
-def test_member_history_pure_bonus_row_on_a_real_event_is_bonus_and_clickable(client, db_session, seed_refs):
-    bonus_action = _add_bonus_action(db_session)
+def test_member_history_bonus_on_a_real_event_is_bonus_and_clickable(client, db_session, seed_refs):
     event = _add_history_event(db_session, "Real online event", EventsLocationType.ONLINE)
-    _add_log(db_session, seed_refs, event, bonus_action, None, seed_refs.ahmed.id)
+    bonus = _add_bonus(db_session, title=event.name, event=event, member_id=seed_refs.ahmed.id)
 
-    row = next(row for row in _member_history(client, seed_refs.ahmed.id) if row["event_id"] == event.id)
-
+    payload = _member_history(client, seed_refs.ahmed.id)
+    row = next(row for row in payload["history"] if row["bonus_id"] == bonus.id)
+    assert row["kind"] == "bonus"
+    assert row["event_id"] == event.id
     assert row["location_type"] == "online"
-    assert row["bonus_row"] is True
+
+    legacy = next(row for row in payload["events"] if row["event_id"] == event.id)
+    assert legacy["location_type"] == "online"
+    assert legacy["bonus_row"] is True
 
 
-def test_member_history_custom_points_page_entry_is_bonus_and_not_clickable(client, db_session, seed_refs):
-    bonus_action = _add_bonus_action(db_session)
-    event = _add_history_event(db_session, "Custom points-page entry", EventsLocationType.NONE)
-    _add_log(db_session, seed_refs, event, bonus_action, None, seed_refs.ahmed.id)
+def test_member_history_standalone_bonus_is_bonus_and_not_clickable(client, db_session, seed_refs):
+    bonus = _add_bonus(db_session, title="Standalone competition", member_id=seed_refs.ahmed.id)
 
-    row = next(row for row in _member_history(client, seed_refs.ahmed.id) if row["event_id"] == event.id)
+    payload = _member_history(client, seed_refs.ahmed.id)
+    row = next(row for row in payload["history"] if row["bonus_id"] == bonus.id)
+    assert row["kind"] == "bonus"
+    assert row["event_id"] is None
+    assert row["location_type"] is None
 
-    assert row["location_type"] == "none"
-    assert row["bonus_row"] is True
+    legacy = next(row for row in payload["events"] if row["event_name"] == "Standalone competition")
+    assert legacy["location_type"] == "none"
+    assert legacy["bonus_row"] is True
 
 
-def test_member_history_mixed_attendance_and_bonus_row_is_not_bonus(client, db_session, seed_refs):
-    bonus_action = _add_bonus_action(db_session)
+def test_member_history_attendance_and_event_bonus_appear_as_distinct_rows(client, db_session, seed_refs):
     event = _add_history_event(db_session, "Real event with both", EventsLocationType.ONLINE)
     _add_log(db_session, seed_refs, event, seed_refs.member_action, None, seed_refs.ahmed.id)
-    _add_log(db_session, seed_refs, event, bonus_action, None, seed_refs.ahmed.id)
+    _add_bonus(db_session, title=event.name, points=3, event=event, member_id=seed_refs.ahmed.id)
 
-    row = next(row for row in _member_history(client, seed_refs.ahmed.id) if row["event_id"] == event.id)
-
-    assert row["location_type"] == "online"
-    assert row["bonus_row"] is False
+    payload = _member_history(client, seed_refs.ahmed.id)
+    event_rows = [row for row in payload["history"] if row["event_id"] == event.id]
+    assert {r["kind"] for r in event_rows} == {"event", "bonus"}
+    assert sum(r["points"] for r in event_rows) == seed_refs.member_action.points + 3
 
 
 def test_department_history_real_event_row_is_clickable_and_not_bonus(client, db_session, seed_refs):
     event = _add_history_event(db_session, "Real on-site event", EventsLocationType.ON_SITE)
     _add_log(db_session, seed_refs, event, seed_refs.dept_action, seed_refs.dept_business.id, None)
 
-    row = next(row for row in _department_history(client, seed_refs.dept_business.id) if row["event_id"] == event.id)
-
+    payload = _department_history(client, seed_refs.dept_business.id)
+    row = next(row for row in payload["history"] if row["event_id"] == event.id)
+    assert row["kind"] == "event"
     assert row["location_type"] == "on-site"
-    assert row["bonus_row"] is False
 
 
-def test_department_history_pure_bonus_row_on_a_real_event_is_bonus_and_clickable(client, db_session, seed_refs):
-    bonus_action = _add_bonus_action(db_session)
+def test_department_history_bonus_on_a_real_event_is_bonus_and_clickable(client, db_session, seed_refs):
     event = _add_history_event(db_session, "Real online event", EventsLocationType.ONLINE)
-    _add_log(db_session, seed_refs, event, bonus_action, seed_refs.dept_business.id, None)
+    bonus = _add_bonus(db_session, title=event.name, event=event, department_id=seed_refs.dept_business.id)
 
-    row = next(row for row in _department_history(client, seed_refs.dept_business.id) if row["event_id"] == event.id)
-
+    payload = _department_history(client, seed_refs.dept_business.id)
+    row = next(row for row in payload["history"] if row["bonus_id"] == bonus.id)
+    assert row["kind"] == "bonus"
+    assert row["event_id"] == event.id
     assert row["location_type"] == "online"
-    assert row["bonus_row"] is True
 
 
-def test_department_history_custom_points_page_entry_is_bonus_and_not_clickable(client, db_session, seed_refs):
-    bonus_action = _add_bonus_action(db_session)
-    event = _add_history_event(db_session, "Custom points-page entry", EventsLocationType.NONE)
-    _add_log(db_session, seed_refs, event, bonus_action, seed_refs.dept_business.id, None)
+def test_department_history_standalone_bonus_is_bonus_and_not_clickable(client, db_session, seed_refs):
+    bonus = _add_bonus(db_session, title="Department recognition", department_id=seed_refs.dept_business.id)
 
-    row = next(row for row in _department_history(client, seed_refs.dept_business.id) if row["event_id"] == event.id)
+    payload = _department_history(client, seed_refs.dept_business.id)
+    row = next(row for row in payload["history"] if row["bonus_id"] == bonus.id)
+    assert row["kind"] == "bonus"
+    assert row["event_id"] is None
+    assert row["location_type"] is None
 
-    assert row["location_type"] == "none"
-    assert row["bonus_row"] is True
+    legacy = next(row for row in payload["events"] if row["event_name"] == "Department recognition")
+    assert legacy["location_type"] == "none"
+    assert legacy["bonus_row"] is True

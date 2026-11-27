@@ -288,12 +288,12 @@ def test_paginated_filters_phase_registration_status_and_exclude_custom(admin_cl
             registration_status="open",
         ),
     ).json()
-    custom_none = admin_client.post(
+    walkin_no_form = admin_client.post(
         "/events/",
         json=make_create_event_payload(
             event=make_event(
-                name="custom-points",
-                location_type="none",
+                name="walkin-event",
+                location_type="online",
                 start_datetime="2026-06-28T10:00:00",
                 end_datetime="2026-06-28T12:00:00",
                 status="published",
@@ -304,7 +304,7 @@ def test_paginated_filters_phase_registration_status_and_exclude_custom(admin_cl
 
     # phase filters
     res_upcoming = admin_client.get("/events/paginated", params={"phase": "upcoming"}).json()
-    assert {e["id"] for e in res_upcoming["items"]} == {upcoming_open["id"], custom_none["id"]}
+    assert {e["id"] for e in res_upcoming["items"]} == {upcoming_open["id"], walkin_no_form["id"]}
     assert res_upcoming["total"] == 2
 
     res_live = admin_client.get("/events/paginated", params={"phase": "live"}).json()
@@ -315,10 +315,10 @@ def test_paginated_filters_phase_registration_status_and_exclude_custom(admin_cl
     assert [e["id"] for e in res_ended["items"]] == [ended_closed["id"]]
     assert res_ended["total"] == 1
 
-    # exclude_custom must affect BOTH total and items
+    # exclude_custom stays accepted as a backward-compatible parameter (all events are real now)
     res_no_custom = admin_client.get("/events/paginated", params={"phase": "upcoming", "exclude_custom": True}).json()
-    assert [e["id"] for e in res_no_custom["items"]] == [upcoming_open["id"]]
-    assert res_no_custom["total"] == 1
+    assert {e["id"] for e in res_no_custom["items"]} == {upcoming_open["id"], walkin_no_form["id"]}
+    assert res_no_custom["total"] == 2
 
     # registration_status filters match effective status
     assert [
@@ -333,7 +333,7 @@ def test_paginated_filters_phase_registration_status_and_exclude_custom(admin_cl
     ] == [ended_closed["id"]]
     assert [
         e["id"] for e in admin_client.get("/events/paginated", params={"registration_status": "none"}).json()["items"]
-    ] == [custom_none["id"]]
+    ] == [walkin_no_form["id"]]
 
 
 # ---------------------------------------------------------------- submissions gating & GET /submissions/me

@@ -205,7 +205,7 @@ def give_custom(client, event_id, member_ids, points=4):
 
 
 def test_custom_points_push_once_per_member_even_after_an_edit(admin_client, db_session, push_on, apns_mock, frozen):
-    from app.DB.schema import Logs
+    from app.DB.schema import Bonuses, BonusGrants
 
     event = make_event(db_session, start=datetime(2026, 7, 18, 16, 0))
     first, second = app_user(db_session), app_user(db_session)
@@ -213,12 +213,14 @@ def test_custom_points_push_once_per_member_even_after_an_edit(admin_client, db_
 
     give_custom(admin_client, event.id, [first.id])
     [row] = rows(db_session, PushKind.POINTS)
-    log_id = db_session.scalars(select(Logs.id).where(Logs.event_id == event.id)).one()
-    assert row.dedupe_key == f"points:custom:{log_id}:{first.id}"
+    grant_id = db_session.scalars(
+        select(BonusGrants.id).join(Bonuses, Bonuses.id == BonusGrants.bonus_id).where(Bonuses.event_id == event.id)
+    ).one()
+    assert row.dedupe_key == f"points:bonus:{grant_id}:{first.id}"
     assert row.payload["en"]["title"] == "+4 points"
 
-    # The edit deletes and recreates every members_logs row; only the added member hears about it.
-    response = admin_client.put(f"/custom/members/{log_id}", json={"member_ids": [first.id, second.id], "points": 4})
+    # Editing keeps the grant and deduplicates so only the added member hears about it.
+    response = admin_client.put(f"/custom/members/{grant_id}", json={"member_ids": [first.id, second.id], "points": 4})
     assert_2xx(response)
     assert sorted(r.member_id for r in rows(db_session, PushKind.POINTS)) == sorted([first.id, second.id])
 
@@ -294,7 +296,6 @@ def test_reminders_skip_pending_registrations_check_ins_and_unattended_events(db
     for status, location, form in (
         (EventsStatus.DRAFT, EventsLocationType.ON_SITE, FormType.REGISTRATION),
         (EventsStatus.CANCELLED, EventsLocationType.ON_SITE, FormType.REGISTRATION),
-        (EventsStatus.PUBLISHED, EventsLocationType.HIDDEN, FormType.REGISTRATION),
         (EventsStatus.PUBLISHED, EventsLocationType.ON_SITE, FormType.NONE),
     ):
         other = make_event(

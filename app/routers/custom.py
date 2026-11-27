@@ -1,32 +1,37 @@
+"""Compatibility shim for legacy ``/custom/*`` endpoints, backed by ``bonuses``.
+
+New clients (Admin web) use ``/bonuses`` directly. This router stays alive so
+shipped TestFlight iOS builds (whose admin portal calls ``POST /custom/members``
+and ``GET /custom/members/{event_id}``) keep working without creating fake
+``events`` rows. Remove once old TestFlight builds are retired.
+"""
+
 import logging
-from typing import List
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status, Depends
+from datetime import datetime
+from typing import List, Literal
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
 from app.DB import (
-    events as events_queries,
-    departments as departments_queries,
     actions as actions_queries,
-    logs as log_queries,
+    bonuses as bonuses_queries,
+    departments as departments_queries,
+    events as events_queries,
     members as members_queries,
 )
-
-from app.routers.models import Events_model, BaseClassModel
-
-from datetime import datetime
-from app.DB.schema import EventsLocationType
+from app.DB.schema import BonusRecipientType
 from app.dependencies import DB
 from app.helpers import CurrentMember
-from app.exceptions import DataIntegrityError
-
+from app.leaderboard_cache import refresh_attendance_points_cache
+from app.routers.models import BaseClassModel
 from app.routers.responses import CustomPointsCreatedResponse, MessageResponse
+from app.semesters import semester_for_event
 from app.services.permissions.catalogue import Perm
 from app.services.permissions.guards import Require
 from app.services.push import delivery as push_delivery
 from app.services.push import triggers as push_triggers
 
-
 logger = logging.getLogger(__name__)
-
 
 router = APIRouter(prefix="/custom", tags=["custom"], dependencies=[Depends(Require(Perm.POINTS_CUSTOM))])
 
@@ -50,7 +55,7 @@ class CustomDepartmentPointsRequest(BaseClassModel):
     start_datetime: datetime
     end_datetime: datetime
     event_name: str
-    location_type: EventsLocationType
+    location_type: Literal["online", "on-site", "none", "hidden"] = "none"
     point_deatils: List[DepartmentPointDetails]
 
 
@@ -59,7 +64,7 @@ class CustomMemberPointsRequest(BaseClassModel):
     start_datetime: datetime
     end_datetime: datetime
     event_name: str
-    location_type: EventsLocationType
+    location_type: Literal["online", "on-site", "none", "hidden"] = "none"
     point_deatils: List[MemberPointDetails]
 
 
@@ -95,453 +100,280 @@ class CustomMemberPointsResponse(BaseClassModel):
     point_details: List[MemberPointDetailsWithLogId]
 
 
+def _resolve_legacy_grant(
+    session: DB, action_id: int | None, action_name: str | None, points: int
+) -> tuple[int, int | None, str | None, str | None]:
+    if action_id is not None:
+        action = actions_queries.get_action_by_id(session, action_id)
+        if action is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Action with id {action_id} not found")
+        return int(action.points), action.id, action.action_name, action.ar_action_name
+    if action_name and action_name.strip():
+        clean = action_name.strip()
+        return points, None, clean, clean
+    return points, None, None, None
+
+
+def _get_or_create_target_bonus(
+    session: DB,
+    *,
+    event_id: int | None,
+    event_name: str,
+    start_datetime: datetime,
+    end_datetime: datetime,
+    location_type: str,
+    actor_id: int,
+):
+    if event_id:
+        legacy = bonuses_queries.get_standalone_bonus_by_legacy_id(session, event_id)
+        if legacy is not None:
+            return legacy, legacy.legacy_id
+        event = events_queries.get_event_by_id(session, event_id, for_update=True)
+        bonus = bonuses_queries.get_bonus_by_event_id(session, event.id)
+        if bonus is None:
+            bonus = bonuses_queries.create_bonus(
+                session,
+                title=event.name,
+                semester_id=event.semester_id,
+                given_at=event.start_datetime,
+                is_public=True,
+                event_id=event.id,
+                created_by=actor_id,
+            )
+        return bonus, event.id
+
+    semester = semester_for_event(session, end_datetime)
+    bonus = bonuses_queries.create_bonus(
+        session,
+        title=event_name.strip(),
+        semester_id=semester.id,
+        given_at=start_datetime,
+        is_public=location_type != "hidden",
+        event_id=None,
+        created_by=actor_id,
+        legacy_end_datetime=end_datetime,
+    )
+    return bonus, bonus.legacy_id
+
+
+def _legacy_event_details(session: DB, event_id: int):
+    standalone = bonuses_queries.get_standalone_bonus_by_legacy_id(session, event_id)
+    if standalone is not None:
+        return (
+            standalone.title,
+            standalone.given_at,
+            standalone.legacy_end_datetime or standalone.given_at,
+            standalone.grants,
+        )
+    event = events_queries.get_event_by_id(session, event_id)
+    bonuses = bonuses_queries.get_bonuses_by_event_id(session, event_id)
+    return event.name, event.start_datetime, event.end_datetime, bonuses_queries.collect_grants(bonuses)
+
+
 @router.post("/departments", status_code=status.HTTP_201_CREATED, response_model=CustomPointsCreatedResponse)
 def give_department_custom_points(body: CustomDepartmentPointsRequest, session: DB, member: CurrentMember):
-    try:
-        logger.info("Custom Department Points")
-        # [1] validate events
-        if body.event_id:
-            logger.info(f"Validating event with id {body.event_id}")
-            event = events_queries.get_event_by_id(session, body.event_id)
-            if not event:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {body.event_id} not found"
-                )
-        else:
-            # an existing event is not provided, create a new one with default values
-            new_event_model = Events_model(
-                name=body.event_name,
-                description=None,
-                location="none",
-                location_type=body.location_type,
-                start_datetime=body.start_datetime,
-                end_datetime=body.end_datetime,
-                status="published",
-                image_url=None,
-                is_official=0,
-            )
-
-            event = events_queries.create_event(session, new_event_model, member.id, member.id)
-            if not event:
-                raise DataIntegrityError("Failed to create event")
-
-        # Proccess each point detail and give points to departments per action/points
-        details_len = len(body.point_deatils)
-        for i, point_detail in enumerate(body.point_deatils):
-            # [2] validate action
-            logger.info(f"Processing point detail [{i + 1}/{details_len}]")
-            if point_detail.action_id:
-                logger.info(f"Validating action with id {point_detail.action_id}")
-                action = actions_queries.get_action_by_id(session, point_detail.action_id)
-                if not action:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Action with id {point_detail.action_id} not found",
-                    )
-            else:
-                logger.info("No action id provided, checking name")
-                if point_detail.action_name:
-                    logger.info(f"Action name provided creating action with name {point_detail.action_name}")
-                    action = actions_queries.create_action(
-                        session, point_detail.action_name, point_detail.points, "bonus"
-                    )
-                else:
-                    logger.info("No action name provided, inferring from points value")
-                    if point_detail.points > 0:
-                        action = actions_queries.get_bonus_action(session)
-                        logger.info(
-                            f"Points are {point_detail.points}, using Bonus action {action.action_name} with id {action.id}"
-                        )
-                    else:
-                        action = actions_queries.get_discount_action(session)
-                        logger.info(
-                            f"Points are {point_detail.points}, using Discount action {action.action_name} with id {action.id}"
-                        )
-
-            # [3] using the action and event to give points
-            new_log = log_queries.create_log(session, event.id, action.id)
-            logger.info(f"Created log with id {new_log.id} for event {event.name} and action {action.action_name}")
-
-            # [4] creating bonus/discount modification - only for default actions
-            # When action_id is provided: predefined action with its own points
-            # When action_name is provided: new custom action created with points embedded
-            # Only create modification when using default Bonus/Discount (no action_id AND no action_name)
-            if point_detail.action_id is None and point_detail.action_name is None:
-                mod_type = "bonus" if point_detail.points > 0 else "discount"
-                mod_value = abs(point_detail.points)
-                log_queries.create_modification(session, new_log.id, mod_type, mod_value)
-                logger.info(f"Created modification for log id {new_log.id} with type {mod_type} and value {mod_value}")
-            else:
-                logger.info(f"Skipping modification - using action points ({action.points})")
-
-            # [5] give points to departments
-            for department_id in point_detail.departments_id:
-                logger.info(f"Giving points to department with id {department_id}")
-                log_queries.create_department_log(session, department_id, new_log.id)
-
-        session.commit()
-        logger.info("Successfully given custom points to departments")
-        return {"event_id": event.id, "message": "Successfully given custom points to departments"}
-
-    finally:
-        logger.debug("request body: %s", body.model_dump(mode="json"))
-        logger.info("Finished processing custom department points request")
-
-
-@router.get("/departments/{event_id}", response_model=CustomDepartmentPointsResponse)
-def get_department_custom_points(event_id: int, session: DB):
-    """Retrieve all custom department points for a specific event."""
-    logger.info(f"Get Custom Department Points for Event {event_id}")
-
-    # [1] Validate event exists
-    logger.info(f"Validating event with id {event_id}")
-    event = events_queries.get_event_by_id(session, event_id)
-    if not event:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {event_id} not found")
-
-    # [2] Get all custom department points for this event
-    logger.info(f"Fetching custom department points for event {event_id}")
-    raw_points = log_queries.get_custom_department_points_by_event(session, event_id)
-
-    # [3] Transform the data to match the response model
-    point_details = []
-    for point_data in raw_points:
-        points = point_data["mod_value"] if point_data["mod_type"] == "bonus" else -point_data["mod_value"]
-        point_details.append(
-            {
-                "log_id": point_data["log_id"],
-                "departments_id": point_data["department_ids"],
-                "points": points,
-                "action_id": point_data["action_id"],
-                "action_name": point_data["action_name"],
-            }
-        )
-
-    logger.info(f"Found {len(point_details)} custom point entries for event {event_id}")
-    response = CustomDepartmentPointsResponse(
-        event_id=event.id,
-        start_datetime=event.start_datetime,
-        end_datetime=event.end_datetime,
-        event_name=event.name,
-        point_details=point_details,
+    bonus, response_event_id = _get_or_create_target_bonus(
+        session,
+        event_id=body.event_id,
+        event_name=body.event_name,
+        start_datetime=body.start_datetime,
+        end_datetime=body.end_datetime,
+        location_type=body.location_type,
+        actor_id=member.id,
     )
-    logger.info("Successfully retrieved custom department points")
-    return response
+    for detail in body.point_deatils:
+        for dept_id in detail.departments_id:
+            if departments_queries.get_department_by_id(session, dept_id) is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {dept_id} not found"
+                )
+        points, source_action_id, label_en, label_ar = _resolve_legacy_grant(
+            session, detail.action_id, detail.action_name, detail.points
+        )
+        grant = bonuses_queries.create_bonus_grant(
+            session,
+            bonus_id=bonus.id,
+            recipient_type=BonusRecipientType.DEPARTMENT,
+            points=points,
+            source_action_id=source_action_id,
+            label_en=label_en,
+            label_ar=label_ar,
+        )
+        bonuses_queries.set_grant_recipients(session, grant, detail.departments_id)
+
+    session.commit()
+    refresh_attendance_points_cache()
+    return {
+        "event_id": response_event_id,
+        "bonus_id": bonus.id,
+        "message": "Successfully given custom points to departments",
+    }
+
+
+@router.get("/departments/{event_id:int}", response_model=CustomDepartmentPointsResponse)
+def get_department_custom_points(event_id: int, session: DB):
+    name, start, end, all_grants = _legacy_event_details(session, event_id)
+    grants = [g for g in all_grants if g.recipient_type == BonusRecipientType.DEPARTMENT]
+    return CustomDepartmentPointsResponse(
+        event_id=event_id,
+        start_datetime=start,
+        end_datetime=end,
+        event_name=name,
+        point_details=[
+            DepartmentPointDetailsWithLogId(
+                log_id=g.legacy_id,
+                departments_id=sorted(r.department_id for r in g.recipients if r.department_id is not None),
+                points=g.points,
+                action_id=g.source_action_id,
+                action_name=g.label_en or ("Discount" if g.points < 0 else "Bonus"),
+            )
+            for g in grants
+        ],
+    )
 
 
 @router.put("/departments/{log_id}", response_model=MessageResponse)
-def update_department_custom_points(log_id: int, body: DepartmentPointDetails, session: DB):
-    """Update a single custom department point entry by log_id."""
-    logger.info(f"Update Custom Department Points for Log {log_id}")
-
-    # [1] Validate log exists
-    logger.info(f"Validating log with id {log_id}")
-    existing_log = log_queries.get_log_by_id(session, log_id)
-    if not existing_log:
+def update_department_custom_points(log_id: str, body: DepartmentPointDetails, session: DB):
+    grant = bonuses_queries.get_bonus_grant_by_id(session, log_id)
+    if grant is None or grant.recipient_type != BonusRecipientType.DEPARTMENT:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
-    logger.info(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
-
-    # [2] Validate or infer action
-    if body.action_id:
-        logger.info(f"Validating action with id {body.action_id}")
-        action = actions_queries.get_action_by_id(session, body.action_id)
-        if not action:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=f"Action with id {body.action_id} not found"
-            )
-    else:
-        logger.info("No action id provided, inferring from points value")
-        if body.points > 0:
-            action = actions_queries.get_bonus_action(session)
-            logger.info(f"Points are {body.points}, using Bonus action {action.action_name} with id {action.id}")
-        else:
-            action = actions_queries.get_discount_action(session)
-            logger.info(f"Points are {body.points}, using Discount action {action.action_name} with id {action.id}")
-
-    # [3] Validate all departments exist
-    logger.info(f"Validating {len(body.departments_id)} departments")
     for dept_id in body.departments_id:
-        department = departments_queries.get_department_by_id(session, dept_id)
-        if not department:
+        if departments_queries.get_department_by_id(session, dept_id) is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Department with id {dept_id} not found")
-
-    # [4] Update the log's action if it changed
-    if existing_log.action_id != action.id:
-        logger.info(f"Updating log action from {existing_log.action_id} to {action.id}")
-        log_queries.update_log_action_id(session, log_id, action.id)
-
-    # [5] Update the modification - only for default actions (no action_id AND no action_name)
-    # When action_id is provided: predefined action with its own points
-    # When action_name is provided: custom action (created or existing) with points embedded
-    modification = log_queries.get_modification_by_log_id(session, log_id)
-    if body.action_id is None and body.action_name is None:
-        # Default action: need a modification for points
-        mod_type = "bonus" if body.points > 0 else "discount"
-        mod_value = abs(body.points)
-        if modification:
-            logger.info(f"Updating modification for log {log_id}: type={mod_type}, value={mod_value}")
-            log_queries.update_modification(session, modification.id, mod_type, mod_value)
-        else:
-            logger.info("No modification found, creating new one")
-            log_queries.create_modification(session, log_id, mod_type, mod_value)
-    else:
-        # Custom/predefined action: remove any existing modification (action has its own points)
-        if modification:
-            logger.info(f"Removing modification for log {log_id} - using action points ({action.points})")
-            log_queries.delete_modification(session, modification.id)
-        else:
-            logger.info(f"No modification to remove - using action points ({action.points})")
-
-    # [6] Update department associations
-    deleted_count = log_queries.delete_department_logs_by_log_id(session, log_id)
-    logger.info(f"Deleted {deleted_count} existing department associations")
-
-    logger.info(f"Creating {len(body.departments_id)} new department associations")
-    for dept_id in body.departments_id:
-        log_queries.create_department_log(session, dept_id, log_id)
-        logger.info(f"Associated department {dept_id} with log {log_id}")
-
+    points, source_action_id, label_en, label_ar = _resolve_legacy_grant(
+        session, body.action_id, body.action_name, body.points
+    )
+    if source_action_id is None or source_action_id != grant.source_action_id:
+        grant.points = points
+    grant.source_action_id = source_action_id
+    grant.label_en = label_en
+    grant.label_ar = label_ar
+    bonuses_queries.set_grant_recipients(session, grant, body.departments_id)
     session.commit()
-    logger.info("Successfully updated custom department points")
+    refresh_attendance_points_cache()
     return {"message": "Successfully updated custom department points"}
+
+
+def _delete_grant_and_prune_empty_bonus(session: DB, grant) -> None:
+    bonus_id = grant.bonus_id
+    bonuses_queries.delete_bonus_grant(session, grant.id)
+    remaining = bonuses_queries.get_bonus_by_id(session, bonus_id)
+    if remaining is not None and not remaining.grants:
+        bonuses_queries.delete_bonus(session, bonus_id)
+
+
+@router.delete("/departments/{log_id}", response_model=MessageResponse)
+def delete_department_custom_points(log_id: str, session: DB):
+    grant = bonuses_queries.get_bonus_grant_by_id(session, log_id)
+    if grant is None or grant.recipient_type != BonusRecipientType.DEPARTMENT:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
+    _delete_grant_and_prune_empty_bonus(session, grant)
+    session.commit()
+    refresh_attendance_points_cache()
+    return {"message": "Successfully deleted custom department points"}
 
 
 @router.post("/members", status_code=status.HTTP_201_CREATED, response_model=CustomPointsCreatedResponse)
 def give_member_custom_points(
     body: CustomMemberPointsRequest, session: DB, member: CurrentMember, background_tasks: BackgroundTasks
 ):
-    try:
-        logger.info("Custom Member Points")
-        if body.event_id:
-            logger.info(f"Validating event with id {body.event_id}")
-            event = events_queries.get_event_by_id(session, body.event_id)
-            if not event:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {body.event_id} not found"
-                )
-        else:
-            new_event_model = Events_model(
-                name=body.event_name,
-                description=None,
-                location="none",
-                location_type=body.location_type,
-                start_datetime=body.start_datetime,
-                end_datetime=body.end_datetime,
-                status="published",
-                image_url=None,
-                is_official=0,
-            )
-            event = events_queries.create_event(session, new_event_model, member.id, member.id)
-            if not event:
-                raise DataIntegrityError("Failed to create event")
-
-        details_len = len(body.point_deatils)
-        for i, point_detail in enumerate(body.point_deatils):
-            logger.info(f"Processing point detail [{i + 1}/{details_len}]")
-            if point_detail.action_id:
-                logger.info(f"Validating action with id {point_detail.action_id}")
-                action = actions_queries.get_action_by_id(session, point_detail.action_id)
-                if not action:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Action with id {point_detail.action_id} not found",
-                    )
-            else:
-                logger.info("No action id provided, checking name")
-                if point_detail.action_name:
-                    logger.info(f"Action name provided creating action with name {point_detail.action_name}")
-                    action = actions_queries.create_action(
-                        session, point_detail.action_name, point_detail.points, "bonus"
-                    )
-                else:
-                    logger.info("No action name provided, inferring from points value")
-                    if point_detail.points > 0:
-                        action = actions_queries.get_bonus_action(session)
-                        logger.info(
-                            f"Points are {point_detail.points}, using Bonus action {action.action_name} with id {action.id}"
-                        )
-                    else:
-                        action = actions_queries.get_discount_action(session)
-                        logger.info(
-                            f"Points are {point_detail.points}, using Discount action {action.action_name} with id {action.id}"
-                        )
-
-            new_log = log_queries.create_log(session, event.id, action.id)
-            logger.info(f"Created log with id {new_log.id} for event {event.name} and action {action.action_name}")
-
-            if point_detail.action_id is None and point_detail.action_name is None:
-                mod_type = "bonus" if point_detail.points > 0 else "discount"
-                mod_value = abs(point_detail.points)
-                log_queries.create_modification(session, new_log.id, mod_type, mod_value)
-                logger.info(f"Created modification for log id {new_log.id} with type {mod_type} and value {mod_value}")
-            else:
-                logger.info(f"Skipping modification - using action points ({action.points})")
-
-            for member_id in point_detail.member_ids:
-                logger.info(f"Giving points to member with id {member_id}")
-                log_queries.create_member_log(session, member_id, new_log.id)
-            push_triggers.custom_points_given(session, event, new_log.id, point_detail.member_ids)
-
-        session.commit()
-        background_tasks.add_task(push_delivery.kick)
-        logger.info("Successfully given custom points to members")
-        return {"event_id": event.id, "message": "Successfully given custom points to members"}
-
-    finally:
-        logger.debug("request body: %s", body.model_dump(mode="json"))
-        logger.info("Finished processing custom member points request")
-
-
-@router.get("/members/{event_id}", response_model=CustomMemberPointsResponse)
-def get_member_custom_points(event_id: int, session: DB):
-    logger.info(f"Get Custom Member Points for Event {event_id}")
-
-    logger.info(f"Validating event with id {event_id}")
-    event = events_queries.get_event_by_id(session, event_id)
-    if not event:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Event with id {event_id} not found")
-
-    logger.info(f"Fetching custom member points for event {event_id}")
-    raw_points = log_queries.get_custom_member_points_by_event(session, event_id)
-
-    point_details = []
-    for point_data in raw_points:
-        points = point_data["mod_value"] if point_data["mod_type"] == "bonus" else -point_data["mod_value"]
-        point_details.append(
-            {
-                "log_id": point_data["log_id"],
-                "member_ids": point_data["member_ids"],
-                "points": points,
-                "action_id": point_data["action_id"],
-                "action_name": point_data["action_name"],
-            }
-        )
-
-    logger.info(f"Found {len(point_details)} custom point entries for event {event_id}")
-    response = CustomMemberPointsResponse(
-        event_id=event.id,
-        start_datetime=event.start_datetime,
-        end_datetime=event.end_datetime,
-        event_name=event.name,
-        point_details=point_details,
+    bonus, response_event_id = _get_or_create_target_bonus(
+        session,
+        event_id=body.event_id,
+        event_name=body.event_name,
+        start_datetime=body.start_datetime,
+        end_datetime=body.end_datetime,
+        location_type=body.location_type,
+        actor_id=member.id,
     )
-    logger.info("Successfully retrieved custom member points")
-    return response
-
-
-@router.delete("/departments/{log_id}", response_model=MessageResponse)
-def delete_department_custom_points(log_id: int, session: DB):
-    logger.info(f"Delete Custom Department Points for Log {log_id}")
-
-    logger.info(f"Validating log with id {log_id}")
-    existing_log = log_queries.get_log_by_id(session, log_id)
-    if not existing_log:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
-
-    logger.info(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
-
-    modification = log_queries.get_modification_by_log_id(session, log_id)
-    if modification:
-        logger.info(f"Deleting modification with id {modification.id}")
-        log_queries.delete_modification(session, modification.id)
-
-    deleted_dept_count = log_queries.delete_department_logs_by_log_id(session, log_id)
-    logger.info(f"Deleted {deleted_dept_count} department associations")
-
-    log_queries.delete_log(session, log_id)
-    logger.info(f"Deleted log {log_id}")
+    pushed = False
+    for detail in body.point_deatils:
+        for member_id in detail.member_ids:
+            members_queries.get_member_by_id(session, member_id)
+        points, source_action_id, label_en, label_ar = _resolve_legacy_grant(
+            session, detail.action_id, detail.action_name, detail.points
+        )
+        grant = bonuses_queries.create_bonus_grant(
+            session,
+            bonus_id=bonus.id,
+            recipient_type=BonusRecipientType.MEMBER,
+            points=points,
+            source_action_id=source_action_id,
+            label_en=label_en,
+            label_ar=label_ar,
+        )
+        added = bonuses_queries.set_grant_recipients(session, grant, detail.member_ids)
+        if added and push_triggers.bonus_points_given(session, bonus, grant, added) > 0:
+            pushed = True
 
     session.commit()
-    logger.info("Successfully deleted custom department points")
-    return {"message": "Successfully deleted custom department points"}
+    refresh_attendance_points_cache()
+    if pushed:
+        background_tasks.add_task(push_delivery.kick)
+    return {
+        "event_id": response_event_id,
+        "bonus_id": bonus.id,
+        "message": "Successfully given custom points to members",
+    }
 
 
-@router.delete("/members/{log_id}", response_model=MessageResponse)
-def delete_member_custom_points(log_id: int, session: DB):
-    logger.info(f"Delete Custom Member Points for Log {log_id}")
-
-    logger.info(f"Validating log with id {log_id}")
-    existing_log = log_queries.get_log_by_id(session, log_id)
-    if not existing_log:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
-
-    logger.info(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
-
-    modification = log_queries.get_modification_by_log_id(session, log_id)
-    if modification:
-        logger.info(f"Deleting modification with id {modification.id}")
-        log_queries.delete_modification(session, modification.id)
-
-    deleted_member_count = log_queries.delete_member_logs_by_log_id(session, log_id)
-    logger.info(f"Deleted {deleted_member_count} member associations")
-
-    log_queries.delete_log(session, log_id)
-    logger.info(f"Deleted log {log_id}")
-
-    session.commit()
-    logger.info("Successfully deleted custom member points")
-    return {"message": "Successfully deleted custom member points"}
+@router.get("/members/{event_id:int}", response_model=CustomMemberPointsResponse)
+def get_member_custom_points(event_id: int, session: DB):
+    name, start, end, all_grants = _legacy_event_details(session, event_id)
+    grants = [g for g in all_grants if g.recipient_type == BonusRecipientType.MEMBER]
+    return CustomMemberPointsResponse(
+        event_id=event_id,
+        start_datetime=start,
+        end_datetime=end,
+        event_name=name,
+        point_details=[
+            MemberPointDetailsWithLogId(
+                log_id=g.legacy_id,
+                member_ids=sorted(r.member_id for r in g.recipients if r.member_id is not None),
+                points=g.points,
+                action_id=g.source_action_id,
+                action_name=g.label_en or ("Discount" if g.points < 0 else "Bonus"),
+            )
+            for g in grants
+        ],
+    )
 
 
 @router.put("/members/{log_id}", response_model=MessageResponse)
-def update_member_custom_points(log_id: int, body: MemberPointDetails, session: DB, background_tasks: BackgroundTasks):
-    logger.info(f"Update Custom Member Points for Log {log_id}")
-
-    logger.info(f"Validating log with id {log_id}")
-    existing_log = log_queries.get_log_by_id(session, log_id)
-    if not existing_log:
+def update_member_custom_points(log_id: str, body: MemberPointDetails, session: DB, background_tasks: BackgroundTasks):
+    grant = bonuses_queries.get_bonus_grant_by_id(session, log_id)
+    if grant is None or grant.recipient_type != BonusRecipientType.MEMBER:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
-    logger.info(f"Log found: event_id={existing_log.event_id}, action_id={existing_log.action_id}")
-
-    if body.action_id:
-        logger.info(f"Validating action with id {body.action_id}")
-        action = actions_queries.get_action_by_id(session, body.action_id)
-        if not action:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=f"Action with id {body.action_id} not found"
-            )
-    else:
-        logger.info("No action id provided, inferring from points value")
-        if body.points > 0:
-            action = actions_queries.get_bonus_action(session)
-            logger.info(f"Points are {body.points}, using Bonus action {action.action_name} with id {action.id}")
-        else:
-            action = actions_queries.get_discount_action(session)
-            logger.info(f"Points are {body.points}, using Discount action {action.action_name} with id {action.id}")
-
-    logger.info(f"Validating {len(body.member_ids)} members")
     for mem_id in body.member_ids:
         members_queries.get_member_by_id(session, mem_id)
+    points, source_action_id, label_en, label_ar = _resolve_legacy_grant(
+        session, body.action_id, body.action_name, body.points
+    )
+    if source_action_id is None or source_action_id != grant.source_action_id:
+        grant.points = points
+    grant.source_action_id = source_action_id
+    grant.label_en = label_en
+    grant.label_ar = label_ar
+    added = bonuses_queries.set_grant_recipients(session, grant, body.member_ids)
 
-    if existing_log.action_id != action.id:
-        logger.info(f"Updating log action from {existing_log.action_id} to {action.id}")
-        log_queries.update_log_action_id(session, log_id, action.id)
-
-    modification = log_queries.get_modification_by_log_id(session, log_id)
-    if body.action_id is None and body.action_name is None:
-        mod_type = "bonus" if body.points > 0 else "discount"
-        mod_value = abs(body.points)
-        if modification:
-            logger.info(f"Updating modification for log {log_id}: type={mod_type}, value={mod_value}")
-            log_queries.update_modification(session, modification.id, mod_type, mod_value)
-        else:
-            logger.info("No modification found, creating new one")
-            log_queries.create_modification(session, log_id, mod_type, mod_value)
-    else:
-        if modification:
-            logger.info(f"Removing modification for log {log_id} - using action points ({action.points})")
-            log_queries.delete_modification(session, modification.id)
-        else:
-            logger.info(f"No modification to remove - using action points ({action.points})")
-
-    # Members who stay keep their rows (and the day they were given the points); see set_member_logs.
-    added = log_queries.set_member_logs(session, log_id, body.member_ids)
-    logger.info(f"Log {log_id} now has {len(set(body.member_ids))} member(s), {len(added)} added")
-    if existing_log.event is not None:
-        # Only members the edit adds are told: the others already were (docs/PUSH.md).
-        push_triggers.custom_points_given(session, existing_log.event, log_id, body.member_ids)
+    pushed = False
+    if grant.bonus is not None and added:
+        if push_triggers.bonus_points_given(session, grant.bonus, grant, added) > 0:
+            pushed = True
 
     session.commit()
-    background_tasks.add_task(push_delivery.kick)
-    logger.info("Successfully updated custom member points")
+    refresh_attendance_points_cache()
+    if pushed:
+        background_tasks.add_task(push_delivery.kick)
     return {"message": "Successfully updated custom member points"}
+
+
+@router.delete("/members/{log_id}", response_model=MessageResponse)
+def delete_member_custom_points(log_id: str, session: DB):
+    grant = bonuses_queries.get_bonus_grant_by_id(session, log_id)
+    if grant is None or grant.recipient_type != BonusRecipientType.MEMBER:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Log with id {log_id} not found")
+    _delete_grant_and_prune_empty_bonus(session, grant)
+    session.commit()
+    refresh_attendance_points_cache()
+    return {"message": "Successfully deleted custom member points"}

@@ -107,15 +107,20 @@ def resource_page(session: Session, event_id: int, resource: str, page: int, pag
     # Never expose payloads, answers, tokens, email contents or integration errors.
     for name in (
         "name",
+        "title",
         "label",
+        "label_en",
+        "label_ar",
         "status",
         "team",
         "kind",
+        "recipient_type",
         "form_type",
         "submission_type",
         "is_accepted",
         "is_invited",
         "date",
+        "given_at",
         "submitted_at",
         "cancelled_at",
         "type",
@@ -124,10 +129,15 @@ def resource_page(session: Session, event_id: int, resource: str, page: int, pag
     ):
         if name in table.c and name not in {column.name for column in columns}:
             columns.append(table.c[name])
-    for field, model in (("member_id", Members), ("department_id", Departments)):
-        if field in table.c:
-            columns.append(select(model.name).where(model.id == table.c[field]).scalar_subquery().label("display_name"))
-            break
+    display_subqueries = [
+        select(model.name).where(model.id == table.c[field]).scalar_subquery()
+        for field, model in (("member_id", Members), ("department_id", Departments))
+        if field in table.c
+    ]
+    if len(display_subqueries) == 1:
+        columns.append(display_subqueries[0].label("display_name"))
+    elif len(display_subqueries) > 1:
+        columns.append(func.coalesce(*display_subqueries).label("display_name"))
     rows = session.execute(
         select(*columns)
         .where(where)
@@ -138,7 +148,14 @@ def resource_page(session: Session, event_id: int, resource: str, page: int, pag
     items = []
     for row in rows:
         identifier = " / ".join(str(row[c.name]) for c in table.primary_key.columns)
-        label = row.get("display_name") or row.get("label") or row.get("name") or f"#{identifier}"
+        label = (
+            row.get("display_name")
+            or row.get("title")
+            or row.get("label")
+            or row.get("label_en")
+            or row.get("name")
+            or f"#{identifier}"
+        )
         details = {}
         for column in columns:
             key = column.name

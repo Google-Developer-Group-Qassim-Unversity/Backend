@@ -88,7 +88,7 @@ def _penalty(session, request: EventRequests) -> PenaltyResponse | None:
     if penalty is None:
         return None
     return PenaltyResponse(
-        late_days=penalty.late_days, points=penalty.points, applied=penalty.applied_log_id is not None
+        late_days=penalty.late_days, points=penalty.points, applied=penalty.applied_bonus_grant_id is not None
     )
 
 

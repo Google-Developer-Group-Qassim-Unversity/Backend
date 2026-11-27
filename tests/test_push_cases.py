@@ -522,18 +522,15 @@ def test_an_update_for_an_event_that_ended_meanwhile_is_skipped(db_session, push
     assert rows(db_session, PushKind.EVENT_UPDATED)[0].last_error == "event_over"
 
 
-def test_an_event_moved_out_of_the_app_sends_nothing(db_session, push_on, apns_mock, frozen):
+def test_a_draft_event_drops_pending_update_pushes(db_session, push_on, apns_mock, frozen):
     event = make_event(db_session, start=datetime(2026, 7, 28, 16, 0))
     register(db_session, event, app_user(db_session))
     assert change(db_session, event, location="Hall 61") == 1
-    assert change(db_session, event, location_type=EventsLocationType.HIDDEN) == 0
-    assert change(db_session, event, status=EventsStatus.CANCELLED) == 0  # not even a cancellation
-    event.status = EventsStatus.PUBLISHED
+    event.status = EventsStatus.DRAFT
     db_session.commit()
     frozen.advance(minutes=2)
     deliver()
-    assert rows(db_session, PushKind.EVENT_UPDATED)[0].last_error == "event_hidden"
-    assert rows(db_session, PushKind.EVENT_CANCELLED) == []
+    assert rows(db_session, PushKind.EVENT_UPDATED)[0].last_error == "event_closed"
 
 
 def test_a_cancellation_names_the_start_that_was_cancelled(db_session, push_on, frozen):
@@ -944,7 +941,7 @@ def test_no_closing_push_for_late_opened_unregistrable_or_long_missed_events(db_
     # Opened after its 24-hour mark (12:30 Riyadh): new_event just announced it.
     make_event(db_session, start=datetime(2026, 7, 21, 12, 30), created_at=datetime(2026, 7, 20, 9, 45))
     make_event(db_session, start=datetime(2026, 7, 21, 12, 30), form_type=FormType.NONE)
-    make_event(db_session, start=datetime(2026, 7, 21, 12, 30), location_type=EventsLocationType.HIDDEN)
+    make_event(db_session, start=datetime(2026, 7, 21, 12, 30), status=EventsStatus.DRAFT)
     make_event(db_session, start=datetime(2026, 7, 21, 12, 30), registration_status=FormRegistrationStatus.CLOSED)
     # Its mark was 6.5 hours ago (a deploy, an outage): too late to say "last chance".
     make_event(db_session, start=datetime(2026, 7, 21, 6, 30))
@@ -1238,10 +1235,19 @@ def test_on_thursday_evening_each_member_with_points_gets_their_week(db_session,
 
 
 def test_custom_points_given_this_week_on_an_old_event_count_this_week(db_session, push_on):
-    old = make_event(db_session, start=datetime(2026, 7, 2, 0, 0), location_type=EventsLocationType.NONE)
-    log = attendance_log(db_session, old, points=20)
+    from app.DB.schema import Bonuses, BonusGrantRecipients, BonusGrants, BonusRecipientType
+
+    semester_id = make_event(db_session, start=datetime(2026, 7, 2, 0, 0)).semester_id
+    bonus = Bonuses(title="Old bonus", semester_id=semester_id, given_at=datetime(2026, 7, 2, 0, 0), is_public=1)
+    db_session.add(bonus)
+    db_session.flush()
+    grant = BonusGrants(bonus_id=bonus.id, recipient_type=BonusRecipientType.MEMBER, points=20)
+    db_session.add(grant)
+    db_session.flush()
     member = app_user(db_session)
-    db_session.add(MembersLogs(member_id=member.id, log_id=log.id, date=datetime(2026, 7, 22, 10, 0)))
+    db_session.add(
+        BonusGrantRecipients(bonus_grant_id=grant.id, member_id=member.id, given_at=datetime(2026, 7, 22, 10, 0))
+    )
     db_session.commit()
     sweep(db_session, THURSDAY_8PM)
     [row] = rows(db_session, PushKind.WEEKLY_SUMMARY)
@@ -1251,17 +1257,30 @@ def test_custom_points_given_this_week_on_an_old_event_count_this_week(db_sessio
 def test_editing_a_custom_points_entry_keeps_when_its_points_were_given(
     admin_client, db_session, push_on, frozen, kicks
 ):
-    """``PUT /custom/members/{log_id}`` keeps the rows of the members who stay, so the edit moves no points."""
-    event = make_event(db_session, start=datetime(2026, 7, 2, 0, 0), location_type=EventsLocationType.NONE)
-    log = attendance_log(db_session, event, points=4)
+    """``PUT /custom/members/{grant_id}`` keeps the rows of the members who stay, so the edit moves no points."""
+    from app.DB.schema import Bonuses, BonusGrantRecipients, BonusGrants, BonusRecipientType
+
+    semester_id = make_event(db_session, start=datetime(2026, 7, 2, 0, 0)).semester_id
+    bonus = Bonuses(title="Old bonus", semester_id=semester_id, given_at=datetime(2026, 7, 2, 0, 0), is_public=1)
+    db_session.add(bonus)
+    db_session.flush()
+    grant = BonusGrants(bonus_id=bonus.id, recipient_type=BonusRecipientType.MEMBER, points=4)
+    db_session.add(grant)
+    db_session.flush()
     staying, added = app_user(db_session), app_user(db_session)
-    db_session.add(MembersLogs(member_id=staying.id, log_id=log.id, date=datetime(2026, 7, 5, 10, 0)))
+    db_session.add(
+        BonusGrantRecipients(bonus_grant_id=grant.id, member_id=staying.id, given_at=datetime(2026, 7, 5, 10, 0))
+    )
     db_session.commit()
 
-    response = admin_client.put(f"/custom/members/{log.id}", json={"member_ids": [staying.id, added.id], "points": 4})
+    response = admin_client.put(f"/custom/members/{grant.id}", json={"member_ids": [staying.id, added.id], "points": 4})
     assert_2xx(response)
     db_session.expire_all()
-    found = db_session.execute(select(MembersLogs.member_id, MembersLogs.date).where(MembersLogs.log_id == log.id))
+    found = db_session.execute(
+        select(BonusGrantRecipients.member_id, BonusGrantRecipients.given_at).where(
+            BonusGrantRecipients.bonus_grant_id == grant.id
+        )
+    )
     dates = dict(found.tuples().all())
     assert set(dates) == {staying.id, added.id}
     assert dates[staying.id] == datetime(2026, 7, 5, 10, 0)
@@ -1271,9 +1290,11 @@ def test_editing_a_custom_points_entry_keeps_when_its_points_were_given(
     assert summary.payload["en"]["body"] == "4 points this semester"
 
     # Taken off the entry: their row goes.
-    assert_2xx(admin_client.put(f"/custom/members/{log.id}", json={"member_ids": [added.id], "points": 4}))
+    assert_2xx(admin_client.put(f"/custom/members/{grant.id}", json={"member_ids": [added.id], "points": 4}))
     db_session.expire_all()
-    assert db_session.scalars(select(MembersLogs.member_id).where(MembersLogs.log_id == log.id)).all() == [added.id]
+    assert db_session.scalars(
+        select(BonusGrantRecipients.member_id).where(BonusGrantRecipients.bonus_grant_id == grant.id)
+    ).all() == [added.id]
 
 
 def test_no_summary_on_other_days_late_at_night_or_between_semesters(db_session, push_on):
