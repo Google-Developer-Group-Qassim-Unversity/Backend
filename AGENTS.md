@@ -14,8 +14,7 @@ The repos sit side by side; `Admin/lib/api.ts` means that file in the sibling re
 - The deploy runs `alembic upgrade head` on that environment's database before it swaps the release,
   so a failed migration stops the deploy and the old release keeps serving. After the swap there is no
   fallback: if the new release fails its smoke test, that environment is down until a fix deploys.
-  Nobody runs migrations against staging or prod by hand. There is a `poe migrate-prod` task: never
-  use it.
+  Nobody runs migrations against staging or prod by hand.
 - Local `poe dev` uses Infisical `dev`, whose database is a local MySQL (`scores-local`), never staging.
 - Staging and local dev redirect every email away from real members (`app/services/email_redirect.py`).
   Staging still shares production's R2 bucket, Google account and wallet identity: an upload or a
@@ -72,7 +71,7 @@ checkout of `dev` is an old scaffold). `docs/points-model.md` shows the pattern:
 ## Migrations
 
 Use the `writing-alembic-migrations` skill for any schema or data migration. In short: write them
-by hand, never `--autogenerate` (`poe revision` autogenerates, so don't use it), keep one head, and
+by hand, never `--autogenerate`, keep one head, and
 dry-run a data migration against a local copy of staging before merging.
 
 ## Gotchas

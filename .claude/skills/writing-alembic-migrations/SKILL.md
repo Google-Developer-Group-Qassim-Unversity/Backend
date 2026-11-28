@@ -27,7 +27,7 @@ uv run alembic heads                      # must print exactly one head
 uv run alembic revision -m "add x to y"   # empty file, needs no database
 ```
 
-Never `--autogenerate`, and so never `uv run poe revision` (it autogenerates). It can't write the data
+Never `--autogenerate`. It can't write the data
 moves, and it guesses MySQL types and collations. Keep `include_object` in `alembic/env.py`: it stops
 Alembic from treating the database views in `VIEWS` as tables.
 
