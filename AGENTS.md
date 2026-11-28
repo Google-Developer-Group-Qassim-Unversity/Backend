@@ -1,106 +1,95 @@
-# AGENTS.md
+# Backend
 
-FastAPI backend for a score/leaderboard admin system. Python 3.13, managed with **uv**.
+FastAPI + SQLAlchemy + Alembic on MySQL, Python 3.13 with uv. Every GDG Qassim client calls this one
+API: `Admin` (admin.gdg-q.com), `Website` (gdg-q.com) and the iOS app (`App`, shipped to TestFlight).
+The repos sit side by side; `Admin/lib/api.ts` means that file in the sibling repo.
 
-## After Any Changes
+## Branches, deploys, environments
 
-Always run in this order:
-
-```bash
-uv run ruff format .        # format first
-uv run ruff check --fix .   # lint fix
-uv run pytest               # tests
-```
-
-Also run `uv run mypy .` and `uv run ruff check .` — these have **many pre-existing errors that are OK to ignore**. Only investigate errors on lines you added or modified.
-
-## Setup
-
-- **Python 3.13** required (`.python-version`)
-- `uv sync --dev` to install all dependencies
-- Secrets managed via **Infisical**. If not installed, ask the user to install it first:
-  - **Windows**: `winget install infisical`
-  - **macOS/Linux**: `brew install infisical/get-cli/infisical`
-  - **Arch**: `yay -S infisical-bin`
-  - **Ubuntu**: `curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash && sudo apt-get update && sudo apt-get install -y infisical`
-- Then ask the user to log in by following the steps in `docs/ENVIRONMENT_VARIABLES.md`
-- Once logged in, prefixing any command with `infisical run --path=/admin-backend --env=dev --` will inject secrets (e.g. `run.sh`)
-- `.env.local` is for optional local overrides only — it takes priority over Infisical values
-- FastAPI entrypoint: `app.main:app` → Swagger docs at `http://localhost:7001/docs`
+- Branch from `dev`, open PRs into `dev`. Never push to `main` or open a PR into it unless asked:
+  `main` only receives `dev` (the `releasing-to-production` skill).
+- A merge to `dev` deploys **staging** (`api-dev.gdg-q.com`, database `scores_staging`, Infisical
+  `staging`); a merge to `main` deploys **production** (`refactor.albrrak773.com`, database `scores`,
+  Infisical `prod`). `docs/STAGING.md` has the full table.
+- The deploy runs `alembic upgrade head` on that environment's database before it swaps the release,
+  so a failed migration stops the deploy and the old release keeps serving. After the swap there is no
+  fallback: if the new release fails its smoke test, that environment is down until a fix deploys.
+  Nobody runs migrations against staging or prod by hand. There is a `poe migrate-prod` task: never
+  use it.
+- Local `poe dev` uses Infisical `dev`, whose database is a local MySQL (`scores-local`), never staging.
+- Staging and local dev redirect every email away from real members (`app/services/email_redirect.py`).
+  Staging still shares production's R2 bucket, Google account and wallet identity: an upload or a
+  Google Form made from staging is real.
+- A change that spans repos uses the same branch name in each, and this repo merges and deploys first.
+  Backend's and Admin's PR checks check out each other's same-named branch (else `dev`); Website's
+  checks never run against Backend.
 
 ## Commands
 
+Secrets come from Infisical (`--path=/admin-backend`); the `poe` tasks already wrap `infisical run`.
+
 ```bash
-uv run pytest                                  # all tests
-uv run pytest tests/routers/test_events.py     # single file
-uv run pytest -k test_name                     # single test
-uv run ruff format .                           # format
-uv run ruff check --fix .                      # lint
-uv run mypy .                                  # typecheck (pre-existing errors expected)
-uv run alembic upgrade head                    # apply migrations
-uv run alembic revision -m "desc"              # new empty migration (write manually)
+uv sync --dev                                   # a fresh worktree has no .venv
+uv run poe dev                                  # API on :7001, docs at /docs
+uv run ruff format . && uv run ruff check --fix .   # CI checks both, separately
+uv run pyright <changed files>                  # ~44 errors already exist in untouched code; CI doesn't run it
+uv run pytest -o addopts="" -q tests/routers/test_events.py   # one file, no coverage, ~40 s
+uv run pytest -o addopts="" -q -k name          # one test
 ```
 
-## Architecture
+- Every pytest run starts a MySQL testcontainer (Docker must be running) and applies all migrations
+  first, so even one test takes ~35 s. The full suite takes about 6 minutes: run it in the background,
+  never in a foreground command with a short timeout. CI runs it as
+  `RUN_CLUB_BROWSER=1 uv run pytest`, which also drives the Admin repo's Club Structure page.
+- `ruff check --fix` does not reformat. Run `ruff format` before every commit or the format check fails.
 
-- **`app/main.py`** – FastAPI app, CORS, router registration, static file mount for uploads
-- **`app/config.py`** – all env vars accessed through `config` singleton; `ENV=testing` skips dotenv loading
-- **`app/semesters.py`** – semester resolution. Semesters live in the `semesters` DB table (admin-editable via `/semesters`), *not* in config — never reintroduce a hardcoded semester dict, and never use the current semester as a route default (it must be resolved per request)
-- **`app/DB/schema.py`** – SQLAlchemy ORM models (source of truth for DB schema). Alembic uses `Base.metadata` from here
-- **`app/DB/main.py`** – `SessionLocal` and `engine` creation
-- **`app/routers/`** – API route handlers, one file per domain (events, members, points, etc.)
-- **`app/helpers.py`** – shared utilities and the Clerk guards (`authenticated_guard`, `optional_clerk_guard`)
-- **`app/services/permissions/`** – who can do what: the `Perm` catalogue, `resolve_access`, and the route guards (`Staff`, `Require`, `SuperAdmin`)
-- **`alembic/env.py`** – migration env; excludes DB views listed in `VIEWS` set via `include_object`
-- **Source of truth for DB**: `app/DB/schema.py` + existing migration files
-- **Ids are UUIDs.** A new table's id is `UUID_CHAR` with `default=new_id` (`app/DB/ids.py`, time-ordered UUIDv7), never an auto-increment integer; columns that reference it are `UUID_CHAR` as well. Only the legacy tables listed in `tests/test_uuid_ids.py` keep integer ids. See `CLAUDE.md`
-- **Do not use `--autogenerate`** for new migrations. Create empty revisions with `alembic revision -m "desc"` and write them manually
-- For FK relationships with `ON DELETE CASCADE`, always add `passive_deletes=True` to the SQLAlchemy relationship (see schema docstring)
-- Alembic ignores the views in `alembic/env.py` `VIEWS` set — do not remove `include_object`
+## Conventions the tests enforce
 
-## Testing
+- **Sessions** come from the `session: DB` dependency. Code outside a request (background tasks,
+  scripts) uses `db_session()` from `app/DB/main.py`.
+- **Errors are raised**, not caught into a 500 in the handler; `app/error_handlers.py` maps them.
+- **Auth** is a dependency and comes from our database, never Clerk metadata. Admin routes take a guard
+  from `app/services/permissions/guards.py` (`Staff`, `Require(Perm.X)`, `SuperAdmin`);
+  `tests/test_route_auth.py` pins every route's permission. See `docs/PERMISSIONS.md`.
+- **Every route declares a `response_model`.** It silently drops undeclared keys, so
+  `tests/test_response_models.py` checks each model against what its handler returns.
+- **Logging** is `logger = logging.getLogger(__name__)`; `print()`, `write_log` and `LogFile` fail the suite.
+- **New tables use UUIDv7 string ids**: `mapped_column(UUID_CHAR, primary_key=True, default=new_id)`, and
+  `mysql.CHAR(36, charset="ascii", collation="ascii_bin")` in migrations. The old integer-id tables stay
+  integer; `tests/test_uuid_ids.py` lists them.
+- **Semesters** live in the `semesters` table and are resolved per request (`app/semesters.py`). Never
+  hardcode one or default a route to the current semester.
 
-- Uses **testcontainers** (MySQL 8.0) by default; set `DATABASE_URL` to use an existing DB (CI mode)
-- Alembic migrations run automatically in `conftest.py` before any tests
-- Auth bypass fixture chain: `client` (no auth) < `clerk_client` (member) < `admin_client` / `super_admin_client`
-- Each test gets transaction rollback via connection-level binding to `SessionLocal`
-- **Never import app modules at module level in conftest** — env vars must be set first (delayed imports inside fixtures)
-- Factories in `tests/factories.py`; assertion helpers in `tests/utils.py`
-- `--cov=app` is on by default
+## Changing the API: shipped iOS builds can't update
 
-## Ruff Config
+TestFlight builds call production and stay installed for weeks after a new build ships, so API changes
+are additive: add fields and routes, keep the old ones and their types until Albrrak773 says the old
+builds are gone. The app sends `X-App-Version` and `X-App-Build` on every request (nothing here reads
+them yet). Its expectations are in `App/docs/API-CONTRACT.md` on App's `main` branch (a local `gdg-app`
+checkout of `dev` is an old scaffold). `docs/points-model.md` shows the pattern: compatibility shims
+(`/custom/*`, the `events` list on `/points/*`) kept until a later cleanup phase.
 
-- Line length: 120
-- `ruff.lint.select = ["FAST", "TID252"]` (FastAPI-specific + absolute imports)
-- `ruff.format.skip-magic-trailing-comma = true`
-- Unused imports in `__init__.py` are allowed (`F401` suppressed)
+## Migrations
 
-## CI (`.github/workflows/`)
+Use the `writing-alembic-migrations` skill for any schema or data migration. In short: write them
+by hand, never `--autogenerate` (`poe revision` autogenerates, so don't use it), keep one head, and
+dry-run a data migration against a local copy of staging before merging.
 
-This repo is the backend only. The admin frontend lives in the `Admin` repo and
-the public site in `Website`; see `CLAUDE.md`.
+## Gotchas
 
-- **pr.yml** – on PRs into `dev`
-  - `lint` – `uv run ruff check .` and `uv run ruff format --check .`
-  - `test` – `RUN_CLUB_BROWSER=1 uv run pytest` (the fixtures also run `alembic upgrade head` on a fresh MySQL, and `tests/test_migrations.py` fails on multiple heads or models that no migration matches). The Club Structure browser check needs the admin frontend, so the job also checks out `Admin` - the branch with the PR's name if there is one, else `dev`.
-- **deploy.yml** – on push to `dev` (staging, port 7502) or `main` (production, port 7501); SSH-deploys the backend under PM2 with the matching Infisical env. Run it manually to redeploy.
-  The deploy builds the release in `~/GDG-backend.new` (or `-staging.new`), runs `alembic upgrade head` against that environment's database, replaces the live release, restarts, and fails unless `/health/db` and `/events/` answer. Migrations are never run by hand.
+- `app/DB/logs.py` and `app/routers/action.py` hardcode production `actions` ids. They are wrong in every
+  other database. Read `docs/HARDCODED_ACTION_IDS.md` before touching events, attendance or actions.
+- The Website caches public data (30 s on its server, 60 s in the browser). After committing a change to
+  points, events, members or semesters, call one of the best-effort helpers in `app/leaderboard_cache.py`
+  (`refresh_attendance_points_cache()` for points, as `attendance.py` and `bonuses.py` do;
+  `reset_leaderboard_cache_best_effort()` for everything else). They log failures instead of raising, so
+  a Website outage never fails an admin's save. The bare `reset_leaderboard_cache()` raises.
+- A production bug: read `docs/LOGGING.md` first. Every response has an `X-Request-ID`, which is also a
+  Sentry tag (Sentry MCP `sentry-gdg`) and appears on every log line.
+- Every env var is declared on `Settings` in `app/config.py` and listed in `docs/ENVIRONMENT_VARIABLES.md`;
+  add both together.
 
-## Linear: use `linear-gdg`, never `linear`
+## Linear
 
-This project's tickets live in the GDG Linear workspace, reached through an MCP
-server named `linear-gdg` (`https://mcp.linear.app/mcp`). It is declared in this
-repo for every agent we use:
-
-| Agent | File | Sign in once with |
-|-------|------|-------------------|
-| Claude Code | `.mcp.json` | `/mcp` |
-| Codex | `.codex/config.toml` (project must be trusted) | `codex mcp login linear-gdg` |
-| opencode | `opencode.json` | `opencode mcp auth linear-gdg` |
-| Cursor | `.cursor/mcp.json` | Settings → MCP |
-| VS Code (Copilot) | `.vscode/mcp.json` | the server's "Start" prompt |
-| Gemini CLI | `.gemini/settings.json` | `/mcp auth linear-gdg` |
-
-Sign in with the Linear account that is a member of the GDG workspace. No token
-is committed. A `linear` server, if one is loaded, is some other workspace
-configured outside this repo: never read or write GDG tickets through it.
+GDG tickets (`GDG-54`) live in the GDG Linear workspace: the `linear-gdg` MCP server from `.mcp.json`, or
+`linear-gdgq` in Albrrak773's own setup. Never read or write them through another Linear server.

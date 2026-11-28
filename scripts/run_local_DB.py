@@ -17,7 +17,6 @@ VOLUME_NAME = "scores-local-data"
 LOCAL_DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@127.0.0.1:{HOST_PORT}/{DB_NAME}"
 
 INFISICAL_PATH = "/admin-backend"
-INFISICAL_ENV = "prod"
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -109,21 +108,10 @@ def run_migrations():
     print("[setup] Migrations complete.")
 
 
-def get_prod_db_url() -> str:
-    print("[infisical] Fetching DATABASE_URL...")
+def get_source_db_url(env: str) -> str:
+    print(f"[infisical] Fetching DATABASE_URL from {env}...")
     r = run(
-        [
-            "infisical",
-            "secrets",
-            "get",
-            "DATABASE_URL",
-            "--path",
-            INFISICAL_PATH,
-            "--env",
-            INFISICAL_ENV,
-            "--silent",
-            "--plain",
-        ]
+        ["infisical", "secrets", "get", "DATABASE_URL", "--path", INFISICAL_PATH, "--env", env, "--silent", "--plain"]
     )
     if r.returncode != 0 or not r.stdout.strip():
         print("[error] Failed to fetch DATABASE_URL from infisical.")
@@ -260,7 +248,7 @@ def dump_prod_to_local(prod_url: str):
                 print(f"        {line}")
         sys.exit(1)
 
-    print("[dump] Production data copied to local database.")
+    print("[dump] Data copied to local database.")
 
 
 def prefix_event_names():
@@ -296,13 +284,22 @@ def remove_container():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Set up a local MySQL dev database with optional prod data sync.")
+    parser = argparse.ArgumentParser(
+        description="Set up a local MySQL dev database, optionally filled with a copy of prod or staging."
+    )
     parser.add_argument(
         "--schema-only", action="store_true", help="Only run schema migrations via Alembic (no prod data copy)."
     )
     parser.add_argument(
         "--reset", action="store_true", help="Stop and remove the container and its volume before starting fresh."
     )
+    parser.add_argument(
+        "--source",
+        choices=["prod", "staging"],
+        default="prod",
+        help="Infisical env whose database is copied (read-only mysqldump). Default: prod.",
+    )
+    parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
     args = parser.parse_args()
 
     if not shutil.which("docker"):
@@ -326,13 +323,12 @@ def main():
         run_migrations()
     else:
         print()
-        response = input("  This will REPLACE all local data with a copy of production.\n  Continue? [y/N] ")
-        if response.strip().lower() != "y":
+        prompt = f"  This will REPLACE all local data with a copy of {args.source}.\n  Continue? [y/N] "
+        if not args.yes and input(prompt).strip().lower() != "y":
             print("Aborted.")
             return
 
-        prod_url = get_prod_db_url()
-        dump_prod_to_local(prod_url)
+        dump_prod_to_local(get_source_db_url(args.source))
         prefix_event_names()
 
     print(f"\n[done] Database URL: {LOCAL_DATABASE_URL}")
