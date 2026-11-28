@@ -14,6 +14,7 @@ from app.config import config, get_settings
 from app.DB.main import get_engine
 from app.error_handlers import register_exception_handlers
 from app.logging_config import configure_logging
+from app.legacy_app import LegacyAppMiddleware
 from app.middleware import RequestContextMiddleware
 from app.services import pipeline_sweep, wallet_push
 from app.services.push import apns, redact as push_redact
@@ -101,6 +102,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Old event statuses for iOS builds before 1.2.0 (docs/EVENT_LIFECYCLE_COMPAT.md).
+app.add_middleware(LegacyAppMiddleware)
 
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]

@@ -1,6 +1,7 @@
 import re
 
-from pydantic import BaseModel, HttpUrl, EmailStr, Field, field_validator, conlist, ConfigDict
+from pydantic import BaseModel, HttpUrl, EmailStr, Field, field_validator, conlist, ConfigDict, model_validator
+from pydantic.json_schema import SkipJsonSchema
 from typing import List, Literal, Dict
 from datetime import datetime
 from pydantic.types import JsonValue
@@ -279,6 +280,26 @@ class GoogleFormsOAuthExchangeRequest(BaseModel):
     state: str = Field(min_length=1)
 
 
+# Deprecated: the old event statuses that app builds before 1.2.0 still send
+# (app/legacy_app.py, docs/EVENT_LIFECYCLE_COMPAT.md). Each maps to `published`;
+# the request models below say what it does to registration. None of them
+# cancels an event. Delete with the shim.
+LegacyEventStatus = Literal["open", "active", "closed"]
+_LEGACY_EVENT_STATUSES = ("open", "active", "closed")
+
+
+def _take_legacy_status(data, nested: bool):
+    """Swap an old status in a request body for `published`, and keep the old value in `legacy_status`."""
+    if not isinstance(data, dict):
+        return data
+    holder = data.get("event") if nested else data
+    if not isinstance(holder, dict) or holder.get("status") not in _LEGACY_EVENT_STATUSES:
+        return data
+    legacy = holder["status"]
+    holder = {**holder, "status": "published"}
+    return {**data, "event": holder, "legacy_status": legacy} if nested else {**holder, "legacy_status": legacy}
+
+
 class createEvent_model(BaseClassModel):
     event: Events_model
     form_type: Literal["google", "none", "registration"]
@@ -286,6 +307,17 @@ class createEvent_model(BaseClassModel):
     member_action_id: int
     department_id: int
     registration_status: RegistrationStatus | None = None
+    # Deprecated (old app builds): `open` publishes with registration open,
+    # `active` / `closed` publish with it closed.
+    legacy_status: SkipJsonSchema[LegacyEventStatus | None] = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_event_status(cls, data):
+        data = _take_legacy_status(data, nested=True)
+        if isinstance(data, dict) and data.get("legacy_status") and data.get("registration_status") is None:
+            data = {**data, "registration_status": "open" if data["legacy_status"] == "open" else "closed"}
+        return data
 
 
 class event_actions_model(BaseClassModel):
@@ -333,11 +365,31 @@ class UpdateEventModel(BaseClassModel):
     event: Events_model
     attendance_points: int | None = Field(default=None, ge=0, le=2147483647, strict=True)
     actions: conlist(event_actions_model, min_length=1)  # pyright: ignore[reportInvalidTypeForm]
+    # Deprecated (old app builds send the status they read back): an old value
+    # leaves the event's status as it is. Status changes go through /status.
+    legacy_status: SkipJsonSchema[LegacyEventStatus | None] = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_event_status(cls, data):
+        return _take_legacy_status(data, nested=True)
 
 
 class UpdateEventStatus_model(BaseClassModel):
     status: EventStatus
     open_registration: bool | None = None
+    # Deprecated (old app builds): `open` publishes and opens registration,
+    # `active` (close registration) and `closed` (close the event) publish and
+    # close registration.
+    legacy_status: SkipJsonSchema[LegacyEventStatus | None] = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_event_status(cls, data):
+        data = _take_legacy_status(data, nested=False)
+        if isinstance(data, dict) and data.get("legacy_status") == "open":
+            data = {**data, "open_registration": True}
+        return data
 
 
 class UpdateEventRegistration_model(BaseClassModel):

@@ -346,6 +346,9 @@ def update_event(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="End datetime must be after start datetime. For overnight events, the end date should be the next day.",
             )
+        if event_data.legacy_status is not None and existing is not None:
+            # An old app build sent the old status back: keep the event's own.
+            event_data.event.status = existing.status.value
         updated_event = events_queries.update_event(session, event_id, event_data.event)
         assert updated_event != -1, f"Event with id [{event_id}] hit an IntegrityError while updating."
 
@@ -591,7 +594,9 @@ def update_event_status(
         elif new_status == EventsStatus.DRAFT:
             form.registration_status = FormRegistrationStatus.NOT_OPEN
         elif new_status == EventsStatus.PUBLISHED:
-            if status_data.open_registration is True:
+            if status_data.legacy_status in ("active", "closed"):
+                form.registration_status = FormRegistrationStatus.CLOSED
+            elif status_data.open_registration is True:
                 form.registration_status = FormRegistrationStatus.OPEN
             elif status_data.open_registration is False and form.registration_status == FormRegistrationStatus.OPEN:
                 form.registration_status = FormRegistrationStatus.NOT_OPEN
