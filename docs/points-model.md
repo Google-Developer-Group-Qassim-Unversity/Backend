@@ -93,5 +93,6 @@ Downgrade reconstructs the legacy ledger from the current bonuses, including awa
 2. **Phase 2 (after `gdg-app` TestFlight update ships):**
    - Update `gdg-app` to read `history` on `/points/{members,departments}/{id}`, `bonuses` on `/events/me`, and call `/bonuses` in its admin portal.
    - Once old TestFlight builds expire, delete `app/routers/custom.py`, the deprecated `events` compat list on `/points/*`, and the legacy `participated` field on `/events/me`.
+   - The event lifecycle shims for the same old builds ([EVENT_LIFECYCLE_COMPAT.md](EVENT_LIFECYCLE_COMPAT.md)) go at the same time.
 3. **Next refactor (Problem 2 — Points Versioning / `event_actions`):**
    - Separate PR introducing `event_actions` + `event_action_recipients` with inlined `action_points`, resolving `HARDCODED_ACTION_IDS.md` and GDG-53 delta semantics cleanly on top of this separated bonus model.
