@@ -282,8 +282,7 @@ class GoogleFormsOAuthExchangeRequest(BaseModel):
 
 # Deprecated: the old event statuses that app builds before 1.2.0 still send
 # (app/legacy_app.py, docs/EVENT_LIFECYCLE_COMPAT.md). Each maps to `published`;
-# the request models below say what it does to registration. None of them
-# cancels an event. Delete with the shim.
+# the request models below say what else it does. Delete with the shim.
 LegacyEventStatus = Literal["open", "active", "closed"]
 _LEGACY_EVENT_STATUSES = ("open", "active", "closed")
 
@@ -292,6 +291,7 @@ def _take_legacy_status(data, nested: bool):
     """Swap an old status in a request body for `published`, and keep the old value in `legacy_status`."""
     if not isinstance(data, dict):
         return data
+    data = {key: value for key, value in data.items() if key != "legacy_status"}  # only the shim sets it
     holder = data.get("event") if nested else data
     if not isinstance(holder, dict) or holder.get("status") not in _LEGACY_EVENT_STATUSES:
         return data
@@ -379,8 +379,9 @@ class UpdateEventStatus_model(BaseClassModel):
     status: EventStatus
     open_registration: bool | None = None
     # Deprecated (old app builds): `open` publishes and opens registration,
-    # `active` (close registration) and `closed` (close the event) publish and
-    # close registration.
+    # `active` (close registration) publishes and closes registration, `closed`
+    # (close the event) cancels it before its start and closes registration
+    # after. On a cancelled event, `open` / `active` reopen it, as they did.
     legacy_status: SkipJsonSchema[LegacyEventStatus | None] = Field(default=None, exclude=True)
 
     @model_validator(mode="before")

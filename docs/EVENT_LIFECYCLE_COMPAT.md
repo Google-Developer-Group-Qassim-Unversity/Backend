@@ -27,7 +27,8 @@ fields stay; old builds ignore them.
 | New model | Old status |
 |---|---|
 | `draft` | `draft` |
-| `cancelled`, or the event has ended | `closed` |
+| `cancelled`, or the event ended more than a day ago | `closed` |
+| published and ended less than a day ago | `active` (old events stayed `active` until someone closed them; the old admin portal hides attendance on `closed` ones) |
 | published, registration or Google form, registration open | `open` |
 | published, registration or Google form, registration not open or closed | `active` |
 | published, no registration, before the start | `open` |
@@ -45,23 +46,32 @@ answers of `POST /events/`, `PUT /events/{id}`, `PUT /events/{id}/status` and
 schedule; the old app refetches the details after each of them.
 
 **Requests, every caller** (validators in `app/routers/models.py`): the old
-values are accepted and never cancel an event.
+values are accepted and do what the old action did. A `legacy_status` sent by
+a client is dropped; only the old values set it.
 
 | Request | Old value | Does |
 |---|---|---|
 | `PUT /events/{id}/status` | `open` | publish, open registration |
-| | `active` (close registration), `closed` (close the event) | publish, close registration |
+| | `active` (close registration, or "reopen event" on a closed one) | publish, close registration |
+| | `closed` (close the event) before the event's start | cancel it (the old model's cancellation, with its `event_cancelled` push) |
+| | `closed` after the start | publish, close registration |
 | `POST /events/` | `open` | publish, registration open |
 | | `active`, `closed` | publish, registration closed |
 | `PUT /events/{id}` | any old value | keep the event's status (old builds send back what they read) |
 
+"Reopen event" on a cancelled event (`open` or `active`) publishes it again
+and sends the "Back on" push, as reopening a closed event did in 1.1.3.
+
 ## Known gaps for old builds
 
-- An ended event reads `closed`, so an old build's admin portal hides its
-  attendance buttons after the event's end. Late attendance goes through the
-  Admin site.
-- "Close the event" on an event that has not ended closes registration; the
-  event reads back `active` until it ends.
+- "Close the event" after the start closes registration; the event reads back
+  `active` until a day after its end.
+- The answers of the change routes carry no form, so for a moment the old app
+  can show the schedule-based status (`open` for an upcoming event whose
+  registration it just closed) until its refetch lands.
+- A status that changes with time (an event starts or ends) while an old
+  build's edit form is open makes that form's save report a change made
+  elsewhere.
 - Old builds cannot see `not_open` registration (they see `active`), cancelled
   events (they see `closed`) or accepted-only meeting links (the link is
   withheld, as for the new clients).

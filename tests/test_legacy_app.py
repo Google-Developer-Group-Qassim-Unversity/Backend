@@ -34,6 +34,9 @@ UPCOMING = {"start_datetime": "2026-06-29T16:00:00", "end_datetime": "2026-06-29
         ("2.0", False),
         ("1.1.3", True),
         ("1.0.2", True),
+        ("1.1", True),
+        ("1.2", False),
+        ("1.2.0-rc.1", False),
         ("0", True),
         ("garbage", True),
     ],
@@ -58,8 +61,10 @@ def test_legacy_event_status_matrix():
     ended = datetime(2026, 6, 29, 18, 1)
     assert _legacy("draft") == "draft"
     assert _legacy("cancelled") == "closed"
-    assert _legacy(now=ended) == "closed"
-    assert _legacy(form_type="registration", registration_status="open", now=ended) == "closed"
+    # Ended: active for a day (late attendance in the old admin portal), then closed.
+    assert _legacy(now=ended) == "active"
+    assert _legacy(form_type="registration", registration_status="open", now=ended) == "active"
+    assert _legacy(now=datetime(2026, 6, 30, 18, 1)) == "closed"
     # With registration: open while it is open, else active (the old "registration closed").
     assert _legacy(form_type="registration", registration_status="open") == "open"
     assert _legacy(form_type="google", registration_status="open", now=live) == "open"
@@ -161,14 +166,39 @@ def test_old_app_admin_portal_status_flow(admin_client: TestClient, frozen):
     assert admin_client.get(f"/events/{event_id}/form").json()["registration_status"] == "open"
     assert _status_seen(admin_client, event_id) == "open"
 
-    # Close the event: setStatus('closed') closes registration and never cancels.
+    # Once it started, setStatus('closed') closes registration; the event stays published.
+    frozen.set(datetime(2026, 6, 29, 14, 0))  # 17:00 Riyadh
     assert_2xx(admin_client.put(f"/events/{event_id}/status", json={"status": "closed"}, headers=OLD_APP))
     assert _status_seen(admin_client, event_id, headers={}) == "published"
     assert admin_client.get(f"/events/{event_id}/form").json()["registration_status"] == "closed"
+    assert _status_seen(admin_client, event_id) == "active"
 
-    # Once it ended, the old app sees it closed.
+    # After the end it stays active for a day (late attendance), then reads closed.
     frozen.set(datetime(2026, 6, 29, 15, 1))  # 18:01 Riyadh
+    assert _status_seen(admin_client, event_id) == "active"
+    frozen.set(datetime(2026, 6, 30, 15, 1))
     assert _status_seen(admin_client, event_id) == "closed"
+
+
+def test_old_app_close_before_start_cancels_and_reopen_restores(admin_client: TestClient, frozen):
+    """In 1.1.3, closing an event before its start was its cancellation (the event_cancelled push)."""
+    frozen.set(datetime(2026, 6, 20, 9, 0))
+    event_id = _create(admin_client, "open")["id"]
+    assert_2xx(admin_client.put(f"/events/{event_id}/status", json={"status": "closed"}, headers=OLD_APP))
+    assert _status_seen(admin_client, event_id, headers={}) == "cancelled"
+    assert _status_seen(admin_client, event_id) == "closed"
+    # "Reopen event" (closed -> active) brings it back with registration closed, as it did.
+    assert_2xx(admin_client.put(f"/events/{event_id}/status", json={"status": "active"}, headers=OLD_APP))
+    assert _status_seen(admin_client, event_id, headers={}) == "published"
+    assert _status_seen(admin_client, event_id) == "active"
+
+
+def test_clients_cannot_set_legacy_status_directly(admin_client: TestClient, frozen):
+    frozen.set(datetime(2026, 6, 20, 9, 0))
+    event_id = _create(admin_client, "open")["id"]
+    res = admin_client.put(f"/events/{event_id}/status", json={"status": "published", "legacy_status": "closed"})
+    assert_2xx(res)
+    assert admin_client.get(f"/events/{event_id}/form").json()["registration_status"] == "open"
 
 
 def test_old_app_draft_then_publish(admin_client: TestClient, frozen):

@@ -571,6 +571,9 @@ def update_event_status(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
     old_status = event.status
     new_status = EventsStatus(status_data.status)
+    if status_data.legacy_status == "closed" and event_lifecycle.riyadh_now() < event.start_datetime:
+        # Old app builds: closing an event before its start was its cancellation.
+        new_status = EventsStatus.CANCELLED
     push_before = push_cases.event_state(event)
     form = session.scalar(select(Forms).where(Forms.event_id == event_id))
     old_reg_status = form.registration_status if form is not None else None

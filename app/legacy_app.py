@@ -17,8 +17,8 @@ and the Website and Admin never do:
   held. The new fields stay in the answer; old builds ignore them.
 - **Requests** (the validators in ``app/routers/models.py``, for every caller):
   the old values are accepted on ``PUT /events/{id}/status``, ``POST /events/``
-  and ``PUT /events/{id}`` and mapped onto the new model. They never cancel an
-  event.
+  and ``PUT /events/{id}`` and mapped onto the new model, keeping what each
+  old action did (closing an event before its start cancels it).
 
 Remove this module, its middleware line in ``app/main.py`` and the
 ``legacy_status`` validators once no old build is left (TestFlight builds
@@ -27,8 +27,9 @@ expire 90 days after upload). See docs/EVENT_LIFECYCLE_COMPAT.md.
 
 import json
 import logging
+import re
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -47,6 +48,11 @@ APP_VERSION_HEADER = b"x-app-version"
 
 _FORMS_WITH_REGISTRATION = ("registration", "google")
 
+# An ended event stays `active` this long, as events did when nobody closed
+# them: the old admin portal hides attendance on `closed` events, and late
+# check-ins and backfills still count after the end.
+ENDED_GRACE = timedelta(days=1)
+
 
 def is_legacy_app(app_version: str | None) -> bool:
     """True for an app build older than ``FIRST_LIFECYCLE_APP_VERSION``.
@@ -56,10 +62,13 @@ def is_legacy_app(app_version: str | None) -> bool:
     """
     if app_version is None:
         return False
-    try:
-        version = tuple(int(part) for part in app_version.strip().split("."))
-    except ValueError:
-        return True
+    parts = []
+    for part in app_version.strip().split(".")[:3]:
+        digits = re.match(r"\d+", part)
+        if digits is None:
+            return True
+        parts.append(int(digits.group()))
+    version = tuple(parts + [0] * (3 - len(parts)))
     return version < FIRST_LIFECYCLE_APP_VERSION
 
 
@@ -74,15 +83,18 @@ def legacy_event_status(
 ) -> LegacyEventStatus:
     """The old four-value status an event would have had.
 
-    - ``draft`` stays ``draft``; ``cancelled`` and ended events are ``closed``.
+    - ``draft`` stays ``draft``; ``cancelled`` is ``closed``, and so is an event
+      that ended more than ``ENDED_GRACE`` ago (``active`` until then).
     - With a registration or Google form: ``open`` while registration is open,
       else ``active`` (the old "registration closed").
     - Without one: ``open`` before the start, ``active`` once it started.
     """
     if status == "draft":
         return "draft"
-    if status == "cancelled" or local_now > end_datetime:
+    if status == "cancelled" or local_now > end_datetime + ENDED_GRACE:
         return "closed"
+    if local_now > end_datetime:
+        return "active"
     if form_type in _FORMS_WITH_REGISTRATION:
         return "open" if registration_status == "open" else "active"
     return "active" if local_now >= start_datetime else "open"
@@ -200,7 +212,9 @@ class LegacyAppMiddleware:
                     to_legacy(json.loads(body), scope["path"]), ensure_ascii=False, separators=(",", ":")
                 ).encode("utf-8")
             except Exception:
-                logger.exception("Legacy app rewrite failed for %s; sending the answer unchanged", scope["path"])
+                logger.warning(
+                    "Legacy app rewrite failed for %s; sending the answer unchanged", scope["path"], exc_info=True
+                )
             assert start is not None
             headers = [(k, v) for k, v in start.get("headers", []) if k.lower() != b"content-length"]
             headers.append((b"content-length", str(len(body)).encode("latin-1")))
