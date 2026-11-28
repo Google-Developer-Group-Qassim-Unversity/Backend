@@ -59,14 +59,21 @@ uv run pytest -o addopts="" -q -k name          # one test
 - **Semesters** live in the `semesters` table and are resolved per request (`app/semesters.py`). Never
   hardcode one or default a route to the current semester.
 
-## Changing the API: shipped iOS builds can't update
+## Changing the API: never break a shipped app build
 
-TestFlight builds call production and stay installed for weeks after a new build ships, so API changes
-are additive: add fields and routes, keep the old ones and their types until Albrrak773 says the old
-builds are gone. The app sends `X-App-Version` and `X-App-Build` on every request (nothing here reads
-them yet). Its expectations are in `App/docs/API-CONTRACT.md` on App's `main` branch (a local `gdg-app`
-checkout of `dev` is an old scaffold). `docs/points-model.md` shows the pattern: compatibility shims
-(`/custom/*`, the `events` list on `/points/*`) kept until a later cleanup phase.
+TestFlight builds call production and stay installed for weeks after a new build ships, so **the API
+never breaks a shipped app build**. Backend changes must be able to ship before the app updates.
+
+- Changes are additive: add fields and routes, keep the old ones and their types.
+- To change what a field means, add a new field, or answer old builds the old way through a shim in its
+  own module. The app sends `X-App-Version` and `X-App-Build` on every request; `app/legacy_app.py`
+  keys on them. Accept old request values too, and make them do what the old app expected.
+- Document each shim with its removal date: 90 days after the last old TestFlight upload, unless
+  Albrrak773 says otherwise. Examples: `docs/EVENT_LIFECYCLE_COMPAT.md`, `docs/points-model.md`.
+- Test it by replaying the old app's requests with its headers, as `tests/test_legacy_app.py` does.
+
+The app's expectations are in `App/docs/API-CONTRACT.md` on App's `main` branch (a local `gdg-app`
+checkout of `dev` is an old scaffold).
 
 ## Migrations
 
